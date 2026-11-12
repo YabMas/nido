@@ -80,23 +80,24 @@
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
       (is (str/includes? (:body resp) "rail-needs-count")))))   ; rail patched too
 
-(deftest gate-pane-route-renders                ; legacy URI /gate/… → needs surface, gate selected
-  (let [g {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage
-           :label "BR-7" :report nil :actions [] :session nil}]
-    (with-redefs [nido.coordinator.work/all-gates (fn [] [g])
-                  nido.coordinator.work/all-grouped (fn [] [])
-                  nido.ui.dev/pending-resolve-keys (fn [] #{})
-                  project/list-projects (fn [] {"brian" {:directory "/x"}})
-                  nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-      (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
-        (is (= 200 (:status resp)))
-        (is (str/includes? (:body resp) "BR-7"))))))
+(deftest a-gate-link-opens-its-workstream
+  ;; A gate is answered on its workstream's pane, so both of the old ways to open one
+  ;; on the home page — /gate/… and /?sel= — go there instead.
+  (doseq [req [{:request-method :get :uri "/gate/brian/ws-1"}
+               {:request-method :get :uri "/" :query-string "sel=brian:ws-1"}]]
+    (let [resp (server/handle-request req)]
+      (is (= 302 (:status resp)) (:uri req))
+      (is (= "/workstreams/brian/ws-1" (get-in resp [:headers "Location"])) (:uri req)))))
+
+(deftest there-is-no-home-gate-route-to-post-to
+  (with-redefs [nido.coordinator.work/resolve-gate! (fn [& _] (throw (ex-info "must not resolve" {})))]
+    (is (= 404 (:status (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/apply"}))))))
 
 (deftest post-gate-mutation-calls-resolve-and-returns-sse
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:decision :dropped})
                   nido.coordinator.work/all-gates    (fn [] [])]
-      (let [resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/skip"})]
+      (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/skip"})]
         (Thread/sleep 50)   ; resolve runs on a background future
         (is (= [["brian" "ws-1" :skip nil]] @calls))
         (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))))))
@@ -105,7 +106,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
                   nido.coordinator.work/all-gates    (fn [] [])]
-      (let [resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/apply"})]
+      (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/apply"})]
         (Thread/sleep 50)   ; resolve runs on a background future
         (is (= 200 (:status resp)))
         (is (= [["brian" "ws-1" :apply nil]] @calls)
@@ -116,7 +117,7 @@
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
                   nido.coordinator.work/all-gates    (fn [] [])]
       (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"do the fix\"}"))]
-        (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/reply" :body body})
+        (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})
         (Thread/sleep 50)
         (is (= [["brian" "ws-1" :reply "do the fix"]] @calls))))))
 
@@ -124,7 +125,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
                   nido.coordinator.work/all-gates    (fn [] [])]
-      (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/option-a"
+      (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/option-a"
                               :query-string "entry=4"})
       ;; ws-2, not ws-1: gate-resolve!'s in-flight guard is keyed per workstream
       ;; and would drop a second click landing while the first is still resolving.
@@ -139,10 +140,10 @@
 (deftest post-gate-reply-returns-resuming-pane
   (with-redefs [nido.coordinator.work/resolve-gate! (fn [& _] {:resumed "auto"})]
     (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"apply\"}"))
-          resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/reply" :body body})]
+          resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})]
       (Thread/sleep 50)
       (is (str/includes? (:body resp) "Resuming"))
-      (is (str/includes? (:body resp) "gate-pane")))))
+      (is (str/includes? (:body resp) "ws-pane")))))
 
 (deftest workstreams-route-renders
   (with-redefs [nido.coordinator.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :incoming []})
@@ -199,9 +200,9 @@
 
 (deftest post-gate-mutation-returns-confirm-pane-with-follow-links
   (with-redefs [nido.coordinator.work/resolve-gate! (fn [& _] {:decision :promote})]
-    (let [resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/promote"})]
+    (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/promote"})]
       (Thread/sleep 50)
-      (is (str/includes? (:body resp) "gate-pane"))
+      (is (str/includes? (:body resp) "ws-pane"))
       (is (str/includes? (:body resp) "Promoting"))
       (is (str/includes? (:body resp) "/workstreams/brian/ws-1"))
       (is (str/includes? (:body resp) "/workstreams")))))
@@ -256,10 +257,15 @@
                 nido.ui.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
     (let [gate (first (:gates (server/derive-screen {:scope "all" :surface :needs})))]
       (is (= "Apply failed: http 400" (:error-msg gate)))
-      (is (str/includes? (views/gate-pane (assoc gate :actions [{:id :apply :label "Apply"
-                                                                 :kind :mutation}]))
+      (is (str/includes? (views/workstream-pane
+                          {:project "brian" :ws-id "ws-1" :label "L" :stage :triage
+                           :error-msg (:error-msg gate)
+                           :gate {:ask {:kind :generic :question "Q?" :questions [{:question "Q?" :context [] :options []}]
+                                        :answer-does []}
+                                  :actions [{:id :apply :label "Apply" :kind :mutation}]}}
+                          {})
                          "Apply failed: http 400")
-          "the pane renders it, and keeps the Apply button clickable to retry"))))
+          "the pane's card renders it, and keeps the Apply button clickable to retry"))))
 
 (deftest derive-screen-hides-a-stale-error-on-a-gate-that-is-working-again
   (with-redefs [nido.coordinator.work/all-gates (fn [] [{:ws-id "ws-1" :project "brian" :origin :slack
@@ -695,10 +701,10 @@
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
                   nido.coordinator.work/all-gates    (fn [] [])]
-      (server/handle-request {:request-method :post :uri "/gate/brian/ws-qc/apply"
+      (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-qc/gate/apply"
                               :query-string "entry=6"
                               :body (java.io.ByteArrayInputStream.
-                                     (.getBytes "{\"qcard\":{\"step\":1,\"answers\":{\"q0\":\"B\",\"q1\":\"\",\"q2\":\"A\"}}}"))})
+                                     (.getBytes "{\"qcard\":{\"ws_qc\":{\"step\":1,\"answers\":{\"q0\":\"B\",\"q1\":\"\",\"q2\":\"A\"}}}}"))})
       (Thread/sleep 50)
       (is (= [["brian" "ws-qc" :apply {:seq 6 :answers ["B" nil "A"]}]] @calls)
           "the card's answers arrive one per question, in order, a blank kept as nil —
@@ -708,7 +714,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
                   nido.coordinator.work/all-gates    (fn [] [])]
-      (server/handle-request {:request-method :post :uri "/gate/brian/ws-old/apply"
+      (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-old/gate/apply"
                               :query-string "entry=3"})
       (Thread/sleep 50)
       (is (= [["brian" "ws-old" :apply 3]] @calls)))))

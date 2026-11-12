@@ -31,7 +31,7 @@
                       :events [{:at "2026-09-17T10:00:00Z" :kind :failure-kept :session "brian/impl-br-6346"
                                 :message "Advancing shared cluster failed"}]}})]
     (is (str/includes? html "needs you"))
-    (is (str/includes? html "/?sel=nido:ws-r") "the person is sent to the gate that asks them")
+    (is (str/includes? html "/workstreams/nido/ws-r") "the person is sent to the gate that asks them")
     (is (str/includes? html "project-defect"))
     (is (str/includes? html "https://github.com/o/r/pull/1"))
     (is (str/includes? html "Activity"))

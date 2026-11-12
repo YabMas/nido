@@ -106,7 +106,9 @@
                    (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
                      ws (assoc :ws (cond-> (assoc ws :open-rounds (:rounds view-state)
                                                      :open-stage  (:stage view-state)
-                                                     :history?    (:history? view-state))
+                                                     :history?    (:history? view-state)
+                                                     :pending?    (contains? (dev/pending-resolve-keys)
+                                                                             (str (:project sel) "/" (:ws-id sel))))
                                      (get ws-errors (str (:project sel) "/" (:ws-id sel)))
                                      (assoc :error-msg (get ws-errors (str (:project sel) "/" (:ws-id sel)))))
                                :dev-states (dev/ws-session-dev-states (:project sel) ws)
@@ -333,14 +335,16 @@
   ([project ws-id {:keys [entry rounds stage history?]}]
    (work/refresh-selected! project ws-id)
    (let [ws  (work/workstream project ws-id entry)
-         err (get (dev/failed-ws-errors) (str project "/" ws-id))]
+         k   (str project "/" ws-id)
+         err (get (dev/failed-ws-errors) k)]
      (sse-response
       (sse-fragment
        (views/workstream-pane (cond-> ws
                                 rounds   (assoc :open-rounds rounds)
                                 stage    (assoc :open-stage stage)
                                 history? (assoc :history? true)
-                                err      (assoc :error-msg err))
+                                err      (assoc :error-msg err)
+                                (contains? (dev/pending-resolve-keys) k) (assoc :pending? true))
                               (dev/ws-session-dev-states project ws)
                               (work/machine-facts project (map :name (:sessions ws)))))))))
 
@@ -484,19 +488,20 @@
    :approve was rendered with its position and read back without one, so
    `work/approve!` saw nil, took its stale branch, and no design was ever
    approved from the web."
-  [{:keys [body] :as req} action-id]
+  [{:keys [body] :as req} ws-id action-id]
   ;; Read once: the body is a stream, and a second slurp of it is empty.
-  (let [signals (delay (parse-json-body body))]
+  (let [signals (delay (parse-json-body body))
+        answers (delay (get-in @signals [:qcard (keyword (views/card-signal ws-id)) :answers]))]
     (cond
       (= :reply action-id)                     (:reply @signals)
       (= :assert-gate action-id)               (:evidence @signals)
-      ;; An Accept that submits questions also carries the card's choices — its
-      ;; `qcard.answers` signal, one `q<i>` per question — as the answers in order, a blank
-      ;; for a question left open. What each letter means is the resolver's to read off the
-      ;; ledger; this only keeps the order.
-      (and (= :apply action-id) (map? (get-in @signals [:qcard :answers])))
+      ;; An Accept that submits questions also carries the card's choices — this
+      ;; workstream's `qcard.<card-signal>.answers`, one `q<i>` per question — as the answers
+      ;; in order, a blank for a question left open. What each letter means is the
+      ;; resolver's to read off the ledger; this only keeps the order.
+      (and (= :apply action-id) (map? @answers))
       {:seq     (:entry (view-state/parse req))
-       :answers (card-answers (get-in @signals [:qcard :answers]))}
+       :answers (card-answers @answers)}
       (work/position-carrying-action? action-id) (:entry (view-state/parse req)))))
 
 (defn- gate-action-response-fragment
@@ -513,24 +518,15 @@
 (defn- handle-post [{:keys [uri body] :as req}]
   (let [segs (parse-path uri)]
     (cond
-      ;; POST /gate/:project/:ws-id/:action — resolve a gate follow-action
-      (and (= 4 (count segs)) (= "gate" (first segs)))
-      (let [project   (nth segs 1)
-            ws-id     (nth segs 2)
-            action-id (keyword (nth segs 3))
-            started?  (gate-resolve! project ws-id action-id (click-payload req action-id))]
-        (sse-response (sse-fragment
-                       (gate-action-response-fragment started? action-id project ws-id "gate-pane"))))
-
       ;; POST /workstreams/:project/:ws-id/gate/:action — resolve a gate action from
       ;; the overview/detail pane (the stage-appropriate action bar below the reader).
-      ;; Reuses gate-resolve!; :reply carries the textarea input like the home route.
+      ;; :reply carries the reply textarea's input.
       ;; The confirmation patches #ws-pane, the list's 5s poll drops the resolved row.
       (and (= 5 (count segs)) (= "workstreams" (first segs)) (= "gate" (nth segs 3)))
       (let [project   (nth segs 1)
             ws-id     (nth segs 2)
             action-id (keyword (nth segs 4))
-            started?  (gate-resolve! project ws-id action-id (click-payload req action-id))]
+            started?  (gate-resolve! project ws-id action-id (click-payload req ws-id action-id))]
         (sse-response (sse-fragment
                        (gate-action-response-fragment started? action-id project ws-id "ws-pane"))))
 
@@ -692,6 +688,11 @@
       :else
       (html-response 404 (views/not-found-page)))))
 
+(defn- ws-redirect
+  "302 to the workstream page — where a gate is answered."
+  [project ws-id]
+  {:status 302 :headers {"Location" (str "/workstreams/" project "/" ws-id)}})
+
 (defn- handle-get [{:keys [uri] :as req}]
   (let [segments (parse-path uri)]
     (case segments
@@ -701,10 +702,15 @@
       ;; GET /nido-logo.png — looser circular mark for the rail home button
       ["nido-logo.png"] (png-resource-response "nido-logo.png")
 
-      ;; GET / — Needs you (home)
+      ;; GET / — Needs you (home): the list only. A row opens its workstream, so a
+      ;; selection here (?sel=) is a link from when the list carried a pane, and
+      ;; goes to the workstream it names.
       []
-      (let [screen (derive-screen (view-state/parse req))]
-        (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))
+      (let [vs (view-state/parse req)]
+        (if-let [{:keys [project ws-id]} (:selection vs)]
+          (ws-redirect project ws-id)
+          (let [screen (derive-screen vs)]
+            (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))))
 
       ;; GET /system — dissolved; the rail lost the destination, redirect callers on.
       ["system"]
@@ -782,12 +788,9 @@
               screen (derive-screen vs)]
           (html-response 200 (views/workstreams-page (rail-ctx :workstreams screen) screen)))
 
-        ;; GET /gate/:project/:ws-id — legacy deep link → needs surface, gate selected
+        ;; GET /gate/:project/:ws-id — legacy deep link → the workstream it names
         (and (= 3 (count segments)) (= "gate" (first segments)))
-        (let [vs     (assoc (view-state/parse req) :surface :needs
-                            :selection {:project (nth segments 1) :ws-id (nth segments 2)})
-              screen (derive-screen vs)]
-          (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))
+        (ws-redirect (nth segments 1) (nth segments 2))
 
         :else
         (html-response 404 (views/not-found-page))))))

@@ -10,7 +10,7 @@
             [canvas.coordinator.lane.drive :refer [next-action]]
             [canvas.coordinator.work :refer [gates Gate owed-revivals]]
             [canvas.review.record :refer [design-prompt]]
-            [canvas.ui.surface :refer [gate-pane needs-fragment ui-server operations-home-cards workstream-pane]]))
+            [canvas.ui.surface :refer [needs-fragment ui-server operations-home-cards workstream-pane]]))
 
 (Claim every-gate-carries-an-ask
   "Every gate the work plane lists carries an :ask that report.ask/ask built for the move its position owes, from the record that move's question was written in — the owed blocker for answer-blocker, and for every other move the record the position read when it placed the workstream there, whatever was appended after it — together with the workstream's live intent, the actions the gate offers and any conductor note."

@@ -112,7 +112,8 @@ the answers sit directly under the question. Microsoft human-AI guidelines G16
 
 **Rule.** A pane reads in this order: what the reader must decide, what they
 need to decide it, and then the evidence, folded. The record a question was
-read from is one click away under a `<details>`, never above the answers.
+read from is one click away — an entry in the pane's own stage list — never
+above the answers.
 Nothing a decision needs is folded.
 
 **Check.** Evidence above the decision; something the answer depends on hidden
@@ -122,20 +123,39 @@ behind a fold.
 readers need, defer the rest behind one obvious control. Shneiderman: overview
 first, details on demand.
 
-## 6. Orientation — re-orient a cold reader before asking
+## 6. Orientation — the question leads, the context sits below it
 
-**Rule.** A pane that asks for a decision first says, unfolded and above the
-question, what the work is for (the live goal and its done-whens), where it is
-(the arc of stages with the current one marked, the position named and its next
-move, what is running), and what this decision holds up (the Ask's `:holding`).
-Every line comes from the data — the Ask, the gate's arc and position — never a
-sentence the view composes for itself.
+**Rule.** A pane that asks for a decision leads with the question: it is the
+first thing under the pane's heading. What re-orients a cold reader — what the
+work is for, where it stands, what it has been through — sits below the
+question, and is the workstream's own pane: its status, its standing records,
+its stage list. A gate is answered on its workstream's pane, never on a second
+page that re-tells that context in a band of its own.
 
-**Check.** Arrive at the pane from another workstream: can you say what this is
-for, where it stands and what waits on you, without opening anything or
-scrolling past the answers? If not, the pane fails.
+**Check.** Open a workstream that waits on you: is the question the first thing
+you read, and is everything you need to answer it either on the card or in the
+pane below it, without a second page?
 
-**From.** GOV.UK's caption-above-heading pattern (the section a question belongs
-to, set above it); Microsoft human-AI guidelines G11 (make clear why the system
-did what it did); the person this dashboard serves, who moves between
-workstreams all day and re-calibrates on every one.
+**From.** The person this dashboard serves, reviewing the shipped gate pane:
+the question first, the context block below; and the Needs-you page dissolved
+into the workstream pane, because a card inside the pane "saves reinventing the
+context question". GOV.UK's one-thing-per-page question pattern.
+
+## 7. Placement — never state what the placement already says
+
+**Rule.** A line earns its place only if a reader could not get it from where
+it sits. A card on a workstream's pane does not say which workstream it is
+for; a stage marked as waiting on you does not also say so in a sentence; a
+heading that names the position is not followed by a line that names it again.
+State is a mark — a glyph in its semantic colour, its words in a `title` — and
+not a sentence beside the thing it marks.
+
+**Check.** For every line of text in the pane, cover it: is anything lost that
+its position, its heading or a mark beside it did not already say? If not,
+delete it.
+
+**From.** The person's review of the shipped gate pane, which cut the
+"what this decision holds up" line ("doesn't add anything"), the
+"Blocked / next · your answer / agent · answering" position lines, and every
+"agent doing X" label. Tufte's data-ink ratio: ink that restates is ink to
+erase.

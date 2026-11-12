@@ -1378,15 +1378,16 @@
                  (and (< (:seq %) g) (phase-trail-kinds (:kind %))))
             entries)))
 
-(declare driven-denials)
+(declare driven-denials gate)
 
 (defn- arc-at
-  "The arc of stages `entries` travelled, read at `position` with what `doing` has running — the one
-   reading both the workstream pane and a gate show, so the two cannot mark different stages."
+  "The arc of stages `entries` travelled, read at `position`: the stage a person owes marked
+   :awaiting, and otherwise the stage `doing` has something running in marked :running."
   [entries position doing]
   (pipeline/arc (current-phase-entries entries)
-                {:at     (:stage position)
-                 :active (pipeline/stage-active position doing)}))
+                {:at       (:stage position)
+                 :active   (pipeline/stage-active position doing)
+                 :awaiting (when (awaiting-human position) (:stage position))}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
   workstream
@@ -1471,6 +1472,11 @@
         ;; heading and the arc under it are one reading and cannot disagree.
         ;; What is running rides beside it, on the stage it is running in.
         :arc          (arc-at entries position (:doing row))
+        ;; The gate `gates` lists for this workstream, when it is one: its question, the actions
+        ;; that answer it and the session a reply reaches, which the pane renders through the
+        ;; question card. The same value the needs-you list holds, so the two cannot ask different
+        ;; things.
+        :gate         (gate project ws-id)
         ;; A phased workstream's plan, phase by phase — nil for an unphased one.
         :plan         (plan project ws-id w)
         :holds        (holds project ws-id)
@@ -1582,8 +1588,7 @@
    for every other kind, its newest — the live intent (the newest :intent — an amendment is
    appended, so the newest is the one standing), and the conductor's note when its newest decision
    is an escalation that parked nothing and was recorded over the very move `position` owes — its
-   :owes equal to the position's. `:source` is the record the Ask reads — the owed one, else `report` — which the
-   gate carries as `:ask-record` for the card folded under the Ask; it is not one of ask's inputs."
+   :owes equal to the position's."
   [project ws-id report position actions]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
         owed     (owed-seq position)
@@ -1594,7 +1599,6 @@
                       (map (fn [[k es]] (if (and owed-e (= k (:kind owed-e))) owed-e (last es))))
                       (sort-by :seq))
         records  (mapv #(hydrate (entry->report base-dir %)) chosen)
-        source   (or (when owed-e (some #(when (= owed (:seq %)) %) records)) report)
         intent   (last (filter #(= :intent (:format %)) records))
         decision (->> entries (filter #(= :conduct-decision (:kind %))) last)
         d        (some->> decision (entry->report base-dir))
@@ -1608,7 +1612,6 @@
                    (some-> (get-in d [:decision 1 :needs]) str/trim not-empty
                            (->> (str "The conductor adds: "))))]
     (cond-> {:report  report
-             :source  source
              :entries (vec (remove #(= :intent (:format %)) records))
              :actions (vec actions)}
       intent (assoc :intent intent)
@@ -1644,10 +1647,7 @@
                                 :reply-to       (when (conductor/awaiting-answer? project (:ws-id row))
                                                   :conductor)
                                 :seq            (:seq report)})
-        inputs   (ask-inputs project (:ws-id row) report (:position row) actions)
-        ;; Read as `workstream` reads it — the row's position, the active ledger — so the gate pane's
-        ;; orientation and the workstream pane name one position and mark one stage.
-        position (or (:position row) (pipeline/of project (:ws-id row)))]
+        inputs   (ask-inputs project (:ws-id row) report (:position row) actions)]
     {:ws-id        (:ws-id row)
      :project      (name project)
      :origin       (:origin row)
@@ -1666,14 +1666,7 @@
      :actions      actions
      ;; The question the card leads with, for the move the position owes. Built here, once, so
      ;; the inbox row, the pane and the TUI all ask the same thing.
-     :ask          (ask/ask (or awaiting :generic) (dissoc inputs :source))
-     ;; The record the Ask was read from, for the card folded under it. Not :report, which is
-     ;; what the actions' position guards are rendered from and can be a later record.
-     :ask-record   (:source inputs)
-     ;; Where the workstream is, for the pane's orientation band: the position itself, and the arc of
-     ;; stages read at it.
-     :position     position
-     :arc          (arc-at (:entries (active-ledger project (:ws-id row))) position (:doing row))
+     :ask          (ask/ask (or awaiting :generic) inputs)
      :session      (:name psess)
      :denials      (driven-denials project (:ws-id row))
      :resume-error (get-in psess [:autonomy :error])

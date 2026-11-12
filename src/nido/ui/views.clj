@@ -130,7 +130,6 @@
         .inbox { overflow:auto; flex:1; }
         .gate-card { display:block; padding:10px 16px; border-bottom:1px solid var(--border-subtle); color:inherit; }
         .gate-card:hover { background:var(--surface-hover); text-decoration:none; }
-        .gate-card.sel { background:var(--surface); border-left:3px solid var(--accent); padding-left:13px; }
         .gate-top { display:flex; align-items:center; gap:8px; }
         .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-strong); }
         .needs { width:7px; height:7px; border-radius:50%; background:var(--needs); box-shadow:0 0 6px var(--needs); }
@@ -142,23 +141,6 @@
         .gate-prev { color:var(--text-faint); font-size:var(--fs-xs); margin:5px 0 0 26px;
                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-err { color:var(--failed); font-size:var(--fs-xs); margin:4px 0 0 26px; }
-        /* The gate pane: orientation first, then the one question, then a row per control. */
-        .orient { border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-raised);
-                  padding:12px 16px; margin:6px 0 18px; display:grid; gap:10px; }
-        .orient-k { font-size:var(--fs-xs); color:var(--text-faint); text-transform:uppercase;
-                    letter-spacing:.06em; margin:0 0 3px; }
-        .orient-goal { margin:0; color:var(--text); max-width:var(--measure); }
-        .orient-dw { margin:4px 0 0; padding-left:20px; color:var(--text-muted); font-size:var(--fs-sm);
-                     max-width:var(--measure); }
-        .orient-pos { margin:6px 0 0; color:var(--text); font-weight:600; font-size:var(--fs-sm); }
-        .orient-hold { margin:0; color:var(--needs); max-width:var(--measure); }
-        .orient .posn { margin:0; }
-        .arc-strip { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:var(--fs-sm); color:var(--text-faint); }
-        .arc-step { display:inline-flex; gap:5px; align-items:baseline; }
-        .arc-step.done { color:var(--text-muted); } .arc-step.done .arc-step-g { color:var(--ok-dim); }
-        .arc-step.current { color:var(--text-strong); font-weight:600; } .arc-step.current .arc-step-g { color:var(--working-dim); }
-        .arc-step.stale { color:var(--waiting); }
-        .arc-step.skipped { color:var(--waiting-dim); }
         .qcard { border:1px solid var(--border); border-radius:6px; background:var(--surface-raised);
                  padding:14px 16px; margin:0 0 20px; }
         .qc-head { margin:0 0 10px; color:var(--text-muted); font-size:var(--fs-sm); max-width:var(--measure); }
@@ -199,7 +181,6 @@
         .ans-letter { font-weight:600; color:var(--text-muted); }
         .ans-does { margin:0; color:var(--text-faint); font-size:var(--fs-sm); max-width:var(--measure); }
         .controls .reply { margin-top:0; }
-        .ask-record > summary { cursor:pointer; color:var(--text-muted); font-size:var(--fs-xs); }
         .md h1 { font-size:var(--fs-lg); } .md h2 { font-size:var(--fs-md); } .md h3, .md h4 { font-size:var(--fs-sm); }
         .chip { padding:0 7px; border-radius:3px; font-size:var(--fs-xs); text-transform:uppercase; }
         .c-triage{ background:var(--needs-bg); color:var(--needs); } .c-ready{ background:var(--ok-bg); color:var(--ok); }
@@ -266,16 +247,6 @@
         .plan .pm.owed { color:var(--needs-dim); }
         .plan .pm.pnr { color:var(--failed-dim); }
         .gate-criterion { font-size:var(--fs-xs); color:var(--needs-dim); margin-top:3px; }
-        .posn { margin:2px 0 10px; }
-        .posn .nx { font-size:var(--fs-sm); color:var(--text-muted); }
-        .posn .nx b { color:var(--text); font-weight:600; }
-        .posn .nx.done { color:var(--text-faint); font-style:italic; }
-        /* NOT .md — that is the rendered-markdown block, a bordered card with
-           16px of padding, and a bare `.md` rule this would inherit. Naming a
-           one-word span after an existing component is how a clause acquires a
-           box. */
-        .posn .mode { color:var(--text-faint); }
-        .posn .why { margin-top:4px; font-size:var(--fs-xs); color:var(--waiting-dim); }
         /* One per row, full text. Three columns fitted the cards on screen and
            made the RECORDS unreadable: a baseline's area or a design's summary is
            several sentences, and a 220px column clamped at four lines showed
@@ -325,14 +296,15 @@
         .arc-row.skipped .arc-n { color:var(--waiting-dim); }
         .arc-row.skipped .arc-m { color:var(--waiting-dim); }
         .arc-row.ahead .arc-n { color:var(--text-faint); }
-        /* Something running in a stage: a spinner in place of its glyph and
-           what is running beside its count, in the colour the pane uses for
-           activity. The stage's own state still colours its name. */
+        /* Something running in a stage: a spinner in place of its glyph. A stage
+           whose next move is a person's has a mark of its own in the needs
+           colour instead, which outranks the spinner. */
         .arc-spin { display:inline-block; width:8px; height:8px; border:1.5px solid var(--running);
                     border-right-color:transparent; border-radius:50%;
                     animation:arc-spin .8s linear infinite; }
         @keyframes arc-spin { to { transform:rotate(360deg); } }
-        .arc-d { font-size:var(--fs-xs); color:var(--running); }
+        .arc-wait { color:var(--needs); font-size:var(--fs-sm); line-height:1; }
+        .arc-row.awaiting .arc-n { color:var(--needs); }
         .arc-sub { padding:2px 0 8px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); }
         .hist-head { display:inline-flex; gap:7px; align-items:baseline; cursor:pointer;
                      font-size:var(--fs-sm); color:var(--text-muted); padding:3px 0; }
@@ -431,7 +403,6 @@
      .dot-down { background:var(--text-faint); }
      .doing-badge { color:var(--running-dim); }
      .doing-badge::before { content:'● '; }
-     .doing-line { color:var(--running); font-size:var(--fs-sm); margin:2px 0 6px; }
      .badge-findings { color:var(--warning-dim); border:1px solid var(--warning-bg); border-radius:4px; padding:1px 6px; font-size:var(--fs-xs); margin-left:6px; }
      .doing-badge.ship-blocked { color:var(--failed); font-weight:600; }
      .doing-badge.ship-driving { color:var(--working-dim); }
@@ -904,16 +875,15 @@
    (when tool-input [:span.meta " " tool-input])])
 
 (defn- gate-card
-  "One inbox row; links to the gate pane. `sel?` highlights the open gate. `href`
-   carries the view-state so selecting a gate preserves scope + selection. A
+  "One inbox row, linking to `href` — the workstream the gate is answered on. A
    `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'.
    `:error-msg` (a gate action that came back failed) renders on the row — the
    resolve is async, so this is the only trace a failed Apply leaves.
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [project origin stage label tag report ask session resume-error pending? error-msg doing denials]} sel? href]
-  [:a {:class (str "gate-card" (when sel? " sel"))
+  [{:keys [project origin stage label tag report ask session resume-error pending? error-msg doing denials]} href]
+  [:a {:class "gate-card"
        :href  href}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
    (tag-line tag)
@@ -939,25 +909,21 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
-  "The needs-you queue column — initial render + SSE refresh. Renders from the
-   screen so a poll preserves the open gate's highlight (selection is threaded
-   from the screen, not reset to nil each tick). Each gate's link carries the
-   view-state (scope + selection) so selecting one preserves scope."
-  [{:keys [gates selection] :as screen}]
-  (let [sel-id (:ws-id selection)]
-    (str
-     (h/html
-      (if (seq gates)
-        [:div {:id "needs"}
-         (for [g gates]
-           (gate-card g (= sel-id (:ws-id g))
-                      (str "/" (screen-query screen {:sel (str (:project g) ":" (:ws-id g))}))))]
-        [:div {:id "needs"} [:p.empty "Nothing needs you right now."]])))))
+  "The needs-you list — initial render + SSE refresh: one row per gate, each opening that
+   workstream's pane, where its question is answered."
+  [{:keys [gates]}]
+  (str
+   (h/html
+    (if (seq gates)
+      [:div {:id "needs"}
+       (for [g gates]
+         (gate-card g (str "/workstreams/" (:project g) "/" (:ws-id g))))]
+      [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
 
 (defn- gate-action-fragment
   "Shared shape for the immediate, action-keyed gate-action pane fragment:
    headline `msg` over ws-id + the follow-it links. `pane-id` is the element it
-   patches — \"gate-pane\" on the Needs-you page, \"ws-pane\" on the overview."
+   patches — \"ws-pane\", the workstream pane the action was taken from."
   [msg project ws-id pane-id]
   (str
    (h/html
@@ -969,12 +935,11 @@
       " · "
       [:a {:href "/workstreams"} "workstreams →"]]])))
 
-(defn ^{:malli/schema [:=> [:cat :any :ProjectName :WorkstreamId [:? :string]] :any]}
+(defn ^{:malli/schema [:=> [:cat :any :ProjectName :WorkstreamId :string] :any]}
   gate-action-confirm-fragment
   "Immediate, action-keyed confirmation toast for an action that actually ran.
    :promote is intentionally destination-neutral: a :ready ticket provisions the
    work session, an :incoming Slack report starts triage."
-  ([action-id project ws-id] (gate-action-confirm-fragment action-id project ws-id "gate-pane"))
   ([action-id project ws-id pane-id]
    (gate-action-fragment
     (cond
@@ -1014,7 +979,7 @@
         "Done."))
     project ws-id pane-id)))
 
-(defn ^{:malli/schema [:=> [:cat :string :ProjectName :WorkstreamId [:? :string]] :any]}
+(defn ^{:malli/schema [:=> [:cat :string :ProjectName :WorkstreamId :string] :any]}
   gate-action-skip-fragment
   "Rendered instead of gate-action-confirm-fragment when the gate action did NOT
    actually run — e.g. server/gate-resolve!'s in-flight guard dropped a
@@ -1022,17 +987,11 @@
    caller-supplied honest copy (server/resolve-failure-msg's :already-in-flight
    sentence) rather than a per-action success claim about something that never
    happened."
-  ([msg project ws-id] (gate-action-skip-fragment msg project ws-id "gate-pane"))
   ([msg project ws-id pane-id]
    (gate-action-fragment msg project ws-id pane-id)))
 
 (defn- style-class [style]
   (case style :primary "btn btn-primary" :danger "btn btn-danger" "btn"))
-
-(defn- gate-route
-  "Default POST target for a gate action: the home /gate route (patches #gate-pane)."
-  [project ws-id action-id]
-  (str "/gate/" project "/" ws-id "/" (name action-id)))
 
 (defn- action-button
   "One gate button. A descriptor carrying `:seq` (blocker-option buttons — see
@@ -1050,15 +1009,12 @@
              title (assoc :title title))
    label])
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any [:? :any]] :any]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any :any] :any]}
   action-bar
   "Render an action set: one-click buttons (mutations + preset-input resumes) in a row,
    plus a free-text reply textarea when a resume action without :input is present.
-   `session` (optional) labels the resume target. `route` (optional, default the home
-   /gate route) builds each button's POST url from (project ws-id action-id) — pass the
-   pane route to keep responses inside the overview pane. The single renderer behind
-   every gate."
-  ([project ws-id actions session] (action-bar project ws-id actions session gate-route))
+   `session` labels the resume target, or is nil. `route` builds each button's POST url from
+   (project ws-id action-id). The single renderer behind every gate."
   ([project ws-id actions session route]
    (let [buttons   (filter #(or (#{:mutation :link} (:kind %)) (:input %)) actions)
          free-text (some #(when (and (= :resume (:kind %)) (not (:input %))) %) actions)
@@ -1827,54 +1783,26 @@
 
 ;; The position and arc vocabulary the workstream pane defines below; the gate pane names a
 ;; position and marks a stage exactly as it does.
-(declare position-label position-line arc-label arc-glyph)
-
-(defn- arc-strip
-  "The arc as one line of marked stages, for a reader re-orienting rather than reading history:
-   each stage with its state's glyph, the current one marked. The workstream pane draws the same
-   arc as rows it can expand; this is the same reading, folded to a line."
-  [{:keys [stages]}]
-  (into [:div.arc-strip]
-        (for [{:keys [stage state active?]} stages]
-          [:span {:class (str "arc-step " (name state) (when active? " active"))}
-           [:span.arc-step-g (if active? [:span.arc-spin] (get arc-glyph state "·"))]
-           (get arc-label stage (name stage))])))
-
-(defn- orientation-band
-  "What a reader arriving cold needs before the question: what the workstream is for, where it is,
-   and what this decision holds up. Unfolded, because someone who has been elsewhere cannot judge
-   an answer without it. Every line is read off the gate — the Ask's goal and :holding, the gate's
-   arc and position — and the view adds no sentence of its own."
-  [{:keys [ask arc position doing]}]
-  (let [{:keys [goal holding]} ask]
-    [:section.orient
-     (when goal
-       [:div.orient-row
-        [:p.orient-k "What this workstream is for"]
-        [:p.orient-goal (:goal goal)]
-        (when (seq (:done-when goal))
-          (into [:ol.orient-dw] (map (fn [d] [:li d])) (:done-when goal)))])
-     [:div.orient-row
-      [:p.orient-k "Where it is"]
-      (when arc (arc-strip arc))
-      (when-let [at (:at position)]
-        [:p.orient-pos (get position-label at (name at))])
-      (when position (position-line position))
-      (when-let [d (wsv/doing-label doing)] [:p.doing-line "● " d])]
-     (when holding
-       [:div.orient-row
-        [:p.orient-k "What this decision holds up"]
-        [:p.orient-hold holding]])]))
-
 (defn- does-of
   "What giving action `id` does, as the Ask words it."
   [ask id]
   (some #(when (= id (:action %)) (:does %)) (:answer-does ask)))
 
+(defn ^{:malli/schema [:=> [:cat :WorkstreamId] :string]}
+  card-signal
+  "The key under `qcard` that holds workstream `ws-id`'s card state ({step, answers}): the id with
+   every character a signal name cannot carry replaced by `_`. Keyed per workstream so the state is
+   seeded only when missing — a pane poll re-renders the card without resetting the reader's step
+   or choices — and a card opened for another workstream starts fresh instead of inheriting them."
+  [ws-id]
+  (str/replace (str ws-id) #"[^A-Za-z0-9]" "_"))
+
 (defn- answer-signal
-  "The page signal holding question `i`'s choice: a letter, or '' while it is open."
-  [i]
-  (str "$qcard.answers.q" i))
+  "The page signal holding question `i`'s choice on `ws-id`'s card: a letter, or '' while open."
+  [ws-id i]
+  (str "$qcard." (card-signal ws-id) ".answers.q" i))
+
+(defn- step-signal [ws-id] (str "$qcard." (card-signal ws-id) ".step"))
 
 (defn- post-expr
   "The click expression posting action descriptor `d` through `route`, with the reading position
@@ -1890,7 +1818,7 @@
    button at all."
   [{:keys [project ws-id route by-id pending? primary-option?]} i
    {:keys [letter label summary consequence recommended? action] :as opt}]
-  (let [chosen (str (answer-signal i) " === '" letter "'")
+  (let [chosen (str (answer-signal ws-id i) " === '" letter "'")
         body   (list [:span.qc-opt-label [:strong label]
                       (when recommended? [:span.chip.c-opt-rec "recommended"])
                       (when-not action [:span.qc-chosen {"data-show" chosen} "✓ chosen"])]
@@ -1906,14 +1834,14 @@
       :else [:button {:type "button" :class "qc-opt"
                       "data-class:chosen" chosen
                       "data-attr:aria-pressed" chosen
-                      "data-on:click" (str (answer-signal i) " = (" chosen ") ? '' : '" letter "'")}
+                      "data-on:click" (str (answer-signal ws-id i) " = (" chosen ") ? '' : '" letter "'")}
              body])))
 
 (defn- question-section
   "Question `i` of `n`: its line, then its context, recommendation and what follows the answer as
    body text, then its options. Only the shown one is visible when there are several."
   [ctx i n {:keys [question context recommendation after options]}]
-  [:section (cond-> {:class "qc-question"} (> n 1) (assoc "data-show" (str "$qcard.step === " i)))
+  [:section (cond-> {:class "qc-question"} (> n 1) (assoc "data-show" (str (step-signal (:ws-id ctx)) " === " i)))
    [:p.qc-q question]
    (when (seq context) (into [:div.qc-ctx] (map (fn [c] [:p c])) context))
    (when recommendation [:p.qc-rec [:span.qc-k "Recommended"] recommendation])
@@ -1924,16 +1852,16 @@
 (defn- stepper-nav
   "Where the reader is among `n` questions: which is shown, one marker per question saying whether
    it is answered (● answered, ○ open — the glyph says it, not only the colour), and a jump to each."
-  [n]
+  [ws-id n]
   (into [:div.qc-nav
-         [:span "Question " [:span {"data-text" "$qcard.step + 1"} "1"] " of " n]]
+         [:span "Question " [:span {"data-text" (str (step-signal ws-id) " + 1")} "1"] " of " n]]
         (for [i (range n)]
           [:button {:type "button" :class "qc-mark"
                     :aria-label (str "Question " (inc i))
-                    "data-class:answered" (str (answer-signal i) " !== ''")
-                    "data-class:current" (str "$qcard.step === " i)
-                    "data-text" (str (answer-signal i) " !== '' ? '●' : '○'")
-                    "data-on:click" (str "$qcard.step = " i)}
+                    "data-class:answered" (str (answer-signal ws-id i) " !== ''")
+                    "data-class:current" (str (step-signal ws-id) " === " i)
+                    "data-text" (str (answer-signal ws-id i) " !== '' ? '●' : '○'")
+                    "data-on:click" (str (step-signal ws-id) " = " i)}
            "○"])))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :any :map] :any]}
@@ -1942,15 +1870,15 @@
    beside what it does. Reads nothing but its arguments, so any pane can drop it in: `ask` is a
    report.ask Ask, `actions` the gate's action descriptors, and `opts` {:route :pending?
    :error-msg :session} — `:route` (project ws-id action-id) -> the URL every POST it renders goes
-   to (default the Needs-you /gate route), `:pending?` a gate whose agent is running, which renders
+   to, `:pending?` a gate whose agent is running, which renders
    its questions with no control for any action, `:error-msg` a failed action's message, set
    above the first question, and `:session` the session a Reply resumes.
 
    Several questions share one card with a stepper; choices made in it are page state
-   (`qcard.answers`) until the Ask's `:submit` sends them all, so a question may be left open. The
+   (`qcard.<card-signal>.answers`) until the Ask's `:submit` sends them all, so a question may be left open. The
    submit, or with none the recommended option, is the one primary button."
   [project ws-id {:keys [question questions submit note] :as ask} actions
-   {:keys [route pending? error-msg session] :or {route gate-route}}]
+   {:keys [route pending? error-msg session]}]
   (let [by-id     (into {} (map (juxt :id identity)) actions)
         n         (count questions)
         options   (mapcat :options questions)
@@ -1975,23 +1903,23 @@
                      [:div.ans-body [:p.ans-cons (does-of ask (:id d))]]])]
     [:div (cond-> {:class "qcard"}
             (or submit (> n 1))
-            (assoc "data-signals"
-                   (str "{qcard: {step: 0, answers: {"
+            (assoc "data-signals__ifmissing"
+                   (str "{qcard: {" (card-signal ws-id) ": {step: 0, answers: {"
                         (str/join ", " (map #(str "q" % ": ''") (range n)))
-                        "}}}")))
+                        "}}}}")))
      (when (and error-msg (not pending?)) [:div.action-err "⚠ " error-msg])
      (when (and (> n 1) (not= question (:question (first questions))))
        [:p.qc-head question])
-     (when (> n 1) (stepper-nav n))
+     (when (> n 1) (stepper-nav ws-id n))
      (map-indexed #(question-section ctx %1 n %2) questions)
      (when (> n 1)
        [:div.qc-step
         [:button {:type "button" :class "btn"
-                  "data-attr:disabled" "$qcard.step === 0"
-                  "data-on:click" "$qcard.step = Math.max(0, $qcard.step - 1)"} "◂ Previous"]
+                  "data-attr:disabled" (str (step-signal ws-id) " === 0")
+                  "data-on:click" (str (step-signal ws-id) " = Math.max(0, " (step-signal ws-id) " - 1)")} "◂ Previous"]
         [:button {:type "button" :class "btn"
-                  "data-attr:disabled" (str "$qcard.step === " (dec n))
-                  "data-on:click" (str "$qcard.step = Math.min(" (dec n) ", $qcard.step + 1)")} "Next ▸"]])
+                  "data-attr:disabled" (str (step-signal ws-id) " === " (dec n))
+                  "data-on:click" (str (step-signal ws-id) " = Math.min(" (dec n) ", " (step-signal ws-id) " + 1)")} "Next ▸"]])
      (when (seq opt-does) (into [:div] (map (fn [d] [:p.ans-does d])) opt-does))
      (when note [:p.ask-note note])
      (if pending?
@@ -2007,66 +1935,17 @@
                 (cond->> (action-bar project ws-id boxes session route)
                   primary-taken? (walk/postwalk #(if (= :button.btn.btn-primary %) :button.btn %)))))])]))
 
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
-  gate-pane
-  "The detail pane: one gate in full. nil -> calm placeholder.
-
-   Top to bottom: the title and links; the orientation band; any auto-mode denials recorded while
-   nido drives the session; the Ask, through `question-card`; and the record the Ask was read
-   from, folded. A `:pending?` gate (its agent is running after Apply/Reply) shows no control —
-   deriving that from the agent's live phase, so a poll can't flip it back to a fresh Apply
-   button. `:error-msg` (a failed action) renders at the top of the card, whose controls stay
-   clickable to retry."
-  [{:keys [ws-id project origin label tag links report ask ask-record actions session pending?
-           error-msg denials]
-    :as gate}]
-  (str
-   (h/html
-    (if-not gate
-      [:div {:id "gate-pane"} [:p.empty "Nothing needs you right now."]]
-      [:div {:id "gate-pane"}
-       (pane-heading origin label links tag)
-       (links-row links)
-       (orientation-band gate)
-       ;; Every auto-mode denial recorded while nido drives the session, whether or not
-       ;; anything else here waits on a person.
-       (when (seq denials)
-         [:div.denials [:p.meta "Permission denials while nido drives it:"]
-          (into [:ul] (map denial-line) denials)])
-       (if ask
-         (list (question-card project ws-id ask actions
-                              {:route gate-route :pending? pending? :error-msg error-msg
-                               :session session})
-               ;; Folded: the record the Ask was read from, not the gate's latest report — a
-               ;; verdict appended after an unanswered one is not the evidence behind the question.
-               (when-let [r (or ask-record report)]
-                 [:details.ask-record
-                  [:summary "The record: " (some-> r :format name) " · " (:at r)]
-                  (report-body r)]))
-         (list (when report [:div.meta (some-> report :format name) " · " (:at report)])
-               (report-body report)
-               (if pending?
-                 [:div.actions [:span.meta "working… the agent is running."]]
-                 (list (when error-msg [:div.action-err "⚠ " error-msg])
-                       (action-bar project ws-id actions session)))))]))))
-
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   needs-page
-  "Home: the needs-you master-detail inside the shell, rendered from the screen.
-   The selected gate (matched from the screen's gates by the view-state
-   selection) fills the pane; the poll query carries scope + selection so the
-   3s refresh preserves both."
-  [ctx {:keys [gates selection] :as screen}]
-  (let [sel-id   (:ws-id selection)
-        sel-gate (first (filter #(= sel-id (:ws-id %)) gates))
-        q        (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))]
-    (shell
-     (assoc ctx :active :needs :title "Needs you")
-     [:div.gate-wrap
-      [:div.queue-col
-       [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" q "')")}
-        (h/raw (needs-fragment screen))]]
-      [:div.pane (h/raw (gate-pane sel-gate))]])))
+  "Home: the list of what waits on you, inside the shell, rendered from the screen. No pane of its
+   own: each row opens its workstream's pane, where the question is answered, so the context a
+   reader re-orients by is the workstream's and is not drawn a second time here. The poll query
+   carries the scope so the 3s refresh keeps it."
+  [ctx screen]
+  (shell
+   (assoc ctx :active :needs :title "Needs you")
+   [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" (screen-query screen nil) "')")}
+    (h/raw (needs-fragment screen))]))
 
 ;; ---------------------------------------------------------------------------
 ;; Workstreams (overview + ledger) — replaces the board + ws-detail.
@@ -2338,29 +2217,6 @@
     (str "Status — " (get position-label at (name at)))
     "Status"))
 
-(defn- position-line
-  "What comes next, on its own line and in plain words.
-
-   No pill. A bordered chip reads as a control or a tag — something to click or
-   to filter by — and this is neither: it is one sentence about what happens
-   next. It also sat inline beside the position, which made a heading, a state
-   and an instruction into one run-on line.
-
-   The mode still says WHO acts, because that is the distinction a reader is
-   scanning for, but as a clause rather than as a badge."
-  [{:keys [next why]}]
-  [:div.posn
-   (if next
-     [:div.nx "next · " [:b (get stage-label (:stage next) (name (:stage next)))]
-      [:span.mode (case (:mode next)
-                  :human        " — waiting on you"
-                  :mechanical   " — a task nido runs"
-                  :authoring    " — nido writes the record"
-                  :working-copy " — changes code"
-                  (str " — " (name (:mode next))))]]
-     [:div.nx.done "nothing further"])
-   (when why [:div.why why])])
-
 (defn- hold-card
   "One standing record: what it is, which entry it is, how many revisions it took,
    and a line of what it says. `foot` is the record-specific verdict line."
@@ -2507,19 +2363,22 @@
    on every row would bury the case that matters: `2 visits` on a baseline means a
    later stage sent the work back to it, which is the fact the ledger index cannot
    show and a forward-only track cannot show either."
-  [pos doing {:keys [stage state visits active?] :as facet}]
+  [pos {:keys [stage state visits now] :as facet}]
   (let [live? (pos? (:entries facet))
         open? (= stage (:stage pos))]
     [:div (cond-> {:class (str "arc-row " (name state)
+                              (when (= :awaiting now) " awaiting")
                               (when live? " live") (when open? " open"))}
             live? (assoc "data-on:click" (pane-fragment (at-stage pos stage))))
-     [:span.arc-g (if active? [:span.arc-spin {:title doing}] (get arc-glyph state "·"))]
+     [:span.arc-g (case now
+                    :awaiting [:span.arc-wait {:title "waiting on you"} "◆"]
+                    :running  [:span.arc-spin]
+                    (get arc-glyph state "·"))]
      [:span.arc-n (get arc-label stage (name stage))]
      (when-let [m (arc-meta facet)] [:span.arc-m m])
      (when (> visits 1)
        [:span.arc-v {:title "the work left this stage and came back"}
-        (str "· " visits " visits")])
-     (when (and active? doing) [:span.arc-d (str "· " doing)])]))
+        (str "· " visits " visits")])]))
 
 (defn- arc-entry-rows
   "The entries of one stage, newest first, as rows that open into the viewer. The
@@ -2553,11 +2412,11 @@
    it; when it does not, the entry was reached from the raw index and the viewer
    renders down there instead. One viewer either way — reading an entry twice on
    one page is worse than reaching it from two places."
-  [pos {:keys [stages excursions]} entries report report-here? doing]
+  [pos {:keys [stages excursions]} entries report report-here?]
   [:div
    (into [:div.arc]
          (mapcat (fn [{:keys [stage seqs] :as facet}]
-                   (cond-> [(arc-row pos doing facet)]
+                   (cond-> [(arc-row pos facet)]
                      (= stage (:stage pos))
                      (conj [:div.arc-sub
                             (arc-entry-rows pos entries seqs)
@@ -2631,18 +2490,12 @@
   (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
     (action-bar project ws-id
-                (mapv
-                 ;; Accepting a verdict that asks questions — Accept with its answers, or Defer
-                 ;; with every one left open — is done where they are shown: this pane shows none
-                 ;; of them, so both link to the gate on Needs you rather than accepting a verdict
-                 ;; whose questions nobody saw.
-                 (fn [{:keys [answers id] :as a}]
-                   (if (or (= :questions answers) (= :defer id))
-                     {:id (:id a) :kind :link :style (:style a)
-                      :label (str (:label a) " on Needs you ▸")
-                      :title "Answer the verdict's questions where they are shown"
-                      :href (str "/?sel=" project ":" ws-id)}
-                     a))
+                ;; Rendered only for a workstream that is no gate, which owes no Ask: an action that
+                ;; answers a verdict's questions, or Defer, which accepts with every one left open,
+                ;; would accept questions nobody was shown, so neither is offered here — a gate's
+                ;; are the question card's.
+                (into []
+                 (remove (fn [{:keys [answers id]}] (or (= :questions answers) (= :defer id))))
                  (work/gate-actions stage parked? origin
                                    {:report-format (:format report)
                                     :grantable?    (work/grantable? project ws-id)
@@ -2732,13 +2585,16 @@
    is a map of session-name → {:state … :url :error-msg} (the view does no IO).
    `machine-facts` is a map of session-name → {:pg-port :nrepl-port :app-port
    :repl-rss :pg-rss :heap-max} (also no IO — a projection the caller injects).
-   `:error-msg` on the ws (a gate action that came back failed) renders above the
-   action bar, whose buttons stay clickable to retry.
+   A ws carrying `:gate` (it waits on the person) renders its question card under the
+   heading, and the card is then the pane's only control; `:pending?` marks an action
+   on it still resolving. `:error-msg` (a gate action that came back failed) renders
+   at the top of the card, or above the action bar when there is no gate — the
+   buttons stay clickable to retry either way.
    Polls its own fragment AT THE READER'S POSITION (`:selected-seq` + `:open-rounds`
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? denials]
+  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc plan status replyable? denials gate pending?]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2762,6 +2618,13 @@
             (pane-heading origin label links tag)
             [:p.meta (name stage) " " (status-chip status)]
             (links-row links)
+            ;; What waits on the person leads the pane: the question is the first
+            ;; thing under the heading, and the card owns the gate's error line and
+            ;; every control, so the pane offers neither of its own beside it.
+            (when gate
+              (question-card project ws-id (:ask gate) (:actions gate)
+                             {:route pane-route :pending? (boolean (or (:working? gate) pending?))
+                              :error-msg error-msg :session (:session gate)}))
 
             ;; Two sections, and the split is the pane's whole claim: what is
             ;; TRUE of this workstream, and what HAPPENED to it. They were one
@@ -2769,20 +2632,12 @@
             ;; revision of them read as the same kind of thing — which is exactly
             ;; the confusion the standing records were added to end.
             [:h2 (status-heading position)]
-            (when position (position-line position))
-            ;; Under the position, because it answers the next question a reader
-            ;; has once they know where this stands: is anything happening in it
-            ;; at this moment.
-            ;; On its own line only when no stage carries it — a merge runs in
-            ;; no stage of the unit. Otherwise the arc row it runs in says it.
-            (when-let [d (wsv/doing-label doing)]
-              (when-not (some :active? (:stages arc)) [:p.doing-line "● " d]))
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
             ;; that can show the work having been sent back to an earlier stage.
             (when plan (plan-block plan))
             (when (seq (:stages arc))
-              (arc-block pos arc entries report in-stage? (wsv/doing-label doing)))
+              (arc-block pos arc entries report in-stage?))
             (when (seq holds) (holds-block holds))
             (when (seq denials)
               [:div.denials [:p.meta "Permission denials while nido drives it:"]
@@ -2792,9 +2647,9 @@
             ;; the CURRENT report, never the entry a reader happens to have open.
             ;; Left below the ledger they read as actions on the thing being read,
             ;; which is the one thing they are not.
-            (when (and on-latest? error-msg)
+            (when (and on-latest? error-msg (not gate))
               [:div.action-err "⚠ " error-msg])
-            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report position plan replyable?))
+            (when (and on-latest? (not gate)) (pane-action-bar project ws-id origin stage sessions action-report position plan replyable?))
             (when (= :done stage) (file-findings-form project ws-id))
 
             ;; Collapsed by default. The arc above is the reading a driver
@@ -2969,7 +2824,7 @@
     (when (pos? (or runs 0)) [:span (str runs " recovery run" (when (not= 1 runs) "s"))])
     (when closed [:span (str "closed " (name (:outcome closed)) " " (ago (:at closed)))])
     (when first-at [:span (str "first " (ago first-at))])
-    (when gate-ws [:a {:href (str "/?sel=nido:" gate-ws)} "open the gate"])
+    (when gate-ws [:a {:href (str "/workstreams/nido/" gate-ws)} "open the gate"])
     (when ws-id [:a {:href (str "/workstreams?sel=nido:" ws-id)} ws-id])]])
 
 (defn- feed-href
@@ -3064,7 +2919,7 @@
         [:span.prop-verdict.prop-waiting "sweep waiting on you"]
         [:span.prop-where title]]
        [:p.prop-sum ws-link " is parked at a gate, and the sweep waits until it is answered. "
-        [:a {:href (str "/?sel=" project ":" ws-id)} "open the gate"]]]
+        [:a {:href (str "/workstreams/" project "/" ws-id)} "open the gate"]]]
       :working
       [:p.meta "Sweep working on " ws-link " — " title
        (when started-at (str " · started " (ago started-at)))])))

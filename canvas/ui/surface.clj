@@ -53,13 +53,13 @@
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [origin-badge]})
   (Operation gate-action-confirm-fragment "The immediate confirmation a gate action swaps in."
     {:signature [:=> [:catn [:action-id :any] [:project ProjectName] [:ws-id WorkstreamId]
-                            [:pane-id [:? :string]]] :any]})
+                            [:pane-id :string]] :any]})
   (Operation gate-action-skip-fragment "What is rendered when a gate action is not offered."
     {:signature [:=> [:catn [:msg :string] [:project ProjectName] [:ws-id WorkstreamId]
-                            [:pane-id [:? :string]]] :any]})
+                            [:pane-id :string]] :any]})
   (Operation action-bar "One action set, rendered."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:actions :any]
-                            [:session :any] [:route [:? :any]]] :any]})
+                            [:session :any] [:route :any]] :any]})
   (Operation question-card
     "One Ask, answered: its questions one at a time, their options, and every action the gate
      offers beside what it does. Reads nothing but its arguments — the page supplies only how a
@@ -67,12 +67,14 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ask :map]
                             [:actions :any] [:opts :map]] :any]
      :delegates [action-bar]})
-  (Operation gate-pane "One gate in full: what it is, what it holds, what you can do."
-    {:signature [:=> [:catn [:gate :map]] :any]
-     :delegates [question-card origin-badge report/report->markdown render]})
-  (Operation needs-page "The home page: the needs-you master and the selected gate."
+  (Operation card-signal
+    "The key a workstream's question card keeps its step and choices under, in page state —
+     one per workstream, so two cards on one page never share them, and the server reads a
+     submit's choices back from the same key."
+    {:signature [:=> [:catn [:ws-id WorkstreamId]] :string]})
+  (Operation needs-page "The home page: the list of what waits on you, each row opening its workstream."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
-     :delegates [shell needs-fragment gate-pane]})
+     :delegates [shell needs-fragment]})
   (Operation workstreams-fragment "The selected tab's stage groups."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [origin-badge]})
   (Operation status-heading "The status section's heading."

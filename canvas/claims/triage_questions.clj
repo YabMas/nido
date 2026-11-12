@@ -9,10 +9,10 @@
             [canvas.coordinator.record.tickets :refer [complete!]]
             [canvas.coordinator.report :refer [accepted-answers blocker-parts coordinator-report parse-event triage-questions validate-event]]
             [canvas.coordinator.report.ask :refer [Ask ask report-ask]]
-            [canvas.coordinator.work :refer [apply! gate-actions resolve-gate!]]
+            [canvas.coordinator.work :refer [apply! gate-actions gates resolve-gate! workstream]]
             [canvas.tasks.nido-review :refer [parked-blocker]]
             [canvas.tasks.nido-seats :refer [decide*]]
-            [canvas.ui.surface :refer [gate-pane question-card ui-server workstream-pane]]))
+            [canvas.ui.surface :refer [needs-fragment question-card ui-server workstream-pane]]))
 
 (Claim questions-write-shape
   "The write contract for :triage accepts :questions, each a :question, a :context, an :after, one to authoring-branch-cap :directions and an optional :recommendation, which a triager gives only when it genuinely holds a view on which fix is right. It refuses a new report carrying :directions; a report with no questions writes :questions []."
@@ -39,7 +39,7 @@
   {:about [halt-for parked-blocker decide!] :evidence "test"})
 
 (Claim ask-is-typed
-  "An Ask is {:kind :question :questions :answer-does} plus optional :submit, :goal, :holding and :note. :question is its one-line headline. Each question is {:question :context [strings] :options} with an optional :recommendation and :after. Each option is letter, label, summary, an optional consequence and recommended?, and an optional :action. An Ask answers in one mode: without :submit, every option carries an :action and answers by itself; with :submit, no option carries one, there is at least one option, and :submit names the gate action that sends the choices. `ask` constructs no other Ask, and none whose :action or :submit names an action the gate does not offer."
+  "An Ask is {:kind :question :questions :answer-does} plus optional :submit, :goal and :note. :question is its one-line headline. Each question is {:question :context [strings] :options} with an optional :recommendation and :after. Each option is letter, label, summary, an optional consequence and recommended?, and an optional :action. An Ask answers in one mode: without :submit, every option carries an :action and answers by itself; with :submit, no option carries one, there is at least one option, and :submit names the gate action that sends the choices. `ask` constructs no other Ask, and none whose :action or :submit names an action the gate does not offer."
   {:about [Ask ask] :evidence "test"})
 
 (Claim answer-is-its-button
@@ -51,8 +51,8 @@
   {:about [report-ask question-card] :evidence "test"})
 
 (Claim card-leads-with-the-question
-  "A needs-you row previews its Ask :question. The gate pane renders, top to bottom: the title and links; the orientation band; the permission denials recorded while nido drives the session, when there are any; the question card; and the kind's own record card last, folded. A failed action's error line, when there is one, sits at the top of the card, above its first question."
-  {:about [gate-pane Ask] :evidence "test"})
+  "A needs-you row previews its Ask :question. A failed action's error line, when there is one, sits at the top of the question card, above its first question."
+  {:about [needs-fragment question-card Ask] :evidence "test"})
 
 (Claim ask-carries-questions
   "The accept-triage Ask is read from the newer of a triage report and a Slack proposal. Over a triage report it carries one question per question of the report, in order; a report with no questions is asked as its own acceptance — one question, the headline's, over its determination and summary, with no options. Each has its words ('Which fix should be built?' where a legacy question has none), its context, recommendation and after, and its directions as options with no :action, label, summary and the effort as consequence. :submit is :apply when the report asks a question; a report with none has no :submit, its Apply answering as its own button. The headline asks to accept the triage. Over a Slack proposal it asks to file it as a ticket, as one option-less question over the proposal's sections, answered by Apply with no :submit. An answer-blocker Ask carries one question from report/blocker-parts, whose options carry their :option-<letter> actions. Every other kind yields one question from its own record."
@@ -87,8 +87,8 @@
   {:about [question-card] :evidence "test"})
 
 (Claim panes-use-the-card
-  "The gate pane renders its Ask only through question-card, below its title, links and orientation, with the folded record after it. The workstream pane, which renders a gate's actions without its Ask, renders every action that accepts a verdict with questions — an Accept that submits them, and Defer, which accepts with every one left open — as a link to that gate on Needs you instead of a button, so no surface accepts a multi-question verdict without showing its questions."
-  {:about [gate-pane workstream-pane] :evidence "test"})
+  "The workstream map carries :gate exactly when `gates` lists a gate for the workstream, and it is that gate. workstream-pane over a map carrying :gate renders question-card over that gate's :ask, :actions and :session with pane-route, directly under its heading and links, before the stage-and-status line, the status heading, the plan, the stage list, holds and denials, passing it the pane's :error-msg and, as :pending?, the reading work/screen gives a needs gate: the gate's :working?, or a gate action on the workstream still resolving. It then renders no error line of its own and no pane-action-bar. The card's step and choices survive the pane's refresh. A pane over a map without :gate renders pane-action-bar without the actions that answer an Ask's questions (an action with :answers :questions, and :defer), and none of its actions is a link to another page. No other pane renders an Ask."
+  {:about [workstream-pane workstream gates question-card] :evidence "test"})
 
 (Claim skill-splits-defects
   "The triage-bug skill's report template writes :questions. It tells the agent to write one question per independent defect, each with its question, context and after and a recommendation only when it genuinely holds one; to list within a question only alternatives that exclude one another; and that a question may carry a single direction."

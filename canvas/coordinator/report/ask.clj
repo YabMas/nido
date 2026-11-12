@@ -14,8 +14,7 @@
    headline, and one or more questions — each its words, the context it presupposes, a
    recommendation and what follows the answer, and the answers on offer with what each costs —
    the action that submits answers collected across questions, what each of the gate's
-   actions does, the goal the question is judged against, and what the question holds up until
-   it is answered. Derived from records, never stored,
+   actions does, and the goal the question is judged against. Derived from records, never stored,
    and constructed only by `ask`."
   [:map [:kind :keyword]
         [:question [:re "\\S"]]
@@ -31,7 +30,6 @@
         [:submit {:optional true} :keyword]
         [:answer-does [:vector [:map [:action :keyword] [:label :string] [:does [:re "\\S"]]]]]
         [:goal {:optional true} :map]
-        [:holding {:optional true} [:re "\\S"]]
         [:note {:optional true} :string]])
 
 (Module report-ask

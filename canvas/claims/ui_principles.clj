@@ -4,9 +4,10 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
+            [canvas.coordinator.lane.drive :refer [arc stage-active]]
             [canvas.coordinator.report.ask :refer [report-ask Ask]]
             [canvas.coordinator.work :refer [gates workstream]]
-            [canvas.ui.surface :refer [ui-views shell gate-pane action-bar]]))
+            [canvas.ui.surface :refer [ui-views shell needs-page needs-fragment ui-server workstream-pane]]))
 
 (Claim principles-stated
   "docs/reference/ui-principles.md states the web dashboard's principles of hierarchy, type, colour, actions, disclosure and orientation, each as a rule a reader can check a page against and each naming the established pattern it is drawn from; it governs the web dashboard and says it does not govern the TUI."
@@ -20,14 +21,26 @@
   "The dashboard's body text is set in the prose face token (a system-ui stack); the mono face token is applied only to code, pre, kbd and the classes that carry identifiers, paths, commands and machine facts. Prose blocks on the gate pane are bounded to a reading measure in ch, never truncated."
   {:about [ui-views shell] :evidence "round"})
 
-(Claim orientation-before-answers
-  "Above the question and unfolded, the gate pane shows what the workstream is for (the live intent's goal and its done-whens), where it is, and how this decision fits. Where it is: the gate's arc of stages, its current stage marked when the position is on the arc; beside it the position named and its next move, as the workstream pane's status heading and next line name them, which is how a gate past the arc — a landing, a phase's exit gate — says where the work is now; and, when something is running, what. How it fits: the Ask's :holding when the Ask carries one, and otherwise the named position, with no sentence of the view's own. A gate with no live intent shows the same band without the goal."
-  {:about [gate-pane gates] :evidence "round"})
+(Claim home-lists-what-waits
+  "GET / renders needs-page as the needs-you list alone, with no detail pane, each row linking to /workstreams/<project>/<ws-id>. GET / with ?sel=<project>:<ws-id> and GET /gate/<project>/<ws-id> each redirect to /workstreams/<project>/<ws-id>, and every link the dashboard renders as opening a gate — the list's rows and the 'open the gate' links of the operations and recovery notices — is /workstreams/<project>/<ws-id>. Nothing renders gate-pane or patches #gate-pane, and there is no POST /gate/<project>/<ws-id>/<action> route: a gate action posts through pane-route."
+  {:about [ui-server needs-page needs-fragment] :evidence "test"})
 
-(Claim holding-per-kind
-  "Each registered kind but :generic yields an Ask whose :holding says, in a person's terms, what in the workstream waits on this answer; it is read from the kind's registry entry and the record, never from the view."
-  {:about [report-ask Ask] :evidence "round"})
+(Claim gate-carries-no-pane-facts
+  "A gate map carries no :arc and no :position key; of the gate and workstream maps, only the workstream map carries them."
+  {:about [gates workstream] :evidence "test"})
 
-(Claim gate-arc-is-the-panes
-  "Every gate carries :arc and :position, the arc of stages and the position that workstream returns for the same workstream at the same moment — the same pipeline/arc over the current phase's entries with the stage and activity of the position the row carries, and that position itself — so the gate pane and the workstream pane cannot show different stages or name the position differently."
-  {:about [gates workstream] :evidence "round"})
+(Claim stage-list-marks-waiting
+  "pipeline/arc takes :awaiting, the stage whose next move is a person's, beside :active, and in place of :active? gives a facet one :now value: :awaiting on the stage :awaiting names, otherwise :running on the stage :active names. work/workstream passes its position's stage as :awaiting exactly when awaiting-human holds for that position. arc-row dispatches on :now: :awaiting draws a mark of its own in the --needs colour, titled 'waiting on you'; :running draws the running mark; a facet without :now draws its state's glyph."
+  {:about [arc stage-active workstream workstream-pane] :evidence "test"})
+
+(Claim no-restated-lines
+  "workstream-pane renders no position line ('next · … — waiting on …') and no activity label: no text wsv/doing-label produces appears anywhere in the pane, the stage list's rows and their marks' titles included."
+  {:about [workstream-pane] :evidence "test"})
+
+(Claim ask-carries-no-holding
+  "The Ask schema has no :holding key, and no registry entry of report.ask builds one."
+  {:about [Ask report-ask] :evidence "test"})
+
+(Claim principles-say-ask-leads
+  "docs/reference/ui-principles.md's orientation rule says a pane that asks leads with the question and sets the context that re-orients a reader below it, and a rule of its own says a pane never states what its placement already says; both name the person's review of the shipped gate pane as their source."
+  {:about [ui-views] :evidence "round"})

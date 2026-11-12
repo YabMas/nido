@@ -30,23 +30,38 @@
                                   :description-prepend "Rounding bug."}
                   :trail [{:ref "src/order.clj:88" :note "per-line round"}]}))
 
+(def ^:private pane-route #'views/pane-route)
+
+(defn- gate-in-pane
+  "A gate as a person meets it now: the question card inside its workstream's pane. The
+   gate's report is the entry open in the reader, so its record renders below; a gate built
+   without an Ask asks the generic one, as every gate the work plane makes carries one."
+  [{:keys [project ws-id origin stage label tag links report actions pending? error-msg] :as g}]
+  (when g
+    (let [g (cond-> g
+              (nil? (:ask g)) (assoc :ask (ask/ask :generic {:report report :entries []
+                                                            :actions (vec actions)})))]
+      (views/workstream-pane {:project project :ws-id ws-id :origin origin :stage (or stage :triage)
+                              :label label :tag tag :links links :gate g :pending? pending?
+                              :error-msg error-msg :denials (:denials g)
+                              :report report :selected-seq (or (:seq report) 1)
+                              :entries (if report
+                                         [{:seq (or (:seq report) 1) :kind :report
+                                           :at (:at report) :format (:format report)}]
+                                         [])}
+                             {}))))
+
 (deftest needs-fragment-lists-cards
   (let [html (views/needs-fragment {:gates [sample-gate] :selection nil :scope "all"})]
     (is (str/includes? html "id=\"needs\""))
     (is (str/includes? html "BR-7"))
     (is (str/includes? html ">N<"))
-    ;; selecting a gate carries the view-state (sel) rather than a bare path
-    (is (str/includes? html "sel=brian:ws-1"))))
+    ;; a row opens its workstream, where the gate is answered
+    (is (str/includes? html "href=\"/workstreams/brian/ws-1\""))
+    (is (not (str/includes? html "sel=brian:ws-1")))))
 
 (deftest needs-fragment-empty-state-is-calm
   (is (str/includes? (views/needs-fragment {:gates [] :selection nil}) "Nothing needs you")))
-
-(deftest needs-fragment-preserves-selection-highlight
-  ;; the polled fragment must keep the open gate's highlight (selection threaded
-  ;; from the screen, not reset to nil each tick)
-  (let [html (views/needs-fragment {:gates [sample-gate]
-                                    :selection {:project "brian" :ws-id "ws-1"} :scope "all"})]
-    (is (str/includes? html "gate-card sel"))))
 
 (deftest needs-fragment-marks-pending-gate-working
   (let [html (views/needs-fragment {:gates [(assoc sample-gate :pending? true)]
@@ -61,31 +76,29 @@
     (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
                        "reviewing the diff")
         "the inbox row carries the activity badge")
-    (is (str/includes? (views/gate-pane g) "reviewing the diff")
-        "so does the pane"))
-  (is (not (str/includes? (views/gate-pane sample-gate) "doing-line"))
-      "a gate with nothing underway draws no activity line at all"))
+    (is (not (str/includes? (gate-in-pane g) "reviewing the diff"))
+        "the pane does not restate it: its stage list marks what runs")))
 
 (deftest gate-pane-renders-markdown-report-and-actions
-  (let [html (views/gate-pane sample-gate)]
+  (let [html (gate-in-pane sample-gate)]
     (is (str/includes? html "Verdict"))
     (is (str/includes? html "bug — reproduced."))
-    (is (str/includes? html "/gate/brian/ws-1/apply"))     ; one-click Apply button
-    (is (str/includes? html "/gate/brian/ws-1/dismiss"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))     ; one-click Apply button
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
     (is (str/includes? html "data-bind=\"reply\""))         ; free-text reply still present
-    (is (str/includes? html "/gate/brian/ws-1/reply"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/reply"))
     (is (str/includes? html "<textarea"))
     (is (not (str/includes? html "class=\"breadcrumb\"")))))
 
 (deftest gate-pane-curates-a-triage-report
-  (let [html (views/gate-pane triage-gate)]
+  (let [html (gate-in-pane triage-gate)]
     (is (str/includes? html "<h2>Checkout off by a cent</h2>"))   ; §1 enriched title (heading, not the §3 li)
     (is (str/includes? html "Rounding on each line."))       ; §1 summary
     (is (str/includes? html "round once"))                   ; §2 direction
     (is (str/includes? html "Needs verification"))           ; §3 notion-writes
     (is (str/includes? html "<details"))                     ; §5 collapsed
     (is (str/includes? html "src/order.clj:88"))
-    (is (str/includes? html "/gate/brian/ws-1/apply"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))
     (is (not (str/includes? html "dismiss instead")))))
 
 (def ^:private two-question-report
@@ -112,36 +125,36 @@
                                           :actions actions}))))
 
 (deftest a-verdict-of-several-questions-is-one-stepper-card
-  (let [pane (views/gate-pane (two-question-gate))
+  (let [pane (gate-in-pane (two-question-gate))
         at   #(or (str/index-of pane %) (throw (ex-info (str "missing " %) {})))]
-    (is (str/includes? pane "Question <span data-text=\"$qcard.step + 1\">1</span> of 2")
+    (is (str/includes? pane "Question <span data-text=\"$qcard.ws_1.step + 1\">1</span> of 2")
         "it says which of how many is shown")
     (is (= 2 (count (re-seq #"class=\"qc-mark\"" pane))) "one marker per question")
-    (is (str/includes? pane "data-show=\"$qcard.step === 1\"") "only the shown question is visible")
+    (is (str/includes? pane "data-show=\"$qcard.ws_1.step === 1\"") "only the shown question is visible")
     (is (str/includes? pane "◂ Previous"))
     (is (str/includes? pane "Next ▸"))
-    (is (str/includes? pane "{qcard: {step: 0, answers: {q0: &apos;&apos;, q1: &apos;&apos;}}}")
+    (is (str/includes? pane "{qcard: {ws_1: {step: 0, answers: {q0: &apos;&apos;, q1: &apos;&apos;}}}}")
         "a choice is page state until Accept")
     (is (< (at "<strong>Round once</strong>") (at "On the total.") (at "Effort: S"))
         "an option's name in bold, then what it does, then its cost")
-    (is (str/includes? pane "$qcard.answers.q0 = ($qcard.answers.q0 === &apos;A&apos;) ? &apos;&apos; : &apos;A&apos;")
+    (is (str/includes? pane "$qcard.ws_1.answers.q0 = ($qcard.ws_1.answers.q0 === &apos;A&apos;) ? &apos;&apos; : &apos;A&apos;")
         "choosing marks it, and choosing it again leaves the question open")
     (is (not (re-find #"qc-opt[^\"]*\"[^>]*data-on:click=\"@post" pane))
         "no choice submits on its own")
     (is (not (re-find #">[A-C]\.?\s*<|>[A-C]\. " pane)) "no letter on screen")
     (is (not (str/includes? pane "option-letter")))
-    (is (str/includes? pane "/gate/brian/ws-1/apply?entry=4") "Accept posts once, at the position it was drawn at")
+    (is (str/includes? pane "/workstreams/brian/ws-1/gate/apply?entry=4") "Accept posts once, at the position it was drawn at")
     (is (= 1 (count (re-seq #"class=\"btn btn-primary\"" pane))) "Accept is the one primary")
-    (is (< (at "Should the receipt show it?") (at "/gate/brian/ws-1/apply") (at "/gate/brian/ws-1/defer"))
+    (is (< (at "Should the receipt show it?") (at "/workstreams/brian/ws-1/gate/apply") (at "/workstreams/brian/ws-1/gate/defer"))
         "Accept and Defer sit after the questions")
     (is (str/includes? pane "Recommended</span>Round once — the smallest fix."))
     (is (str/includes? pane "Once answered</span>The fix is built."))
     (is (str/includes? pane "Accept the triage of “Checkout off by a cent”?") "the headline leads")))
 
 (deftest a-pending-stepper-shows-its-choices-without-buttons
-  (let [pane (views/gate-pane (assoc (two-question-gate) :pending? true))]
+  (let [pane (gate-in-pane (assoc (two-question-gate) :pending? true))]
     (is (str/includes? pane "Round once"))
-    (is (not (str/includes? pane "/gate/brian/ws-1/")) "no action can be posted")
+    (is (not (str/includes? pane "/workstreams/brian/ws-1/gate/")) "no action can be posted")
     (is (not (str/includes? pane "class=\"qc-opt\" data")) "choices are not buttons")))
 
 (deftest the-question-card-reads-only-its-arguments
@@ -154,19 +167,16 @@
     (is (not (str/includes? html "holds up")) "no holding line")))
 
 (deftest the-record-names-each-question-and-no-letter
-  (let [html (views/gate-pane (assoc sample-gate :report two-question-report))]
+  (let [html (gate-in-pane (assoc sample-gate :report two-question-report))]
     (is (str/includes? html "<h3>Where should the total be rounded?</h3>"))
     (is (str/includes? html "<h3>Should the receipt show it?</h3>"))
     (is (not (str/includes? html "option-letter")))
     (is (str/includes? html "the largest size among the fixes you choose, or M if you defer"))))
 
 (deftest a-legacy-triage-record-still-renders-its-directions
-  (let [html (views/gate-pane triage-gate)]
+  (let [html (gate-in-pane triage-gate)]
     (is (str/includes? html "<h3>Solution directions</h3>"))
     (is (str/includes? html "round once"))))
-
-(deftest gate-pane-empty-is-calm
-  (is (str/includes? (views/gate-pane nil) "Nothing needs you")))
 
 (deftest needs-page-has-shell-master-detail-and-poll
   (let [html (views/needs-page {:active :needs :needs-count 1 :daemon {:state :up} :scope "all" :projects []}
@@ -179,9 +189,9 @@
 (deftest gate-pane-pending-shows-working-without-actions
   ;; after Apply/Reply the agent is running → the pane shows "working…" and NO
   ;; action buttons, so a poll can't flip it back to a fresh Apply button.
-  (let [html (views/gate-pane (assoc sample-gate :pending? true))]
+  (let [html (gate-in-pane (assoc sample-gate :pending? true))]
     (is (str/includes? html "working…"))
-    (is (not (str/includes? html "/gate/brian/ws-1/apply")) "no action buttons while working")
+    (is (not (str/includes? html "/workstreams/brian/ws-1/gate/apply")) "no action buttons while working")
     (is (not (str/includes? html "<textarea")))))
 
 (def ^:private sample-grouped
@@ -466,19 +476,19 @@
     (is (str/includes? html "$opsOpen"))))
 
 (deftest gate-action-confirm-reply-targets-the-pane
-  (let [html (views/gate-action-confirm-fragment :reply "brian" "ws-1")]
-    (is (str/includes? html "id=\"gate-pane\""))
+  (let [html (views/gate-action-confirm-fragment :reply "brian" "ws-1" "ws-pane")]
+    (is (str/includes? html "id=\"ws-pane\""))
     (is (str/includes? html "Resuming"))))
 
 (deftest gate-action-confirm-renders-per-action-message-and-follow-links
   (doseq [[action needle] [[:promote "Promoting"] [:apply "Applying"] [:dismiss "Dismissed"]
                            [:drop "Dropped"] [:done "done"] [:reply "Resuming"]]]
-    (let [html (views/gate-action-confirm-fragment action "brian" "ws-1")]
+    (let [html (views/gate-action-confirm-fragment action "brian" "ws-1" "ws-pane")]
       (is (str/includes? html needle) (str action " message"))
       (is (str/includes? html "/workstreams/brian/ws-1") (str action " links to the workstream"))
       (is (str/includes? html "/workstreams") (str action " links to workstreams"))))
-  (let [html (views/gate-action-confirm-fragment :wat "brian" "ws-1")]
-    (is (str/includes? html "id=\"gate-pane\""))))
+  (let [html (views/gate-action-confirm-fragment :wat "brian" "ws-1" "ws-pane")]
+    (is (str/includes? html "id=\"ws-pane\""))))
 
 (deftest gate-card-shows-resume-error-badge
   (let [g (assoc sample-gate :resume-error {:reason :resume-failed :message "exec failed"})
@@ -844,15 +854,6 @@
     (is (str/includes? html "@get(&apos;/_fragment/workstream/brian/ws-1?entry=7&apos;)")
         "and clicking round 1 again folds it back, leaving the entry open")))
 
-(deftest gate-pane-renders-review-rounds-unfolded
-  ;; The gate pane has no reading position to navigate, so there is nothing to
-  ;; click — a folded round there would hide its detail with no way to reach it.
-  (let [html (views/gate-pane {:ws-id "ws-1" :project "brian" :origin :notion
-                               :label "BR-7" :report review-report :actions []})]
-    (is (str/includes? html "the one-shot update runs early") "bodies render")
-    (is (str/includes? html "a real correctness risk") "reasoning renders")
-    (is (not (str/includes? html "rv-foldable")) "and no round offers a fold")))
-
 (deftest workstream-pane-review-without-detail-still-shows-the-verdict
   ;; Run dirs get cleaned; the event's own counts must still render, and the pane
   ;; must say why there are no rounds rather than going blank.
@@ -893,9 +894,9 @@
                               {:id :option-b :label "B" :title "Implement archive-and-clone"
                                :kind :mutation :style :default}
                               {:id :reply :label "Reply" :kind :resume :style :default}])
-        html (views/gate-pane gate)]
-    (is (str/includes? html "/gate/brian/ws-1/option-a"))
-    (is (str/includes? html "/gate/brian/ws-1/option-b"))
+        html (gate-in-pane gate)]
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/option-a"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/option-b"))
     (is (str/includes? html ">A</button>")
         "the button is the letter alone — the branch is on the card above it, and
          a button as wide as a sentence broke the row")
@@ -911,11 +912,11 @@
                     :actions [{:id :option-a :label "A" :title "Drop Keep Old" :kind :mutation
                                :style :primary :seq 4}
                               {:id :reply :label "Reply" :kind :resume :style :default}])
-        html (views/gate-pane gate)]
-    (is (str/includes? html "/gate/brian/ws-1/option-a?entry=4")
+        html (gate-in-pane gate)]
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/option-a?entry=4")
         "the letter means nothing except relative to the report that drew it, so
          the click names that report and the resolver can refuse a stale one")
-    (is (not (str/includes? html "/gate/brian/ws-1/reply?entry="))
+    (is (not (str/includes? html "/workstreams/brian/ws-1/gate/reply?entry="))
         "only the option buttons carry a position — Reply is free text against
          whatever is current")))
 
@@ -947,7 +948,7 @@
         "an answer nobody heard says so — the next session is what acts on it")))
 
 (deftest answering-an-option-confirms-as-a-recorded-answer
-  (let [msg (views/gate-action-confirm-fragment :option-b "brian" "ws-1")]
+  (let [msg (views/gate-action-confirm-fragment :option-b "brian" "ws-1" "ws-pane")]
     (is (str/includes? msg "Recording your answer"))
     (is (str/includes? msg "if one is still listening")
         "honest for the unparked case, which is the common one")))
@@ -1016,8 +1017,8 @@
     (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/reply"))
-    (is (not (str/includes? html "/gate/brian/ws-1/apply"))
-        "pane actions go through the pane route, not the home gate")))
+    (is (not (str/includes? html "\"/gate/"))
+        "there is no home gate route to post to")))
 
 (deftest workstream-pane-offers-reply-to-a-conductors-escalation
   ;; No agent is parked, but a conductor's escalation is owed the person's answer.
@@ -1072,12 +1073,12 @@
     (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))))
 
 (deftest confirm-fragment-covers-dismiss-and-restore
-  (is (str/includes? (views/gate-action-confirm-fragment :restore "brian" "ws-9")
+  (is (str/includes? (views/gate-action-confirm-fragment :restore "brian" "ws-9" "ws-pane")
                      "Restored"))
   ;; Pin the safety claim itself, not the word "Dismissed" — the OLD copy already
   ;; contained that, so asserting it tested nothing. This sentence is the
   ;; user-facing evidence for the branch's entire guarantee.
-  (is (str/includes? (views/gate-action-confirm-fragment :dismiss "brian" "ws-9")
+  (is (str/includes? (views/gate-action-confirm-fragment :dismiss "brian" "ws-9" "ws-pane")
                      "Nothing written to Notion")))
 
 ;; ---------------------------------------------------------------------------
@@ -1163,7 +1164,7 @@
         "there IS something to do — Restore — so the card must not claim otherwise")))
 
 (deftest confirm-fragment-covers-start-triage
-  (is (str/includes? (views/gate-action-confirm-fragment :start-triage "brian" "pg-bare")
+  (is (str/includes? (views/gate-action-confirm-fragment :start-triage "brian" "pg-bare" "ws-pane")
                      "Starting triage")))
 
 ;; ---------------------------------------------------------------------------
@@ -1177,7 +1178,7 @@
     :url "https://github.com/o/r/pull/12"}])
 
 (deftest gate-pane-lists-external-refs
-  (let [html (views/gate-pane (assoc sample-gate :links sample-links))]
+  (let [html (gate-in-pane (assoc sample-gate :links sample-links))]
     (is (str/includes? html "href=\"https://app.notion.com/p/checkout-abc\""))
     (is (str/includes? html "href=\"https://github.com/o/r/pull/12\""))
     (is (str/includes? html "target=\"_blank\""))
@@ -1186,7 +1187,7 @@
 
 (deftest gate-pane-heading-links-to-the-primary-ref
   ;; the primary (first) ref's url appears twice: on the heading label and in the links row
-  (let [html (views/gate-pane (assoc sample-gate :links sample-links))]
+  (let [html (gate-in-pane (assoc sample-gate :links sample-links))]
     (is (= 2 (count (re-seq #"https://app\.notion\.com/p/checkout-abc" html))))))
 
 (deftest gate-pane-without-links-renders-a-plain-heading
@@ -1194,7 +1195,7 @@
   ;; environment block — so its absence proves both stayed plain.
   (doseq [[what gate] [["empty links" (assoc sample-gate :links [])]
                        ["absent links" sample-gate]]]
-    (let [html (views/gate-pane gate)]
+    (let [html (gate-in-pane gate)]
       (is (not (str/includes? html "link-k")) (str what ": no links row"))
       (is (not (str/includes? html "↗")) (str what ": heading label is not an anchor")))))
 
@@ -1293,12 +1294,11 @@
                     :record {:summary "one projection, one driver"}}}
    :entries [] :sessions [] :on-latest? true})
 
-(deftest the-pane-states-the-position-and-who-the-next-stage-waits-on
+(deftest the-pane-states-the-position-once-in-its-heading
   (let [html (views/workstream-pane a-pane {})]
-    (is (str/includes? html "Approved"))
-    (is (str/includes? html "implement it"))
-    (is (str/includes? html "changes code")
-        "the mode says WHO acts, which was previously only inferable from the buttons")))
+    (is (str/includes? html "Status — Approved"))
+    (is (not (str/includes? html "next · ")) "no line restates what comes next")
+    (is (not (str/includes? html "class=\"posn\"")))))
 
 (deftest the-pane-states-each-standing-record-once-with-its-revision-count
   (let [html (views/workstream-pane a-pane {})]
@@ -1448,19 +1448,20 @@
     (is (str/includes? html "no record"))
     (is (str/includes? html "arc-row ahead"))))
 
-(deftest a-running-round-shows-on-its-stage-not-on-a-line-of-its-own
-  (let [pane (assoc a-pane :doing {:source :claim :kind :diff-review}
-                    :arc (assoc-in an-arc [:stages 3 :active?] true))
-        html (views/workstream-pane pane {})]
+(deftest a-stage-says-whether-it-runs-or-waits-on-you-by-its-mark-alone
+  (let [html (views/workstream-pane
+              (assoc a-pane :doing {:source :claim :kind :diff-review}
+                     :arc (assoc-in an-arc [:stages 3 :now] :running)) {})]
     (is (str/includes? html "arc-spin"))
-    (is (str/includes? html "· reviewing the diff"))
-    (is (not (str/includes? html "doing-line"))
-        "the arc row says it, so the standalone line does not"))
+    (is (not (str/includes? html "reviewing the diff")) "no words restate the mark"))
+  (let [html (views/workstream-pane
+              (assoc a-pane :arc (assoc-in an-arc [:stages 3 :now] :awaiting)) {})]
+    (is (re-find #"arc-row \w+ awaiting" html))
+    (is (str/includes? html "title=\"waiting on you\""))
+    (is (not (str/includes? html "arc-spin")) "a stage waiting on a person is not running"))
   (let [html (views/workstream-pane
               (assoc a-pane :doing {:source :merge :phase :queued} :arc an-arc) {})]
-    (is (str/includes? html "doing-line")
-        "while activity no stage carries keeps its own line")
-    (is (not (str/includes? html "arc-spin")))))
+    (is (not (str/includes? html "doing-line")) "activity no stage carries draws no line")))
 
 (deftest a-stage-that-no-longer-stands-says-so
   (let [html (views/workstream-pane
@@ -1532,7 +1533,6 @@
         "three sections")
     (is (< (at "Status") (at "History") (at "Environment")) "in that order")
     ;; what currently holds is above the log of how it got there
-    (is (< (str/index-of html "class=\"posn\"") (at "History")))
     (is (< (str/index-of html "class=\"holds\"") (at "History")))
     (is (> (str/index-of html "ledger-index") (at "History")))))
 
@@ -1557,37 +1557,16 @@
   (is (= "Status — Baseline verified" (views/status-heading {:at :baseline-verified})))
   (is (= "Status" (views/status-heading nil)) "no position, no dash"))
 
-(deftest what-comes-next-is-its-own-line-and-not-a-pill
-  ;; A bordered chip reads as a control or a tag — something to click or filter
-  ;; by — and this is one sentence about what happens next.
-  (let [html (views/workstream-pane a-pane {})
-        css  (views/shell {:body "" :title "t"})]
-    (is (str/includes? html "next · "))
-    (is (str/includes? html "changes code"))
-    (is (not (re-find #"\.posn \.nx \{[^}]*border" css)) "no pill around it")
-    (is (not (str/includes? html "class=\"at\""))
-        "and the position is not repeated in the body")))
-
-(deftest the-mode-clause-does-not-borrow-the-markdown-card
-  ;; It was rendered as class="md", which is this stylesheet's RENDERED-MARKDOWN
-  ;; block — a bordered card with 16px of padding and a bare rule to match. The
-  ;; clause inherited the box. Visible from the first screenshot of this pane and
-  ;; missed every time, because a stray border reads as someone's design choice.
-  (let [html (views/workstream-pane a-pane {})]
-    (is (str/includes? html "class=\"mode\""))
-    (is (not (re-find #"<span class=\"md\"" html))
-        "no element in this pane may take the markdown block's name")))
-
 (deftest no-pane-class-silently-inherits-a-bare-rule
   ;; The general form of the bug: a short class name that some other component
   ;; already owns. Every SHORT class the pane's own components introduce is
   ;; asserted to be scoped under its parent in the stylesheet, so it cannot
   ;; inherit a rule written for something else.
   (let [css (views/shell {:body "" :title "t"})]
-    (doseq [c ["nx" "mode" "why" "hk" "hs" "hb" "hf" "hc"]]
+    (doseq [c ["hk" "hs" "hb" "hf" "hc"]]
       (is (not (re-find (re-pattern (str "(?m)^\\s*\\." c " \\{")) css))
           (str "." c " must not have a bare rule of its own"))
-      (is (re-find (re-pattern (str "\\.(posn|hold|hist-head) \\." c " \\{")) css)
+      (is (re-find (re-pattern (str "\\.(hold|hist-head) \\." c " \\{")) css)
           (str "." c " must be scoped to the component that owns it")))))
 
 (deftest the-arc-owns-every-name-it-styles-unscoped
@@ -1628,10 +1607,10 @@
   (let [html (str (h/html (views/action-bar "nido" "ws-1"
                                             [{:id :assert-gate :label "Assert gate" :kind :evidence
                                               :style :primary :criterion "a quiet week"}]
-                                            nil)))]
+                                            nil pane-route)))]
     (is (str/includes? html "data-bind=\"evidence\""))
     (is (str/includes? html "a quiet week"))
-    (is (str/includes? html "/gate/nido/ws-1/assert-gate"))
+    (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))
     (is (not (str/includes? html "Reply &amp; resume")) "no reply box without a resume action")))
 
 (deftest a-phase-gate-entry-renders-its-evidence
@@ -1680,7 +1659,7 @@
     (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
                        "2 permission denials")
         "the inbox row counts them")
-    (let [pane (views/gate-pane g)]
+    (let [pane (gate-in-pane g)]
       (is (str/includes? pane "Write"))
       (is (str/includes? pane "Bash"))
       (is (str/includes? pane "rm -rf build") "the pane lists each, with what was denied"))))
@@ -1688,10 +1667,10 @@
 (deftest an-answer-box-promises-no-resume
   (let [answer (str (h/html (views/action-bar "brian" "ws-1"
                                               [{:id :reply :label "Answer" :kind :resume :style :default}]
-                                              "run-x")))
+                                              "run-x" pane-route)))
         reply  (str (h/html (views/action-bar "brian" "ws-1"
                                               [{:id :reply :label "Reply" :kind :resume :style :default}]
-                                              "run-x")))]
+                                              "run-x" pane-route)))]
     (is (str/includes? answer "Record answer"))
     (is (not (str/includes? answer "resumes run-x"))
         "nobody hears an Answer, so it names no session it would resume")
@@ -1716,15 +1695,14 @@
     (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
                        "Where should students see interactive elements?")
         "the row previews the question, not the record's first line")
-    (let [pane (views/gate-pane g)
+    (let [pane (gate-in-pane g)
           at   #(str/index-of pane %)]
       (doseq [s ["Students run AI dialogues" "Web only" "recommended" "A second ticket."
-                 "Records A as your answer." "Let a teacher embed" "A teacher can attach one."
-                 "The conductor adds" "Web only — no mobile work."
+                 "Records A as your answer." "The conductor adds" "Web only — no mobile work."
                  "The ticket is built for the surface you choose."]]
         (is (str/includes? pane s)))
-      (is (< (at "Where should students") (at "The record: markdown") (at "bug — reproduced."))
-          "the question leads, and the record it was read from is folded under it"))))
+      (is (< (at "Where should students") (at "Status"))
+          "the question leads the pane, above everything the pane says about the workstream"))))
 
 (def ^:private oriented-gate
   (assoc sample-gate
@@ -1733,51 +1711,45 @@
                    {:id :done :label "Done" :kind :mutation}
                    {:id :reply :label "Reply" :kind :resume :style :default}]
          :ask (assoc sample-ask
-                     :holding "The work this blocker stopped waits on your answer."
                      :answer-does [{:action :option-a :label "A" :does "Choosing an answer records it."}
                                    {:action :option-b :label "B" :does "Choosing an answer records it."}
                                    {:action :done :label "Done" :does "Marks the workstream done."}
                                    {:action :reply :label "Reply" :does "Sends your words to the parked session."}])
-         :position {:at :design-approved :next {:stage :answer-blocker :mode :human}}
-         :arc {:stages [{:stage :intent :state :done :entries 1 :visits 1}
-                        {:stage :design :state :current :entries 2 :visits 1}
-                        {:stage :implementation :state :ahead :entries 0 :visits 0}]
-               :excursions []}))
+))
 
-(deftest the-gate-pane-orients-then-asks-then-offers
-  (let [pane (views/gate-pane oriented-gate)
+(deftest the-card-asks-then-offers
+  (let [pane (gate-in-pane oriented-gate)
         at   #(or (str/index-of pane %) (throw (ex-info (str "missing " %) {})))]
-    (testing "orientation comes first, unfolded"
-      (is (< (at "What this workstream is for") (at "Where it is") (at "What this decision holds up")
-             (at "Where should students")))
-      (is (str/includes? pane "Let a teacher embed"))
-      (is (str/includes? pane "Approved") "the position named as the workstream pane names it")
-      (is (str/includes? pane "arc-step current") "the current stage marked")
-      (is (str/includes? pane "The work this blocker stopped waits on your answer.")))
+    (testing "the question comes first; nothing restates what the pane already says"
+      (is (< (at "Where should students") (at "Status")))
+      (is (not (str/includes? pane "What this workstream is for")))
+      (is (not (str/includes? pane "What this decision holds up")))
+      (is (not (str/includes? pane "class=\"orient")))
+      (is (not (str/includes? pane "action-bar")) "the card is the pane's only control"))
     (testing "each answer is its button, recommended one primary"
-      (is (re-find #"class=\"qc-opt primary\" data-on:click=\"@post\(&apos;/gate/brian/ws-1/option-a\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>Web only</strong>" pane))
-      (is (re-find #"class=\"qc-opt\" data-on:click=\"@post\(&apos;/gate/brian/ws-1/option-b\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>brian-mobile too</strong>" pane))
+      (is (re-find #"class=\"qc-opt primary\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-a\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>Web only</strong>" pane))
+      (is (re-find #"class=\"qc-opt\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-b\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>brian-mobile too</strong>" pane))
       (is (= 1 (count (re-seq #"option-a\?entry" pane))) "no second button for an option")
       (is (not (str/includes? pane "class=\"btn btn-primary\"")) "and no other row is primary beside it"))
     (testing "what an option does is said once"
       (is (= 1 (count (re-seq #"Choosing an answer records it\." pane)))))
     (testing "other actions and the reply sit beside what they do, after the options"
       (is (< (at "<strong>brian-mobile too</strong>") (at "Marks the workstream done.")
-             (at "Sends your words to the parked session.") (at "The record: markdown"))))
+             (at "Sends your words to the parked session."))))
     (testing "the question line is calm, and nothing is set at the old question size"
       (is (str/includes? pane "class=\"qc-q\""))
       (is (not (str/includes? pane "fs-xl")))
       (is (not (str/includes? (views/shell {:active :needs} [:div]) "--fs-xl"))))))
 
 (deftest a-pending-gate-offers-no-control
-  (let [pane (views/gate-pane (assoc oriented-gate :pending? true))]
+  (let [pane (gate-in-pane (assoc oriented-gate :pending? true))]
     (is (str/includes? pane "working… the agent is running."))
     (is (str/includes? pane "Web only") "the options still show what was on offer")
-    (is (not (str/includes? pane "<button")) "no control at all while the agent runs")
+    (is (not (str/includes? pane "/workstreams/brian/ws-1/gate/")) "no gate control while the agent runs")
     (is (not (str/includes? pane "<textarea")))))
 
 (deftest a-failed-action-shows-above-the-first-control
-  (let [pane (views/gate-pane (assoc oriented-gate :error-msg "it broke"))]
+  (let [pane (gate-in-pane (assoc oriented-gate :error-msg "it broke"))]
     (is (< (str/index-of pane "it broke") (str/index-of pane "Where should students")))))
 
 (deftest notices-are-on-operations-not-the-needs-you-list
@@ -1803,25 +1775,20 @@
     (is (str/includes? html "Permission denials while nido drives it"))
     (is (str/includes? html "/etc/hosts"))))
 
-(deftest the-folded-record-is-the-one-the-ask-read
-  (let [html (views/gate-pane {:ws-id "w" :project "brian" :label "t"
-                               :report {:format :design-verdict :verdict :sound :reason "LATER-READING"}
-                               :ask-record {:format :design-verdict :verdict :invalidated :reason "OWED-READING"}
-                               :ask {:kind :acknowledge-invalidation :question "Redesign it?"
-                                     :questions [{:question "Redesign it?" :context [] :options []}]
-                                     :answer-does []}
-                               :actions []})]
-    (is (str/includes? html "OWED-READING"))
-    (is (not (str/includes? html "LATER-READING")))))
-
-
-(deftest the-workstream-pane-sends-a-questioned-accept-to-needs-you
+(deftest the-action-bar-never-accepts-a-questioned-verdict
+  ;; Such a verdict is a gate, and a gate is answered on its card; the bar beside no card
+  ;; offers neither the Accept nor the Defer, and no link elsewhere to find them.
   (with-redefs [work/grantable? (constantly false)]
     (let [html (str (h/html (#'views/pane-action-bar "brian" "ws-1" nil :triage [{:parked? true :name "s"}]
                                                      two-question-report nil nil false)))]
-      (is (str/includes? html "href=\"/?sel=brian:ws-1\"")
-          "an Accept that submits questions is answered where they are shown")
-      (is (str/includes? html "Accept on Needs you ▸"))
-      (is (str/includes? html "Defer decision on Needs you ▸") "Defer accepts too, every question left open")
-      (is (not (str/includes? html "/apply")) "the pane never accepts a verdict whose questions it hides")
-      (is (not (str/includes? html "/defer"))))))
+      (is (not (str/includes? html "/apply")) "the bar never accepts a verdict whose questions it hides")
+      (is (not (str/includes? html "/defer")))
+      (is (not (str/includes? html "Needs you ▸")) "and points nowhere else"))))
+
+(deftest a-gated-workstream-answers-on-its-card-and-not-beside-it
+  (let [html (gate-in-pane (two-question-gate))]
+    (is (str/includes? html "class=\"qcard\""))
+    (is (= 1 (count (re-seq #"/workstreams/brian/ws-1/gate/apply\?entry=4" html))) "one Accept, on the card")
+    (is (not (str/includes? html "action-bar")) "no action bar beside the card"))
+  (let [html (gate-in-pane (assoc (two-question-gate) :error-msg "it broke"))]
+    (is (= 1 (count (re-seq #"it broke" html))) "the error is said once, on the card")))

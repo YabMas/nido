@@ -2,6 +2,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [hiccup2.core :as h]
    [nido.ui.views :as views]))
 
 (def ^:private proposed-ticket-report
@@ -14,10 +15,8 @@
    :fix "Restore the column on the admin tab only (conditional). courses.clj:913."
    :at "2026-07-16T10:00:00Z"})
 
-(deftest gate-pane-renders-proposed-ticket-report
-  (let [html (views/gate-pane {:ws-id "w" :project "brian" :origin :slack
-                               :label "proposed-ticket" :report proposed-ticket-report
-                               :actions []})]
+(deftest a-gate-record-renders-proposed-ticket-report
+  (let [html (str (h/html (#'views/report-body proposed-ticket-report)))]
     (is (str/includes? html "Restore the active-students count on the admin courses tab"))
     (is (str/includes? html "Regressed in #3802"))
     (is (str/includes? html "Problem"))
@@ -33,10 +32,8 @@
    :rationale "Recurring manual toil for ops."
    :at "2026-07-16T10:00:00Z"})
 
-(deftest gate-pane-renders-improvement-proposal
-  (let [html (views/gate-pane {:ws-id "w" :project "brian" :origin :slack
-                               :label "proposed-ticket" :report improvement-report
-                               :actions []})]
+(deftest a-gate-record-renders-improvement-proposal
+  (let [html (str (h/html (#'views/report-body improvement-report)))]
     (is (str/includes? html "Bulk-export button on the admin courses tab"))
     (is (str/includes? html "Request"))
     (is (str/includes? html "Proposed change"))

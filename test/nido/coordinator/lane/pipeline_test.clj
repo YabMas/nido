@@ -531,8 +531,21 @@
                    {:at :design :active :implementation})]
       (is (= [:done :done :current :stale] (mapv :state (:stages a)))
           "the position still decides every state")
-      (is (= [:implementation] (keep #(when (:active? %) (:stage %)) (:stages a)))
+      (is (= [[:implementation :running]] (keep #(when (:now %) [(:stage %) (:now %)]) (:stages a)))
           "and the running round is flagged on its own stage"))))
+
+(deftest a-stage-a-person-owes-is-awaiting-not-running
+  ;; BR-6927: a design waiting on its approval drew the running spinner because the
+  ;; session still had an instruction pending. The person's move outranks it.
+  (let [es (kinds->entries [:intent :baseline :design])
+        a  (p/arc es {:at :design :active :design :awaiting :design})]
+    (is (= [[:design :awaiting]] (keep #(when (:now %) [(:stage %) (:now %)]) (:stages a)))
+        "the stage a person owes is awaiting, and is not also running"))
+  (let [a (p/arc (kinds->entries [:intent :baseline :design :implementation-completed :review])
+                 {:at :design :active :implementation :awaiting :design})]
+    (is (= {:design :awaiting :implementation :running}
+           (into {} (keep #(when (:now %) [(:stage %) (:now %)])) (:stages a)))
+        "a round running in another stage still shows there")))
 
 (deftest arc-counts-entries-and-visits-separately
   ;; Nine records inside one uninterrupted stretch is one visit. The two numbers

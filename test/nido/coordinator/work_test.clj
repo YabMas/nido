@@ -944,17 +944,28 @@
           (is (= {:goal "Live goal." :done-when ["one" "two"]} (:goal a))
               "the newest intent is the one the question is judged against"))))))
 
-(deftest a-gate-shows-the-arc-and-position-the-pane-shows
+(deftest a-workstream-carries-its-gate-and-the-gate-carries-no-pane-facts
   (with-tmp
     (fn [_]
       (let [w  (bury-a-blocker!)
             g  (work/gate :brian (:id w))
             ws (work/workstream :brian (:id w))]
-        (is (some? (:arc g)) "the gate carries the arc of stages for its orientation band")
-        (is (= (:arc ws) (:arc g))
-            "and it is the arc the workstream pane shows, so the two mark one stage")
-        (is (= (:position ws) (:position g))
-            "and the position the pane names")))))
+        (is (= g (:gate ws))
+            "the pane is handed the very gate the needs-you list holds, so the two ask one question")
+        (is (not-any? #(contains? g %) [:arc :position])
+            "the arc and position are the workstream map's alone")
+        (is (some? (:arc ws)))
+        (is (= [[(get-in ws [:position :stage]) :awaiting]]
+               (keep #(when (:now %) [(:stage %) (:now %)]) (get-in ws [:arc :stages])))
+            "the stage the blocker holds is marked as waiting on the person")))))
+
+(deftest a-workstream-that-is-no-gate-carries-none
+  (with-tmp
+    (fn [_]
+      (let [w (bury-a-blocker!)]
+        (work/resolve-gate! :brian (:id w) :option-b 1)
+        (is (nil? (:gate (work/workstream :brian (:id w))))
+            "once answered nothing is owed, and the pane renders no question")))))
 
 (deftest a-buried-blocker-is-answered-by-its-letter-once
   (with-tmp
@@ -3853,10 +3864,8 @@
         (is (= :design-invalidated (:at (pipeline/of :brian id))) "the invalidation is still owed")
         (let [g (first (filter #(= id (:ws-id %)) (work/gates :brian)))
               a (:ask g)]
-          (is (= [v :invalidated] [(:seq (:ask-record g)) (:verdict (:ask-record g))])
-              "the card folded under the Ask is the record the Ask was read from")
           (is (= [v :invalidated] [(:seq (:report g)) (:verdict (:report g))])
-              "and the actions answer it too, the later verdict notwithstanding")
+              "the actions answer the owed verdict, the later one notwithstanding")
           (is (every? #(= v (:seq %)) (filter :seq (:actions g))))
           (is (= "redesign the totalling seam" (:question a))
               (str "the Ask reads the verdict at " v ", not the one appended after it"))

@@ -61,8 +61,7 @@
    per defect on a triage verdict; `:submit` is the gate action that sends the choices made across
    questions, present exactly when some option has no action of its own; `:answer-does` has one
    entry per action the gate offers; `:goal` is the workstream's live intent, done-whens in the
-   intent's order; `:holding` is what in the workstream waits on the answer, in a person's terms —
-   absent only on a :generic Ask; `:note` is a conductor's escalation riding on the owed move."
+   intent's order; `:note` is a conductor's escalation riding on the owed move."
   [:map {:closed true}
    [:kind        :keyword]
    [:question    non-blank-string]
@@ -72,7 +71,6 @@
    [:goal        {:optional true} [:map {:closed true}
                                    [:goal :string]
                                    [:done-when [:vector :string]]]]
-   [:holding     {:optional true} non-blank-string]
    [:note        {:optional true} :string]])
 
 ;; ── what an action does ─────────────────────────────────────────────────────
@@ -173,12 +171,10 @@
    the gate's actions; `:question` reads it for the Ask's headline. A kind asking one question
    gives its `:context` and `:options` (with the actions, for options); one asking it in parts, or
    asking several, gives `:questions` instead, and `:submit` when its choices are sent together.
-   `:holding` reads it for what waits on the answer, and every kind but `:generic` has one;
    `:guidance` names the addendum in resources/asking/ its authors are briefed with. `:generic`
    answers for anything unregistered."
   {:answer-blocker
    {:guidance  "answer-blocker"
-    :holding   (fn [_] "The work this blocker stopped waits on your answer.")
     ;; The gate's report IS the owed blocker: the work plane hands the buried one when later
     ;; records covered it, because which blocker is owed is the position's to say.
     :record    (fn [report _ _] report)
@@ -189,7 +185,6 @@
 
    :approve-design
    {:guidance "approve-design"
-    :holding  (fn [_] "Implementation waits on this approval; no code is written against the design until it is given.")
     :record   (fn [_ newest _] (newest :design-decision))
     :question (fn [{:keys [asks]}] asks)
     :context  (fn [{:keys [reason recommend]}]
@@ -198,7 +193,6 @@
 
    :acknowledge-invalidation
    {:guidance "acknowledge-invalidation"
-    :holding  (fn [_] "The work stops at the design until you choose: a redesign, or building it as it stands.")
     :record   (fn [_ newest _] (newest :design-verdict))
     :question (fn [{:keys [needs]}]
                 (or (not-empty needs)
@@ -206,8 +200,7 @@
     :context  (fn [{:keys [reason]}] (non-blank reason))}
 
    :assert-gate
-   {:holding  (fn [_] "The next phase cannot start until you have observed this phase's exit on the running system.")
-    :record   (fn [_ _ actions] {:criterion (some :criterion actions)})
+   {:record   (fn [_ _ actions] {:criterion (some :criterion actions)})
     :question (fn [{:keys [criterion]}]
                 (str "Have you observed this on the running system: " (or criterion "the phase's exit criterion") "?"))
     :context  (fn [{:keys [claim]}]
@@ -216,12 +209,7 @@
    :accept-triage
    ;; Owed over a Notion triage or a Slack proposal alike (`standing/verdict-kinds`): the record is
    ;; whichever of the two the work plane handed, the newer when it handed both.
-   {:holding  (fn [{:keys [format]}]
-                (case format
-                  :proposed-ticket  "Nothing is filed until you accept the proposal."
-                  :proposed-tickets "Nothing is filed for this thread until its verdict is carried out."
-                  "The ticket stays untriaged, and no fix is built, until you accept the verdict."))
-    :record   (fn [_ newest _]
+   {:record   (fn [_ newest _]
                 (last (sort-by #(or (:seq %) 0)
                                (keep newest [:triage-report :proposed-ticket :proposed-tickets]))))
     :question  (fn [{:keys [format title doubt]}]
@@ -267,8 +255,7 @@
                    :apply))}
 
    :land
-   {:holding  (fn [_] "The change is built and reviewed; it waits on you to land it.")
-    :record   (fn [_ newest _] (newest :pr-opened))
+   {:record   (fn [_ newest _] (newest :pr-opened))
     :question (fn [{:keys [title]}] (str "Land “" (or title "this pull request") "”?"))
     :context  (fn [{:keys [url summary]}] (non-blank url summary))}
 
@@ -330,7 +317,6 @@
                            :answer-does (answer-does actions)}
                     submit                        (assoc :submit submit)
                     (goal-of intent)              (assoc :goal (goal-of intent))
-                    (:holding entry)              (assoc :holding ((:holding entry) record))
                     (not (str/blank? (str note))) (assoc :note note))]
     (when (and (m/validate Ask out) (answers-coherent? out actions)) out)))
 

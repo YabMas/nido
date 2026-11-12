@@ -193,7 +193,7 @@
   (is (= (ask/guidance :land) (str/trim (ask/guidance :generic)))
       "a kind with no addendum is briefed with the generic guidance alone"))
 
-(deftest every-registered-kind-says-what-waits-on-it
+(deftest no-kind-says-what-waits-on-its-answer
   (doseq [[kind record] {:answer-blocker blocker
                          :approve-design {:format :design-decision :recommend :proceed :asks "Worth an L now?"}
                          :acknowledge-invalidation {:format :design-verdict :verdict :invalidated :reason "r"}
@@ -207,9 +207,10 @@
                                        {:id :assert-gate :label "Assert gate" :kind :evidence
                                         :criterion (:criterion record)}]})]
         (is (= kind (:kind a)))
-        (is (not (str/blank? (:holding a))) "a registered kind says what waits on its answer"))))
-  (is (nil? (:holding (ask/ask :something-new {:report {} :actions []})))
-      "a generic Ask has no holding: the card names the position instead"))
+        (is (not (contains? a :holding))
+            "no kind says what waits on its answer: being asked at all already says it"))))
+  (is (not (contains? (ask/ask :something-new {:report {} :actions []}) :holding)))
+  (is (not (re-find #":holding" (pr-str ask/Ask))) "and the Ask has no slot for it"))
 
 (deftest options-on-one-gate-do-the-same-thing-in-the-same-words
   (let [a    (ask/ask :answer-blocker {:report blocker :actions option-actions})

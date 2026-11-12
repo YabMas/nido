@@ -356,16 +356,20 @@
    exactly that those records stand for nothing now. Deriving it here from
    anything else is how the heading and the arc under it came to disagree.
 
-   `:active` is the stage something is running in (`stage-active`); that facet
-   carries `:active? true` beside its state rather than in place of it, because
-   where the work IS and what is running are two facts that come apart.
+   `:now` is what is happening at a stage this moment, beside its state rather than
+   in place of it, because where the work IS and what is happening there are two
+   facts that come apart. `:awaiting` names the stage whose next move is a
+   person's, and that facet's `:now` is :awaiting; otherwise the stage `:active`
+   names (`stage-active`) has `:now` :running. A person's move outranks a running
+   session: an agent still finishing an instruction does not make a design that
+   waits on its approval a design in progress. Every other facet has no `:now`.
 
    `:visits` counts how many times the workstream ENTERED a stage, across the
    spine alone so that a halt in the middle of a design does not read as having
    left design and come back. A design its decision round sent back to the
    baseline shows two visits to baseline."
   ([entries] (arc entries {}))
-  ([entries {:keys [at active]}]
+  ([entries {:keys [at active awaiting]}]
    (let [staged    (keep (fn [e]
                            (when-let [st (stage-of (:kind e))]
                              (assoc e :stage st)))
@@ -390,7 +394,8 @@
                                         (and here (> i here))       (if (seq es) :stale :ahead)
                                         (seq es)                    :done
                                         :else                       :skipped))
-                          (= st active) (assoc :active? true))))
+                          (= st awaiting)                         (assoc :now :awaiting)
+                          (and (= st active) (not= st awaiting))  (assoc :now :running))))
                     unit-stages)
       :excursions (->> (remove #(on-spine? (:stage %)) staged)
                        (group-by :stage)

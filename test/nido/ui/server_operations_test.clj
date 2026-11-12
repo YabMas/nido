@@ -291,7 +291,7 @@
           (is (not (str/includes? body "sweep stuck")))
           (is (str/includes? body "Sweep working on"))
           (is (str/includes? body "sweep waiting on you"))
-          (is (str/includes? body "/?sel=nido:ws-g") "pointing at the gate"))))))
+          (is (str/includes? body "/workstreams/nido/ws-g") "pointing at the gate"))))))
 
 (deftest a-free-sweep-shows-nothing
   (with-one-proposal
