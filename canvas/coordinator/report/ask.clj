@@ -10,18 +10,25 @@
             [fukan.common.typing.malli]))
 
 (Kind Ask
-  "One question for a person, in the one shape every gate kind is asked in: the question, the
-   context it presupposes, the answers on offer with what each costs, what each of the gate's
+  "What a person is asked at one gate, in the one shape every gate kind is asked in: a one-line
+   headline, and one or more questions — each its words, the context it presupposes, a
+   recommendation and what follows the answer, and the answers on offer with what each costs —
+   the action that submits answers collected across questions, what each of the gate's
    actions does, the goal the question is judged against, and what the question holds up until
    it is answered. Derived from records, never stored,
    and constructed only by `ask`."
   [:map [:kind :keyword]
         [:question [:re "\\S"]]
-        [:context [:vector :string]]
-        [:options [:vector [:map [:letter :string] [:label :string] [:summary :string]
-                                 [:consequence {:optional true} :string]
-                                 [:recommended? {:optional true} :boolean]
-                                 [:action :keyword]]]]
+        [:questions [:vector {:min 1}
+                     [:map [:question [:re "\\S"]]
+                           [:context [:vector :string]]
+                           [:recommendation {:optional true} :string]
+                           [:after {:optional true} :string]
+                           [:options [:vector [:map [:letter :string] [:label :string] [:summary :string]
+                                                    [:consequence {:optional true} :string]
+                                                    [:recommended? {:optional true} :boolean]
+                                                    [:action {:optional true} :keyword]]]]]]]
+        [:submit {:optional true} :keyword]
         [:answer-does [:vector [:map [:action :keyword] [:label :string] [:does [:re "\\S"]]]]]
         [:goal {:optional true} :map]
         [:holding {:optional true} [:re "\\S"]]

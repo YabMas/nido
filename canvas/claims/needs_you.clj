@@ -20,10 +20,6 @@
   "How a kind's record yields its Ask's question, context and options, and that kind's guidance addendum, are one entry of report.ask's registry plus the addendum's file; the generic ask, the work plane's building of a gate's Ask and the views' rendering of an Ask name no kind. The kind's record card renders the record as written and builds no part of the Ask."
   {:about [report-ask] :evidence "round"})
 
-(Claim card-leads-with-the-question
-  "A needs-you row previews its Ask question; the gate pane renders, top to bottom: the title and links; the orientation band; the permission denials recorded while nido drives the session, when there are any; the Ask question, set larger than every other text on the pane; its context and note; the control rows; and the kind's own record card last, folded. On a gate that is not pending the control rows are, in order, the Ask options, every other mutation the gate offers, the reply and the gate evidence, each present only when the gate offers it; on a pending gate they are the option rows without buttons and the working message. A failed action's error line, when there is one, sits directly above the first control row."
-  {:about [gate-pane Ask] :evidence "round"})
-
 (Claim authors-briefed-from-one-guidance
   "There is one generic guidance on asking a person a question, and each kind's addendum extends it; the conductor's brief carries the guidance for an escalation and the design round's judge prompt the guidance for approve-design, both from report.ask/guidance, and a task prints it for any kind. The conductor's escalation guidance no longer states asking rules of its own."
   {:about [guidance lane-conductor design-prompt] :evidence "round"})
@@ -39,10 +35,6 @@
 (Claim worked-example-re-asked
   "Once the change lands, brian ws-20261105-275c8d owes one question about where students see interactive elements: blockers 6, 7 and 9 each carry nido's own :blocker-answered saying the question was re-asked, and one new blocker asks the web-only-versus-brian-mobile choice in words readable without the ledger, with that choice as :options; its gate's Ask meets the card claims above."
   {:about [gates] :evidence "round"})
-
-(Claim ask-is-typed
-  "An Ask is constructed only by report.ask/ask and satisfies its schema there: a non-blank question; context as strings; each option a label, summary, optional consequence and recommended?, and the id of the gate action that gives it; one :answer-does entry per gate action, naming the action and what giving it records and resumes; and the goal as the intent's goal and done-whens. Every option names an action the gate offers."
-  {:about [Ask ask] :evidence "round"})
 
 (Claim a-person-owes-six-moves
   "The position level names the moves only a person can make as :human stages of next-action — accept-triage, approve-design, acknowledge-invalidation, assert-gate, answer-blocker and land — and a workstream is a needs-you gate only when its position owes one of them."

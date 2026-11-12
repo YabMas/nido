@@ -77,7 +77,7 @@
   (pr-str {:format :triage-report :ticket-key ticket :determination :bug
            :title "Verdict" :summary "bug — reproduced."
            :confidence {:level :high :reason "r"}
-           :routing nil :directions [] :notion-writes nil :trail []}))
+           :routing nil :questions [] :notion-writes nil :trail []}))
 
 (defn- triaged!
   "A triage verdict on `ws-id`, and — when `accepted?` — a person's acceptance of it."
@@ -696,7 +696,7 @@
                                         {:options [{:label "A"} {:label "B"}] :seq 7})
                      (work/gate-actions :triage true nil
                                         {:report-format :triage-report
-                                         :directions sample-directions :seq 7}))
+                                         :questions [{:directions sample-directions}] :seq 7}))
         carries-seq (into #{} (comp (filter :seq) (map :id)) descriptors)]
     (is (seq carries-seq) "the fixture must actually produce position-carrying buttons")
     (is (contains? carries-seq :approve)
@@ -775,7 +775,7 @@
         (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
           (pr-str {:format :blocker :summary "The modal offers a branch nothing implements."
-                   :needs "A product decision on Keep Old." :options sample-options}))
+                   :needs "A product decision on Keep Old?" :options sample-options :after "The work resumes once you answer."}))
         (with-redefs [resume/resume! (fn [_ _ input & _] (reset! got input) {:decision :resumed})]
           (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-b 1)))
               "the click names the report it was rendered from — entry 1, still the latest")
@@ -803,7 +803,7 @@
       (let [w       (workstream/create! :brian {:external-refs []})
             resumed (atom false)]
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
           (is (= {:decision :answered-unresumed}
                  (work/resolve-gate! :brian (:id w) :option-a 1))
@@ -838,7 +838,7 @@
                                              :announced-blocked? false :recovered-boot nil}))
         (write-run! "r1" (:id w) "run-x" "sid" :done)
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (with-redefs [executor/driven?  (constantly false)
                       conduct/instruct! (fn [_ _ sname text & _] (reset! given [sname text]))]
           (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
@@ -850,7 +850,7 @@
     (fn [_]
       (let [w (workstream/create! :brian {:external-refs []})]
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (is (= :answered-unresumed (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
         (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-b 1))
             "entry 1 is no longer the latest — the answer is — so a second click
@@ -862,7 +862,7 @@
       (let [w       (workstream/create! :brian {:external-refs []})
             resumed (atom false)]
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
           (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-c 1))
               "the click carries a letter; the CURRENT ledger decides what it meant")
@@ -877,13 +877,13 @@
       (let [w       (workstream/create! :brian {:external-refs []})
             resumed (atom false)]
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "Keep Old" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "Keep Old" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         ;; Another tab answered; the agent parked again on a DIFFERENT question
         ;; that happens to have as many branches — so the letter still resolves.
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "Retention" :needs "n"
+          (pr-str {:format :blocker :summary "Retention" :needs "n?"
                    :options [{:label "Delete after 30 days" :summary "x"}
-                             {:label "Keep forever" :summary "y"}]}))
+                             {:label "Keep forever" :summary "y"}] :after "The work resumes once you answer."}))
         (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
           (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a 1))
               "answering entry 1 after entry 2 replaced it would resume the agent
@@ -903,7 +903,7 @@
   []
   (let [w (workstream/create! :brian {:external-refs []})]
     (workstream/append-entry! :brian (:id w) {:kind :blocker}
-      (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+      (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
     (workstream/append-entry! :brian (:id w) {:kind :design-verdict}
       (pr-str {:format :design-verdict :verdict :sound :round 1 :reason "Nothing moved."}))
     w))
@@ -923,7 +923,8 @@
             "no agent hears it now, so the button says Answer rather than Reply")
         (is (= 1 (:seq (:action-report (work/workstream :brian (:id w)))))
             "the pane's action bar answers the same blocker the inbox does")
-        (is (= ["n" [:option-a :option-b]] [(:question (:ask g)) (mapv :action (:options (:ask g)))])
+        (is (= ["n?" [:option-a :option-b]]
+               [(:question (:ask g)) (mapv :action (:options (first (:questions (:ask g)))))])
             "and its card asks the buried blocker's question, its branches tied to the buttons")))))
 
 (deftest every-gate-asks-with-the-live-intent-beside-it
@@ -935,10 +936,11 @@
         (workstream/append-entry! :brian (:id w) {:kind :intent}
           (pr-str {:format :intent :goal "Live goal." :done-when ["one" "two"] :supersedes {:seq 1 :why "Amended."}}))
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "the conductor escalated a hand-back" :needs "Which way?"}))
+          (pr-str {:format :blocker :summary "The totals are summed twice." :needs "Which way?"
+                   :after "The work resumes once you answer."}))
         (let [a (:ask (work/gate :brian (:id w)))]
           (is (= "Which way?" (:question a)))
-          (is (= [] (:context a)) "how the question arrived is not context for it")
+          (is (= ["The totals are summed twice."] (:context (first (:questions a)))))
           (is (= {:goal "Live goal." :done-when ["one" "two"]} (:goal a))
               "the newest intent is the one the question is judged against"))))))
 
@@ -994,141 +996,75 @@
       "with nothing owed and nobody parked there is still nothing to offer"))
 
 
-;; ── The answerable triage report: A/B/… rather than a bulleted list ────────
-;; The report already enumerated the branches and already priced them. Until now
-;; the only forward button accepted all of it and decided none of it, so a
-;; direction was chosen by typing prose at an agent that may no longer be alive,
-;; or not at all.
+;; ── The triage gate: one Accept for every question ─────────────────────────
+;; A report asks one question per defect, each with its own directions. No one
+;; direction is the whole answer, so none is an action: Accept sends a choice per
+;; question, and Defer decision accepts with all of them open.
 
-(deftest a-triage-report-with-directions-offers-one-button-per-branch
-  (is (= [{:id :direction-a :label "A"
-           :title "Round once on the total · S — Move the rounding to the aggregate."
-           :kind :mutation :style :default}
-          {:id :direction-b :label "B"
-           :title "Introduce a Money type · L — Make per-line rounding unrepresentable."
-           :kind :mutation :style :default}
-          {:id :apply :label "Defer decision" :kind :mutation :style :default}
+(defn- triage-gate [parked? qs & {:as more}]
+  (work/gate-actions :triage parked? nil (merge {:report-format :triage-report :questions qs} more)))
+
+(deftest a-triage-that-asks-offers-accept-defer-and-dismiss
+  (is (= [{:id :apply :label "Accept" :kind :mutation :style :primary :seq 7 :answers :questions}
+          {:id :defer :label "Defer decision" :kind :mutation :style :default :seq 7}
           {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}
           {:id :reply :label "Reply" :kind :resume :style :default}]
-         (work/gate-actions :triage true nil
-                            {:report-format :triage-report :directions sample-directions}))
-      "the letter is the whole button and the branch rides in the hover title,
-       priced — two directions with the same name and different sizes are two
-       different answers. Nothing is primary: the report recommends none of them")
-  (is (= [:direction-a :direction-b :apply :dismiss]
-         (map :id (work/gate-actions :triage false nil
-                                     {:report-format :triage-report
-                                      :directions sample-directions})))
-      "and they stand with NOBODY parked, for the reason the accept does: a
-       direction is applied nido-side and resumes no agent, so a triage whose run
-       died after writing its report is answerable rather than stuck")
-  (is (= [7 7] (->> (work/gate-actions :triage true nil
-                                       {:report-format :triage-report
-                                        :directions sample-directions :seq 7})
-                    (filter (comp work/direction-action? :id))
-                    (map :seq)))
-      "each names the ledger position it was rendered from"))
+         (triage-gate true [{:directions sample-directions}
+                            {:question "Q2?" :directions (vec (take 1 sample-directions))}] :seq 7))
+      "Accept is the one primary, and both carry the position they were rendered at")
+  (is (= [:apply :defer :dismiss] (map :id (triage-gate false [{:directions sample-directions}])))
+      "they stand with nobody parked: apply! resumes no agent")
+  (is (not-any? #(str/starts-with? (name (:id %)) "direction-")
+                (triage-gate true [{:directions sample-directions}]))
+      "no direction is an action of its own"))
 
-(deftest the-accept-says-defer-only-when-there-is-something-to-defer
-  (is (= "Apply" (->> (work/gate-actions :triage true nil
-                                         {:report-format :triage-report :directions []})
-                      (filter #(= :apply (:id %))) first :label))
-      "a shallow route enumerates no directions, so there is no decision to
-       defer and the word would be a question nobody asked")
-  (is (= "Defer decision" (->> (work/gate-actions :triage true nil
-                                                  {:report-format :triage-report
-                                                   :directions sample-directions})
-                               (filter #(= :apply (:id %))) first :label))
-      "beside branches, accepting without picking one IS deferring the decision"))
+(deftest a-triage-that-asks-nothing-offers-apply
+  (is (= [:apply :dismiss] (map :id (triage-gate false []))))
+  (is (= "Apply" (->> (triage-gate true [{:directions []}]) (filter #(= :apply (:id %))) first :label))
+      "with nothing on offer there is nothing to defer")
+  (is (= [:apply :dismiss]
+         (map :id (triage-gate false [{:directions (vec (repeat 27 (first sample-directions)))}])))
+      "a stored report past the alphabet cannot be lettered, so it is asked nothing"))
 
-(deftest a-stored-report-past-the-authoring-cap-is-still-fully-answerable
-  ;; The authoring cap bounds what may be APPENDED and decides nothing about what
-  ;; an already-written report may be answered by. Holding one number for both is
-  ;; what made a tightening reach backwards and strand stored reports.
-  (let [seven (vec (repeat 7 (first sample-directions)))]
-    (is (= [:direction-a :direction-b :direction-c :direction-d :direction-e
-            :direction-f :direction-g :apply :dismiss]
-           (map :id (work/gate-actions :triage false nil
-                                       {:report-format :triage-report :directions seven})))
-        "every branch it enumerates gets a letter and a button")))
-
-(deftest a-report-past-the-alphabet-is-lettered-by-nothing
-  ;; The one shape that cannot be rendered honestly: the card would letter the
-  ;; first twenty-six and leave the rest described with nothing to pick them by.
-  (let [past (vec (repeat 27 (first sample-directions)))]
-    (is (= [:apply :dismiss]
-           (map :id (work/gate-actions :triage false nil
-                                       {:report-format :triage-report :directions past})))
-        "so none are lettered, and the card falls back to the plain list")
-    (is (= "Apply" (->> (work/gate-actions :triage true nil
-                                           {:report-format :triage-report :directions past})
-                        (filter #(= :apply (:id %))) first :label))
-        "with nothing lettered there is nothing to defer")))
-
-(deftest a-branch-that-defers-its-own-size-is-still-an-answer
-  ;; The case the first cut got wrong. A report whose sizing is deferred is
-  ;; precisely the one whose DIRECTION is the live question, and one unsized
-  ;; branch used to make the whole report unanswerable — the card lettered three
-  ;; branches and offered no buttons at all.
-  (let [unsized (assoc-in sample-directions [0 :effort] :squirrel)]
-    (is (= [:direction-a :direction-b :apply :dismiss]
-           (map :id (work/gate-actions :triage false nil
-                                       {:report-format :triage-report :directions unsized})))
-        "every branch is offered; the click settles the direction, and the size
-         follows from the design record the impl session writes")
-    (is (= "Round once on the total · size deferred — Move the rounding to the aggregate."
-           (->> (work/gate-actions :triage true nil
-                                   {:report-format :triage-report :directions unsized})
-                (filter #(= :direction-a (:id %))) first :title))
-        "and the hover says the size is open rather than naming the joker")))
-
-(deftest a-label-that-is-just-its-letter-is-not-repeated
-  ;; Reports written while the skill's template showed `:label "A"` are full of
-  ;; them, and a button titled "A · S — …" spends its first word saying what the
-  ;; button already says.
-  (let [lettered (assoc-in sample-directions [0 :label] "A")]
-    (is (= "S — Move the rounding to the aggregate."
-           (->> (work/gate-actions :triage true nil
-                                   {:report-format :triage-report :directions lettered})
-                (filter #(= :direction-a (:id %))) first :title)))))
+(deftest a-stored-report-past-the-authoring-cap-still-asks
+  (is (= [:apply :defer :dismiss]
+         (map :id (triage-gate false [{:directions (vec (repeat 7 (first sample-directions)))}])))))
 
 (deftest accepted-report-is-the-only-route-a-choice-takes-to-notion
   (let [report {:format :triage-report
                 :notion-writes {:effort :squirrel :description-prepend "why it broke"}}
-        chosen (#'work/accepted-report report (second sample-directions))]
+        chosen (#'work/accepted-report report [(second sample-directions)])]
     (is (= :L (get-in chosen [:notion-writes :effort]))
         "the branch's own size replaces the deferred one")
     (is (= "why it broke" (get-in chosen [:notion-writes :description-prepend]))
-        "and nothing else the branch carries lands: WHICH branch was taken is the
-         decision itself, and a decision lives in the acceptance entry, not in a
-         second durable copy on the page")
-    (is (not (str/includes? (get-in chosen [:notion-writes :description-prepend])
-                            "Money type"))
-        "the label in particular"))
-  (is (= {:format :proposed-ticket}
-         (#'work/accepted-report {:format :proposed-ticket} nil))
+        "and nothing else the branch carries lands: WHICH branch was taken lives in the acceptance")
+    (is (not (str/includes? (get-in chosen [:notion-writes :description-prepend]) "Money type"))))
+  (is (= {:format :proposed-ticket} (#'work/accepted-report {:format :proposed-ticket} nil))
       "a report with nothing to write to Notion is returned untouched"))
 
-(deftest the-note-follows-the-size-that-lands-not-the-branch-that-was-picked
-  ;; Both ways of reaching it are the same fact about the ticket: nobody deferred,
-  ;; and a chosen branch that defers its own size, both leave the sizing to the
-  ;; design record — and :squirrel reaches Notion as no Effort at all, which
-  ;; otherwise reads exactly like a size nobody set.
-  (let [note?  (fn [r] (str/includes? (get-in r [:notion-writes :description-prepend])
-                                      "Effort left open"))
+(deftest the-effort-is-the-largest-chosen-size
+  (let [note   (fn [r] (get-in r [:notion-writes :description-prepend]))
         effort (fn [r] (get-in r [:notion-writes :effort]))
         sq     {:format :triage-report
                 :notion-writes {:effort :squirrel :description-prepend "why it broke"}}
         sized  (assoc-in sq [:notion-writes :effort] :M)
-        of     (fn [r d] (#'work/accepted-report r d))]
-    (is (= [:S false] ((juxt effort note?) (of sq {:effort :S})))
-        "a sized branch settles it, so there is nothing to apologise for")
-    (is (= [:squirrel true] ((juxt effort note?) (of sq {:effort :squirrel})))
-        "a branch that defers its own size leaves the sizing open, chosen or not")
-    (is (= [:squirrel true] ((juxt effort note?) (of sq nil)))
-        "and so does deferring the decision entirely")
-    (is (= [:M false] ((juxt effort note?) (of sized nil)))
-        "a sized report deferred lands its own size — nothing is open")))
+        of     (fn [r ds] (#'work/accepted-report r ds))]
+    (is (= :L (effort (of sq [{:effort :S} {:effort :L} {:effort :M}])))
+        "the ticket holds every chosen fix, so it is sized by the largest")
+    (is (str/includes? (note (of sq [{:effort :S} {:effort :L}]))
+                       "Effort is the largest of the chosen fixes (S, L).")
+        "and says so, listing the sizes, when they differ")
+    (is (not (str/includes? (note (of sq [{:effort :S} {:effort :S}])) "largest"))
+        "sizes that agree need no note")
+    (is (= :S (effort (of sq [{:effort :S} {:effort :squirrel}])))
+        "a fix that defers its size does not outweigh a sized one")
+    (is (= [:squirrel true] ((juxt effort #(str/includes? (note %) "Effort left open"))
+                             (of sq [{:effort :squirrel}])))
+        "every chosen fix deferring its size leaves it open, and says so")
+    (is (= [:squirrel true] ((juxt effort #(str/includes? (note %) "Effort left open")) (of sq nil)))
+        "as does deferring every question")
+    (is (= [:M false] ((juxt effort #(str/includes? (note %) "Effort left open")) (of sized nil)))
+        "a sized report deferred lands its own size")))
 
 (deftest option-actions-are-not-workstream-less
   (is (empty? (set/intersection @#'work/workstream-less-actions
@@ -1447,7 +1383,7 @@
            :title "Verdict" :summary "bug — slack report."
            :confidence {:level :high :reason "r"}
            :routing nil
-           :directions [] :notion-writes nil :trail []}))
+           :questions [] :notion-writes nil :trail []}))
 
 (deftest gates-hydrates-a-slack-triage-report-from-the-workstream-ledger
   ;; A Slack triage report is appended to the workstream ledger, ROUTED by the
@@ -1485,7 +1421,7 @@
                                                     :summary "the conductor escalated a hand-back"
                                                     :needs "approve the design"})]
           (workstream/append-stamped! :brian id {:format :conduct-decision :hand-back "m-1" :position :implementing
-                                                 :by :conductor :decision [:escalate {:needs "approve the design"}]
+                                                 :by :conductor :decision [:escalate {:needs "approve the design?" :after "The work resumes once you answer." :summary "The work stands at a step only a person takes."}]
                                                  :parked {:seq seq}}))
         (let [g (first (filter #(= id (:ws-id %)) (work/gates :brian)))]
           (is (some? g) "it is a gate")
@@ -1672,7 +1608,7 @@
            :title "Verdict" :summary "ticket-ledger report."
            :confidence {:level :high :reason "r"}
            :routing nil
-           :directions [] :notion-writes nil :trail []}))
+           :questions [] :notion-writes nil :trail []}))
 
 (deftest gates-report-reads-a-triage-report-from-the-workstream-ledger
   (with-tmp
@@ -1949,7 +1885,7 @@
       (let [id (:id (workstream/create! :brian {:external-refs []}))]
         (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
         (workstream/append-entry! :brian id {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (let [at-rest (work/workstream :brian id)]
           (is (nil? (:report at-rest)) "the viewer stays closed — nothing opens itself")
           (is (= sample-options (:options (:action-report at-rest)))
@@ -2003,9 +1939,9 @@
         (workstream/append-entry! :brian id {:kind :implementation-plan}
           (pr-str {:format :implementation-plan :summary "x" :direction "First direction" :effort :S}))
         (workstream/append-entry! :brian id {:kind :blocker}
-          (pr-str {:format :blocker :summary "y" :needs "Second needs"}))
+          (pr-str {:format :blocker :summary "y" :needs "Second needs?" :after "The work resumes once you answer."}))
         (let [d (work/workstream :brian id)]
-          (is (= ["Second needs" "First direction"] (mapv :title (:entries d)))
+          (is (= ["Second needs?" "First direction"] (mapv :title (:entries d)))
               "index titles come from each event's fields via report/report-title"))))))
 
 (defn- review-event
@@ -2447,14 +2383,20 @@
 
 (defn- routed-report-edn
   "TriageReport EDN string for a routed triage. `depth` :shallow ⇒ notion-writes nil.
-   `directions` and `effort` default to the pre-directions shape the older apply
-   tests were written against."
-  [{:keys [owner app-domain depth directions effort]}]
+   `directions` are asked as one question; `questions` adds further ones after it. Both, and
+   `effort`, default to the questionless shape the older apply tests were written against."
+  [{:keys [owner app-domain depth directions questions effort]}]
   (pr-str
    (cond-> {:format :triage-report :ticket-key "BR-77" :determination :bug
             :title "t" :summary "s" :confidence {:level :high :reason "r"}
             :routing {:owner owner :app-domain app-domain :depth depth}
-            :directions (or directions []) :notion-writes nil :trail []}
+            :questions (into (if (seq directions)
+                               [{:question "Where should the total be rounded?" :context "c"
+                                 :after "The ticket moves on with the fix you chose."
+                                 :directions directions}]
+                               [])
+                             questions)
+            :notion-writes nil :trail []}
      (= depth :deep)
      (assoc :notion-writes {:type "bug" :effort (or effort :M)
                             :status-transition ["Needs verification" "Not started"]
@@ -2555,16 +2497,17 @@
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-b 1))))
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["B"]}))))
                 (is (= {:name "L"} (:select (get @props "Effort")))
                     "the branch's own size lands, in place of the deferred one the
                      report carried — which is the whole reason to click a branch")))
             (let [accepted (:report (work/workstream :brian (:id w) 2))]
               (is (= :triage-accepted (:format accepted)))
               (is (= 1 (:triage-seq accepted)) "it cites the report it accepted")
-              (is (= {:letter "B" :label "Introduce a Money type"
-                      :shape "Make per-line rounding unrepresentable." :effort :L}
-                     (:direction accepted))
+              (is (= [{:question  "Where should the total be rounded?"
+                       :direction {:letter "B" :label "Introduce a Money type"
+                                   :shape "Make per-line rounding unrepresentable." :effort :L}}]
+                     (:answers accepted))
                   "and carries the branch in full — a reader of the timeline should
                    not have to open the entry this points at to learn what was decided"))
             (is (not (str/includes? (get-in (first @prepended) [:callout :rich_text 0 :text :content])
@@ -2581,7 +2524,7 @@
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply 1))))
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :defer 1))))
                 (is (nil? (get @props "Effort"))
                     "nothing guesses a size to fill the hole — :squirrel is not a
                      value the Effort select holds")
@@ -2591,9 +2534,73 @@
                      keeps the seam visible rather than reading as neglect")))
             (let [accepted (:report (work/workstream :brian (:id w) 2))]
               (is (= :triage-accepted (:format accepted)))
-              (is (nil? (:direction accepted))
-                  "absence IS the second answer — the routing stands and the
-                   implementation direction was deliberately left open"))))))))
+              (is (= [{:question "Where should the total be rounded?"}] (:answers accepted))
+                  "every question answered as open — the routing stands and the
+                   fixes were deliberately left to whoever builds it"))))))))
+
+(def ^:private second-question
+  {:question "Should the receipt show the rounding?" :context "c2"
+   :after "The receipt is built as you choose."
+   :directions [{:label "Show it" :shape "Print a rounding line." :effort :XS
+                 :confidence {:level :high :reason "r"}}
+                {:label "Hide it" :shape "Print nothing." :effort :M
+                 :confidence {:level :high :reason "r"}}]})
+
+(deftest accepting-several-questions-records-an-answer-for-each
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher"
+        {:directions sample-directions :questions [second-question] :effort :squirrel}
+        (fn [w]
+          (let [props (atom nil) prepended (atom nil)]
+            (with-redefs-fn (notion-write-redefs props prepended)
+              (fn []
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply
+                                                               {:seq 1 :answers ["A" "B"]}))))
+                (is (= {:name "M"} (:select (get @props "Effort")))
+                    "the largest of the chosen sizes — S and M — is the ticket's")
+                (is (str/includes? (get-in (first @prepended) [:callout :rich_text 0 :text :content])
+                                   "Effort is the largest of the chosen fixes (S, M).")
+                    "and the page says the sizes differed")))
+            (is (= [["Where should the total be rounded?" "A"]
+                    ["Should the receipt show the rounding?" "B"]]
+                   (map (juxt :question (comp :letter :direction))
+                        (:answers (workstream/latest-entry :brian (:id w) :triage-accepted))))
+                "one answer per question, in the report's order")))))))
+
+(deftest a-question-may-be-left-open
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher"
+        {:directions sample-directions :questions [second-question] :effort :squirrel}
+        (fn [w]
+          (let [props (atom nil) prepended (atom nil)]
+            (with-redefs-fn (notion-write-redefs props prepended)
+              (fn []
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply
+                                                               {:seq 1 :answers [nil "A"]}))))
+                (is (= {:name "XS"} (:select (get @props "Effort"))))))
+            (is (= [nil "A"]
+                   (map (comp :letter :direction)
+                        (:answers (workstream/latest-entry :brian (:id w) :triage-accepted)))))))))))
+
+(deftest an-accept-that-does-not-answer-this-report-writes-nothing
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher"
+        {:directions sample-directions :questions [second-question]}
+        (fn [w]
+          (with-redefs [notion-client/keychain-token
+                        (fn [] (throw (ex-info "Notion must not be touched" {})))]
+            (is (= {:decision :triage-stale}
+                   (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A"]}))
+                "one answer for two questions was given over a different report")
+            (is (= {:decision :triage-stale}
+                   (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A" "C"]}))
+                "a letter that names no direction of its question")
+            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :apply 1))
+                "an Accept that carried no answers answers none of the questions"))
+          (is (= 1 (count (:entries (workstream/read-ws :brian (:id w)))))))))))
 
 (deftest accepting-a-report-the-ledger-has-moved-past-writes-nothing
   (with-tmp
@@ -2606,7 +2613,7 @@
           (with-redefs [notion-client/keychain-token
                         (fn [] (throw (ex-info "Notion must not be touched" {})))]
             (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :apply 1)))
-            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :direction-a 1))
+            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A"]}))
                 "a click against a page the ledger has moved past accepts a verdict
                  the human was not looking at"))
           (is (= 2 (count (:entries (workstream/read-ws :brian (:id w)))))
@@ -2624,7 +2631,7 @@
             (workstream/append-stamped! :brian (:id w)
                                         {:format :conduct-decision :hand-back "m-1" :position (:at pos)
                                          :next (:next pos) :by :conductor
-                                         :decision [:escalate {:needs "Take B."}]}))
+                                         :decision [:escalate {:needs "Take B?" :after "The work resumes once you answer." :summary "The work stands at a step only a person takes."}]}))
           ;; And a record of the work over it that answers nothing: notion-sync's account of a
           ;; status it set. The conductor's decision is a status entry; this is not.
           (workstream/append-entry! :brian (:id w) {:kind :note} "Status moved in Notion.")
@@ -2632,15 +2639,14 @@
           (let [g (work/gate :brian (:id w))]
             (is (= [1 :triage-report] [(:seq (:report g)) (:format (:report g))])
                 "the gate answers the verdict, not the escalation above it")
-            (is (some #{:direction-a} (map :id (:actions g))) "its directions are still offered")
+            (is (some #{:apply} (map :id (:actions g))) "its Accept is still offered")
             (is (every? #(= 1 (:seq %)) (filter :seq (:actions g))))
-            (is (= (set (map :action (:options (:ask g))))
-                   (set (filter (set (map :id (:actions g))) (map :action (:options (:ask g))))))
-                "every option the Ask offers is a button the gate offers"))
+            (is (= :apply (:submit (:ask g)))
+                "and the Ask's questions are sent by it"))
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-a 1))))
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A"]}))))
                 (is (some? @props) "the verdict's routing reached Notion"))))
           (is (= 1 (:triage-seq (workstream/latest-entry :brian (:id w) :triage-accepted)))
               "the acceptance cites the verdict")
@@ -2654,12 +2660,16 @@
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-a 1))))
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A"]}))))
+                (reset! props nil)
+                (reset! prepended nil)
                 (is (= {:decision :triage-stale}
-                       (work/resolve-gate! :brian (:id w) :direction-b 1))
-                    "after accepting, the acceptance IS the latest entry — so the
-                     second click of the same rendered page refuses on the same
-                     check that stops a stale one")))))))))
+                       (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["B"]}))
+                    "a second click of the same rendered page answers a report already accepted")
+                (is (nil? @props) "and carries nothing out to Notion again")
+                (is (nil? @prepended))
+                (is (= 1 (count (workstream/entries-of :brian (:id w) :triage-accepted)))
+                    "nor records a second acceptance")))))))))
 
 (deftest a-letter-no-direction-answers-is-refused
   (with-tmp
@@ -2668,7 +2678,7 @@
         (fn [w]
           (with-redefs [notion-client/keychain-token
                         (fn [] (throw (ex-info "Notion must not be touched" {})))]
-            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :direction-c 1))
+            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["C"]}))
                 "the click carries a letter; the CURRENT ledger decides what it meant")))))))
 
 (deftest a-failed-notion-write-records-nothing-and-stays-retryable
@@ -2684,7 +2694,7 @@
           (with-redefs [notion-client/keychain-token (fn [] "tok")
                         notion-client/retrieve-page (fn [_ _] {:error :http})]
             (is (= {:decision :notion-failed :error :http}
-                   (work/resolve-gate! :brian (:id w) :direction-a 1))))
+                   (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A"]}))))
           (is (= 1 (count (:entries (workstream/read-ws :brian (:id w)))))
               "nothing was appended, so the gate is exactly as it was")
           (is (= :awaiting-input (tickets/status :brian "BR-77"))
@@ -2692,7 +2702,7 @@
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-a 1)))
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A"]})))
                     "so the same click, from the same page, works on the retry")))))))))
 
 (deftest the-position-check-is-equality-not-presence
@@ -2738,7 +2748,7 @@
             (let [accepted (:report (work/workstream :brian (:id w) 2))]
               (is (= :triage-accepted (:format accepted)))
               (is (= 1 (:triage-seq accepted)))
-              (is (nil? (:direction accepted))
+              (is (not-any? :direction (:answers accepted))
                   "the CLI path chooses no branch — it applies the report as written"))))))))
 
 (deftest enriched-callout-splits-a-long-body-into-capped-runs
@@ -3851,7 +3861,7 @@
           (is (every? #(= v (:seq %)) (filter :seq (:actions g))))
           (is (= "redesign the totalling seam" (:question a))
               (str "the Ask reads the verdict at " v ", not the one appended after it"))
-          (is (= ["a second path sums lines"] (:context a)))
+          (is (= ["a second path sums lines"] (:context (first (:questions a)))))
           (is (= "The conductor adds: Weigh the second path." (:note a))
               "the escalation stays on the move it was made about"))))))
 
@@ -3988,7 +3998,7 @@
                                                        :autonomy parked-autonomy})
                 ;; What a parked improvement leaves: a halt only a person's answer clears.
                 _       (workstream/append-entry! :nido parked {:kind :blocker}
-                                                  (pr-str {:format :blocker :summary "s" :needs "n"}))
+                                                  (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
                 by-ws   (into {} (map (juxt :ws-id identity)) (work/improvement-holds))]
             (is (= :stuck (:state (by-ws ended))))
             (is (= (:at (last (:substrate-history archived))) (:ended-at (by-ws ended)))
@@ -4077,8 +4087,8 @@
       (let [id   (:id (workstream/create! :brian {:external-refs []}))
             add! (fn [k r] (workstream/append-entry! :brian id {:kind k} (pr-str r))
                    (count (:entries (workstream/read-ws :brian id))))
-            b1   (add! :blocker {:format :blocker :summary "first" :needs "Which name?"})
-            b2   (add! :blocker {:format :blocker :summary "second" :needs "Which port?"})]
+            b1   (add! :blocker {:format :blocker :summary "first" :needs "Which name?" :after "The work resumes once you answer."})
+            b2   (add! :blocker {:format :blocker :summary "second" :needs "Which port?" :after "The work resumes once you answer."})]
         (is (= b2 (:placed-by (pipeline/of :brian id))))
         (escalate-over! id "Take port 80.")
         (is (= "The conductor adds: Take port 80." (:note (:ask (work/gate :brian id)))))
@@ -4225,7 +4235,7 @@
             row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
         (is (= :analysed (:stage (row))))
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (is (= :blocked (get-in (row) [:position :at])))
         (is (= :in-progress (:stage (row))) "status places it, not where it came from")))))
 
@@ -4241,7 +4251,7 @@
         (workstream/append-entry! :brian (:id w) {:kind :note} "notion-sync: an account of it")
         (is (= :shipping (:stage (row))) "nor does a note")
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (is (not= :shipping (:stage (row))) "work past the shipment still moves it on")))))
 
 (deftest a-closed-row-under-a-live-run-reads-status
@@ -4263,7 +4273,7 @@
         (workstream/advance-stage! :brian (:id w) :ready :person)
         (is (= :ready (:stage (row))))
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (is (not= :ready (:stage (row))) "a blocker recorded since the choice is where the work is")
         (is (:needs-you (row)))
         (let [b (:seq (last (filter #(= :blocker (:kind %)) (:entries (workstream/read-ws :brian (:id w))))))]

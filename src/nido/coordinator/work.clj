@@ -136,36 +136,15 @@
    the browser could compose is an answer that can arrive saying anything."
   (lettered-ids "option"))
 
-(def direction-action-ids
-  "Gate action id per triage-direction position — :direction-a … :direction-f.
-
-   A SEPARATE id space from a blocker's, though both are lettered branches of the
-   latest entry, because the two answers do different things: a blocker letter
-   resumes an agent with the branch spelled back to it, a direction letter writes
-   the verdict to Notion and resumes nobody. One id behind a test on the report's
-   format would put two resolvers under one name and stop the URL saying what it
-   answers."
-  (lettered-ids "direction"))
-
 (def ^:private option-index
   "Action id → the blocker-option position it selects."
   (into {} (map-indexed (fn [i id] [id i])) option-action-ids))
-
-(def ^:private direction-index
-  "Action id → the triage-direction position it selects."
-  (into {} (map-indexed (fn [i id] [id i])) direction-action-ids))
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   option-action?
   "True for an :option-<letter> gate action id."
   [action-id]
   (contains? option-index action-id))
-
-(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
-  direction-action?
-  "True for a :direction-<letter> gate action id."
-  [action-id]
-  (contains? direction-index action-id))
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   position-carrying-action?
@@ -184,8 +163,7 @@
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
-      (direction-action? action-id)
-      (contains? #{:approve :redesign :hold-design :apply} action-id)))
+      (contains? #{:approve :redesign :hold-design :apply :defer} action-id)))
 
 (defn- lettered-actions
   "One button per branch of an enumerated question, lettered by position. `:kind
@@ -207,8 +185,7 @@
    when unknown, which fails closed there rather than resolving blind.
 
    Branches past the letter set get no button. Both writers are capped at it, so
-   this bites only on a record written before the cap — see answerable-directions,
-   which is what stops such a report offering a partial row of buttons at all."
+   this bites only on a record written before the cap."
   [ids entry-seq branches title]
   (vec (map-indexed
         (fn [i branch]
@@ -233,23 +210,6 @@
   [entry-seq options]
   (lettered-actions option-action-ids entry-seq options (fn [_ opt] (:label opt))))
 
-(defn- direction-actions
-  "One button per solution direction of a triage report.
-
-   The hover text carries the SIZE as well as the name, because that is what the
-   choice is between: two directions with the same name and different prices are
-   two different answers, and a row of letters with the prices only on the card
-   asks the reader to hold them while they move the mouse.
-
-   A label that IS the letter is dropped rather than repeated. Reports written
-   while the skill's template showed `:label \"A\"` are full of them, and a button
-   titled \"A · S — …\" spends its first word saying what the button already says."
-  [entry-seq directions]
-  (lettered-actions direction-action-ids entry-seq directions
-                    (fn [i {:keys [label shape effort]}]
-                      (str (when-not (= label (report/option-letter i)) (str label " · "))
-                           (report/effort-label effort) " — " shape))))
-
 (defn ^{:malli/schema [:=> [:cat :keyword :boolean [:? :any] [:? :map]] :any]}
   gate-actions
   "Follow-actions for a gate, derived from its spine `stage` and whether a session is
@@ -269,17 +229,17 @@
    `{:options [...]}` is the CURRENT report's blocker options, when it has any:
    a parked gate whose latest entry named its branches offers one button per
    branch (option-actions) instead of only a textarea. The call sites read
-   :report-format, :options, :directions AND :seq off the SAME report the reader
+   :report-format, :options, :questions AND :seq off the SAME report the reader
    is looking at, so the buttons and the card can never disagree about the
    question — and :seq is what lets the resolver notice that the question itself
    has since changed.
 
-   `{:directions [...]}` is the same for a triage report's solution directions.
-   They are the branches of a different question — which fix, rather than which
-   way out of a halt — so they letter into their own ids and their answer writes
-   the verdict rather than resuming anybody (direction-actions, apply!). Offered
-   only when the report is one a gate may letter (report/answerable?): a report
-   stored before that bound gets the directionless action set, not a partial row.
+   `{:questions [...]}` is a triage report's questions (report/triage-questions). A
+   report that asks one with directions is accepted with an answer per question, all
+   sent by one Accept — so no direction is an action of its own: a direction chosen
+   is page state until Accept carries it, and Defer decision accepts with every
+   question left open. A report whose directions a gate cannot letter
+   (report/answerable?) is offered the questionless set rather than a partial one.
 
    `{:awaiting <stage>}` is the stage the pipeline says a PERSON owes this
    workstream, or nil — `(:stage (:next position))` when that position's mode is
@@ -305,7 +265,7 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare? report-format options directions awaiting grantable?
+  ([stage parked? _origin {:keys [bare? report-format options questions awaiting grantable?
                                   gate-criterion reply-to]
                            entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
@@ -315,12 +275,13 @@
          ;; on parked?: each one resumes an agent, and offering it with none is a
          ;; button that can only fail.
          answers (option-actions entry-seq options)
-         ;; The branches of the CURRENT triage report, or [] — and gated on
-         ;; nothing but the report, for the reason the accept below is: apply!
-         ;; writes the verdict itself and resumes nobody, so a triage whose run
-         ;; died is exactly the one that most needs answering.
-         dirs    (when (and (= :triage-report report-format) (report/answerable? directions))
-                   (direction-actions entry-seq directions))
+         ;; Whether the CURRENT triage report asks anything — gated on nothing but
+         ;; the report, for the reason the accept below is: apply! writes the
+         ;; verdict itself and resumes nobody, so a triage whose run died is
+         ;; exactly the one that most needs answering.
+         asking? (and (= :triage-report report-format)
+                      (some (comp seq :directions) questions)
+                      (every? (comp report/answerable? :directions) questions))
          ;; Approve is not one of those, which is what `awaiting` is for. It asks
          ;; the PIPELINE whether a person owes this workstream a decision, and
          ;; the board stage cannot answer that: the round that produces a design
@@ -425,24 +386,23 @@
                               ;; to nido-only ticket:complete for legacy/Slack reports, and appends
                               ;; the acceptance to the ledger.
                               ;;
-                              ;; It says "Defer decision" exactly when there are directions beside
-                              ;; it, because that is what accepting without picking one MEANS
-                              ;; there: the routing lands and the implementation direction is left
-                              ;; open. With nothing on offer there is nothing to defer, so the word
-                              ;; would be a question nobody asked — it stays "Apply".
-                              ;;
-                              ;; One id either way. The two differ in the word on the button and
-                              ;; nothing else — same resolver, same effect, same entry — and
-                              ;; whether a direction was on offer is already readable from the
-                              ;; report the entry cites.
+                              ;; A report that asks is accepted with its answers: Accept sends the
+                              ;; choice made on each question (`:answers :questions`), and Defer
+                              ;; decision accepts with every question left open — the routing
+                              ;; lands and the fixes are left to whoever builds it. One that asks
+                              ;; nothing has nothing to defer, so it is one Apply.
                               accept  (cond-> {:id :apply :kind :mutation
-                                               :label (if (seq dirs) "Defer decision" "Apply")
-                                               :style (if (seq dirs) :default :primary)}
+                                               :label (if asking? "Accept" "Apply")
+                                               :style :primary}
                                         entry-seq (assoc :seq entry-seq)
+                                        asking?   (assoc :answers :questions)
                                         ;; apply! files a Slack proposal as a new ticket
                                         ;; rather than writing a triage to its own.
                                         (#{:proposed-ticket :proposed-tickets} report-format)
-                                        (assoc :answers :proposal))]
+                                        (assoc :answers :proposal))
+                              defer   (cond-> {:id :defer :label "Defer decision"
+                                               :kind :mutation :style :default}
+                                        entry-seq (assoc :seq entry-seq))]
                           ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
                           ;; off the radar nido-side, writing nothing to Notion.
                           (cond
@@ -452,15 +412,17 @@
                             bare?   [{:id :start-triage :label "Start triage"
                                       :kind :mutation :style :primary}
                                      dismiss]
-                            ;; The accept is NOT gated on parked?, and neither are the directions.
+                            ;; The accept is NOT gated on parked?, and neither is the defer.
                             ;; apply! writes the verdict itself and resumes nobody, so tying them
                             ;; to a live session ordered two things nothing orders — and left the
                             ;; ticket unappliable in exactly the case it was stuck in already, a
                             ;; triage whose run failed or was budget-killed after writing its
                             ;; report. Reply is gated, because it is the one that reaches for an
                             ;; agent.
-                            :else   (cond-> (into (vec dirs) answers)
-                                      true    (conj accept dismiss)
+                            :else   (cond-> answers
+                                      true    (conj accept)
+                                      asking? (conj defer)
+                                      true    (conj dismiss)
                                       parked? (conj reply-action))))
            ;; The nido-side veto, reversible: Restore clears the ticket status so the row
            ;; rejoins the triage queue and the auto-triage gate can pick it up again.
@@ -1673,7 +1635,7 @@
                                {:report-format  (:format report)
                                 :grantable?     (grantable? project (:ws-id row))
                                 :options        (:options report)
-                                :directions     (:directions report)
+                                :questions      (report/triage-questions report)
                                 :awaiting       awaiting
                                 :gate-criterion (get-in row [:phase :exit :criterion])
                                 ;; Whom a Reply reaches, in resolve-gate!'s order: a conductor's
@@ -2708,31 +2670,52 @@
    its own size, both leave the sizing to the design record."
   "Effort left open at triage — the size follows from the design.")
 
+(def ^:private effort-order
+  "Concrete sizes, smallest first — what `largest` compares by."
+  [:XS :S :M :L :XL])
+
+(defn- size-note
+  "The sentence an acceptance adds when the chosen fixes differ in size: the Effort written is
+   the largest of them, and these are all their sizes. Names no branch, for the reason
+   `deferred-size-note` names none."
+  [efforts]
+  (str "Effort is the largest of the chosen fixes (" (str/join ", " (map report/effort-label efforts)) ")."))
+
+(defn- add-note [report note]
+  (update-in report [:notion-writes :description-prepend]
+             (fn [d] (str (when-not (str/blank? d) (str d "\n\n")) note))))
+
 (defn- accepted-report
-  "`report` as the acceptance makes it — the ONE route by which a human's choice
-   reaches Notion.
+  "`report` as the acceptance makes it — the ONE route by which a human's choices
+   reach Notion.
 
-   A chosen `direction` contributes its own size, and that is the whole of what a
-   choice changes here. WHICH branch was taken is the decision itself and lives in
-   the acceptance entry; writing the label into the callout too would put it in a
-   second durable place that nothing afterwards can correct.
+   The chosen `directions` (one per answered question; open questions contribute
+   nothing) decide the size, and that is the whole of what a choice changes here.
+   WHICH branches were taken is the decision itself and lives in the acceptance
+   entry; writing their labels into the callout too would put them in a second
+   durable place nothing afterwards can correct.
 
-   Whether the note goes on is decided by the size that will LAND, not by whether
-   a branch was picked. A direction may itself defer its size — that is a report
-   whose open question is the direction, which is exactly the report worth
-   answering — so choosing one of those leaves the sizing open just as deferring
-   does, and the page has to say so either way.
+   The Effort is the largest concrete size among the chosen fixes, because the
+   ticket has to hold all of them. When the chosen sizes differ the callout says so
+   and lists them. When every chosen fix defers its size, or none was chosen and the
+   report itself defers it, no Effort lands and the page says the size is open on
+   purpose. With none chosen, the report's own size is the one written.
 
    A report with no `:notion-writes` is returned untouched — there is nothing for
    either half to land on."
-  [report direction]
+  [report directions]
   (if-not (:notion-writes report)
     report
-    (let [effort (or (:effort direction) (get-in report [:notion-writes :effort]))]
-      (if (= :squirrel effort)
-        (update-in report [:notion-writes :description-prepend]
-                   (fn [d] (str (when-not (str/blank? d) (str d "\n\n")) deferred-size-note)))
-        (assoc-in report [:notion-writes :effort] effort)))))
+    (let [chosen   (keep :effort directions)
+          concrete (filter (set effort-order) chosen)
+          largest  (when (seq concrete) (apply max-key #(.indexOf ^java.util.List effort-order %) concrete))
+          effort   (cond largest      largest
+                         (seq chosen) :squirrel
+                         :else        (get-in report [:notion-writes :effort]))]
+      (cond-> (if (= :squirrel effort)
+                (add-note report deferred-size-note)
+                (assoc-in report [:notion-writes :effort] effort))
+        (< 1 (count (distinct chosen))) (add-note (size-note chosen))))))
 
 (defn- execute-report!
   "Write `report` out and finalize the ticket. Three paths:
@@ -2768,35 +2751,64 @@
              (catch Throwable _ nil)))
       {:decision :applied})))
 
+(defn- answers-for
+  "The acceptance's answers for `report`'s questions given `letters` — one letter or nil per
+   question, in order — or nil when they do not answer this report: a different count, or a letter
+   that names no direction of its question. nil `letters` leave every question open."
+  [report letters]
+  (let [qs      (report/triage-questions report)
+        letters (if (nil? letters) (repeat (count qs) nil) letters)]
+    (when (= (count qs) (count letters))
+      (reduce (fn [acc [{:keys [question directions]} l]]
+                (let [i (when-not (str/blank? l) (.indexOf ^java.util.List report/option-letters (str/upper-case l)))
+                      d (when (and i (<= 0 i)) (get (vec directions) i))]
+                  (if (and (not (str/blank? l)) (nil? d))
+                    (reduced nil)
+                    (conj acc (cond-> {}
+                                (not (str/blank? question)) (assoc :question question)
+                                d (assoc :direction {:letter (report/option-letter i)
+                                                     :label  (:label d)
+                                                     :shape  (:shape d)
+                                                     :effort (:effort d)}))))))
+              [] (map vector qs letters)))))
+
 (defn- accept!
   "Execute the report the gate answers (`gate-report`) — the verdict a person owes an acceptance,
    whatever was appended after it, else the latest — and record that a human accepted it.
 
    `at-seq`, when given, is the ledger position the click was rendered at, and the
    acceptance is refused unless that is still the report the gate answers.
-   `direction` is the index of the branch the human chose, or nil for an
-   acceptance that chose none.
+   `letters` is one direction letter or nil per question of that report, in order —
+   nil altogether for an acceptance that answers none (Defer, the CLI).
 
    Shared by both of apply!'s arities, which differ only in `checked?` — see there
    for why the two writes happen in the order they do."
-  [project ws-id at-seq direction checked?]
+  [project ws-id at-seq letters checked?]
   (if-let [w (cws/read-ws project ws-id)]
-    (let [report (gate-report project ws-id)
+    (let [report  (gate-report project ws-id)
           ;; Resolved against the CURRENT report, never against what the browser
           ;; was showing — the same discipline choose-option! holds, and for the
-          ;; same reason: the ledger decides what the letter meant, and the
-          ;; position decides whether that question is still being asked.
-          branch (when direction (get (vec (:directions report)) direction))]
+          ;; same reason: the ledger decides what each letter meant, and the
+          ;; position decides whether those questions are still being asked.
+          answers (answers-for report letters)]
       (cond
         ;; Equality, not presence: a click that carried NO position is stale
         ;; against a ledger that holds a positioned report, and is not stale
         ;; against one that holds none — an intake-text fallback has no :seq, and
         ;; a ledger with nothing in it cannot have moved past what was on screen.
         (and checked? (not= at-seq (:seq report))) {:decision :triage-stale}
-        (and direction (nil? branch))              {:decision :triage-stale}
+        (nil? answers)                             {:decision :triage-stale}
+        ;; A second click on a report already accepted answers a question nobody is asking any
+        ;; more, and would carry the verdict out again. The CLI path is not a click and stays
+        ;; repeatable; a failed write records no acceptance, so its retry is not refused here.
+        (and checked?
+             (let [v (standing/verdict project ws-id w)]
+               (and (:accepted? v) (= (:seq v) (:seq report)))))
+        {:decision :triage-stale}
 
         :else
-        (let [outcome (execute-report! project ws-id (accepted-report report branch) w)]
+        (let [chosen  (keep :direction answers)
+              outcome (execute-report! project ws-id (accepted-report report chosen) w)]
           ;; Only what landed is recorded. :notion-failed and :error leave the
           ;; gate exactly as they found it, which is what keeps the click
           ;; repeatable. An acceptance cites the report it accepted; on an empty
@@ -2811,11 +2823,7 @@
              project ws-id {:kind :triage-accepted}
              (pr-str (cond-> {:format :triage-accepted}
                        (int? (:seq report)) (assoc :triage-seq (:seq report))
-                       branch (assoc :direction
-                                     {:letter (report/option-letter direction)
-                                      :label  (:label branch)
-                                      :shape  (:shape branch)
-                                      :effort (:effort branch)})))))
+                       (seq answers)        (assoc :answers answers)))))
           outcome)))
     {:decision :applied}))
 
@@ -2826,16 +2834,20 @@
 
    `opts` is what a GATE click carries and a CLI apply does not:
 
-     :at-seq    — the ledger position the button was rendered at. This arity
-                  CHECKS it: anything but the report the gate answers
-                  (`gate-report`) — a stale position,
-                  or none where the ledger holds one — is refused
-                  ({:decision :triage-stale}) and nothing is written. The
-                  two-argument arity is the CLI path and checks nothing: the agent
-                  executing its own verdict inside its own turn has no
-                  render-and-click gap for a position to guard.
-     :direction — the index of the solution direction the human chose, or absent
-                  for an acceptance that deliberately chose none.
+     :at-seq  — the ledger position the button was rendered at. This arity
+                CHECKS it: anything but the report the gate answers
+                (`gate-report`) — a stale position,
+                or none where the ledger holds one — is refused
+                ({:decision :triage-stale}) and nothing is written, as is a
+                click on a report whose acceptance already stands. The
+                two-argument arity is the CLI path and checks nothing: the agent
+                executing its own verdict inside its own turn has no
+                render-and-click gap for a position to guard.
+     :answers — one direction letter, or nil for a question left open, per
+                question of that report, in order. Absent leaves every question
+                open, which is what Defer decision sends. A count that is not the
+                report's question count, or a letter naming no direction of its
+                question, is refused as stale, writing nothing.
 
    The acceptance is appended AFTER the write, which is the opposite order to
    choose-option!. The difference is what the second write IS. A resume is a
@@ -2847,8 +2859,8 @@
 
    The daemon's sweep settles the now-resolved parked session."
   ([project ws-id] (accept! project ws-id nil nil false))
-  ([project ws-id {:keys [at-seq direction]}]
-   (accept! project ws-id at-seq direction true)))
+  ([project ws-id {:keys [at-seq answers]}]
+   (accept! project ws-id at-seq answers true)))
 
 (defn- triage-trigger
   "The project's triage trigger: the first in triggers.edn whose :skill is
@@ -3322,8 +3334,9 @@
    legitimately offers (see workstream-less-actions).
      :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
-     :apply   -> apply! the verdict and record the acceptance, iff `payload` still
-                 names the latest report
+     :apply   -> apply! the verdict with the answers `payload` carries and record the
+                 acceptance, iff `payload` still names the latest report
+     :defer   -> apply! it with every question left open, under the same check
      :reply   -> answer a conductor's escalation with `payload`, else resume! the
                  parked agent with it
      :approve -> record the grant (:design-approved) and resume, iff `payload`
@@ -3332,8 +3345,6 @@
      :hold-design -> answer one by granting the design anyway
      :option-a … :option-f -> resume! with the blocker branch that letter names,
                               iff `payload` still names the latest report
-     :direction-a … :direction-f -> apply! the verdict with the triage direction
-                              that letter names, under the same position check
      :assert-gate -> advance-phase! with `payload` as the gate's evidence
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
@@ -3341,7 +3352,8 @@
    `payload` is whatever the click carried besides its id, and what that is
    depends on the action: the reply text for :reply, the evidence for :assert-gate,
    and the :seq of the report the button was rendered from for every id
-   position-carrying-action? names.
+   position-carrying-action? names — for :apply, {:seq <that> :answers [<letter or
+   nil per question>]} when the gate asked questions, else the :seq alone.
    Every other action resolves entirely nido-side and ignores it.
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
@@ -3356,20 +3368,22 @@
 
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
 
-     ;; Not `case` branches: both id sets are derived from report/option-letters,
-     ;; and case needs literals — spelling twelve of them here is a second copy of
-     ;; that vector, free to drift from the one the buttons are built from.
+     ;; Not a `case` branch: the id set is derived from report/option-letters, and
+     ;; case needs literals — spelling six of them here is a second copy of that
+     ;; vector, free to drift from the one the buttons are built from.
      (option-action? action-id) (choose-option! project ws-id action-id payload)
-
-     (direction-action? action-id)
-     (apply! project ws-id {:at-seq payload :direction (direction-index action-id)})
 
      :else
      (case action-id
        :promote (set-stage! project ws-id :in-progress)
        :done    (set-stage! project ws-id :done)
        :drop    (do (cws/close! project ws-id :dropped nil :person) {:decision :dropped})
-       :apply   (apply! project ws-id {:at-seq payload})
+       ;; An Accept answers every question it was shown, open ones as nil: one that carried no
+       ;; answers answers none, so a report that asks is refused it — only Defer leaves all open.
+       :apply   (apply! project ws-id (if (map? payload)
+                                        {:at-seq (:seq payload) :answers (vec (:answers payload))}
+                                        {:at-seq payload :answers []}))
+       :defer   (apply! project ws-id {:at-seq payload})
        ;; A reply to a conductor's escalation is that blocker's answer, in the person's own words,
        ;; and reaches the conductor as a hand-back on the next pass; any other resumes the parked
        ;; agent.

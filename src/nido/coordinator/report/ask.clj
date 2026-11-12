@@ -22,15 +22,31 @@
 ;; ── the shape ───────────────────────────────────────────────────────────────
 
 (def AskOption
-  "One answer on offer. `:action` is the id of the gate action that gives it, so the card's
-   branches and its buttons cannot disagree."
+  "One answer on offer. `:action`, when present, is the id of the gate action that gives it, so the
+   card's branches and its buttons cannot disagree; an option without one is a choice the Ask's
+   `:submit` sends with the other questions' choices. `:letter` is the record's name for it — what an
+   answer is stored as, never what the card shows."
   [:map {:closed true}
    [:letter       :string]
    [:label        :string]
    [:summary      :string]
    [:consequence  {:optional true} :string]
    [:recommended? {:optional true} :boolean]
-   [:action       :keyword]])
+   [:action       {:optional true} :keyword]])
+
+(def ^:private non-blank-string
+  [:and :string [:fn {:error/message "never blank"} (complement str/blank?)]])
+
+(def AskQuestion
+  "One question of an Ask, in its parts: `:question` is its one sentence; `:context` what the answer
+   depends on, in reading order; `:recommendation` the answer its writer supports, present only when
+   the writer had one; `:after` what follows the answer; `:options` its branches, possibly none."
+  [:map {:closed true}
+   [:question       non-blank-string]
+   [:context        [:vector :string]]
+   [:recommendation {:optional true} non-blank-string]
+   [:after          {:optional true} non-blank-string]
+   [:options        [:vector AskOption]]])
 
 (def AnswerDoes
   "What giving one of the gate's actions does: what it records, and whom it resumes."
@@ -40,21 +56,23 @@
    [:does   :string]])
 
 (def Ask
-  "One question for a person. `:question` leads the card; `:context` is what the question
-   presupposes, in reading order; `:options` are its branches, each tied to an action; `:answer-does`
-   has one entry per action the gate offers; `:goal` is the workstream's live intent, done-whens in
-   the intent's order; `:holding` is what in the workstream waits on the answer, in a person's terms —
+  "What a person is asked at one gate. `:question` is its one-line headline, what a list row
+   previews; `:questions` are what the card asks, one at a time, in order — one for most kinds, one
+   per defect on a triage verdict; `:submit` is the gate action that sends the choices made across
+   questions, present exactly when some option has no action of its own; `:answer-does` has one
+   entry per action the gate offers; `:goal` is the workstream's live intent, done-whens in the
+   intent's order; `:holding` is what in the workstream waits on the answer, in a person's terms —
    absent only on a :generic Ask; `:note` is a conductor's escalation riding on the owed move."
   [:map {:closed true}
    [:kind        :keyword]
-   [:question    [:and :string [:fn {:error/message "a question is never blank"} (complement str/blank?)]]]
-   [:context     [:vector :string]]
-   [:options     [:vector AskOption]]
+   [:question    non-blank-string]
+   [:questions   [:vector {:min 1} AskQuestion]]
+   [:submit      {:optional true} :keyword]
    [:answer-does [:vector AnswerDoes]]
    [:goal        {:optional true} [:map {:closed true}
                                    [:goal :string]
                                    [:done-when [:vector :string]]]]
-   [:holding     {:optional true} [:and :string [:fn {:error/message "a holding is never blank"} (complement str/blank?)]]]
+   [:holding     {:optional true} non-blank-string]
    [:note        {:optional true} :string]])
 
 ;; ── what an action does ─────────────────────────────────────────────────────
@@ -76,16 +94,18 @@
    (when (lettered "option" id)
      (str "Choosing an answer records it. A session parked on the question resumes with it; "
           "otherwise it waits on the ledger for whoever takes the workstream up next."))
-   (when (lettered "direction" id)
-     "Choosing a direction accepts the triage verdict with it as the fix to build.")
    (case id
      :approve      "Approves the design; the workstream goes on to implement it."
      :redesign     "Sends the design back to be redesigned against the review's finding."
      :hold-design  "Accepts the design as it stands despite the finding; the work goes on."
      :assert-gate  "Records what you observed as the gate's evidence and opens the next phase."
-     :apply        (if (= :proposal answers)
-                     "Accepts the proposal and files it as a ticket."
+     :apply        (case answers
+                     :proposal  "Accepts the proposal and files it as a ticket."
+                     :questions (str "Accepts the triage verdict with the fixes you chose and writes it to "
+                                     "the ticket; a question you left open is left to whoever builds it.")
                      "Accepts the triage verdict and writes it to the ticket, leaving the fix's direction open.")
+     :defer        (str "Accepts the triage verdict and writes it to the ticket, leaving every question "
+                        "open for whoever builds it.")
      :dismiss      "Dismisses the workstream from the board; Restore brings it back."
      :done         "Marks the workstream done and stops its sessions."
      :drop         "Drops the workstream off the queue."
@@ -125,11 +145,6 @@
 
 ;; ── the kinds ───────────────────────────────────────────────────────────────
 
-(def ^:private escalation-summary
-  "The fixed headline escalation blockers carried before an escalation said what it was about. It
-   says how a question arrived, not what it is, so it is never context."
-  "the conductor escalated a hand-back")
-
 (defn- non-blank [& xs] (vec (remove #(or (nil? %) (str/blank? (str %))) xs)))
 
 (defn- blocker-option [{:keys [label summary consequence recommended?]}]
@@ -137,23 +152,40 @@
     consequence  (assoc :consequence consequence)
     recommended? (assoc :recommended? true)))
 
+(defn- direction-option
+  "A triage direction as a choice of its question: answered by Accept, so it carries no action."
+  [i {:keys [label shape effort]}]
+  (when-let [l (report/option-letter i)]
+    (cond-> {:letter l :label (if (str/blank? label) l label) :summary (str shape)}
+      effort (assoc :consequence (str "Effort: " (report/effort-label effort))))))
+
+(defn- triage-question
+  [{:keys [question context recommendation after directions]}]
+  (cond-> {:question (if (str/blank? question) "Which fix should be built?" (str/trim question))
+           :context  (non-blank context)
+           :options  (vec (keep-indexed direction-option directions))}
+    (not (str/blank? recommendation)) (assoc :recommendation recommendation)
+    (not (str/blank? after))          (assoc :after after)))
+
 (def ^:private registry
   "One entry per move a person owes. `:record` picks the record the move's question lives in, from
    the gate's report, the record of each format the work plane handed (`newest` of a format) and
-   the gate's actions; `:question`, `:context` and `:options` read it (with the actions, for
-   options); `:holding` reads it for what waits on the answer, and every kind but `:generic` has one;
+   the gate's actions; `:question` reads it for the Ask's headline. A kind asking one question
+   gives its `:context` and `:options` (with the actions, for options); one asking it in parts, or
+   asking several, gives `:questions` instead, and `:submit` when its choices are sent together.
+   `:holding` reads it for what waits on the answer, and every kind but `:generic` has one;
    `:guidance` names the addendum in resources/asking/ its authors are briefed with. `:generic`
    answers for anything unregistered."
   {:answer-blocker
-   {:guidance "answer-blocker"
-    :holding  (fn [_] "The work this blocker stopped waits on your answer.")
+   {:guidance  "answer-blocker"
+    :holding   (fn [_] "The work this blocker stopped waits on your answer.")
     ;; The gate's report IS the owed blocker: the work plane hands the buried one when later
     ;; records covered it, because which blocker is owed is the position's to say.
-    :record   (fn [report _ _] report)
-    :question (fn [{:keys [needs]}] needs)
-    :context  (fn [{:keys [summary]}]
-                (non-blank (when-not (= escalation-summary summary) summary)))
-    :options  (fn [{:keys [options]} actions] (branches "option" actions options blocker-option))}
+    :record    (fn [report _ _] report)
+    :question  (fn [r] (:question (report/blocker-parts r)))
+    :questions (fn [{:keys [options] :as r} actions]
+                 [(assoc (report/blocker-parts r)
+                         :options (branches "option" actions options blocker-option))])}
 
    :approve-design
    {:guidance "approve-design"
@@ -192,33 +224,47 @@
     :record   (fn [_ newest _]
                 (last (sort-by #(or (:seq %) 0)
                                (keep newest [:triage-report :proposed-ticket :proposed-tickets]))))
-    :question (fn [{:keys [format title directions doubt]}]
-                (case format
-                  :proposed-ticket  (str "File “" title "” as a ticket?")
-                  :proposed-tickets (if doubt
-                                      (str "The triage doubts “" title "” is a problem — reply to override it, or dismiss it?")
-                                      (str "File the tickets proposed from “" title "”?"))
-                  (str "Accept the triage of “" title "”"
-                       (if (seq directions) ", and which fix should be built?" "?"))))
-    :context  (fn [{:keys [format summary determination ticket-type priority doubt tickets] :as r}]
-                (case format
-                  :proposed-ticket
-                  (into (non-blank (str "Proposed " (or ticket-type "ticket")
-                                        (when priority (str ", priority " priority)) ".")
-                                   doubt)
-                        (keep (fn [{:keys [heading text]}] (when-not (str/blank? text) (str heading ": " text))))
-                        (concat (report/product-sections r) (report/analysis-sections r)))
-                  :proposed-tickets
-                  (non-blank doubt
-                             (when (seq tickets)
-                               (str "Proposed: " (str/join "; " (map #(-> % :ticket :title) tickets)) ".")))
-                  (non-blank (when determination (str "Determination: " (name determination) "."))
-                             summary)))
-    :options  (fn [{:keys [directions]} actions]
-                (branches "direction" actions directions
-                          (fn [{:keys [label shape effort]}]
-                            (cond-> {:label (or label "") :summary (str shape)}
-                              effort (assoc :consequence (str "Effort: " (report/effort-label effort)))))))}
+    :question  (fn [{:keys [format title doubt]}]
+                 (case format
+                   :proposed-ticket  (str "File “" title "” as a ticket?")
+                   :proposed-tickets (if doubt
+                                       (str "The triage doubts “" title "” is a problem — reply to override it, or dismiss it?")
+                                       (str "File the tickets proposed from “" title "”?"))
+                   (str "Accept the triage of “" title "”?")))
+    ;; A proposal is one option-less question, answered by Apply. A verdict that asks nothing is
+    ;; asked as its own acceptance, over its determination; one that asks is asked as its
+    ;; questions, the verdict's summary leading the first.
+    :questions (fn [{:keys [format summary determination ticket-type priority doubt tickets] :as r} _]
+                 (let [question ((get-in registry [:accept-triage :question]) r)]
+                   (case format
+                     :proposed-ticket
+                     [{:question question
+                       :context  (into (non-blank (str "Proposed " (or ticket-type "ticket")
+                                                       (when priority (str ", priority " priority)) ".")
+                                                  doubt)
+                                       (keep (fn [{:keys [heading text]}]
+                                               (when-not (str/blank? text) (str heading ": " text))))
+                                       (concat (report/product-sections r) (report/analysis-sections r)))
+                       :options  []}]
+
+                     :proposed-tickets
+                     [{:question question
+                       :context  (non-blank doubt
+                                            (when (seq tickets)
+                                              (str "Proposed: " (str/join "; " (map #(-> % :ticket :title) tickets)) ".")))
+                       :options  []}]
+
+                     (let [verdict (non-blank (when determination (str "Determination: " (name determination) "."))
+                                              summary)
+                           qs      (mapv triage-question (report/triage-questions r))]
+                       (if (seq qs)
+                         (update-in qs [0 :context] #(into verdict %))
+                         [{:question question :context verdict :options []}])))))
+    :submit    (fn [{:keys [format] :as r} actions]
+                 (when (and (= :triage-report format)
+                            (some (comp seq :directions) (report/triage-questions r))
+                            (some #(= :apply (:id %)) actions))
+                   :apply))}
 
    :land
    {:holding  (fn [_] "The change is built and reviewed; it waits on you to land it.")
@@ -253,21 +299,40 @@
    [:intent  {:optional true} :map]
    [:note    {:optional true} :string]])
 
+(defn- answers-coherent?
+  "Every action an Ask names is one its gate offers, and an Ask answers in one mode: without
+   `:submit` every option carries its own action; with one, no option does and `:submit` sends the
+   choices, so there is at least one to choose. An option nothing can send is not on offer, and a
+   mix would leave a reader to work out which buttons answer and which only choose."
+  [{:keys [questions submit]} actions]
+  (let [offered (into #{} (map :id) actions)
+        options (mapcat :options questions)]
+    (and (every? offered (keep :action options))
+         (if submit
+           (and (seq options) (not-any? :action options) (offered submit))
+           (every? :action options)))))
+
 (defn- build
   "The Ask `entry` yields for kind `k`, or nil when what it yields is not one."
   [k entry {:keys [report entries actions intent note]}]
-  (let [newest (fn [fmt] (last (filter #(= fmt (:format %)) entries)))
-        record (or ((:record entry) report newest actions) {})
-        q      (str/trim (str ((:question entry) record)))
-        out    (cond-> {:kind        k
-                        :question    q
-                        :context     ((:context entry) record)
-                        :options     (if-let [f (:options entry)] (f record actions) [])
-                        :answer-does (answer-does actions)}
-                 (goal-of intent)              (assoc :goal (goal-of intent))
-                 (:holding entry)              (assoc :holding ((:holding entry) record))
-                 (not (str/blank? (str note))) (assoc :note note))]
-    (when (m/validate Ask out) out)))
+  (let [newest    (fn [fmt] (last (filter #(= fmt (:format %)) entries)))
+        record    (or ((:record entry) report newest actions) {})
+        q         (str/trim (str ((:question entry) record)))
+        questions (if-let [f (:questions entry)]
+                    (f record actions)
+                    [{:question q
+                      :context  ((:context entry) record)
+                      :options  (if-let [f (:options entry)] (f record actions) [])}])
+        submit    (when-let [f (:submit entry)] (f record actions))
+        out       (cond-> {:kind        k
+                           :question    q
+                           :questions   (vec questions)
+                           :answer-does (answer-does actions)}
+                    submit                        (assoc :submit submit)
+                    (goal-of intent)              (assoc :goal (goal-of intent))
+                    (:holding entry)              (assoc :holding ((:holding entry) record))
+                    (not (str/blank? (str note))) (assoc :note note))]
+    (when (and (m/validate Ask out) (answers-coherent? out actions)) out)))
 
 (defn ^{:malli/schema [:=> [:cat :keyword [:map
                                            [:report [:maybe :map]]
