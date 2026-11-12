@@ -9,13 +9,14 @@
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as events]
-   [nido.coordinator.record.state :as cstate]))
+   [nido.coordinator.record.state :as cstate]
+   [nido.session.state :as sstate]))
 
 ;; ── decide: the policy, pure ────────────────────────────────────────────────
 
 (def driving
-  {:session-id "s" :bg-id "s" :origin :person :driver :nido :hold nil :pending nil :queued nil
-   :own-work? false :policy {:auto-respawn? false} :cursor 0 :driving-since "t0"
+  {:session-id "s" :bg-id "s" :origin :person :driver :nido :pending nil :queued nil
+   :own-work? false :policy {:auto-respawn? false} :driving-since "t0"
    :announced-blocked? false :recovered-boot nil})
 
 (def done-row {:sessionId "s" :kind "background" :state "done" :status "idle" :pid 7 :cwd "/home/kid"})
@@ -34,8 +35,7 @@
   (is (= [:wake] (kinds (conduct/decide (assoc driving :queued "x") (dissoc done-row :pid) [] ctx)))))
 
 (deftest nothing-is-given-unless-every-gate-is-open
-  (doseq [[why facet row] [["held"             (assoc driving :queued "x" :hold {:at "t" :because :foreign-prompt}) done-row]
-                           ["released"         (assoc driving :queued "x" :driver :nobody) done-row]
+  (doseq [[why facet row] [["released"         (assoc driving :queued "x" :driver :nobody) done-row]
                            ["a person drives"  (assoc driving :queued "x" :driver :person) done-row]
                            ["one outstanding"  (assoc driving :queued "x" :pending {:token "P" :at "t" :via :send :seen? true}) done-row]
                            ["working"          (assoc driving :queued "x") (assoc done-row :state "working")]
@@ -65,20 +65,15 @@
     (is (= "x" (get-in d [:facet :queued])) "kept queued")
     (is (nil? (get-in d [:facet :pending])))))
 
-(deftest a-turn-only-the-listing-shows-holds-the-session
-  (let [working (assoc done-row :state "working")
-        d1 (conduct/decide driving done-row [{:event :stop :background-tasks 0 :crons 0}]
-                           (assoc ctx :latest nil))
-        d2 (conduct/decide (:facet d1) working [] ctx)]
-    (is (= {:at "t1" :because :foreign-turn} (get-in d2 [:facet :hold])))
-    (is (= [:held] (kinds d2))))
-  (testing "working in the same pass its Stop is read is that turn's tail, not a new one"
-    (let [f (assoc driving :pending {:token "T" :at "t" :via :send :seen? true} :idle-seen :listed)
-          d (conduct/decide f (assoc done-row :state "working") [{:event :stop :background-tasks 0 :crons 0}] ctx)]
-      (is (nil? (get-in d [:facet :hold])))))
-  (testing "nido's own instruction outstanding is not a person's turn"
-    (let [f (assoc driving :pending {:token "T" :at "t" :via :send :seen? false} :idle-seen :listed)]
-      (is (nil? (get-in (conduct/decide f (assoc done-row :state "working") [] ctx) [:facet :hold]))))))
+(deftest a-hold-written-before-is-ignored
+  (let [old (assoc driving :queued "x" :hold {:at "t" :because :foreign-prompt})
+        d   (conduct/decide old done-row [] ctx)]
+    (is (= [:send] (kinds d)) "nothing is kept back for it")
+    (is (not (contains? (:facet d) :hold)) "and nothing writes it back"))
+  (testing "a :person driver it left is nobody: nido gives it nothing until a start or an adoption"
+    (let [d (conduct/decide (assoc driving :queued "x" :driver :person) done-row [] ctx)]
+      (is (= [] (kinds d)))
+      (is (= :nobody (get-in d [:facet :driver]))))))
 
 (deftest usage-limit-holds-sends-back
   (is (not-any? #{:send} (kinds (conduct/decide (assoc driving :queued "x") done-row [] (assoc ctx :hold-sends? true))))))
@@ -86,36 +81,33 @@
 (deftest nidos-own-prompt-is-recognised-by-its-token
   (let [f (assoc driving :pending {:token "T" :at "t" :via :send :seen? false})
         d (conduct/decide f done-row [{:event :prompt :prompt "do it\n\n[nido-send T]"}] ctx)]
-    (is (true? (get-in d [:facet :pending :seen?])))
-    (is (nil? (get-in d [:facet :hold])))))
+    (is (true? (get-in d [:facet :pending :seen?])))))
 
-(deftest a-prompt-nido-did-not-give-holds-the-session
+(deftest a-prompt-nido-did-not-give-changes-nothing-of-who-drives
   (testing "typed, no token"
-    (let [d (conduct/decide (assoc driving :queued "x") done-row [{:event :prompt :prompt "wait, stop" :at "t2"}] ctx)]
-      (is (= {:at "t2" :because :foreign-prompt} (get-in d [:facet :hold])))
-      (is (not-any? #{:send} (kinds d)) "decided in the same pass: nothing goes out after it")))
+    (let [d (conduct/decide driving done-row [{:event :prompt :prompt "wait, stop" :at "t2"}] ctx)]
+      (is (= :nido (get-in d [:facet :driver])))
+      (is (not (contains? (:facet d) :hold)))
+      (is (= [[:prompted {:event :prompt :prompt "wait, stop" :at "t2"}]] (:actions d))
+          "it is reported as the person's prompt it is")))
   (testing "a paste of an old instruction: its token is no longer pending"
-    (let [f (assoc driving :pending {:token "T" :at "t" :via :send :seen? true})]
-      (is (some? (get-in (conduct/decide f done-row [{:event :prompt :prompt "x [nido-send T]"}] ctx)
-                         [:facet :hold])))))
-  (testing "a released session is not held — nobody drives it"
-    (is (nil? (get-in (conduct/decide (assoc driving :driver :nobody) done-row
-                                      [{:event :prompt :prompt "hi"}] ctx)
-                      [:facet :hold])))))
-
-(deftest a-turn-nido-did-not-give-makes-a-person-the-driver
-  (testing "a recorded prompt"
-    (is (= :person (get-in (conduct/decide driving done-row [{:event :prompt :prompt "mine" :at "t2"}] ctx)
-                           [:facet :driver]))))
-  (testing "a turn only the listing shows"
-    (is (= :person (get-in (conduct/decide (assoc driving :idle-seen :listed) (assoc done-row :state "working") [] ctx)
-                           [:facet :driver])))))
+    (let [f (assoc driving :pending {:token "T" :at "t" :via :send :seen? true})
+          d (conduct/decide f done-row [{:event :prompt :prompt "x [nido-send T]"}] ctx)]
+      (is (= :nido (get-in d [:facet :driver])))
+      (is (= {:token "T" :at "t" :via :send :seen? true} (get-in d [:facet :pending])))))
+  (testing "a person's turn mid-way through nido's leaves nido's instruction to end at its Stop"
+    (let [f (assoc driving :pending {:token "T" :at "t" :via :send :seen? false})
+          d (conduct/decide f done-row [{:event :prompt :prompt "go\n\n[nido-send T]"}
+                                        {:event :prompt :prompt "and also this"}
+                                        {:event :stop :background-tasks 0 :crons 0}] ctx)]
+      (is (= {:token "T" :at "t" :via :send :seen? true}
+             (some (fn [[k _ i]] (when (= :turn-ended k) i)) (:actions d))))
+      (is (= :nido (get-in d [:facet :driver]))))))
 
 (deftest a-stop-ends-the-outstanding-instruction
   (let [f (assoc driving :pending {:token "T" :at "t" :via :send :seen? true})
         d (conduct/decide f done-row [{:event :stop :last-message "ok" :background-tasks 0 :crons 0}] ctx)]
     (is (nil? (get-in d [:facet :pending])))
-    (is (nil? (get-in d [:facet :hold])))
     (is (= :turn-ended (ffirst (:actions d))))))
 
 (deftest a-stop-names-the-instruction-it-ended-only-when-nido-gave-that-turn
@@ -124,32 +116,22 @@
         ended #(some (fn [[k _ i]] (when (= :turn-ended k) [i])) (:actions %))]
     (is (= [p] (ended (conduct/decide (assoc driving :pending p) done-row [stop] ctx)))
         "the Stop after nido's own prompt ended nido's instruction")
-    (is (= [nil] (ended (conduct/decide (assoc driving :pending (assoc p :seen? false)) done-row
-                                        [{:event :prompt :prompt "mine, not nido's"} stop] ctx)))
-        "a person's turn, with nido's instruction outstanding but never prompted, ended none")
+    (let [d (conduct/decide (assoc driving :pending (assoc p :seen? false)) done-row
+                            [{:event :prompt :prompt "mine, not nido's"} stop] ctx)]
+      (is (= [nil] (ended d))
+          "a person's turn, with nido's instruction outstanding but never prompted, ended none")
+      (is (= (assoc p :seen? false) (get-in d [:facet :pending])) "so that instruction is still outstanding"))
     (is (= [nil] (ended (conduct/decide driving done-row [stop] ctx)))
         "nothing outstanding: none")))
-
-(deftest a-turn-after-a-quiet-stop-is-a-person-s
-  (doseq [seen [:stopped :listed]]
-    (let [d (conduct/decide (assoc driving :idle-seen seen) done-row
-                            [{:event :stop :background-tasks 0 :crons 0 :at "t3"}] ctx)]
-      (is (= :foreign-turn (get-in d [:facet :hold :because]))))))
-
-(deftest a-turn-underway-when-nido-began-driving-never-holds-it
-  (let [d1 (conduct/decide driving (assoc done-row :state "working")
-                           [{:event :stop :background-tasks 0 :crons 0 :at "t3"}] ctx)
-        d2 (conduct/decide (:facet d1) done-row
-                           [{:event :stop :background-tasks 0 :crons 0 :at "t4"}] ctx)]
-    (is (nil? (get-in d1 [:facet :hold])) "its Stop ends a turn begun before nido drove it")
-    (is (= :foreign-turn (get-in d2 [:facet :hold :because])) "the turn after it is a person's")))
 
 (deftest a-turn-after-a-stop-with-work-running-is-the-session-s-own
   (let [f  (assoc driving :pending {:token "T" :at "t" :via :send :seen? true})
         d1 (conduct/decide f done-row [{:event :stop :background-tasks 1 :crons 0}] ctx)
         d2 (conduct/decide (:facet d1) done-row [{:event :stop :background-tasks 0 :crons 0}] ctx)]
     (is (true? (get-in d1 [:facet :own-work?])))
-    (is (nil? (get-in d2 [:facet :hold])) "the background work finishing is not a takeover")))
+    (is (not-any? #{:send} (kinds (conduct/decide (assoc (:facet d1) :queued "x") done-row [] ctx)))
+        "nothing is given while its own work runs")
+    (is (false? (get-in d2 [:facet :own-work?])) "the background work finishing frees it")))
 
 (deftest blocked-is-announced-once-per-entry
   (let [blocked (assoc done-row :state "blocked")
@@ -172,7 +154,31 @@
     (is (false? (unrun (conduct/decide (given {:for "run-1"}) blocked stop ctx))) "a Run's turn is its Run's")
     (is (false? (unrun (conduct/decide (given {}) blocked [] (assoc ctx :latest {:event :prompt}))))
         "blocked mid-turn, nothing is handed back: only the person can answer it")
-    (is (false? (unrun (conduct/decide driving blocked stop ctx))) "a turn nido did not give is the person's")))
+    (is (true? (unrun (conduct/decide driving blocked stop ctx)))
+        "a person's turn ended no Run's instruction: it too went to whoever answers for the workstream")))
+
+(deftest an-instruction-whose-prompt-was-never-recorded-lapses
+  (let [p     {:token "P" :at "2026-10-16T08:00:00Z" :via :send :seen? false}
+        later {:event :stop :at "2026-10-16T08:30:00Z"}
+        f     (assoc driving :pending p :queued "next")]
+    (is (= [:send] (kinds (conduct/decide f done-row [] (assoc ctx :latest later))))
+        "a Stop after it was given is the latest event and the listing shows it done: it keeps nothing back")
+    (testing "it lapses only on all three"
+      (is (= [] (kinds (conduct/decide f (assoc done-row :state "working") [] (assoc ctx :latest later)))))
+      (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :latest {:event :stop :at "2026-10-16T07:00:00Z"}))))
+          "a Stop from before it was given")
+      (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :latest {:event :prompt :at "2026-10-16T08:30:00Z"})))))
+      (is (= [] (kinds (conduct/decide (assoc f :pending (assoc p :seen? true)) done-row [] (assoc ctx :latest later))))
+          "a recorded prompt carried its token: it is under way, not lapsed"))
+    (testing "a lapsed instruction is still ended by a Stop whose turn carried its token"
+      (let [d1 (conduct/decide f done-row [] (assoc ctx :latest later))
+            d2 (conduct/decide (:facet d1) done-row [{:event :prompt :prompt "late\n\n[nido-send P]"}
+                                                     {:event :stop :background-tasks 0 :crons 0}] ctx)]
+        (is (= [p] (get-in d1 [:facet :lapsed])) "kept when the next instruction replaced it")
+        (is (= "T" (get-in d1 [:facet :pending :token])))
+        (is (= (assoc p :seen? true) (some (fn [[k _ i]] (when (= :turn-ended k) i)) (:actions d2))))
+        (is (= [] (get-in d2 [:facet :lapsed])))
+        (is (= "T" (get-in d2 [:facet :pending :token])) "and the instruction given after it stays outstanding")))))
 
 (deftest denials-surface-only-while-nido-drives
   (is (= [:denial] (kinds (conduct/decide driving done-row [{:event :permission-denied :tool-name "Bash"}] ctx))))
@@ -183,8 +189,9 @@
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [core/nido-root (constantly (str tmp))
-                       clock/now-iso  (constantly "2026-10-16T09:00:00Z")]
+    (try (with-redefs [core/nido-root       (constantly (str tmp))
+                       sstate/sessions-root (constantly (str (fs/path tmp "sessions")))
+                       clock/now-iso        (constantly "2026-10-16T09:00:00Z")]
            (cstate/ensure-dirs!)
            (session/create! :nido "ws-1" {:name "kid" :weight :light :autonomy nil})
            (f))
@@ -243,61 +250,46 @@
                                       (catch Exception e e)))))
             "neither the start nor the listing naming a directory is no evidence of one")))))
 
-(deftest a-hold-survives-everything-but-hand-back
+(deftest a-hold-written-before-refuses-nothing
   (with-tmp
     (fn []
       (events/append! "s" {:event :session-start :cwd "/home/kid"})
       (events/append! "s" {:event :prompt :permission-mode "auto"})
-      (let [hold {:at "t" :because :foreign-prompt}
-            adopt #(try (conduct/adopt! {:project :nido :ws-id "ws-1" :session-name "kid" :session-id "s"})
-                        (catch Exception e e))]
-        (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :hold hold)))
-        (with-redefs [substrate/listing (constantly [{:sessionId "s" :kind "background" :id "s0" :cwd "/home/kid"}])]
-          (is (= {:reason :held :hold hold} (select-keys (ex-data (adopt)) [:reason :hold])))
-          (is (= hold (:hold (facet))) "a refusal writes nothing")
-          (conduct/release! :nido "ws-1" "kid")
-          (is (= hold (:hold (facet))) "releasing does not clear it")
-          (is (= :held (:reason (ex-data (adopt)))))
-          (conduct/hand-back! :nido "ws-1" "kid")
-          (is (nil? (:hold (facet))))
-          (is (= :nido (:driver (adopt)))))))))
+      (session/update-claude! :nido "ws-1" "kid"
+                              (constantly (assoc driving :driver :person :hold {:at "t" :because :foreign-prompt})))
+      (with-redefs [substrate/listing (constantly [{:sessionId "s" :kind "background" :id "s0" :cwd "/home/kid"}])]
+        (let [f (conduct/adopt! {:project :nido :ws-id "ws-1" :session-name "kid" :session-id "s"})]
+          (is (= :nido (:driver f)) "adoption is refused nothing for it")
+          (is (not (contains? f :hold)) "and drops it"))))))
 
-(deftest releasing-a-held-session-leaves-the-person-driving-it
+(deftest releasing-a-session-leaves-nobody-driving-it
   (with-tmp
     (fn []
       (session/update-claude! :nido "ws-1" "kid"
                               (constantly (assoc driving :driver :person :hold {:at "t" :because :foreign-prompt})))
       (conduct/release! :nido "ws-1" "kid")
-      (is (= :person (:driver (facet))))
-      (session/update-claude! :nido "ws-1" "kid" #(assoc % :hold nil :driver :nido))
+      (is (= :nobody (:driver (facet))) "a person's old hold leaves no one driving it once released")
+      (is (not (contains? (facet) :hold)))
+      (session/update-claude! :nido "ws-1" "kid" #(assoc % :driver :nido))
       (conduct/release! :nido "ws-1" "kid")
-      (is (= :nobody (:driver (facet))) "without a hold, nobody drives a released session"))))
+      (is (= :nobody (:driver (facet)))))))
 
-(deftest hand-back-ends-an-instruction-whose-stop-it-skips
-  ;; A person's prompt held the session while nido's instruction was outstanding; the session's
-  ;; Stop was recorded before any pass read it. Handing back skips it, and with it the instruction.
+(deftest adopt-reads-from-now-on-not-from-what-came-before
   (with-tmp
     (fn []
-      (events/append! "s" {:event :prompt :prompt "x\n\n[nido-send T]"})
-      (events/append! "s" {:event :stop :background-tasks 0 :crons 0})
-      (session/update-claude! :nido "ws-1" "kid"
-                              (constantly (assoc driving :driver :person :cursor 0
-                                                 :hold {:at "t" :because :foreign-prompt}
-                                                 :pending {:token "T" :at "t" :via :send :seen? true})))
-      (conduct/hand-back! :nido "ws-1" "kid")
-      (is (nil? (:pending (facet))) "nothing stays outstanding past its Stop")
-      (is (= (:cursor (events/events-since "s" nil)) (:cursor (facet))) "turns until now never hold it"))))
-
-(deftest adopt-drives-from-now-on-not-from-what-came-before
-  (with-tmp
-    (fn []
-      (events/append! "s" {:event :session-start :cwd "/home/kid"})
-      (events/append! "s" {:event :prompt :prompt "a person typed this earlier" :permission-mode "auto"})
+      (events/append! "s" {:event :session-start :cwd "/home/kid" :at "2026-10-16T08:00:00Z"})
+      (events/append! "s" {:event :prompt :prompt "a person typed this earlier" :permission-mode "auto"
+                           :at "2026-10-16T08:00:01Z"})
+      (events/append! "s" {:event :stop :permission-mode "auto" :background-tasks 0 :crons 0
+                           :at "2026-10-16T08:00:02Z"})
       (with-redefs [substrate/listing (constantly [{:sessionId "s" :kind "background" :id "s0" :cwd "/home/kid"}])]
-        (conduct/adopt! {:project :nido :ws-id "ws-1" :session-name "kid" :session-id "s"}))
-      (is (= {:driver :nido :origin :person :cursor 2 :bg-id "s0"}
-             (select-keys (facet) [:driver :origin :cursor :bg-id]))
-          "the earlier prompt is behind the cursor, so it never holds the adopted session"))))
+        (conduct/adopt! {:project :nido :ws-id "ws-1" :session-name "kid" :session-id "s"})
+        (is (= {:driver :nido :origin :person :bg-id "s0"} (select-keys (facet) [:driver :origin :bg-id :cursor])))
+        (is (= "2026-10-16T09:00:00Z" (:since (:reading (session/read-session :nido "ws-1" "kid"))))
+            "conduct reads the record from its adoption")
+        (let [r (conduct/conduct! {:projects [:nido]})]
+          (is (= [] (:turn-ends r)) "the turn before it is not replayed")
+          (is (= [] (:prompts r))))))))
 
 (deftest start-records-the-token-before-dispatching
   (with-tmp
@@ -335,17 +327,21 @@
           (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go" :source "/src"})
           (is (= ["/wt"] @accepted)))))))
 
-(deftest start-refuses-a-record-whose-session-is-held
+(deftest start-refuses-a-held-record-only-as-a-live-one
   (with-tmp
     (fn []
-      (let [hold {:at "t" :because :foreign-prompt}]
-        (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :hold hold)))
-        (with-redefs [substrate/trusted?  (constantly true)
-                      substrate/listing   (constantly [done-row])
-                      substrate/dispatch! (fn [_] (throw (ex-info "must not" {})))]
-          (is (= :held (:reason (ex-data (try (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"})
-                                              (catch Exception e e)))))))
-        (is (= hold (:hold (facet))))))))
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :hold {:at "t" :because :foreign-prompt})))
+      (with-redefs [substrate/trusted?  (constantly true)
+                    substrate/listing   (constantly [done-row])
+                    substrate/dispatch! (fn [_] (throw (ex-info "must not" {})))]
+        (is (= :live (:reason (ex-data (try (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"})
+                                            (catch Exception e e)))))
+            "its session is alive; the hold is no reason of its own"))
+      (with-redefs [substrate/trusted?  (constantly true)
+                    substrate/listing   (constantly [])
+                    substrate/dispatch! (constantly {:bg-id "b" :session-id "b-1"})]
+        (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"})
+        (is (= "b-1" (:session-id (facet))) "stopped, it is started over whatever hold it carried")))))
 
 (deftest a-start-over-a-retired-held-conversation-inherits-nothing-of-it
   ;; Replacing an occupant a person had taken over: retire! stops its session and keeps the hold,
@@ -461,7 +457,10 @@
           (conduct/release! :nido "ws-1" "kid")
           (events/append! "s" {:event :stop :background-tasks 0 :crons 0 :permission-mode "auto"})
           (conduct/adopt! {:project :nido :ws-id "ws-1" :session-name "kid" :session-id "s"})
-          (is (nil? (:pending (facet))) "its Stop, recorded and not yet read, ends it"))))))
+          (is (= p (:pending (facet))) "adoption moves no read position past its Stop")
+          (let [r (conduct/conduct! {:projects [:nido]})]
+            (is (= [p] (map :instruction (:turn-ends r))) "so the next pass reads the Stop, which ends it")
+            (is (nil? (:pending (facet))))))))))
 
 (deftest the-shared-baseline-check-is-public
   (is (nil? (conduct/baseline-refusal {:started? true :start-cwd "/home/kid" :mode "auto"} done-row)))
@@ -488,7 +487,6 @@
           (let [r (conduct/conduct! {:projects [:nido]})]
             (is (= ["done"] (map #(get-in % [:event :last-message]) (:turn-ends r))))
             (is (= [nil] (map :run (:turn-ends r))) "an instruction given for no Run ends as no Run's")
-            (is (empty? (:held r)) "its own instruction did not hold it")
             (is (nil? (:pending (facet))))))))))
 
 (deftest a-turn-end-names-the-run-its-instruction-was-recorded-for
@@ -793,11 +791,111 @@
   (with-tmp
     (fn []
       (let [pending {:token "T" :at "2026-10-16T08:00:00Z" :via :send :seen? true :for "r1"}
-            f       {:session-id "o-1" :driver :nido :pending pending :cursor 1}]
+            f       {:session-id "o-1" :driver :nido :pending pending}
+            s       {:claude f :reading {:since "2026-10-16T07:00:00Z" :positions {"o-1" 1}}}]
         (events/append! "o-1" {:event :prompt :prompt "go\n\n[nido-send T]"})
-        (is (= pending (conduct/outstanding f)) "nothing past the cursor ends it")
+        (is (= pending (conduct/outstanding s)) "nothing past the position ends it")
         (events/append! "o-1" {:event :notification :notification-type "idle_prompt"})
-        (is (= pending (conduct/outstanding f)) "a notification is not a turn end")
+        (is (= pending (conduct/outstanding s)) "a notification is not a turn end")
         (events/append! "o-1" {:event :stop :last-message "done" :background-tasks 0 :crons 0})
-        (is (nil? (conduct/outstanding f)) "a Stop no pass has folded yet ends it")
-        (is (nil? (conduct/outstanding (assoc f :pending nil))) "nothing given, nothing outstanding")))))
+        (is (nil? (conduct/outstanding s)) "a Stop no pass has folded yet ends it")
+        (is (nil? (conduct/outstanding (assoc-in s [:claude :pending] nil))) "nothing given, nothing outstanding")
+        (is (nil? (conduct/outstanding {:claude (assoc f :cursor 1)}))
+            "a facet written before positions were kept reads from its cursor")))))
+
+;; ── reading every conversation of every session ─────────────────────────────
+
+(deftest a-persons-prompt-into-a-driven-session-holds-nothing
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 2 :queued "next")))
+      (events/append! "s" {:event :prompt :prompt "let me steer this" :permission-mode "auto"})
+      (events/append! "s" {:event :stop :last-message "steered" :background-tasks 0 :crons 0 :permission-mode "auto"})
+      (let [sent (atom nil)]
+        (with-redefs [substrate/listing (constantly [done-row])
+                      substrate/send!   (fn [_ text] (reset! sent text) {:delivered? true})]
+          (let [r (conduct/conduct! {:projects [:nido]})]
+            (is (= [{:session "kid" :instruction nil :conversation "s" :said "steered"}]
+                   (map #(-> (select-keys % [:session :instruction :conversation]) (assoc :said (get-in % [:event :last-message])))
+                        (:turn-ends r)))
+                "the person's turn end is reported, ending no instruction")
+            (is (= ["let me steer this"] (map (comp :prompt :event) (:prompts r))))
+            (is (= :nido (:driver (facet))) "nido still drives it")
+            (is (not (contains? (facet) :hold)))
+            (is (= 1 (count (:delivered r))) "and gives it what was queued once its turn is done")
+            (is (str/starts-with? @sent "next"))))))))
+
+(defn- home!
+  "Make brian-less session `n` of project nido a session home under the test's sessions root, and
+   answer its path."
+  [n]
+  (let [home (str (fs/path (sstate/sessions-root) "nido" n))]
+    (fs/create-dirs home)
+    (spit (str (fs/path home "CLAUDE.md")) "briefing")
+    home))
+
+(deftest every-conversation-of-a-plain-session-is-read-once-from-its-own-position
+  (with-tmp
+    (fn []
+      (session/create! :nido "ws-1" {:name "plain" :weight :light :autonomy nil})
+      (let [home (home! "plain")
+            ev   (fn [conv m] (events/append! conv (assoc m :cwd home)))]
+        ;; Recorded before conduct began reading the session: history, never replayed.
+        (ev "c-old" {:event :prompt :prompt "earlier" :at "2026-10-16T08:00:00Z"})
+        (ev "c-old" {:event :stop :last-message "earlier turn" :at "2026-10-16T08:00:01Z"})
+        (with-redefs [substrate/listing (constantly [])]
+          (let [r1 (conduct/conduct! {:projects [:nido]})]
+            (is (= [] (:turn-ends r1)) "a Stop from before conduct read the session reaches no one")
+            (is (= "2026-10-16T09:00:00Z" (get-in (session/read-session :nido "ws-1" "plain") [:reading :since]))))
+          (ev "c-old" {:event :prompt :prompt "again"})
+          (ev "c-old" {:event :stop :last-message "old conversation, new turn"})
+          (ev "c-new" {:event :prompt :prompt "hello"})
+          (ev "c-new" {:event :stop :last-message "new conversation"})
+          (let [r2 (conduct/conduct! {:projects [:nido]})]
+            (is (= #{["c-old" "old conversation, new turn"] ["c-new" "new conversation"]}
+                   (set (map (juxt :conversation (comp :last-message :event)) (:turn-ends r2))))
+                "each conversation's new Stop, though the session has no facet")
+            (is (every? #(and (= "plain" (:session %)) (nil? (:instruction %)) (false? (:activated? %))) (:turn-ends r2)))
+            (is (= #{"again" "hello"} (set (map (comp :prompt :event) (:prompts r2))))))
+          (is (= {"c-old" 4 "c-new" 2} (get-in (session/read-session :nido "ws-1" "plain") [:reading :positions]))
+              "a position per conversation")
+          (is (= [] (:turn-ends (conduct/conduct! {:projects [:nido]}))) "each is read once"))))))
+
+(deftest a-facets-cursor-becomes-its-conversations-position
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (events/append! "s" {:event :prompt :prompt "x\n\n[nido-send R]" :at "2026-10-16T08:00:00Z"})
+      (events/append! "s" {:event :stop :last-message "run done" :at "2026-10-16T08:00:01Z"})
+      (session/update-claude! :nido "ws-1" "kid"
+                              (constantly (assoc driving :cursor 2 :pending {:token "R" :at "t" :via :send :seen? false :for "run-1"})))
+      (with-redefs [substrate/listing (constantly [done-row])]
+        (let [r (conduct/conduct! {:projects [:nido]})]
+          (is (= ["run-1"] (map :run (:turn-ends r)))
+              "what the facet had not read is read, a Run's turn end whenever it was recorded")
+          (is (= {"s" 4} (get-in (session/read-session :nido "ws-1" "kid") [:reading :positions])))
+          (is (not (contains? (facet) :cursor)) "the facet names only which conversation it drives"))))))
+
+(deftest a-start-changes-only-which-conversation-the-facet-names
+  (with-tmp
+    (fn []
+      (let [home (home! "kid")]
+        (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :driver :retired)))
+        (events/append! "s" {:event :session-start :cwd home})
+        (with-redefs [substrate/listing (constantly [])]
+          (conduct/conduct! {:projects [:nido]}))
+        ;; The old conversation's last turn ends after the pass that read it, before the start.
+        (events/append! "s" {:event :stop :last-message "old one's last" :cwd home})
+        (with-redefs [substrate/trusted?  (constantly true)
+                      substrate/listing   (constantly [])
+                      substrate/dispatch! (fn [{:keys [prompt]}]
+                                            (events/append! "n" {:event :prompt :prompt prompt :cwd home})
+                                            {:bg-id "nb" :session-id "n"})]
+          (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd home :prompt "go"}))
+        (events/append! "n" {:event :stop :last-message "new one's first" :cwd home})
+        (with-redefs [substrate/listing (constantly [])]
+          (let [r (conduct/conduct! {:projects [:nido]})]
+            (is (= #{["s" false "old one's last"] ["n" true "new one's first"]}
+                   (set (map (juxt :conversation (comp some? :instruction) (comp :last-message :event)) (:turn-ends r))))
+                "the old conversation's unread Stop is still read, and the new one's first instruction ends")))))))

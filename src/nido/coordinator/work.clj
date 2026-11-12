@@ -1562,7 +1562,7 @@
 
 (defn- driven-denials
   "Every auto-mode denial recorded in a session of the workstream while nido drives it — since it
-   last began driving it, by dispatch, adoption or hand-back — oldest first, each naming its
+   last began driving it, by dispatch or adoption — oldest first, each naming its
    session: {:session :at :tool-name :tool-input}."
   [project ws-id]
   (vec (for [s     (csession/list-sessions project ws-id)

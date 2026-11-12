@@ -1863,8 +1863,16 @@
    ;; answered the blocker. nido writes it; the act's own entry is the answer's record.
    [:act         {:optional true} [:map {:closed true} [:seq int?]]]
    ;; nido's own answer, to a blocker whose question no longer stands — a seat that could not be
-   ;; started and has since been occupied. No person gave it, so it is handed back as no act.
-   [:by          {:optional true} [:= :nido]]]
+   ;; started and has since been occupied, or an escalation on a person's turn the person then
+   ;; answered by prompting that session again. No person's act gave it, so it is handed back as
+   ;; no act.
+   [:by          {:optional true} [:= :nido]]
+   ;; The prompt that answered an escalation decided on a person's turn: the session it was typed
+   ;; into, its conversation and when.
+   [:prompt      {:optional true} [:map {:closed true}
+                                   [:session string?]
+                                   [:conversation {:optional true} string?]
+                                   [:at string?]]]]
    [:fn {:error/message "a branch answer names both its letter and its label, a worded one neither"}
     (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]])
 

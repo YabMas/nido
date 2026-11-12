@@ -15,7 +15,7 @@
   {:about [boot-core boot-attention] :evidence "round"})
 
 (Claim announced-from-the-inbox
-  "Every condition the daemon announces is one a source reports: a gate from all-gates, a halt from the halt info, a tripped breaker from auto-tripped-triggers, a permission denial or a blocked session from conduct's report, and a boot's casualties from owed-revivals. The daemon formats what a source reports and decides no condition of its own."
+  "Every condition the daemon announces is one a source reports: a gate from all-gates, a halt from the halt info, a tripped breaker from auto-tripped-triggers, a permission denial, a blocked session or a turn end on a workstream not activated from conduct's report, and a boot's casualties from owed-revivals. The daemon formats what a source reports and decides no condition of its own."
   {:about [boot-attention all-gates auto-tripped-triggers owed-revivals] :evidence "round"})
 
 (Claim announced-on-arrival

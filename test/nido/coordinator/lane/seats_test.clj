@@ -452,9 +452,10 @@
             (is (= [{:seat "canvas.strata/seats" :session n}] (:occupied (embodied/carry! :brian id))))
             (is (= [[n]] @launched) "the retired occupant's record is started on again")))))))
 
-(deftest a-held-occupant-whose-relaunch-failed-is-carried-again
-  ;; A hold was on the conversation retirement ended: releasing or handing back the stopped
-  ;; predecessor drives nothing, so it never holds its seat again and carrying starts the seat.
+(deftest an-occupant-a-hold-was-written-on-whose-relaunch-failed-is-carried-again
+  ;; A hold written before holds were ignored, on the conversation retirement ended: releasing the
+  ;; stopped predecessor drives nothing, so it never holds its seat again and carrying starts the
+  ;; seat.
   (with-tmp
     (fn []
       (let [[id] (ledger strata)
@@ -473,8 +474,6 @@
             (with-redefs [lifecycle/up! (fn [_ _] (throw (ex-info "no runtime" {})))]
               (is (thrown-with-msg? Exception #"no runtime" (seats/replace! :brian id (embodied/embodiment) "canvas.strata/seats"))))
             (conduct/release! :brian id n)
-            (with-redefs [nido.coordinator.lane.conduct/caught-up (fn [f _] f)]
-              (conduct/hand-back! :brian id n))
             (reset! launched [])
             (is (= [{:seat "canvas.strata/seats" :session n}] (:occupied (embodied/carry! :brian id))))
             (is (= [[n]] @launched) "the stopped predecessor holds the seat no longer")))))))
@@ -499,8 +498,7 @@
             (conduct/retire! :brian id n {})
             (with-redefs [substrate/listing           (fn [_] [{:kind "background" :sessionId n :id "bg" :pid 1}])
                           conduct/baseline-shown      (fn [_] nil)
-                          nido.coordinator.lane.conduct/baseline-refusal (fn [_ _] nil)
-                          nido.coordinator.lane.conduct/caught-up        (fn [f _] f)]
+                          nido.coordinator.lane.conduct/baseline-refusal (fn [_ _] nil)]
               (conduct/adopt! {:project :brian :ws-id id :session-name n :session-id n}))
             (reset! launched [])
             (is (= [] (:occupied (embodied/carry! :brian id))))

@@ -12,10 +12,11 @@
 (Module lane-conduct
   "Who drives each session, and what nido does about the ones it drives.
 
-   HIDES the driving policy: a session's driver and hold, when a turn has really ended, when the
-   next instruction is sent and when it is held back, when a person is told, and what is
-   restarted after a reboot. ORIGIN is recorded and decides none of it — a session a person
-   started and one nido started are driven, held, handed back and recovered the same way."
+   HIDES the driving policy: a session's driver, when a turn has really ended, when the next
+   instruction is sent and when it is held back, when a person is told a turn ended or a session
+   is blocked, and what is restarted after a reboot. ORIGIN is recorded and decides none of it —
+   a session a person started and one nido started are driven and recovered the same way, and a
+   person's prompt is a turn like any other: it changes nothing of who drives."
   (Operation tagged
     "An instruction as nido gives it: the text, then a last line carrying its token."
     {:signature [:=> [:catn [:text :string] [:token :string]] :string]})
@@ -44,22 +45,19 @@
   (Operation start!
     "Start a conversation for a session record as a background session nido drives, its first
      prompt's token — with the Run it is given for when the opts name one — recorded before the
-     session starts, refused while the record's session lives —
-     naming the hold when one stands on it — and carrying nothing of a stopped one's facet; trust is
-     given only to a directory made from a trusted source."
+     session starts, refused while the record's session lives, and carrying nothing of a stopped
+     one's facet; only which conversation the facet names changes, the record's read positions
+     kept. Trust is given only to a directory made from a trusted source."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [tagged substrate/trusted? substrate/ensure-trusted! substrate/dispatch!]})
   (Operation adopt!
     "Make nido the driver of a background session that already exists, refused unless its own
-     recorded events show the launch baseline, and refused naming the hold while one stands;
-     turns from before never hold it."
+     recorded events show the launch baseline; only which conversation the facet names changes,
+     the record's read positions kept."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [substrate/listing baseline-shown]})
   (Operation release!
-    "Stop driving a session. The session is untouched and keeps running."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] :map]})
-  (Operation hand-back!
-    "Clear the hold a turn nido did not give put on a session, making nido its driver again."
+    "Stop driving a session: nobody drives it. The session is untouched and keeps running."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] :map]})
   (Operation instruct!
     "Queue the next instruction for a session nido drives, given once it is ready for it, recorded
@@ -67,25 +65,31 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:text :string]
                       [:for [:? RunId]]] :map]})
   (Operation conduct!
-    "One pass: read every new session event and the substrate's listing, decide, record, then
-     deliver — only while the session's own events still show the launch baseline; answer what
-     the pass saw — turn ends, each with the instruction it ended and the Run that instruction was
-     recorded for, if any, denials, holds, blocked sessions, deliveries, refusals. Seat
+    "One pass over every session record on every workstream, faceted or not: read each of its
+     conversations — those whose recorded cwd its worktree or home holds, and the one its facet
+     drives — past the position its record keeps for it, seeding one with none at its first event
+     since conduct began reading the session; decide on the driven one, record the decision and
+     the positions in one write, then deliver — only while the session's own events still show the
+     launch baseline; answer what the pass saw, each once — turn ends, each with its conversation,
+     the instruction it ended and the Run that instruction was recorded for, if any, prompts a
+     person typed, denials, blocked sessions, deliveries, refusals, each turn end and blocked
+     session marked with whether its workstream is activated — or, when the listing cannot be
+     read, that the pass was skipped and decided nothing. Seat
      messages are asked of the mail its caller supplies — what each session is owed, oldest first
      — given tokened once nothing is queued, and marked delivered, with the token given, only once
      the substrate took them; conduct keeps none itself."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [faceted-sessions decide baseline-shown events/events-since substrate/listing substrate/send! substrate/wake!]})
+     :delegates [decide baseline-shown events/events-since events/conversations substrate/listing substrate/send! substrate/wake!]})
   (Operation outstanding
-    "The instruction still outstanding on a session's facet as its event log stands now: the
-     facet's pending, unless a Stop recorded past the facet's cursor ends it — what conduct!'s
-     next fold will leave. The one answer a check outside conduct reads before acting on an
-     instruction as unfinished."
-    {:signature [:=> [:catn [:facet :map]] [:maybe :map]]
+    "The instruction still outstanding on a session record's facet as its driven conversation's
+     event log stands now: the facet's pending, unless a Stop recorded past that conversation's
+     read position ends it — what conduct!'s next fold will leave. The one answer a check outside
+     conduct reads before acting on an instruction as unfinished."
+    {:signature [:=> [:catn [:session :map]] [:maybe :map]]
      :delegates [events/events-since]})
   (Operation retire!
     "Stop driving a session and stop its process, before the session it belongs to is torn down;
-     its facet marked retired, so it holds no session."
+     its facet marked retired, so it drives no session."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:opts :map]] [:maybe :map]]
      :delegates [release! substrate/stop!]})
   (Operation live-states

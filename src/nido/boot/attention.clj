@@ -4,8 +4,9 @@
    Five things are items here: a gate (a workstream parked on a human — the same
    rows the gate inbox shows), a halted coordinator, a trigger whose breaker
    tripped on its own, a permission auto mode denied in a session nido drives,
-   and a host boot whose casualties are still owed a revive. A session blocked on a person is announced apart from them, by
-   blocked-notifications. Each becomes one keyed notification; `arrivals` is the
+   and a host boot whose casualties are still owed a revive. A session blocked on a person, and a
+   turn that ended on a workstream not activated, are announced apart from them, by
+   blocked-notifications and turn-end-notifications. Each becomes one keyed notification; `arrivals` is the
    keys that were absent last time. Edge-triggered on purpose: a gate that sits
    for a day is announced once, and announced again only after it has left the
    set — a resumed session that parks again is a new question.
@@ -51,6 +52,28 @@
            :message  (str session " is blocked — answer it in claude agents")
            :sound    sound})
         blocked))
+
+(defn- excerpt [s n]
+  (let [s (str/trim (str/replace (str s) #"\s+" " "))]
+    (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:vector :map]]}
+  turn-end-notifications
+  "One notification for each turn end the conduct pass reported on a workstream not activated, in
+   a session other than a conductor's, that ended no instruction recorded for a Run: no conductor
+   reads it there, so the person is told. Conduct reports each turn end once, so each reaches here
+   once."
+  [turn-ends]
+  (into []
+        (comp (filter #(and (nil? (:run %)) (false? (:activated? %)) (not (:conductor? %))))
+              (map (fn [{:keys [project session event]}]
+                     {:title    "nido · a turn ended"
+                      :subtitle (name project)
+                      :message  (str session " finished its turn"
+                                     (when-let [said (not-empty (str/trim (str (:last-message event))))]
+                                       (str " — " (excerpt said 120))))
+                      :sound    sound})))
+        turn-ends))
 
 (defn- denial-item [{:keys [project session event]}]
   [[:denial (name project) session (:at event)]

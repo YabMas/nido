@@ -16,6 +16,10 @@
   (Operation blocked-notifications
     "One notification per session that has just entered blocked — never folded, never summarised."
     {:signature [:=> [:catn [:blocked [:sequential :map]]] [:vector :map]]})
+  (Operation turn-end-notifications
+    "One notification per turn end conduct reported on a workstream not activated, outside a
+     conductor's session, ending no Run's instruction — no conductor reads it there."
+    {:signature [:=> [:catn [:turn-ends [:sequential :map]]] [:vector :map]]})
   (Operation arrivals
     "The notifications for keys absent last time. The first look posts one summary instead, so a
      daemon restart never replays every open gate."

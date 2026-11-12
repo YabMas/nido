@@ -41,6 +41,7 @@
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.seats :as seats]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.io :as io]
@@ -203,6 +204,13 @@
   [project ws-id generation]
   (filterv #(= generation (:generation %)) (with-deliveries (log-rows project ws-id))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
+  hand-backs
+  "Every hand-back posted to the workstream's conductor, in any generation, oldest first, as
+   `traffic` gives a message. Reads the seat-message log alone — none there, none."
+  [project ws-id]
+  (filterv #(= :hand-back (:kind %)) (with-deliveries (log-rows project ws-id))))
+
 (defn- describe [{:keys [as seat]}]
   (case as
     :seat (if (int? seat) "the whole seat" (str "seat " seat))
@@ -344,7 +352,8 @@
 (defn- brief
   "An occupant's first prompt, built from the records: its seat, the seat's interface, the open
    tensions addressed to it, the settled tensions it was party to, what the generation inherited,
-   and the embodiment's practice."
+   who reads where it stops — the workstream's conductor only when the workstream is activated,
+   since only then has it one — and the embodiment's practice."
   [project ws-id embodiment seat-id]
   (let [seat      (first (filter #(= seat-id (:id %)) (seats/seats project ws-id)))
         settled   (filter #(and (not= :open (:state %)) (party? seat-id %)) (seats/tensions project ws-id))
@@ -379,6 +388,9 @@
                                             ts))
                        "\n"))
                 "\n"))
+         (if (some-> (ws/read-ws project ws-id) standing/activated?)
+           "When you end your turn, the workstream's conductor reads where you stopped and instructs you next.\n\n"
+           "When you end your turn, the person reads where you stopped: this workstream has no conductor.\n\n")
          (:practice embodiment) "\n\n"
          (if (:whole seat)
            "Raise a tension or message the conductor with `bb nido:seats:record` and `bb nido:seats:send`."
@@ -402,11 +414,12 @@
    own working copy, on `prompt`, given for no Run, on `model` (nil: claude's default) and by
    `given-by` (:start for a person's start or a spawn's brief; nil: the conductor answers for it),
    recording them on its record (:launched) first. A `profile` given is the one it comes up with;
-   none is the project's :full. Refused (:closed) on a closed workstream: every start of a driven
-   session comes through here. Answers the facet."
+   none is the project's :full. Refused (:closed) on a closed workstream — every start of a driven
+   session comes through here — unless `closed-ok?`: the conductor, started on a closed workstream
+   to read a hand-back it is owed. Answers the facet."
   ([project ws-id session-name prompt] (launch! project ws-id session-name prompt {:up? true}))
-  ([project ws-id session-name prompt {:keys [up? model given-by profile]}]
-  (refuse-closed! project ws-id)
+  ([project ws-id session-name prompt {:keys [up? model given-by profile closed-ok?]}]
+  (when-not closed-ok? (refuse-closed! project ws-id))
   (session/write! (assoc (session/read-session project ws-id session-name)
                          :launched (cond-> {:prompt prompt}
                                      model    (assoc :model model)
@@ -581,8 +594,9 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :map]}
   conductor!
   "Start the workstream's conductor on `brief`: a driven session on the one record naming it the
-   conductor, occupying no seat, in its own working copy brought up first with no services (`conductor-profile`). Refused while the
-   conductor's session is running; on a record whose session is not — gone from the listing, or
+   conductor, occupying no seat, in its own working copy brought up first with no services
+   (`conductor-profile`) — on an open workstream or a closed one, which may still owe its
+   conductor a hand-back. Refused while the conductor's session is running; on a record whose session is not — gone from the listing, or
    retired with its workstream's close — it is started again on the same record. Answers
    {:session}."
   [project ws-id brief]
@@ -603,7 +617,7 @@
          ;; Stopped without retirement: its facet still names nido as driving a conversation that is
          ;; over. Retiring it says so before a new one starts on the record.
          (conduct/retire! project ws-id n {}))
-       (launch! project ws-id n brief {:up? true :profile (conductor-profile project)})
+       (launch! project ws-id n brief {:up? true :profile (conductor-profile project) :closed-ok? true})
        {:session n}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
@@ -626,7 +640,9 @@
   "The whole seat's embodiment, as occupancy takes it: its occupant's session named for the
    workstream, briefed to work the recipe's next stage — writing the intent from its first
    instruction when that states the goal, leaving any other person's step to the person and
-   handing back naming it — and to hand back when the stage ends or it needs a decision.
+   ending its turn naming it — and to end its turn when the stage ends or it needs a decision.
+   Who reads where it stopped is the brief's to say (`brief`), from whether the workstream is
+   activated.
    Refuses a generation that fixes ids, which its seats' own embodiment carries."
   []
   {:seat-name (fn [_] "work")
@@ -636,7 +652,7 @@
                    "from it, as /design says. When a stage is a person's to take (an intent nothing given "
                    "states, a design approval, a merge), do not take it: end "
                    "your turn saying what the person owes. End your turn when the stage is done or when you "
-                   "need a decision; the workstream's conductor reads where you stopped and instructs you next.")
+                   "need a decision.")
    :refuse    (fn [project ws-id]
                 (when-not (:whole (first (seats/seats project ws-id)))
                   (throw (ex-info (str ws-id "'s generation fixes ids; its seats are not the whole seat's")

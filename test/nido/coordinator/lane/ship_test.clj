@@ -192,10 +192,12 @@
     (is (= [[:adopt "s"] [:instruct "/drive-home"]]
            (:did (drive-home-with (assoc facet :driver :nobody)))))))
 
-(deftest drive-home-refuses-a-held-session
-  (let [{:keys [did run]} (drive-home-with (assoc facet :hold {:at "t" :because :foreign-prompt}))]
-    (is (= [] did))
-    (is (= :awaiting-review (:state run)) "parked as blocked, with the reason on the session")))
+(deftest drive-home-refuses-no-session-a-hold-was-written-on
+  (testing "a hold written before is no refusal: the instruction is queued"
+    (is (= [[:instruct "/drive-home"]] (:did (drive-home-with (assoc facet :hold {:at "t" :because :foreign-prompt}))))))
+  (testing "and the :person it left driving is nobody, so the person's own ship adopts it first"
+    (is (= [[:adopt "s"] [:instruct "/drive-home"]]
+           (:did (drive-home-with (assoc facet :hold {:at "t" :because :foreign-prompt} :driver :person)))))))
 
 (deftest drive-home-refuses-a-session-nido-started-but-has-no-id-for
   ;; A start still in flight has no facet to queue on until a listing names its session, so

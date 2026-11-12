@@ -67,3 +67,15 @@
                                              :event {:at "t1" :tool-name "Bash"}}]})]
     (is (= [[:denial "brian" "kid" "t1"]] (keys current)))
     (is (re-find #"Bash" (:message (val (first current)))))))
+
+(deftest a-turn-end-no-conductor-reads-is-announced-to-the-person
+  (let [end (fn [m] (merge {:project :brian :ws-id "w" :session "plain" :run nil :instruction nil
+                            :activated? false :conductor? false :event {:last-message "  all\n done  "}}
+                           m))
+        ns  (attention/turn-end-notifications
+             [(end {})
+              (end {:session "on" :activated? true})
+              (end {:session "run" :run "r-1" :instruction {:for "r-1"}})
+              (end {:session "c" :conductor? true})])]
+    (is (= ["plain finished its turn — all done"] (map :message ns))
+        "one on a workstream not activated; the activated one's is the conductor's, a Run's its Run's")))

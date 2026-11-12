@@ -1362,3 +1362,29 @@
                   :nido  [{:name :on  :source {:type :slack-events :emoji "eyes"}}]})]
     (is (= [{:type :slack-events :emoji "eyes" :project :nido}]
            (filterv #(= :slack-events (:type %)) configs)))))
+
+(deftest a-blocked-session-is-withheld-as-the-conductors-only-on-an-activated-workstream
+  (let [posted (atom [])
+        notify @#'core/!notify-fn
+        blocked (fn [m] (merge {:project :brian :ws-id "w" :session "s" :unrun? true :activated? true :conductor? false} m))]
+    (reset! @#'core/!notify-fn (fn [n] (swap! posted conj n)))
+    (try
+      (with-redefs [conduct/conduct!          (fn [_] {:turn-ends [{:project :brian :ws-id "w" :session "plain" :run nil
+                                                                     :instruction nil :activated? false :conductor? false
+                                                                     :event {:last-message "done"}}]
+                                                       :blocked [(blocked {:session "held-for-conductor"})
+                                                                 (blocked {:session "plain-blocked" :activated? false})
+                                                                 (blocked {:session "the-conductor" :conductor? true})]
+                                                       :working [] :denials [] :refused [] :delivered [] :left-running []})
+                    conduct/faceted-sessions  (fn [_] [])
+                    core/conductor-pass!      (fn [& _] nil)
+                    core/settle-turn-ends!    (fn [& _] nil)
+                    core/registered-projects  (fn [] [:brian])]
+        (#'core/conduct-pass! 0)
+        (Thread/sleep 200))
+      (finally (reset! @#'core/!notify-fn notify)))
+    (is (= #{"plain-blocked is blocked — answer it in claude agents"
+             "the-conductor is blocked — answer it in claude agents"
+             "plain finished its turn — done"}
+           (set (map :message @posted))))))
+

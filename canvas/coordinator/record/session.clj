@@ -76,6 +76,12 @@
      directory more than one session runs in, or a project's own checkout, names no one."
     {:signature [:=> [:catn [:prompts [:sequential :map]]] [:set [:tuple :string :string]]]
      :delegates [person-prompt?]})
+  (Operation conversation-sessions
+    "The conversations of each session among the given ones, as {[project session-name] #{id}}: a
+     conversation belongs to the session whose home, or whose worktree, holds its recorded cwd,
+     the deepest such directory. One in a directory no session, or more than one, runs in belongs
+     to none."
+    {:signature [:=> [:catn [:conversations [:sequential :map]]] [:map-of [:tuple :string :string] [:set :string]]]})
   (Operation archive!
     "Flip a session to archived, recording when. Idempotent — archiving twice leaves one entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Session]
@@ -89,7 +95,8 @@
      conversation from before the substrate."
     {:signature [:=> [:catn [:s Session]] [:maybe :map]]})
   (Operation update-substrate!
-    "Replace a session's :claude facet and :dispatching note together, under the record's lock."
+    "Replace a session's :claude facet, :dispatching note and conversation read positions together,
+     under the record's lock; read positions an updater does not answer are kept."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:f [:=> [:cat :map] :map]]] Session]})
   (Operation update-claude!
     "Replace a session's :claude facet with what a function makes of it, under the record's lock."

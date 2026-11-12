@@ -321,10 +321,10 @@
    recorded during it is on the log and not yet on the facet. Such a Run is left :running for
    the next pass's fold to settle by its turn end."
   [now-ms faceted]
-  (doseq [{:keys [project ws-id session-name facet]} faceted
+  (doseq [{:keys [project ws-id session-name facet reading]} faceted
           :when (and (get-in facet [:pending :at]) (= :nido (:driver facet)))]
     (try
-      (when-let [pending (conduct/outstanding facet)]
+      (when-let [pending (conduct/outstanding {:claude facet :reading reading})]
         (when-let [run (run-for-instruction pending)]
           (when (= :running (:state run))
             (let [budget-ms (agent/parse-budget-ms (-> run :limits :budget))]
@@ -358,7 +358,7 @@
 
 (defn- surface-left-running!
   "Put on each session's record that a wake left a copy of it running — its instruction stays
-   outstanding, so nothing is given it again until a person releases or hands it back — and take
+   outstanding, so nothing is given it again until it ends or lapses — and take
    it off once the listing no longer shows that copy. Best-effort: a session with no autonomy
    facet has no error to carry it."
   [{:keys [left-running]} faceted]
@@ -369,8 +369,8 @@
                            :reason  :copy-left-running
                            :running running
                            :message (str "A wake left a copy of this session running (" running
-                                         ") — nido gives it nothing more until it is released or "
-                                         "handed back; stop the copy with `claude stop " running "`")})
+                                         ") — nido gives it nothing more until its instruction ends; "
+                                         "stop the copy with `claude stop " running "`")})
       (catch Throwable _ nil)))
   (let [listed (delay (set (keep :id (vals (conduct/live-states {})))))]
     (doseq [{:keys [project ws-id session-name]} faceted]
@@ -404,11 +404,13 @@
          nil)))
 
 (defn- conductor-pass!
-  "What the conductor lane does with one conduct pass: post a hand-back for each turn end that
-   ended an instruction given for no Run, escalate what a conductor turn that ended left
-   unanswered, and — at most every :conductor-interval-ms — start and retire conductors, record
-   and post the person's acts, and re-seat every carried workstream."
+  "What the conductor lane does with one conduct pass: answer in place an escalation on a
+   person's turn the person has prompted that session after, post a hand-back for each turn end
+   on an activated workstream that ended no Run's instruction, escalate what a conductor turn
+   that ended left unanswered, and — at most every :conductor-interval-ms — start and retire
+   conductors, record and post the person's acts, and re-seat every carried workstream."
   [r now-ms]
+  (logged "answering escalations in place" #(conductor/answers-in-place! r))
   (logged "posting hand-backs" #(conductor/hand-backs! r))
   (doseq [{:keys [project ws-id session instruction]} (:turn-ends r)
           :when (:conductor (session/read-session project ws-id session))]
@@ -439,10 +441,11 @@
                  working)))
 
 (defn- conduct-pass!
-  "One conduct pass over the background sessions: hold sends while the account is at its usage
-   limit, settle the Runs whose turns ended, enforce budgets, say on its record why a session's
-   instruction is held back or that a wake left a copy of it running, announce sessions newly
-   blocked, and keep what the rest of the tick reads."
+  "One conduct pass over the sessions on every workstream: hold sends while the account is at its
+   usage limit, settle the Runs whose turns ended, hand the other turn ends to the conductor lane,
+   enforce budgets, say on its record why a session's instruction is held back or that a wake left
+   a copy of it running, announce sessions newly blocked and turns that ended on a workstream not
+   activated, and keep what the rest of the tick reads."
   [now-ms]
   (let [projects (registered-projects)
         r        (conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)
@@ -456,12 +459,14 @@
         (surface-refusals! r)
         (surface-left-running! r faceted)
         (when-let [notify! @!notify-fn]
-          ;; One blocked on an instruction the conductor answers for is handed back to the conductor,
-          ;; not announced to the person; the conductor's own is the person's to answer.
-          (let [ns (attention/blocked-notifications
-                    (remove (fn [{:keys [project ws-id session unrun?]}]
-                              (and unrun? (not (:conductor (session/read-session project ws-id session)))))
-                            (:blocked r)))]
+          ;; One blocked after a turn that went to the conductor is the conductor's — only on an
+          ;; activated workstream, the only kind that has one; the conductor's own is the
+          ;; person's to answer. A turn end no conductor reads is the person's to hear about.
+          (let [ns (into (attention/blocked-notifications
+                          (remove (fn [{:keys [unrun? activated? conductor?]}]
+                                    (and activated? unrun? (not conductor?)))
+                                  (:blocked r)))
+                         (attention/turn-end-notifications (:turn-ends r)))]
             (when (seq ns) (future (doseq [n ns] (notify! n))))))
         (swap! !conduct
                (fn [c]

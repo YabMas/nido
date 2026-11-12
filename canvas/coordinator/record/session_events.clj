@@ -26,5 +26,7 @@
      :delegates [events-since]})
   (Operation conversations
     "Every recorded conversation with the cwd and time of its last event that carried a cwd —
-     what ties a conversation nido did not drive to the session it ran in."
-    {:signature [:=> [:catn] [:vector :map]]}))
+     what ties a conversation to the session it ran in — or, given an instant in epoch
+     milliseconds, only those whose log was written to since then."
+    {:signature [:=> [:catn [:since-ms [:? :int]]] [:vector :map]]
+     :delegates [events-since]}))

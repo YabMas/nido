@@ -62,11 +62,6 @@
   (Operation release
     "Stop nido driving a session's background session; the session keeps running."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation hand-back
-    "Let nido drive a session's background session again after a person's prompt held it, and
-     hand the hold back to its workstream's conductor."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]
-     :delegates [conduct/hand-back! conductor/hand-back!]})
   (Operation spawn
     "Bring a child session up as `up` does and drive it on the brief addressed back to the parent's
      agent: carried as `up` carries a session, occupying its workstream's whole seat when that seat

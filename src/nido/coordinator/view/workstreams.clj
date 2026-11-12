@@ -509,7 +509,8 @@
   session-rows
   "Display rows for one workstream's sessions, ordered most-recently-active first, in the state
    the substrate's listing reports and with who drives each in one vocabulary whoever started it:
-   :driver is what a session's :claude facet records, :nobody without one; :state is the
+   :driver is what a session's :claude facet records, :nobody without one or for a :person a facet
+   written before still carries; :state is the
    listing's, nil for a session it does not list.
 
    `listing` is the substrate's rows for this workstream's directories — View may not reach the
@@ -532,8 +533,10 @@
                              :weight        (:weight s)
                              :substrate     (:substrate s)
                              :state         (:state row)
-                             :driver        (or (get-in s [:claude :driver]) :nobody)
-                             :held?         (some? (get-in s [:claude :hold]))
+                             ;; :person, written before a prompt stopped changing who drives,
+                             ;; is nobody.
+                             :driver        (let [d (get-in s [:claude :driver])]
+                                              (if (or (nil? d) (= :person d)) :nobody d))
                              :last-activity (or (ran-at (:name s))
                                                 (some-> s :substrate-history last :at)
                                                 (:created-at s))}))
@@ -548,7 +551,6 @@
                       :session-id    (:sessionId row)
                       :state         (:state row)
                       :driver        :nobody
-                      :held?         false
                       :last-activity (some-> (:startedAt row) java.time.Instant/ofEpochMilli str)})]
     (->> (concat recorded unrecorded)
          ;; newest-active first; nil :last-activity sorts last. Lexical = chronological.

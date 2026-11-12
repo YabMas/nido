@@ -87,19 +87,24 @@
            (sort-by :at)
            vec))))
 
-(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+(defn ^{:malli/schema [:=> [:cat [:? :int]] [:vector :map]]}
   conversations
   "Every recorded conversation with the cwd and time of its last event that carried a cwd, as
-   {:id :cwd :last-at-ms} — what ties a conversation nido did not drive to the session it ran in.
-   A log with no such event, or whose time does not parse, names no conversation."
-  []
-  (let [dir (fs/parent (cstate/session-events-path "_"))]
-    (if-not (fs/directory? dir)
-      []
-      (vec (for [f     (fs/glob dir "*.edn")
-                 :let  [id   (str/replace (str (fs/file-name f)) #"\.edn$" "")
-                        ev   (->> (:events (events-since id nil)) (filter :cwd) last)
-                        ms   (try (.toEpochMilli (java.time.Instant/parse (:at ev)))
-                                  (catch Exception _ nil))]
-                 :when ms]
-             {:id id :cwd (:cwd ev) :last-at-ms ms})))))
+   {:id :cwd :last-at-ms} — what ties a conversation to the session it ran in. Given `since-ms`,
+   epoch milliseconds, only the logs written to at or after it are read, so the cost follows
+   recent activity. A log with no such event, or whose time does not parse, names no
+   conversation."
+  ([] (conversations nil))
+  ([since-ms]
+   (let [dir (fs/parent (cstate/session-events-path "_"))]
+     (if-not (fs/directory? dir)
+       []
+       (vec (for [^java.io.File f (.listFiles (fs/file dir))
+                  :when (and (str/ends-with? (.getName f) ".edn")
+                             (or (nil? since-ms) (>= (.lastModified f) since-ms)))
+                  :let  [id   (str/replace (.getName f) #"\.edn$" "")
+                         ev   (->> (:events (events-since id nil)) (filter :cwd) last)
+                         ms   (try (.toEpochMilli (java.time.Instant/parse (:at ev)))
+                                   (catch Exception _ nil))]
+                  :when ms]
+              {:id id :cwd (:cwd ev) :last-at-ms ms}))))))

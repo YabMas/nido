@@ -18,7 +18,6 @@
      list     project-wide overview
      adopt    make nido the driver of a background session started in it
      release  stop nido driving its background session; the session keeps running
-     hand-back  let nido drive it again after a person's prompt held it
      revive   bring back the sessions a host boot took down, and reopen their conversations
 
    Examples:
@@ -729,19 +728,6 @@
         session    (require-session-name pos)]
     (conduct/release! (keyword project) (session-ws! project session) session)
     (println (str "nido no longer drives " session))))
-
-(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  hand-back
-  "Let nido drive a session's background session again after a person's prompt held it:
-   :project <p> <session>. What was typed until now never holds it again."
-  [& args]
-  (let [[pos opts] (task-args/split-args args)
-        project    (require-project opts)
-        session    (require-session-name pos)]
-    (let [ws-id (session-ws! project session)]
-      (conduct/hand-back! (keyword project) ws-id session)
-      (conductor/hand-back! (keyword project) ws-id session))
-    (println (str "nido drives " session " again"))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   attach

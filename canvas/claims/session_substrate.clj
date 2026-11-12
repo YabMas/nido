@@ -8,8 +8,7 @@
             [canvas.coordinator.agent.substrate :refer [agent-substrate send! wake! dispatch!
                                                         ensure-trusted! listing]]
             [canvas.coordinator.executor :refer [coordinator-executor]]
-            [canvas.coordinator.lane.conduct :refer [lane-conduct conduct! recover! adopt!
-                                                     hand-back!]]
+            [canvas.coordinator.lane.conduct :refer [lane-conduct conduct! recover! adopt!]]
             [canvas.coordinator.record.session :refer [record-session]]
             [canvas.coordinator.record.session-events :refer [record-session-events]]
             [canvas.tasks.nido-session-hook :refer [nido-session-hook]]
@@ -30,7 +29,7 @@
   {:about [launch!] :evidence "round"})
 
 (Claim driver-is-recorded-not-inferred
-  "A session record's :claude facet states who drives the session now — nido, a person, or nobody — and whether a hold stands, independently of who started it: a person from the turn that sets a hold until hand-back! clears it and makes nido the driver again, and adopt! refuses a session whose hold stands, naming the hold. Origin is recorded there and no decision about a session with that facet reads it."
+  "A session record's :claude facet states who drives the session now — nido or nobody — independently of who started it: nido from its dispatch or adoption until release! or retirement, and no prompt changes it. Origin is recorded there and no decision about a session with that facet reads it."
   {:about [record-session lane-conduct] :evidence "round"})
 
 (Claim send-is-a-message
@@ -38,12 +37,9 @@
   {:about [send! wake! conduct!] :evidence "round"})
 
 (Claim sends-only-when-driving-and-done
-  "nido delivers an instruction to a session with a :claude facet only when the facet says nido drives it, no hold stands, and no earlier instruction to it is outstanding — given, and not yet followed by that session's Stop. It sends a message only to one with a live process that the substrate reports done, or blocked with its Stop as its latest recorded event, with no work of its own still running, and wakes only one the listing shows without a live process whose latest recorded event is its Stop. A session's latest recorded event, here and in every claim that names it, is its latest event other than a notification: Claude Code sends one to a session sitting idle after its Stop, and it reports neither a permission mode nor a turn."
+  "nido delivers an instruction to a session with a :claude facet only when the facet says nido drives it and no earlier instruction to it is outstanding. An instruction is outstanding from when it is given until a Stop of the conversation it was given to ends it — a Stop with a prompt of that conversation carrying its token recorded since that conversation's previous Stop; a Stop after only prompts nido did not give ends none — or until it lapses: no prompt carrying its token is recorded, a Stop of that conversation recorded after it was given is that conversation's latest recorded event, and the listing shows the session done. A lapsed instruction keeps back no delivery, and is still ended by a Stop as above. It sends a message only to one with a live process that the substrate reports done, or blocked with its Stop as its latest recorded event, with no work of its own still running, and wakes only one the listing shows without a live process whose latest recorded event is its Stop. A session's latest recorded event, here and in every claim that names it, is its latest event other than a notification: Claude Code sends one to a session sitting idle after its Stop, and it reports neither a permission mode nor a turn."
   {:about [conduct!] :evidence "round"})
 
-(Claim a-person-speaking-takes-over
-  "Every instruction nido gives a session with a :claude facet — its first prompt, every send and every wake — carries a token recorded as pending before it is given. In such a session nido drives, a turn nido did not give, recorded or listed since nido last began driving it — by dispatch, adoption or hand-back — sets a hold at conduct's first decision about that session after the turn was recorded or listed; such a turn is a recorded prompt without the pending, unconsumed token, or a turn that starts after a Stop with no work pending and no instruction given since. Only an explicit hand-back clears the hold."
-  {:about [conduct! hand-back! record-session-events] :evidence "round"})
 
 (Claim turn-end-is-observed
   "nido learns that a turn of a session with a :claude facet ended from the session's own Stop event and the substrate's state, never from a process exiting; such a session's process ending is a fact about liveness, not an outcome."

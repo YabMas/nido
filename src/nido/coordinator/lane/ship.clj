@@ -216,8 +216,7 @@
 (defn- give-drive-home!
   "Give `/drive-home` to the run's session: queue it for the background session nido drives,
    adopt the session first when nobody drives it, or start one in the session home when the
-   session has none. Throws, naming why, when a person holds the session or a start for it is
-   still in flight."
+   session has none. Throws, naming why, when a start for it is still in flight."
   [run home lc]
   (let [{:keys [project] ws-id :workstream-id session-name :session-name} run
         record (session/read-session project ws-id session-name)
@@ -235,13 +234,9 @@
                        :mcp-config (:mcp-config lc) :add-dirs (:add-dirs lc)
                        :for (:id run)})
 
-      (:hold facet)
-      (throw (ex-info "A person holds this session — hand it back, then ship again"
-                      {:reason :held}))
-
       :else
-      (do (when (#{:nobody :retired} (:driver facet))
-            ;; The person's own `nido ship` is the hand-back: they asked nido to drive it.
+      (do (when (#{:nobody :person :retired} (:driver facet))
+            ;; The person's own `nido ship` asks nido to drive it.
             (conduct/adopt! {:project project :ws-id ws-id :session-name session-name
                              :session-id (:session-id facet)}))
           (conduct/instruct! project ws-id session-name "/drive-home" (:id run))))))

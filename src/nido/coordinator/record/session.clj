@@ -30,58 +30,75 @@
    [:on-promote        [:maybe [:map-of keyword? any?]]]
    [:error             [:maybe [:map-of keyword? any?]]]])
 
+(def Instruction
+  "An instruction nido gave a session: its token is written BEFORE the instruction is delivered,
+   so a prompt carrying it is known for nido's."
+  [:map {:closed true}
+   [:token string?] [:at string?] [:via [:enum :dispatch :send :wake]]
+   ;; The session's own prompt event carried the token: delivered, not yet ended.
+   [:seen? boolean?]
+   ;; The Run it was given for — absent for an instruction no Run gave, whose turn end settles no
+   ;; Run.
+   [:for {:optional true} string?]
+   ;; :start when the start that brought the session gave it — a person's start or a spawn's
+   ;; brief, not the conductor's instruction — so the commit gate lets its turn take a person's act
+   ;; the start asked for (an intent from a brief).
+   [:given-by {:optional true} [:enum :start]]
+   ;; The seat message it was, when it was one.
+   [:message {:optional true} string?]])
+
 (def Claude
-  "The Claude Code background session a record is about, and who may give it its next
-   instruction. Origin is kept for display and decides nothing; driver and hold are what nido
-   reads before it sends. A record without this facet is a conversation from before the
-   substrate, continued — if at all — the old way."
+  "The Claude Code background session a record drives — which conversation that is — and who may
+   give it its next instruction. Origin is kept for display and decides nothing; the driver is
+   what nido reads before it sends, and no prompt changes it. A record without this facet is a
+   conversation nido does not drive.
+
+   A facet written before a person's prompt stopped holding a session may still carry :hold,
+   :idle-seen and :cursor, and a :driver of :person: they read, and nothing reads them — :person is
+   read as :nobody, and the cursor only seeds the conversation's read position (`:reading`)."
   [:map {:closed true}
    [:session-id string?]
    [:bg-id [:maybe string?]]
    [:origin [:enum :nido :person]]
    ;; :retired once retire! stopped its process: the conversation is over, and nothing drives the
-   ;; facet. It lasts until a conversation is driven on the record again — a start, an adoption,
-   ;; a turn that holds it — and a release or a hand-back, which only change who drives the facet
-   ;; they find, leave it retired.
+   ;; facet. It lasts until a conversation is driven on the record again — a start or an
+   ;; adoption — and a release, which only changes who drives the facet it finds, leaves it
+   ;; retired. :person is a legacy value, read as :nobody.
    [:driver [:enum :nido :person :nobody :retired]]
-   ;; Set when a turn nido did not give is seen; only a hand-back clears it.
-   [:hold [:maybe [:map {:closed true} [:at string?] [:because keyword?]]]]
-   ;; The instruction given and not yet followed by the session's Stop. Its token is written
-   ;; here BEFORE the instruction is delivered, so a prompt carrying it is known for nido's.
-   [:pending [:maybe [:map {:closed true}
-                      [:token string?] [:at string?] [:via [:enum :dispatch :send :wake]]
-                      ;; The session's own prompt event carried the token: delivered, not yet ended.
-                      [:seen? boolean?]
-                      ;; The Run it was given for — absent for an instruction no Run gave, whose
-                      ;; turn end settles no Run.
-                      [:for {:optional true} string?]
-                      ;; :start when the start that brought the session gave it — a person's start or
-                      ;; a spawn's brief, not the conductor's instruction — so the commit gate lets
-                      ;; its turn take a person's act the start asked for (an intent from a brief).
-                      [:given-by {:optional true} [:enum :start]]
-                      ;; The seat message it was, when it was one.
-                      [:message {:optional true} string?]]]]
+   [:hold {:optional true} [:maybe [:map {:closed true} [:at string?] [:because keyword?]]]]
+   ;; The instruction given and not yet ended by a Stop of the conversation.
+   [:pending [:maybe Instruction]]
+   ;; Instructions that lapsed — no prompt carrying the token was recorded, and the conversation
+   ;; stopped after it was given — and that a later instruction replaced as :pending. A Stop
+   ;; whose turn carried one's token still ends it. The newest few are kept.
+   [:lapsed {:optional true} [:vector Instruction]]
    ;; One instruction waiting for the session to be ready for it, and the Run it is for.
    [:queued [:maybe string?]]
    [:queued-for {:optional true} [:maybe string?]]
-   ;; The session's last Stop left work of its own running (background tasks, crons), so the
-   ;; turn that follows is the session's own and not a person's.
+   ;; The session's last Stop left work of its own running (background tasks, crons), so nothing
+   ;; is given it until that work is done.
    [:own-work? boolean?]
    [:policy [:map {:closed true} [:auto-respawn? boolean?]]]
-   ;; How far conduct has read the session's event log (session-events/events-since).
-   [:cursor int?]
-   ;; Since when nido has been driving it: turns recorded before this never hold it.
+   [:cursor {:optional true} int?]
+   ;; Since when nido has been driving it, by dispatch or adoption.
    [:driving-since [:maybe string?]]
-   ;; Its last turn, nido's, ended an instruction no Run gave — one the conductor answers for.
+   ;; Its last Stop ended no instruction recorded for a Run: the turn end went to whoever answers
+   ;; for the workstream — its conductor where it has one.
    [:ended-unrun? {:optional true} boolean?]
    ;; The current entry into blocked has been announced; cleared when the session leaves it.
    [:announced-blocked? boolean?]
-   ;; What nido has seen of the session idle since it last began driving it or gave it anything:
-   ;; nil, :stopped by a recorded Stop, or :listed done by the listing since that Stop. Only a
-   ;; turn after such an idle can be one nido did not give.
    [:idle-seen {:optional true} [:maybe [:enum :stopped :listed]]]
    ;; The host boot recover! last restarted this session in, so it restarts it at most once.
    [:recovered-boot [:maybe string?]]])
+
+(def Reading
+  "How far conduct has read the conversations of a session: the instant it began reading the
+   session, and the read position (session-events/events-since's cursor) of each conversation of
+   the session by its id — the one a facet drives among them. A conversation with no position is
+   read from its first event recorded at or after :since."
+  [:map {:closed true}
+   [:since string?]
+   [:positions [:map-of string? int?]]])
 
 (def Session
   [:map {:closed true}
@@ -93,6 +110,7 @@
    [:substrate-history [:vector [:map [:at string?] [:substrate [:enum :live :archived]]]]]
    [:autonomy          [:maybe Autonomy]]
    [:claude            {:optional true} [:maybe Claude]]
+   [:reading           {:optional true} Reading]
    ;; A background session being started for this record and not yet named by Claude Code: the
    ;; first prompt's token, recorded before the start, and — once a start has launched a process
    ;; the listing did not name in time — its background id. Never beside a facet for long: the
@@ -281,6 +299,20 @@
                    dir    (cond-> [(str home)] (and wt (not (checkouts wt))) (conj wt))]
                {dir #{owner}})))))
 
+(defn- owner-of
+  "A function from a directory to the session that runs in it, as [project session-name] — the
+   session whose home, or whose worktree, holds it, the deepest such directory — or nil. A
+   directory more than one session runs in (a :lite worktree is the project's own checkout) is
+   no one's."
+  []
+  (let [dirs (session-dirs)]
+    (fn [cwd]
+      (let [[_ owners] (->> dirs
+                            (filter (fn [[d _]] (or (= cwd d) (str/starts-with? (str cwd) (str d "/")))))
+                            (sort-by (comp - count key))
+                            first)]
+        (when (= 1 (count owners)) (first owners))))))
+
 (defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:set [:tuple :string :string]]]}
   prompted-sessions
   "The sessions a person typed one of `prompts` ({:cwd :prompt …}) in, as #{[project
@@ -292,21 +324,31 @@
   (let [typed (filter person-prompt? prompts)]
     (if (empty? typed)
       #{}
-      (let [dirs  (session-dirs)
-            owner (fn [cwd]
-                    (let [[_ owners] (->> dirs
-                                          (filter (fn [[d _]] (or (= cwd d) (str/starts-with? (str cwd) (str d "/")))))
-                                          (sort-by (comp - count key))
-                                          first)]
-                      (when (= 1 (count owners)) (first owners))))]
-        (into #{} (keep (comp owner :cwd)) typed)))))
+      (let [owner (owner-of)] (into #{} (keep (comp owner :cwd)) typed)))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:map-of [:tuple :string :string] [:set :string]]]}
+  conversation-sessions
+  "The conversations of each session among `conversations` ({:id :cwd …}, as
+   session-events/conversations answers them), as {[project session-name] #{id …}}: a
+   conversation belongs to the session whose home, or whose worktree, holds its recorded cwd —
+   the deepest such directory, as `prompted-sessions` counts a prompt. One in a directory no
+   session, or more than one, runs in belongs to none."
+  [conversations]
+  (if (empty? conversations)
+    {}
+    (let [owner (owner-of)]
+      (reduce (fn [m {:keys [id cwd]}]
+                (if-let [o (when cwd (owner cwd))] (update m o (fnil conj #{}) id) m))
+              {} conversations))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat :map] :map]] :Session]}
   update-substrate!
-  "Replace a session's :claude facet and :dispatching note together with what `(f {:claude
-   :dispatching})` answers — either nil to remove it — read and written under the record's lock,
-   so a facet written and a note cleared are one step, and two updaters (a conduct pass and a
-   hand-back) cannot lose each other's write. Throws when the session does not exist or the
+  "Replace a session's :claude facet, :dispatching note and :reading with what `(f {:claude
+   :dispatching :reading})` answers, read and written under the record's lock, so a facet written,
+   a note cleared and a read position moved are one step, and two updaters (a conduct pass and a
+   start) cannot lose each other's write. A :claude or :dispatching the answer leaves nil or out
+   is removed; a :reading it leaves out is kept, so no updater that is not reading the session's
+   conversations can drop where they were read to. Throws when the session does not exist or the
    result is not valid, and writes nothing then."
   [project ws-id session-name f]
   (let [path (cstate/session-edn-path project ws-id session-name)]
@@ -315,8 +357,12 @@
                       (when-not s
                         (throw (ex-info "Session not found"
                                         {:project project :ws-id ws-id :session session-name})))
-                      (let [{:keys [claude dispatching]} (f (select-keys s [:claude :dispatching]))]
-                        (validate (shed (assoc s :claude claude :dispatching dispatching))))))))
+                      (let [r       (f (select-keys s [:claude :dispatching :reading]))
+                            reading (if (contains? r :reading) (:reading r) (:reading s))]
+                        (validate (shed (cond-> (-> s
+                                                    (assoc :claude (:claude r) :dispatching (:dispatching r))
+                                                    (dissoc :reading))
+                                          reading (assoc :reading reading)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat [:maybe :map]] [:maybe :map]]] :Session]}
   update-claude!

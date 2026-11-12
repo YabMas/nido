@@ -39,9 +39,8 @@
    recorded when nido queued it: one recorded as given for a Run is that Run's; every other
    instruction nido gives — a seat message, a decided instruction, an occupant's brief, a gate
    reply no Run awaits — is the conductor's, on every session nido drives on the workstream but
-   the conductor; a turn nido did not
-   give is a person's, which holds the session, so its end is no hand-back and the hold, handed
-   back, is — on any session nido drives on the workstream — and how each becomes
+   the conductor; a turn nido did not give is a person's, and on an activated workstream its end
+   is a hand-back too, marked as a person's turn — and how each becomes
    exactly one decision: the hand-back logged once to the conductor with the session and its seat, the turn's last
    message and the position the pipeline derives at that moment; the conductor's answer recorded
    as instructions to one or more seats or an escalation, with the position it was decided at; a
@@ -51,10 +50,10 @@
    person's act at the step is recorded as answering when the escalation was at a person's step;
    and each act of the person's recorded on the workstream is one hand-back to the conductor — the
    blocker's answer nido records for an act being carried by that act's. Also the
-   conductor's lifecycle against its workstream's — started by a conduct pass while the open
-   workstream is worked, a person having typed a prompt into one of its sessions within the last
-   day, and its session is not running; retired by a pass once the workstream is closed or no
-   longer worked — and
+   conductor's lifecycle against its workstream's — started by a conduct pass while the activated
+   workstream is open and worked, a person having typed a prompt into one of its sessions within
+   the last day, or owes its conductor a hand-back, and its session is not running; retired by a
+   pass once it owes none and is closed or no longer worked — and
    what it is briefed with: the records at its start and an escalation guidance document edited
    without changing code. And that a workstream a person or a Run starts its first session on is
    carried: that session occupies its whole seat, and whenever the seats change the embodiment that carries them
@@ -83,17 +82,18 @@
   (Operation conductors!
     "On every conduct pass: start, on its one conductor record and a brief of the seats, the
      governing design and the position as the records give them at that start and the escalation
-     guidance, the conductor of
-     each open workstream of a project that is worked — a person typed a prompt into one of its
-     sessions within the window the pass read — whose conductor's session is not running, and
-     retire the conductor of each closed or unworked one — a ticket a person settled in Notion
-     closing it as the pipeline places it. A prompt nido sent or the harness delivered from another
-     agent is no person's, so nothing nido starts makes a workstream worked, and nothing worked
-     long ago keeps it so."
+     guidance, the conductor of each activated workstream of a project whose conductor's session
+     is not running and that owes its conductor a hand-back — one posted after its latest close,
+     or ever, that no decision answers — open or closed, or that is open and worked — a person
+     typed a prompt into one of its sessions within the window the pass read; and retire the
+     conductor of each that owes it none and is closed or unworked — a ticket a person settled in
+     Notion closing it as the pipeline places it. A prompt nido sent or the harness delivered from
+     another agent is no person's, so nothing nido starts makes a workstream worked, and nothing
+     worked long ago keeps it so."
     {:signature [:=> [:catn [:project ProjectName] [:prompted [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]]]
                  [:sequential :map]]
      :delegates [prompted workstream/list-ids workstream/read-ws seats/conductor!
-                 seats/retire-conductor! rseats/seats standing/governing-design drive/of
+                 seats/retire-conductor! seats/hand-backs rseats/seats standing/governing-design drive/of
                  drive/settled-in-notion]})
   (Operation reseat!
     "On every conduct pass, for a carried workstream that is worked — as conductors! reads it, so a
@@ -106,19 +106,20 @@
                       [:prompted [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]]] :map]
      :delegates [prompted seats/reseat! seats/held seats/default-embodiment seats/occupy! embodied-strata/carry! embodied-strata/refused? drive/park!]})
   (Operation hand-backs!
-    "From one conduct pass's report, log to the workstream's conductor each turn end, on a session
-     nido drives other than the conductor, that ended an instruction nido gave and recorded as
-     given for no Run — once per turn end — with the session, its seat when it has one, the
-     position the pipeline derives at that moment, and the governing design and seats as the
-     records give them then. A turn nido did not give is the person's, and
-     its end is logged to no one."
+    "From one conduct pass's report, log to an activated workstream's conductor each turn end of a
+     session on it other than the conductor, faceted or not, that ended no instruction recorded
+     for a Run — once per turn end, a person's turn marked as such — with the session, its seat
+     when it has one, the turn's last message, the position the pipeline derives at that moment,
+     and the governing design and seats as the records give them then."
     {:signature [:=> [:catn [:report :map]] [:sequential :map]]
      :delegates [drive/of seats/occupants seats/post! standing/governing-design rseats/seats]})
-  (Operation hand-back!
-    "Log a person's hold on any session nido drives on the workstream, handed back, to the
-     conductor — once per hand-back — as hand-backs! logs a turn end."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session SessionName]] :map]
-     :delegates [drive/of seats/post!]})
+  (Operation answers-in-place!
+    "From one conduct pass's report, answer as nido each open escalation the conductor decided on
+     a hand-back marked as a person's turn, and the blocker it parked, once the person prompts that
+     same session after the decision, citing that prompt. No other escalation is answered by a
+     prompt."
+    {:signature [:=> [:catn [:report :map]] [:sequential :map]]
+     :delegates [seats/traffic workstream/entries-of workstream/append-entry!]})
   (Operation decide!
     "Record the conductor's answer to a hand-back and carry it out, as one step under the ledger's
      append lock, so no seat it names can be removed between: everything is checked before
@@ -144,8 +145,9 @@
      step a conductor's escalation at a person's step named as that escalation's blocker's answer,
      citing the act; and log each act of the person's recorded on the workstream since its
      conductor's record was made — a reply recorded as a blocker's answer among them, never a
-     blocker's answer nido recorded for an act — to its conductor as a hand-back, once per entry,
-     with the position the pipeline derives at that moment."
+     blocker's answer nido recorded for an act, nor the close that closes the workstream as its
+     ledger stands — to its conductor as a hand-back, once per entry, with the position the
+     pipeline derives at that moment."
     {:signature [:=> [:catn [:project ProjectName]] [:sequential :map]]
      :delegates [workstream/list-ids workstream/entries-of workstream/append-entry! drive/of
                  seats/post!]})
@@ -160,15 +162,16 @@
   (Operation refusal
     "Why a command must not run, or nil: a person's act — an intent, a design grant, a triage
      acceptance, a phase gate, a blocker's answer, a landing, a PR merge or a close — run from the
-     conductor's session, or from any other session's in a turn following an instruction the
-     conductor answers for and that no start gave, judged over what the commit gate reads the
-     command to do. Pushing, whatever the branch, and opening or readying a PR are not a person's
+     conductor's session, or from any other session's conversation in a turn whose latest prompt
+     since its previous Stop carries the token of an instruction the conductor answers for and
+     that no start gave, judged over what the commit gate reads the command to do. A turn whose
+     latest prompt carries no such token is the person's, and its acts are allowed. Pushing, whatever the branch, and opening or readying a PR are not a person's
      act, and neither is a design round, whose carried grant grants nothing the person did not."
     {:signature [:=> [:catn [:input :map]] [:maybe :string]]
      :delegates [commit-gate/acts]})
   (Operation starter
     "Who gives the first instruction of a session a start made from a directory carries or drives:
-     the start, unless the directory is in a nido session whose turn follows an instruction the
-     conductor answers for and no start gave — then no one, so the conductor answers for it and a
+     the start, unless the directory is in a nido session whose driven conversation's turn runs
+     on an instruction the conductor answers for and no start gave — then no one, so the conductor answers for it and a
      start made on its instruction hands its session no act the gate refuses the conductor."
     {:signature [:=> [:catn [:cwd :string]] [:maybe [:enum :start]]]}))

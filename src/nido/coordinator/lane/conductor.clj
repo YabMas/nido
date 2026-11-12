@@ -1,25 +1,27 @@
 (ns nido.coordinator.lane.conductor
   "Who decides what a workstream's seats do next, and what reaches the person.
 
-   HIDES what a hand-back is. A turn end returns to whoever gave the instruction it ended, as
-   conduct recorded when it queued it: one recorded as given for a Run is that Run's, and boot
-   settles it; every other instruction nido gives a session it drives on the workstream — a seat
-   message, a decided instruction, an occupant's brief, a gate reply no Run awaits — is the
-   conductor's; a turn nido did not give is a person's, which holds the session, so its end is no
-   hand-back, and the hold, handed back, is. Each act of the person's recorded on the workstream is
-   a hand-back too. Every hand-back is posted once to the conductor through the seat-message log,
-   carrying the position the pipeline derives at that moment, and answered by exactly one
-   :conduct-decision — the conductor's, or an escalation nido writes when the conductor turn it was
-   delivered for ends leaving it unanswered.
+   HIDES what a hand-back is. A turn end returns to whoever answers for the instruction it ended,
+   as conduct recorded when it queued it: one recorded as given for a Run is that Run's, and boot
+   settles it; every other turn end of a session on an activated workstream but its conductor's
+   is the conductor's — one ending an instruction nido gave (a seat message, a decided
+   instruction, an occupant's brief, a gate reply no Run awaits), and one ending none, a person's
+   turn, marked as such. Each act of the person's recorded on the workstream is a hand-back too.
+   Every hand-back is posted once to the conductor through the seat-message log, carrying the
+   position the pipeline derives at that moment, and answered by exactly one :conduct-decision —
+   the conductor's, or an escalation nido writes when the conductor turn it was delivered for ends
+   leaving it unanswered. An escalation decided on a person's turn is answered in place: by the
+   person's next prompt into that session.
 
    Also the conductor's lifecycle against its workstream's: a workstream is WORKED while a person
    has typed a prompt into one of its sessions, or started it (its :activated entry, or their
    :in-progress choice), within the last day (`session/worked-window-ms`) —
    a prompt nido sent, or one the harness delivered from another agent, is no person's, so an
    occupant nido drives, a spawned child and a Run make nothing worked by their own turns — and
-   every open, worked workstream has one conductor, started by a conduct pass while its session is
-   not running and retired once the workstream is closed or no longer worked. It is briefed from
-   the records and an escalation guidance document a person edits without changing code.
+   every activated workstream that is open and worked, or that owes its conductor a hand-back,
+   has one conductor, started by a conduct pass while its session is not running and retired
+   once the workstream owes it none and is closed or no longer worked. It is briefed from the
+   records and an escalation guidance document a person edits without changing code.
 
    And that a start carries its session: the first session a person's start or a Run's start
    brings up on a workstream whose generation fixes no ids becomes its whole seat's occupant.
@@ -165,7 +167,8 @@
   (let [design (standing/governing-design project ws-id)
         {:keys [position next]} (position project ws-id)]
     (str "You conduct workstream " ws-id " of " (name project) ". You occupy no seat and write no code. "
-         "Each hand-back nido gives you — a seat's turn that ended, or an act of the person's — you "
+         "Each hand-back nido gives you — a turn nido gave that ended, a person's turn in one of its "
+         "sessions (marked as the person's: they are steering it), or an act of the person's — you "
          "answer with exactly one decision, recorded with `bb nido:seats:decide :hand-back <id>` and "
          "either `:seat <id> :text \"…\"` (or `:instruct '[{:seat … :text …} …]'` for several seats) "
          "or `:escalate \"…?\"`, the one-sentence question the person is needed for, with "
@@ -197,36 +200,57 @@
              (sstate/session-live? (get (sstate/read-registry) (str wt))))
            (catch Throwable _ false))))
 
+(defn- owes-hand-back?
+  "Whether the workstream `w` owes its conductor a hand-back: one posted after its latest :closed
+   entry — ever, when it has none — that no :conduct-decision answers. Reads the seat-message log
+   first and the decisions only when such a hand-back is there."
+  [project ws-id w]
+  (let [closed-at (some->> (:entries w) (filter #(= :closed (:kind %))) last :at)
+        after?    (fn [m] (or (nil? closed-at)
+                              (try (.isAfter (java.time.Instant/parse (str (:at m)))
+                                             (java.time.Instant/parse (str closed-at)))
+                                   (catch Exception _ true))))
+        posted    (filter after? (seats/hand-backs project ws-id))]
+    (boolean (when (seq posted)
+               (let [answered (into #{} (map :hand-back) (ws/entries-of project ws-id :conduct-decision))]
+                 (some #(not (answered (:id %))) posted))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]] [:sequential :map]]}
   conductors!
   "On every conduct pass: start, on its one conductor record and its brief, the conductor of each
-   open workstream of `project` that is worked — a person typed into one of its sessions within
-   the window `prompted` was read over (default: read now) — whose conductor's session is not
-   running, and retire the conductor of each closed, unworked or not activated one
-   (`standing/activated?`) that still has a process or an up session — a ticket a person settled in Notion closes its workstream here as the pipeline
-   places it (`pipeline/settled-in-notion`), and one taken back out starts it again. A workstream
-   not worked, or not activated, gets none. Answers [{:ws-id :started|:retired :session}] for what it did; a failure
-   is logged and the rest carried on with."
+   activated workstream (`standing/activated?`) of `project` whose conductor's session is not
+   running and that owes its conductor a hand-back (`owes-hand-back?`), open or closed, or that
+   is open and worked — a person typed into one of its sessions within the window `prompted` was
+   read over (default: read now); and retire the conductor, while it still has a process or an up
+   session, of each workstream that owes it no hand-back and is closed, unworked or not activated
+   — a ticket a person settled in Notion closes its workstream here as the pipeline places it
+   (`pipeline/settled-in-notion`), and one taken back out starts it again. A workstream not
+   activated gets none, and one that owes a hand-back keeps its own. Answers [{:ws-id
+   :started|:retired :session}] for what it did; a failure is logged and the rest carried on
+   with."
   [project & [prompted-sessions]]
   (let [live     (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {}))
         typed-in (or prompted-sessions (prompted))]
     (if (= :unread typed-in)
       []
      (vec
-     ;; Sessions are read first and a ledger only where they leave a conductor to start or retire:
-     ;; reading every ledger costs seconds a pass.
+     ;; Sessions and the seat-message log are read first, and a ledger only where they leave a
+     ;; conductor to start or retire: reading every ledger costs seconds a pass.
      (for [ws-id (ws/list-ids project)
            :let  [c       (conductor-of project ws-id)
                   worked  (worked? project ws-id typed-in)]
-           :when (or c worked)
-           :let  [w (ws/read-ws project ws-id)
-                  act (cond
-                        (nil? w) nil
-                        (or (ws/closure w) (pipeline/settled-in-notion project ws-id w) (not worked)
-                            (not (standing/activated? w)))
-                        (when (and c (needs-retiring? project c @live)) :retired)
-                        (not (and c (running? c @live)))
-                        :started)]
+           :when (or c worked (seq (seats/hand-backs project ws-id)))
+           :let  [w    (ws/read-ws project ws-id)
+                  on?  (and w (standing/activated? w))
+                  owes (and on? (owes-hand-back? project ws-id w))
+                  act  (cond
+                         (nil? w) nil
+                         owes
+                         (when-not (and c (running? c @live)) :started)
+                         (or (ws/closure w) (pipeline/settled-in-notion project ws-id w) (not worked) (not on?))
+                         (when (and c (needs-retiring? project c @live)) :retired)
+                         (not (and c (running? c @live)))
+                         :started)]
            :when act
            :let  [r (try
                       (case act
@@ -327,9 +351,11 @@
 ;; ── hand-backs ──────────────────────────────────────────────────────────────
 
 (defn- hand-back-text
-  [{:keys [what session seat said position next design seats]}]
+  [{:keys [what turn session seat said position next design seats]}]
   (str "Hand-back: " what "\n"
        "Session: " session (when seat (str " (seat " seat ")")) "\n"
+       (when (= :person turn)
+         "Turn: the person's — nido gave this turn nothing; the person is steering this session\n")
        "Position: " (name position) (when next (str ", next " (pr-str next))) "\n"
        "Governing design: " (design-line design) "\n"
        "Seats: " (seats-line seats) "\n"
@@ -338,55 +364,41 @@
 (defn- post-hand-back!
   "Post one hand-back to the workstream's conductor under `key`, carrying the position the
    pipeline derives now and the governing design and seats as the records give them now — so a
-   conductor started under an earlier design decides on this one."
+   conductor started under an earlier design decides on this one. A person's turn (`:turn
+   :person`) is marked so on the message, with the conversation it ran in."
   [project ws-id key fields]
   (let [pos (position project ws-id)
         msg (merge fields pos {:design (standing/governing-design project ws-id)
                                :seats  (rseats/seats project ws-id)})]
-    (seats/post! project ws-id {:key key :kind :hand-back :to :conductor :text (hand-back-text msg)
-                                :session (:session fields) :position (:position pos)})))
+    (seats/post! project ws-id (merge {:key key :kind :hand-back :to :conductor :text (hand-back-text msg)
+                                       :session (:session fields) :position (:position pos)}
+                                      (select-keys fields [:turn :conversation])))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]}
   hand-backs!
-  "From one conduct pass's report, log to the workstream's conductor each turn end, on a session
-   nido drives other than the conductor, that ended an instruction nido gave and recorded as given
-   for no Run — once per turn end, keyed on its instruction's token — with the session, its seat
-   when it has one, the turn's last message, the position the pipeline derives at that moment, and
-   the governing design and seats as the records give them then.
-   A turn nido did not give is the person's, and its end is logged to no one; nor is any turn
-   end of a workstream not activated, which has no conductor to read it. Answers the hand-backs
-   posted."
+  "From one conduct pass's report, log to an activated workstream's conductor each turn end of a
+   session on it other than the conductor, faceted or not, that ended no instruction recorded for
+   a Run — once per turn end — with the session, its seat when it has one, the turn's last
+   message, the position the pipeline derives at that moment, and the governing design and seats
+   as the records give them then. One that ended an instruction nido gave is keyed on that
+   instruction's token; one that ended none is a person's turn, marked as such and keyed on its
+   conversation and the Stop's time. A workstream not activated has no conductor to read it, and
+   is logged nothing. Answers the hand-backs posted."
   [{:keys [turn-ends]}]
-  (vec
-   (for [{:keys [project ws-id session event instruction run]} turn-ends
-         :when (and instruction (nil? run))
-         :let  [s (session/read-session project ws-id session)]
-         :when (and s (not (:conductor s))
-                    (some-> (ws/read-ws project ws-id) standing/activated?))]
-     (post-hand-back! project ws-id (str "turn:" session ":" (:token instruction))
-                      {:what "a turn nido gave ended" :session session :seat (get-in s [:seat :id])
-                       :said (:last-message event)}))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :map]}
-  hand-back!
-  "Log a person's hold on `session-name`, handed back, to the workstream's conductor — once per
-   hand-back, keyed on when nido began driving it again — as hand-backs! logs a turn end, the
-   last message its conversation's newest turn end reported among it. On a workstream not
-   activated there is no conductor, and nothing is logged: answers {:posted nil :why
-   :not-activated}."
-  [project ws-id session-name]
-  (if-not (some-> (ws/read-ws project ws-id) standing/activated?)
-    {:posted nil :why :not-activated}
-  (let [s    (session/read-session project ws-id session-name)
-        ;; The hold's last turn end is the newest stop its conversation reported.
-        said (some->> (get-in s [:claude :session-id])
-                      (#(:events (session-events/events-since % nil)))
-                      (filter #(= :stop (:event %)))
-                      last
-                      :last-message)]
-    (post-hand-back! project ws-id (str "hold:" session-name ":" (get-in s [:claude :driving-since]))
-                     {:what "a person's turn held this session and was handed back"
-                      :session session-name :seat (get-in s [:seat :id]) :said said}))))
+  (let [activated? (memoize (fn [project ws-id] (some-> (ws/read-ws project ws-id) standing/activated?)))]
+    (vec
+     (for [{:keys [project ws-id session event instruction run conversation]} turn-ends
+           :when (nil? run)
+           :let  [s (session/read-session project ws-id session)]
+           :when (and s (not (:conductor s)) (activated? project ws-id))]
+       (if instruction
+         (post-hand-back! project ws-id (str "turn:" session ":" (:token instruction))
+                          {:what "a turn nido gave ended" :session session :seat (get-in s [:seat :id])
+                           :said (:last-message event)})
+         (post-hand-back! project ws-id (str "person-turn:" (or conversation session) ":" (:at event))
+                          {:what "a person's turn ended" :turn :person :session session
+                           :conversation conversation :seat (get-in s [:seat :id])
+                           :said (:last-message event)}))))))
 
 ;; ── decisions ───────────────────────────────────────────────────────────────
 
@@ -587,6 +599,41 @@
         (ws/append-entry! project ws-id {:kind :blocker-answered} (pr-str entry))
         entry))))
 
+(defn- earlier?
+  "Whether ISO instant `a` falls before `b`; false when either does not parse."
+  [a b]
+  (try (.isBefore (java.time.Instant/parse (str a)) (java.time.Instant/parse (str b)))
+       (catch Exception _ false)))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]}
+  answers-in-place!
+  "From one conduct pass's report, answer as nido each open escalation the conductor decided on a
+   hand-back marked as a person's turn, and the blocker it parked, when the person next prompts
+   that same session: the first prompt a person typed there after the decision, which the answer
+   cites. No other escalation is answered by a prompt. Answers [{:ws-id :answered <blocker seq>}]."
+  [{:keys [prompts]}]
+  (vec
+   (for [[[project ws-id session] ps] (group-by (juxt :project :ws-id :session) prompts)
+         r (deciding
+            project ws-id
+            ;; Realized inside the lock: each answer is checked and written as one step.
+            #(vec (for [{:keys [blocker escalation]} (open-escalations project ws-id)
+                        :let  [m (hand-back-message project ws-id (:hand-back escalation))]
+                        :when (and (= :person (:turn m)) (= session (:session m)))
+                        :let  [p (first (filter (fn [{:keys [event]}] (earlier? (:at escalation) (:at event)))
+                                                (sort-by (comp str :at :event) ps)))]
+                        :when p]
+                    (let [{:keys [event conversation]} p]
+                      (ws/append-entry! project ws-id {:kind :blocker-answered}
+                                        (pr-str {:format :blocker-answered :blocker-seq (:seq blocker) :by :nido
+                                                 :resumed nil
+                                                 :summary (str "answered by the person's prompt into " session
+                                                               " at " (:at event))
+                                                 :prompt (cond-> {:session session :at (str (:at event))}
+                                                           conversation (assoc :conversation conversation))}))
+                      {:ws-id ws-id :answered (:seq blocker)}))))]
+     r)))
+
 (defn- at-a-persons-step? [{:keys [next]}]
   (or (= :human (:mode next)) (= :establish-intent (:stage next))))
 
@@ -654,10 +701,10 @@
    person's act at the step it named — an act of a kind
    that takes that step, never another, and never one `persons-act?` rejects — as that escalation's blocker's answer, citing the act; and log each act of the person's recorded on the workstream
    since its conductor's record was made — a reply recorded as a blocker's answer among them,
-   never a blocker's answer nido recorded for an act, an entry nido wrote, or a grant a design
-   round carried forward (`persons-act?`) — to its conductor as a hand-back, once per
-   entry, with the position the pipeline derives at that moment. Answers what it recorded and
-   posted."
+   never a blocker's answer nido recorded for an act, an entry nido wrote, a grant a design
+   round carried forward (`persons-act?`), or the :closed entry that closes the workstream as
+   its ledger stands — to its conductor as a hand-back, once per entry, with the position the
+   pipeline derives at that moment. Answers what it recorded and posted."
   [project]
   (vec
    (mapcat
@@ -686,9 +733,11 @@
                      (ws/append-entry! project ws-id {:kind :blocker-answered} (pr-str entry))
                      [{:ws-id ws-id :answered (:seq blocker)}]))]
                r)))
+           ;; The close that closes it is posted to no one: closing settles what came before it,
+           ;; and is itself nothing for a conductor to read.
            (for [e (sort-by :seq (mapcat #(ws/entries-of project ws-id %) person-kinds))
                  :when (and (pos? (compare (str (:at e)) (str (:created-at c))))
-                            (open? e) (persons-act? e))]
+                            (open? e) (not= upto (:seq e)) (persons-act? e))]
              (assoc (post-hand-back! project ws-id (str "act:" (:seq e))
                                      {:what (str "the person's " (name (:format e)) " at entry " (:seq e))
                                       ;; No turn ended: what the person said is the act as recorded.
@@ -743,18 +792,33 @@
                      (and (generic-appends task) (appends-person-kind? args)) (str task " of a person's kind"))
     nil))
 
+(defn- turn-prompt
+  "The latest prompt conversation `conversation` recorded since its previous Stop — the prompt the
+   turn it is in now runs on — or nil when it recorded none since."
+  [conversation]
+  (let [evs (:events (session-events/events-since conversation nil))]
+    (->> (reverse evs)
+         (take-while #(not= :stop (:event %)))
+         (filter #(= :prompt (:event %)))
+         first)))
+
 (defn- answering-for-conductor?
-  "Whether session record `s` is the conductor, or conversation `conversation` is in a turn
-   following an instruction the conductor answers for — one nido gave its driven conversation and
-   recorded for no Run, and not given by the start that brought the session (:given-by :start:
-   a person's start, or a spawn's brief, whose turn may write the intent the brief states).
-   Another conversation in the same folder received no such instruction; one whose conversation,
-   or the record's, is unknown is taken to be the driven one."
+  "Whether session record `s` is the conductor, or conversation `conversation` is in a turn the
+   conductor answers for: the latest prompt that conversation recorded since its previous Stop
+   carries the token of an instruction nido gave the record's session and recorded for no Run,
+   not given by the start that brought the session (:given-by :start: a person's start, or a
+   spawn's brief, whose turn may write the intent the brief states). A turn whose latest prompt
+   carries no such token — a person's — is the person's, whatever is outstanding on the session.
+   A conversation unknown here is taken to be the one the record's facet drives."
   [s conversation]
   (or (:conductor s)
-      (let [{:keys [pending driver session-id]} (:claude s)]
-        (and pending (= :nido driver) (nil? (:for pending)) (not= :start (:given-by pending))
-             (or (nil? session-id) (nil? conversation) (= session-id conversation))))))
+      (let [{:keys [pending lapsed session-id]} (:claude s)
+            conversation (or conversation session-id)
+            conductors   (filter #(and % (nil? (:for %)) (not= :start (:given-by %))) (cons pending lapsed))]
+        (boolean
+         (when (and conversation (seq conductors))
+           (when-let [p (turn-prompt conversation)]
+             (some #(str/includes? (str (:prompt p)) (str "[nido-send " (:token %) "]")) conductors)))))))
 
 (defn- record-at
   "The session record of the nido session `cwd` is in — its worktree or its home — or nil."
@@ -770,7 +834,7 @@
   starter
   "Who gives a session's first instruction when a start is made from `cwd`: :start, unless `cwd`
    is in a nido session whose turn — its conversation unknown here, so taken to be the driven one —
-   answers for the conductor; then nil, so a start made on the conductor's instruction cannot hand
+   the conductor answers for (`answering-for-conductor?`); then nil, so a start made on the conductor's instruction cannot hand
    its child the person's acts the gate refuses the conductor. A cwd that cannot be read is no
    session's."
   [cwd]
@@ -781,8 +845,9 @@
   refusal
   "Why a Bash command must not run, or nil: a person's act — an intent, a design grant, a triage
    acceptance, a phase gate, a blocker's answer, a landing, a PR merge or a close — run from the
-   conductor's session, or from any other session's in a turn following an instruction the
-   conductor answers for, judged over what the commit gate reads the command to do. Pushing,
+   conductor's session, or from any other session's conversation in a turn whose latest prompt
+   carries an instruction the conductor answers for (`answering-for-conductor?`), judged over
+   what the commit gate reads the command to do. Pushing,
    whatever the branch, and opening or readying a PR are not a person's act. Takes a Claude Code `PreToolUse` input; nil for any other session, and
    — failing open — when the session cannot be read."
   [{:keys [tool_name tool_input cwd session_id]}]

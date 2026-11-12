@@ -21,7 +21,7 @@
   {:about [prompted-sessions] :evidence "round"})
 
 (Claim unworked-conductor-is-retired
-  "On a pass whose conductor/prompted reading answered a set, conductors! retires a running conductor whose workstream is closed, settled in Notion, or not worked by that reading. A retire that throws is logged and leaves the conductor to a later pass."
+  "On a pass whose conductor/prompted reading answered a set, conductors! tries to retire a running conductor whose workstream owes it no hand-back [owed-hand-back-starts-conductor] and is closed, settled in Notion, or not worked by that reading, and retires none whose workstream owes it one. A retire that throws is logged and leaves the conductor to a later pass."
   {:about [conductors!] :evidence "round"})
 
 (Claim one-reading-per-sweep

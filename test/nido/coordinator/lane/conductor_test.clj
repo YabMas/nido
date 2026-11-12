@@ -1,8 +1,10 @@
 (ns nido.coordinator.lane.conductor-test
-  "The conductor: a start carried into the whole seat, every turn nido gave for no Run handed back
-   once, one decision per hand-back from the conductor alone, an unanswered hand-back escalated,
-   a person's reply to an escalation recorded as its answer, a person's act refused for the
-   conductor and the seats on its instruction, and one conductor for every worked workstream."
+  "The conductor: a start carried into the whole seat, every turn end no Run answers for handed
+   back once — a person's marked as theirs — one decision per hand-back from the conductor alone,
+   an unanswered hand-back escalated, a person's reply to an escalation recorded as its answer and
+   their next prompt answering one decided on their turn, a person's act refused for the conductor
+   and the seats on its instruction, and one conductor for every worked workstream and every one
+   owed a hand-back."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
@@ -97,12 +99,27 @@
   "Make `n`'s record a session nido drives in conversation `conv`, in a turn on `pending`."
   [id n conv pending]
   (session/update-substrate! :brian id n (constantly {:claude {:session-id conv :bg-id "b" :origin :nido
-                                                               :driver :nido :hold nil :pending pending
+                                                               :driver :nido :pending pending
                                                                :queued nil :own-work? false
-                                                               :policy {:auto-respawn? false} :cursor 0
+                                                               :policy {:auto-respawn? false}
                                                                :driving-since nil :announced-blocked? false
                                                                :recovered-boot nil}
                                                       :dispatching nil})))
+
+(defn- hand-back!
+  "Post one hand-back to workstream `id`'s conductor — a turn nido gave on the workstream's
+   session `<id>-src` that ended, a fresh one per call — and answer it."
+  [id]
+  (let [n (str id "-src")]
+    (when-not (session/read-session :brian id n)
+      (session/create! :brian id {:name n :weight :heavy :autonomy nil}))
+    (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session n :event {:last-message "done"}
+                                               :instruction {:token (str (random-uuid))} :run nil}]}))))
+
+(defn- prompted!
+  "Record in conversation `conv` a prompt `text`, as the hook records one."
+  [conv text]
+  (session-events/append! conv {:event :prompt :prompt text}))
 
 (deftest a-start-is-carried-into-a-free-whole-seat
   (with-tmp
@@ -177,8 +194,27 @@
               (is (str/includes? t "Seats: the whole seat (1)") "and the seats")))
           (is (= (mapv :id posted) (mapv :id (conductor/hand-backs! (turn {:token "tok-1"} nil))))
               "the same turn end is logged once")
-          (is (= [] (conductor/hand-backs! (turn {:token "tok-2"} "run-1"))) "a Run's turn is the Run's")
-          (is (= [] (conductor/hand-backs! (turn nil nil))) "a person's turn is handed back to no one"))))))
+          (is (= [] (conductor/hand-backs! (turn {:token "tok-2"} "run-1"))) "a Run's turn is the Run's"))))))
+
+(deftest a-persons-turn-is-handed-back-marked-as-theirs
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)]
+        (session/create! :brian id {:name "plain-one" :weight :heavy :autonomy nil})
+        (let [turn   {:turn-ends [{:project :brian :ws-id id :session "plain-one" :conversation "c-9"
+                                   :event {:last-message "the person's work is done" :at "2026-11-13T10:00:00Z"}
+                                   :instruction nil :run nil}]}
+              [hb]   (conductor/hand-backs! turn)]
+          (is (= {:kind :hand-back :to :conductor :turn :person :conversation "c-9" :session "plain-one"}
+                 (select-keys hb [:kind :to :turn :conversation :session]))
+              "a session nido does not drive, and a turn nido gave nothing, still reaches the conductor")
+          (is (str/includes? (:text hb) "the person's work is done"))
+          (is (str/includes? (:text hb) "Turn: the person's") "marked as the person's turn")
+          (is (= [(:id hb)] (mapv :id (conductor/hand-backs! turn))) "once per Stop")
+          (is (not= (:id hb) (:id (first (conductor/hand-backs! (assoc-in turn [:turn-ends 0 :event :at] "2026-11-13T10:05:00Z")))))
+              "a later Stop of the same conversation is another")
+          (is (= [] (conductor/hand-backs! (assoc-in turn [:turn-ends 0 :session] (str id "--conductor"))))
+              "the conductor's own turn is no hand-back"))))))
 
 (deftest a-hand-back-takes-one-decision-from-the-conductor
   (with-tmp
@@ -257,7 +293,7 @@
       (let [[id add] (workstream)
             c        (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
-        (let [hb (:id (conductor/hand-back! :brian id c))]
+        (let [hb (:id (hand-back! id))]
           (is (thrown? Exception (add :conduct-decision {:format :conduct-decision :hand-back hb :position :intake
                                                          :by :conductor :decision [:escalate (esc "x")]}))
               "a generic append of a decision is refused")
@@ -271,7 +307,7 @@
       (let [[id] (workstream)
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
-        (let [hb (:id (conductor/hand-back! :brian id c))
+        (let [hb (:id (hand-back! id))
               go {:hand-back hb :decision [:escalate (esc "x")]}]
           ;; The position is read between the uniqueness check and the write; slowed, both
           ;; decisions are inside that window at once unless the two are one step.
@@ -288,7 +324,7 @@
       (let [[id] (workstream)
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
-        (let [hb (:id (conductor/hand-back! :brian id c))]
+        (let [hb (:id (hand-back! id))]
           (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate (esc "x")]}))
           (is (conductor/awaiting-answer? :brian id))
           (let [cut (count (:entries (ws/read-ws :brian id)))]
@@ -310,7 +346,7 @@
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :design-decided :next {:stage :approve-design :mode :human}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))
+          (let [hb (:id (hand-back! id))
                 [v entry] (in-session c #(conductor/decide! :brian id {:hand-back hb
                                                                         :decision [:escalate (esc "approve the design")]}))]
             (is (= :accepted v))
@@ -330,7 +366,7 @@
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :intake :next {:stage :establish-intent :mode :authoring}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))]
+          (let [hb (:id (hand-back! id))]
             (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not written in its parts.*:summary is the context"
                   (in-session c #(conductor/decide! :brian id {:hand-back hb
                                                                :decision [:escalate {:needs "What is this workstream for?"
@@ -348,7 +384,7 @@
                    :consequence "A second ticket in another repo."}]]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :intake :next {:stage :establish-intent :mode :authoring}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))
+          (let [hb (:id (hand-back! id))
                 r  (in-session c #(conductor/decide! :brian id
                                                      {:hand-back hb
                                                       :decision [:escalate (esc "Where should students see it?"
@@ -366,7 +402,7 @@
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (is (nil? (conductor/answer! :brian id "yes")) "no conductor's blocker is open")
-        (let [hb (:id (conductor/hand-back! :brian id c))
+        (let [hb (:id (hand-back! id))
               [v entry] (in-session c #(conductor/decide! :brian id {:hand-back hb
                                                                       :decision [:escalate (esc "approve the design")]}))]
           (is (= :accepted v))
@@ -385,7 +421,7 @@
             c        (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :triage-awaiting :next {:stage :accept-triage :mode :human}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))]
+          (let [hb (:id (hand-back! id))]
             (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "accept the triage")]})))
           (Thread/sleep 5)
           (let [amended (add :intent {:format :intent :goal "g2" :done-when ["d"] :supersedes {:seq 1 :why "amend"}})]
@@ -406,7 +442,7 @@
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
-        (let [hb (conductor/hand-back! :brian id c)]
+        (let [hb (hand-back! id)]
           (is (= [] (conductor/close-unanswered! :brian id c {:token "tok"})) "a hand-back not yet delivered stays owed")
           (seats/delivered! :brian id (:id hb) "tok")
           (let [[e] (conductor/close-unanswered! :brian id c {:token "tok"})]
@@ -422,10 +458,9 @@
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (driving id c "conv-1" {:token "tok-a" :at "t" :via :send :seen? false})
-        (let [a (conductor/hand-back! :brian id c)]
+        (let [a (hand-back! id)]
           (seats/delivered! :brian id (:id a) "tok-a")
-          (session/update-substrate! :brian id c #(assoc-in % [:claude :driving-since] "later"))
-          (let [b (conductor/hand-back! :brian id c)]
+          (let [b (hand-back! id)]
             (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] "tok-b"))
             (seats/delivered! :brian id (:id b) "tok-b")
             (is (= [(:id a)] (mapv :hand-back (conductor/close-unanswered! :brian id c {:token "tok-a"})))
@@ -545,6 +580,10 @@
                                                :event {:last-message "done"}}]})
           (is (= 1 (count (filter #(= :hand-back (:kind %)) (seats/traffic :brian id 1))))
               "its turn end is still handed back")
+          ;; Answered, the hand-back is owed no conductor, so what follows reads work alone.
+          (with-redefs [conductor/conducting? (constantly true)]
+            (conductor/decide! :brian id {:hand-back (:id (first (seats/hand-backs :brian id)))
+                                          :decision [:escalate {:needs "x"}]}))
           (conduct/retire! :brian id occupant {})
           (session/update-substrate! :brian id occupant #(assoc-in % [:claude :driver] :retired))
           (reset! launched [])
@@ -627,6 +666,8 @@
           (testing "a seat"
             (is (nil? (in "fix-it" "gh pr merge 3")) "on a person's own turn")
             (driving id "fix-it" "conv" {:token "t" :at "t" :via :send :seen? false})
+            (is (nil? (in "fix-it" "gh pr merge 3")) "an instruction given and not yet prompted is no turn of its")
+            (prompted! "conv" "merge it\n\n[nido-send t]")
             (is (some? (in "fix-it" "gh pr merge 3")) "on the conductor's instruction")
             (is (nil? (in-session "fix-it" #(conductor/refusal {:tool_name "Bash" :cwd "/wt" :session_id "another"
                                                                  :tool_input {:command "gh pr merge 3"}})))
@@ -634,6 +675,15 @@
             (is (some? (in-session "fix-it" #(conductor/refusal {:tool_name "Bash" :cwd "/wt" :session_id "conv"
                                                                   :tool_input {:command "gh pr merge 3"}})))
                 "but in the driven one")
+            (testing "a person's turn stays the person's"
+              (prompted! "conv" "no, I'll do this one")
+              (is (nil? (in "fix-it" "gh pr merge 3")) "a person prompting mid-turn takes the turn back")
+              (prompted! "conv" "go on\n\n[nido-send t]")
+              (session-events/append! "conv" {:event :stop})
+              (is (nil? (in "fix-it" "gh pr merge 3")) "after the Stop, with nothing prompted since, the turn is no one's")
+              (prompted! "conv" "merge it now")
+              (is (nil? (in "fix-it" "gh pr merge 3")) "nor while its instruction is still outstanding")
+              (prompted! "conv" "go\n\n[nido-send t]"))
             (driving id "fix-it" "conv" {:token "t" :at "t" :via :send :seen? false :for "run-1"})
             (is (nil? (in "fix-it" "gh pr merge 3")) "on a Run's instruction, the Run's own gates hold")
             (driving id "fix-it" "conv" {:token "t" :at "t" :via :dispatch :seen? true :given-by :start})
@@ -661,31 +711,82 @@
         (driving id "parent" "conv" {:token "t" :at "t" :via :dispatch :seen? true :given-by :start})
         (is (= :start (in-session "parent" #(conductor/starter "/wt"))) "a start from a turn its own start gave")
         (driving id "parent" "conv" {:token "t" :at "t" :via :send :seen? true})
+        (is (= :start (in-session "parent" #(conductor/starter "/wt"))) "an instruction its turn has not taken up")
+        (prompted! "conv" "spawn one\n\n[nido-send t]")
         (is (nil? (in-session "parent" #(conductor/starter "/wt")))
             "a start made on the conductor's instruction hands its child nothing the gate refuses the conductor")))))
 
-(deftest a-hand-back-is-no-work-and-a-conductor-on-no-work-is-retired
+(deftest a-hand-back-owed-starts-a-conductor-and-a-conductor-on-no-work-is-retired
   ;; 2026-11-05: conductors kept on workstreams nobody had touched for days, each driving an
-  ;; occupant whose own turns, handed back, were counted as work.
+  ;; occupant whose own turns, handed back, were counted as work. A hand-back is no work: it keeps
+  ;; a conductor only while it is owed.
   (with-tmp
     (fn []
       (let [[old]  (workstream)
-            [idle] (workstream)]
+            [idle] (workstream)
+            c      (str old "--conductor")]
         (session/create! :brian old {:name "long-ago" :weight :heavy :autonomy nil})
         (launching [_]
           (is (= [] (conductor/conductors! :brian)) "a session nobody typed in is no work")
-          (conductor/hand-back! :brian old "long-ago")
-          (is (= [] (conductor/conductors! :brian)) "nor is a turn nido gave there, handed back")
-          (typed! "long-ago")
-          (is (= [{:ws-id old :act :started :session (str old "--conductor")}] (conductor/conductors! :brian))
-              "a person typing there is")
+          (let [hb (hand-back! old)]
+            (is (= [{:ws-id old :act :started :session c}] (conductor/conductors! :brian))
+                "a hand-back the conductor is owed starts it, worked or not")
+            (session/write! (assoc (session/read-session :brian old c) :dispatching {:token "t" :at "now"}))
+            (let [retired (atom [])]
+              (with-redefs [seats/retire-conductor! (fn [_ id] (swap! retired conj id) {:session (str id "--conductor")})]
+                (is (= [] (conductor/conductors! :brian)) "and keeps it while the hand-back is owed")
+                (in-session c #(conductor/decide! :brian old {:hand-back (:id hb) :decision [:escalate {:needs "x"}]}))
+                (conductor/conductors! :brian)
+                (is (= [old] @retired) "answered, a conductor on no work is retired"))))
           (testing "a conductor running where no work is"
             (session/create! :brian idle {:name (str idle "--conductor") :weight :heavy :autonomy nil :conductor true})
             (session/write! (assoc (session/read-session :brian idle (str idle "--conductor")) :dispatching {:token "t" :at "now"}))
             (let [retired (atom [])]
               (with-redefs [seats/retire-conductor! (fn [_ id] (swap! retired conj id) {:session (str id "--conductor")})]
                 (conductor/conductors! :brian))
-              (is (= [idle] @retired)))))))))
+              (is (some #{idle} @retired)))))))))
+
+(deftest a-hand-back-owed-on-a-closed-workstream-starts-its-conductor
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (ws/close! :brian id :done)
+        (launching [launched]
+          (is (= [] (conductor/conductors! :brian)) "closed, with nothing owed, it gets none")
+          (Thread/sleep 5)
+          (hand-back! id)
+          (is (= [{:ws-id id :act :started :session c}] (conductor/conductors! :brian))
+              "a hand-back posted after the close starts the conductor, closed or not")
+          (is (= [c] (mapv first @launched)))
+          (testing "a hand-back from before the close is owed nothing"
+            (let [[other] (workstream)]
+              (hand-back! other)
+              (Thread/sleep 5)
+              (ws/close! :brian other :done)
+              (is (not-any? #(= other (:ws-id %)) (conductor/conductors! :brian))))))))))
+
+(deftest a-workstream-not-activated-owes-no-conductor-a-hand-back
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (launching [launched]
+          (is (nil? (hand-back! id)) "nothing is posted to a conductor it has not got")
+          (is (= [] (conductor/conductors! :brian)))
+          (is (= [] @launched)))))))
+
+(deftest the-close-that-closes-a-workstream-is-handed-back-to-no-one
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (Thread/sleep 5)
+        (add :blocker-answered {:format :blocker-answered :blocker-seq 1 :summary "go" :resumed nil})
+        (ws/close! :brian id :done)
+        (conductor/answers! :brian)
+        (let [texts (map :text (seats/hand-backs :brian id))]
+          (is (some #(str/includes? % "blocker-answered") texts) "the act before it is handed back")
+          (is (not-any? #(str/includes? % "the person's closed") texts) "the close itself is not"))))))
 
 (deftest an-unreadable-prompt-log-decides-nothing
   ;; A log nobody could read says nothing about who typed: reading it as "nobody" would retire
@@ -704,17 +805,42 @@
             (is (= {} (conductor/reseat! :brian idle :unread))))
           (is (= [] @retired) "no conductor retired on an unread log"))))))
 
-(deftest a-handed-back-hold-carries-its-last-message
+(deftest an-escalation-on-a-persons-turn-is-answered-by-their-next-prompt-there
   (with-tmp
     (fn []
-      (let [[id] (workstream)]
-        (launching [_] (seats/conductor! :brian id "conduct it"))
+      (let [[id] (workstream)
+            c    (str id "--conductor")
+            turn (fn [session at]
+                   (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session session
+                                                               :conversation (str "conv-" session)
+                                                               :event {:last-message "mine" :at at}
+                                                               :instruction nil :run nil}]})))
+            prompt (fn [session at] {:prompts [{:project :brian :ws-id id :session session
+                                                :conversation (str "conv-" session)
+                                                :event {:event :prompt :prompt "here is what I meant" :at at}}]})]
         (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
-        (driving id "fix-it" "conv-1" nil)
-        (session-events/append! "conv-1" {:event :stop :last-message "the person's work is done"})
-        (conductor/hand-back! :brian id "fix-it")
-        (is (some #(str/includes? (str (:text %)) "the person's work is done")
-                  (filter #(= :hand-back (:kind %)) (seats/traffic :brian id 1))))))))
+        (session/create! :brian id {:name "aside" :weight :heavy :autonomy nil})
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [pipeline/of (constantly {:at :implementing :next {:stage :implement :mode :agent}})]
+          (let [hb (turn "fix-it" "2026-11-13T10:00:00Z")
+                [_ e] (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:escalate {:needs "what did you mean?"}]}))
+                blocker (get-in e [:parked :seq])]
+            (is (some? blocker) "the escalation parks a blocker")
+            (is (= [] (conductor/answers-in-place! (prompt "fix-it" "2000-01-01T00:00:00Z")))
+                "a prompt from before the decision answers nothing")
+            (is (= [] (conductor/answers-in-place! (prompt "aside" "2099-01-01T00:00:00Z")))
+                "nor does a prompt into another session")
+            (is (= [{:ws-id id :answered blocker}] (conductor/answers-in-place! (prompt "fix-it" "2099-01-01T00:00:00Z"))))
+            (is (= [{:by :nido :blocker-seq blocker
+                     :prompt {:session "fix-it" :conversation "conv-fix-it" :at "2099-01-01T00:00:00Z"}}]
+                   (mapv #(select-keys % [:by :blocker-seq :prompt]) (ws/entries-of :brian id :blocker-answered)))
+                "answered by nido, citing the prompt")
+            (is (= [] (conductor/answers-in-place! (prompt "fix-it" "2099-01-02T00:00:00Z"))) "once"))
+          (testing "an escalation on a turn nido gave is not answered by a prompt"
+            (let [hb (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
+                                                                 :event {} :instruction {:token "t9"} :run nil}]}))]
+              (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:escalate {:needs "x"}]}))
+              (is (= [] (conductor/answers-in-place! (prompt "fix-it" "2099-01-03T00:00:00Z")))))))))))
 
 (def ^:private a-baseline
   {:format :baseline :strata [] :intent {:seq 1}
@@ -740,7 +866,7 @@
                                    :intent {:seq 1} :effort :S})]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :designed :next {:stage :approve-design :mode :human}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))]
+          (let [hb (:id (hand-back! id))]
             (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "approve it")]})))
           (Thread/sleep 5)
           (let [granted (add :design-approved {:format :design-approved :design {:seq d} :at-seq d :carried true})]
@@ -762,7 +888,7 @@
             b        (add :blocker {:format :blocker :summary "stopped" :needs "a decision about x?" :after "The work resumes once you answer."})]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :blocked :next {:stage :answer-blocker :mode :human}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))]
+          (let [hb (:id (hand-back! id))]
             (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "answer it")]})))
           (let [escalated (:seq (last (ws/entries-of :brian id :blocker)))
                 answer    (add :blocker-answered {:format :blocker-answered :blocker-seq b :summary "do y" :resumed nil})]
@@ -781,7 +907,7 @@
             b2       (add :blocker {:format :blocker :summary "second" :needs "a decision about y?" :after "The work resumes once you answer."})]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :blocked :next {:stage :answer-blocker :mode :human}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))]
+          (let [hb (:id (hand-back! id))]
             (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "answer it")]})))
           (let [escalated (:seq (last (ws/entries-of :brian id :blocker)))
                 acts      #(keep (fn [a] (when (:act a) [(:blocker-seq a) (get-in a [:act :seq])]))
@@ -800,7 +926,7 @@
             c        (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :published :next {:stage :land :mode :human}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))]
+          (let [hb (:id (hand-back! id))]
             (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "land it")]}))))
         (Thread/sleep 5)
         (let [merged (add :merged {:format :merged :commit "abc" :url "u" :title "t"})]
@@ -824,7 +950,7 @@
             r2       (add :triage report)]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :triage-awaiting :next {:stage :accept-triage :mode :human}})]
-          (let [hb (:id (conductor/hand-back! :brian id c))]
+          (let [hb (:id (hand-back! id))]
             (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "accept it")]}))))
         (add :triage-accepted {:format :triage-accepted :triage-seq r1})
         (conductor/answers! :brian)
@@ -892,7 +1018,7 @@
       (let [[id add] (workstream)
             c        (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
-        (let [hb (:id (conductor/hand-back! :brian id c))]
+        (let [hb (:id (hand-back! id))]
           (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate (esc "x")]})))
         (is (conductor/awaiting-answer? :brian id) "a reply answers the escalation placing the pipeline")
         (add :blocker {:format :blocker :summary "reseat failed" :needs "a session?" :after "The work resumes once you answer."})
@@ -915,7 +1041,9 @@
                                                          :event {:last-message "done"}
                                                          :instruction {:token "tok"} :run nil}]}))
               "and no turn end is handed back")
-          (is (= {:posted nil :why :not-activated} (conductor/hand-back! :brian id "fix-it")))
+          (is (= [] (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
+                                                         :event {:last-message "done"} :instruction nil :run nil}]}))
+              "nor a person's turn")
           (is (= [] @launched) "nothing was started")
           (let [w (ws/activate! :brian id "fix-it")]
             (is (standing/activated? w))
@@ -943,3 +1071,20 @@
         (ws/close! :brian id :done)
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"closed" (ws/activate! :brian id nil)))
         (is (empty? (ws/entries-of :brian id :activated)))))))
+
+(deftest an-occupants-brief-names-a-conductor-only-where-there-is-one
+  (with-tmp
+    (fn []
+      (let [[on]  (workstream)
+            [off] (workstream :plain)]
+        (session/create! :brian on {:name "on-s" :weight :heavy :autonomy nil})
+        (session/create! :brian off {:name "off-s" :weight :heavy :autonomy nil})
+        (launching [launched]
+          (conductor/carry! :brian on "on-s" "do it")
+          (conductor/carry! :brian off "off-s" "do it")
+          (let [brief (into {} @launched)]
+            (is (str/includes? (brief "on-s") "the workstream's conductor reads where you stopped")
+                "an activated workstream has a conductor to read it")
+            (is (not (str/includes? (brief "off-s") "conductor reads where you stopped"))
+                "a Run's start carried on a plain workstream is told no conductor does")
+            (is (str/includes? (brief "off-s") "the person reads where you stopped"))))))))

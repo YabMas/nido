@@ -72,7 +72,9 @@
      :delegates [conduct/start!]})
   (Operation conductor!
     "Start the workstream's conductor on the brief its caller gives: a driven session on the one
-     session record naming it the conductor, in its own working copy brought up first. Refused while the conductor's session is running; on a record whose session is not
+     session record naming it the conductor, in its own working copy brought up first — on an
+     open workstream or a closed one that still owes it a hand-back. Refused while the conductor's
+     session is running; on a record whose session is not
      running — gone from the listing, or retired with its workstream's close — it is started again
      on the same record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:brief :string]] :map]
@@ -127,6 +129,10 @@
     "A generation's seat messages, oldest first, each delivered one with the token it was given
      under."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:generation :int]] [:sequential :map]]})
+  (Operation hand-backs
+    "Every hand-back posted to the workstream's conductor, in any generation, oldest first — read
+     from the seat-message log alone."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]})
   (Operation owed
     "The seat messages a session is owed, oldest first, with no delivery recorded: those the log
      addresses, in the current generation, to the seat it occupies — or, when it conducts, those

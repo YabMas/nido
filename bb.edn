@@ -810,11 +810,6 @@
    :doc "Stop nido driving a session's background session: :project <p> <session>. The session keeps running."
    :task (apply nido-session/release *command-line-args*)}
 
-  nido:session:hand-back
-  {:requires ([tasks.nido-session :as nido-session])
-   :doc "Let nido drive a session's background session again after a person's prompt held it: :project <p> <session>."
-   :task (apply nido-session/hand-back *command-line-args*)}
-
   nido:session:attach
   {:requires ([tasks.nido-session :as nido-session])
    :doc "Attach this terminal to a background session: :session-id <uuid>. The resume shim runs it for a run whose conversation is a background session; the session keeps running on detach."
