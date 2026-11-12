@@ -8,6 +8,7 @@
             [canvas.coordinator.report :refer [coordinator-report]]
             [canvas.coordinator.report.model :refer [report-model]]
             [canvas.coordinator.record.standing :refer [record-standing]]
+            [canvas.coordinator.record.drain :refer [record-drain]]
             [canvas.coordinator.record.workstream :refer [record-workstream]]
             [canvas.coordinator.record.generation :refer [record-generation]]
             [canvas.coordinator.record.seats :refer [record-seats]]
@@ -48,8 +49,9 @@
 (Stratum record-status
   "Whether a record still holds: a design decidable, decided or cleared, a baseline verified, a
    goal live — and what stops it, with the seqs that decide it. The one reading of what a
-   retraction unseats."
-  {:provided-by [record-standing]
+   retraction unseats. And what a drain's records say now — every reading record-drain's interface
+   offers of a drain — and a slice's drain and recipe version."
+  {:provided-by [record-standing record-drain]
    :rests-on    [ledger record-vocabulary]})
 
 (Stratum workstream-position

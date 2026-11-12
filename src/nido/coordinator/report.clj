@@ -4080,6 +4080,182 @@
                     [:tuple [:= :covered] [:map {:closed true} [:by [:string {:min 1}]]]]]]
    [:parked    {:optional true} [:map {:closed true} [:seq int?]]]])
 
+;; ── drains ──────────────────────────────────────────────────────────────────
+;;
+;; A drain rolls a pattern established elsewhere out over a codebase in slices. Every kind below is
+;; appended only through `nido.coordinator.record.drain`, which the ledger enforces: the slice-start
+;; gate, the brakes and the closure read these entries, so none may be written on a turn's own word.
+
+(def ^:private DrainWsId [:string {:min 1}])
+
+(def DrainBy
+  "Who an entry of a drain says wrote it, as the verb that appends it stamped it: the drain's
+   coordinator, a slice's session, the person, or nido itself."
+  [:enum :coordinator :slice :person :nido])
+
+(def DrainRecipeBody
+  "What a recipe says, wherever it is carried: the steps every slice follows, the ready gates a
+   slice must pass before it may land (tests and reviews among them), the standing orders every
+   slice brief carries verbatim, the template a slice plan fills, and the census counter — a
+   command run in a checkout of the project's main whose output is the reading."
+  [:map {:closed true}
+   [:steps           [:vector {:min 1} [:string {:min 1}]]]
+   [:ready-gates     [:vector {:min 1} [:string {:min 1}]]]
+   [:standing-orders [:vector [:string {:min 1}]]]
+   [:plan-template   {:optional true} [:string {:min 1}]]
+   [:counter         [:map {:closed true} [:command [:string {:min 1}]]]]])
+
+(def DrainBirth
+  "A drain's birth: what established the pattern it rolls out — a workstream or a landed commit —
+   and the exit criterion the person will observe before closing it. The kind is the class."
+  [:map {:closed true}
+   [:format         [:= :drain]]
+   [:established-by [:or [:map {:closed true} [:ws-id DrainWsId]]
+                         [:map {:closed true} [:commit [:string {:min 7}]]]]]
+   [:exit           [:string {:min 1}]]
+   [:by             [:= :person]]])
+
+(def SliceBirth
+  "A slice's birth: the drain it belongs to, the recipe version (the :recipe entry's seq on the
+   drain) it starts under, and the plan on the drain it was started from."
+  [:map {:closed true}
+   [:format [:= :slice]]
+   [:drain  DrainWsId]
+   [:recipe pos-int?]
+   [:plan   pos-int?]])
+
+(def RecipeProposed
+  "The coordinator's proposal of a recipe or of a change to one, and why. It becomes the drain's
+   recipe only by the person's approval."
+  [:map {:closed true}
+   [:format [:= :recipe-proposed]]
+   [:reason [:string {:min 1}]]
+   [:recipe DrainRecipeBody]
+   [:by     [:= :coordinator]]])
+
+(def Recipe
+  "The drain's recipe from here on: the person's approval of the proposal it cites, carrying that
+   proposal's recipe. Its seq is the recipe version."
+  [:map {:closed true}
+   [:format   [:= :recipe]]
+   [:proposal pos-int?]
+   [:recipe   DrainRecipeBody]
+   [:by       [:= :person]]])
+
+(def Census
+  "One reading of the drain's counter, taken by nido under the recipe it cites."
+  [:map {:closed true}
+   [:format    [:= :census]]
+   [:recipe    pos-int?]
+   [:remaining nat-int?]
+   [:groups    [:vector any?]]
+   [:by        [:= :nido]]])
+
+(def SlicePlanned
+  "A slice the coordinator wants: its sites, the plans of the slices it rests on, whether it starts
+   on top of their unlanded work or after they land, the census it was planned from, and the plan
+   it replaces when it replaces one."
+  [:map {:closed true}
+   [:format   [:= :slice-planned]]
+   [:sites    [:vector {:min 1} [:string {:min 1}]]]
+   [:rests-on [:vector pos-int?]]
+   [:start    [:enum :on-top :after-landing]]
+   [:census   pos-int?]
+   [:replaces {:optional true} pos-int?]
+   [:note     {:optional true} [:string {:min 1}]]
+   [:by       [:= :coordinator]]])
+
+(def SliceWithdrawn
+  "The coordinator withdrawing a plan no start has consumed."
+  [:map {:closed true}
+   [:format [:= :slice-withdrawn]]
+   [:plan   pos-int?]
+   [:why    [:string {:min 1}]]
+   [:by     [:= :coordinator]]])
+
+(def SliceStarted
+  "A slice started from the plan it cites, as the workstream named."
+  [:map {:closed true}
+   [:format [:= :slice-started]]
+   [:plan   pos-int?]
+   [:ws-id  DrainWsId]
+   [:by     DrainBy]])
+
+(def SliceRebased
+  "A slice moving to a newer recipe version of its drain."
+  [:map {:closed true}
+   [:format [:= :slice-rebased]]
+   [:recipe pos-int?]
+   [:by     DrainBy]])
+
+(def Misfit
+  "A slice meeting a site its recipe version does not cover."
+  [:map {:closed true}
+   [:format [:= :misfit]]
+   [:slice  DrainWsId]
+   [:site   [:string {:min 1}]]
+   [:note   [:string {:min 1}]]
+   [:by     [:= :slice]]])
+
+(def ResidueDisposition
+  "Where a residue item goes: a follow-up slice, citing the plan that covers it, or the closing
+   residue slice."
+  [:multi {:dispatch :to}
+   [:follow-up [:map {:closed true} [:to [:= :follow-up]] [:plan pos-int?]]]
+   [:closing   [:map {:closed true} [:to [:= :closing]]]]])
+
+(def MisfitAnswered
+  "The coordinator's answer to one misfit: a recipe proposal that would cover its site, the site
+   carved out to the residue, or a question escalated to the person."
+  [:map {:closed true}
+   [:format [:= :misfit-answered]]
+   [:misfit pos-int?]
+   [:answer [:multi {:dispatch :as}
+             [:proposed  [:map {:closed true} [:as [:= :proposed]] [:proposal pos-int?]]]
+             [:carved    [:map {:closed true} [:as [:= :carved]] [:site [:string {:min 1}]]]]
+             [:escalated [:map {:closed true} [:as [:= :escalated]] [:asks [:string {:min 1}]]]]]]
+   [:by     [:= :coordinator]]])
+
+(def SliceCleared
+  "The coordinator clearing a ready slice for landing, naming the residue it leaves."
+  [:map {:closed true}
+   [:format  [:= :slice-cleared]]
+   [:slice   DrainWsId]
+   [:residue [:vector [:string {:min 1}]]]
+   [:by      [:= :coordinator]]])
+
+(def Residue
+  "One item of the drain's residue: a site, and the clearance or carved misfit answer that left it."
+  [:map {:closed true}
+   [:format [:= :residue]]
+   [:site   [:string {:min 1}]]
+   [:from   pos-int?]
+   [:by     [:= :coordinator]]])
+
+(def ResidueDisposed
+  "The coordinator's disposition of one residue item; the newest one for an item is where it goes."
+  [:map {:closed true}
+   [:format      [:= :residue-disposed]]
+   [:residue     pos-int?]
+   [:disposition ResidueDisposition]
+   [:by          [:= :coordinator]]])
+
+(def ExitObserved
+  "The person observing the drain's exit criterion against the census it cites, before its close."
+  [:map {:closed true}
+   [:format [:= :exit-observed]]
+   [:exit   [:string {:min 1}]]
+   [:census pos-int?]
+   [:by     [:= :person]]])
+
+(def drain-kinds
+  "Every kind a drain's records are written in. The ledger's generic appends refuse each: they are
+   appended only through `nido.coordinator.record.drain`."
+  #{:drain :slice :recipe-proposed :recipe :census :slice-planned :slice-withdrawn :slice-started
+    :slice-rebased :misfit :misfit-answered :slice-cleared :residue :residue-disposed
+    :exit-observed})
+
+
 (def Generation
   "A person opening a new generation of the workstream's design from a :recut.
 
@@ -4154,7 +4330,22 @@
    :tension                  Tension
    :accord                   Accord
    :withdrawal               Withdrawal
-   :conduct-decision         ConductDecision})
+   :conduct-decision         ConductDecision
+   :drain                    DrainBirth
+   :slice                    SliceBirth
+   :recipe-proposed          RecipeProposed
+   :recipe                   Recipe
+   :census                   Census
+   :slice-planned            SlicePlanned
+   :slice-withdrawn          SliceWithdrawn
+   :slice-started            SliceStarted
+   :slice-rebased            SliceRebased
+   :misfit                   Misfit
+   :misfit-answered          MisfitAnswered
+   :slice-cleared            SliceCleared
+   :residue                  Residue
+   :residue-disposed         ResidueDisposed
+   :exit-observed            ExitObserved})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records
@@ -5779,5 +5970,22 @@
      :improvement-claim-reserved (str "Claim " (inc (:claim report))
                                       " of plan " (:plan-seq report) " reserved")
      :ship-submitted           "Ship submitted"
+     :drain                    (str "Drain chartered: " (first-line (:exit report)))
+     :slice                    (str "Slice of " (:drain report) " (recipe " (:recipe report) ")")
+     :recipe-proposed          (str "Recipe proposed: " (first-line (:reason report)))
+     :recipe                   (str "Recipe approved (proposal " (:proposal report) ")")
+     :census                   (str "Census: " (:remaining report) " remaining")
+     :slice-planned            (str "Slice planned: " (str/join ", " (take 3 (:sites report)))
+                                    (when (< 3 (count (:sites report))) ", …"))
+     :slice-withdrawn          (str "Plan " (:plan report) " withdrawn")
+     :slice-started            (str "Slice started: " (:ws-id report))
+     :slice-rebased            (str "Rebased to recipe " (:recipe report))
+     :misfit                   (str "Misfit: " (first-line (:site report)))
+     :misfit-answered          (str "Misfit " (:misfit report) " answered " (name (get-in report [:answer :as])))
+     :slice-cleared            (str "Slice cleared: " (:slice report)
+                                    (when (seq (:residue report)) (str " (" (count (:residue report)) " residue)")))
+     :residue                  (str "Residue: " (first-line (:site report)))
+     :residue-disposed         (str "Residue " (:residue report) " → " (name (get-in report [:disposition :to])))
+     :exit-observed            (str "Exit observed at census " (:census report))
      :phase-gate               (str "Phase gate met — opens " (first-line (:opens report)))
      nil)))

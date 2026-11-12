@@ -184,6 +184,12 @@
      one step no other append, generation's opening or design approval falls between."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:f [:=> [:cat :map] :any]]] :any]
      :delegates [append-lock-path read-ws]})
+  (Operation appending-drain!
+    "Answer a function, under the workstream's append lock, of the workstream read under it and an
+     append that takes only a drain's kinds — the one path they join a ledger by, which the generic
+     appends refuse. Every other check an append makes holds."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:f [:=> [:cat :map] :any]]] :any]
+     :delegates [append-lock-path read-ws]})
   (Operation holding-ledger
     "Answer a function of the workstream read under its append lock — the lock every append and a
      generation's opening hold — so what it decides from that read stays true while it runs."

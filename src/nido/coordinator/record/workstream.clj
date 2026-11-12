@@ -85,7 +85,7 @@
    means: a close appended after a completed implementation must not become the answer to
    `how did the merge run end`."
   #{:closed :reopened :stage-set :findings-resolved :scratch :activated :deactivated :paused :resumed :notion-status
-    :conduct-decision})
+    :conduct-decision :drain :slice})
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
   newest-record
@@ -1245,9 +1245,13 @@
   (case kind
     :phase-gate (throw (ex-info "A :phase-gate is appended only through open-phase!" {:kind kind}))
     :generation (throw (ex-info "A :generation is appended only through open-generation!" {:kind kind}))
-    (when (contains? stamped-kinds kind)
+    (cond
+      (contains? stamped-kinds kind)
       (throw (ex-info (str "A " kind " is appended only through append-stamped! or appending!, its writer stamped"
                            " by the verb that calls it")
+                      {:kind kind}))
+      (contains? report/drain-kinds kind)
+      (throw (ex-info (str "A " kind " is a drain's record, appended only through nido.coordinator.record.drain")
                       {:kind kind})))))
 
 (defn- refuse-design-between-phases!
@@ -2150,6 +2154,29 @@
             :append! (fn [entry content]
                        (guard! entry)
                        (append-locked! project ws-id (read) entry content))})))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:=> [:cat :map] :any]] :any]}
+  appending-drain!
+  "Answer `f` of `{:w :append!}` under the workstream's append lock, as `appending!` does, for a
+   drain's records: `(append! payload)` appends one entry whose kind is a drain's, against the
+   ledger as the last append left it, every check an append makes holding, and answers its seq.
+   The one way a drain kind is written — called by `nido.coordinator.record.drain` alone, which
+   checks what its kinds cite before it appends, under this same lock."
+  [project ws-id f]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [read #(or (read-ws project ws-id)
+                      (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+        (f {:w       (read)
+            :append! (fn [payload]
+                       (let [kind (:format payload)]
+                         (when-not (contains? report/drain-kinds kind)
+                           (throw (ex-info (str "appending-drain! takes a drain's kinds, not " kind)
+                                           {:kind kind})))
+                         (let [w (read)]
+                           (append-locked! project ws-id w {:kind kind} (pr-str payload))
+                           (:seq (last (:entries (read)))))))})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:=> [:cat :Workstream] :any]] :any]}
   holding-ledger
