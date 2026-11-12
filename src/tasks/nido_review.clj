@@ -473,6 +473,17 @@
                            " — puts the design record itself in question.")
            ""))))
 
+(defn- split-question
+  "`gate-question`'s paragraph as the blocker's two parts: `[question reasoning]` — its one
+   sentence ending in '?', and every other sentence in order, nil when there is none. The
+   paragraph reads as an argument; a blocker is asked as its question with the argument as
+   context (report/enforce-blocker-parts)."
+  [paragraph]
+  (let [sentences (str/split (str/trim paragraph) #"(?<=[.?])\s+")
+        q         (last (filter #(str/ends-with? % "?") sentences))
+        rest      (remove #{q} sentences)]
+    [q (when (seq rest) (str/join " " rest))]))
+
 (defn- gate-options
   "The branches, in the order the gate letters them.
 
@@ -573,7 +584,9 @@
    parks. The last run's parks nobody answered are in it, marked inherited.
 
    `verdict` is this run's design verdict, or nil when the pass found nothing to
-   judge against, was skipped, or produced no answer.
+   judge against, was skipped, or produced no answer. Its `:recommendation` is the
+   branch the verdict supports, and absent when it supports none: a recommendation
+   only when there is a genuine one.
 
    `status` is how the run ended. One that ended on something other than its
    parks — a usage limit, a fixer that would not start — says so: the parks
@@ -582,20 +595,27 @@
   ([findings verdict] (parked-blocker findings verdict nil))
   ([findings verdict status]
    (when-let [parked (seq (filter #(= :park (:disposition %)) findings))]
-     (let [supports (verdict-supports verdict parked)
-           ground   (park-ground parked)
-           ids      (into (sorted-set) (keep #(some-> (:id %) str)) parked)]
+     (let [supports          (verdict-supports verdict parked)
+           ground            (park-ground parked)
+           ids               (into (sorted-set) (keep #(some-> (:id %) str)) parked)
+           options           (gate-options ground supports verdict)
+           [question reason] (split-question (gate-question ground supports verdict parked))
+           recommended       (first (filter :recommended? options))]
        (cond-> {:format  :blocker
                 :summary (str "The review loop is holding " (count parked)
                               (if (= 1 (count parked)) " finding" " findings")
                               " it has no move for:\n\n"
                               (parked-detail parked)
+                              (when reason (str "\n\n" reason))
                               (when (and status (not (park-statuses status)))
                                 (str "\n\nThe run itself ended `" (name status)
                                      "`, not on these: " (diff-remedies status))))
-                :needs   (gate-question ground supports verdict parked)
-                :options (gate-options ground supports verdict)}
-         (seq ids) (assoc :parks (vec ids)))))))
+                :needs   question
+                :after   (str "Your answer is recorded on the ledger and the next review run "
+                              "is judged against it; the parked findings stay open until then.")
+                :options options}
+         recommended (assoc :recommendation (str (:label recommended) " — " (:consequence recommended)))
+         (seq ids)   (assoc :parks (vec ids)))))))
 
 (defn- already-asked
   "The unanswered blocker among `standing` that already asks what `blocker`

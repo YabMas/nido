@@ -38,9 +38,19 @@
     (and rounds (pos? rounds)) (assoc :rounds rounds)
     detail                     (assoc :detail detail)))
 
+(defn- question?
+  "True when `s` is a question the blocker write contract accepts as one: a single line, short,
+   ending in '?' (report/enforce-blocker-parts)."
+  [s]
+  (let [q (str/trim (str s))]
+    (and (not (str/blank? q)) (not (str/includes? q "\n")) (<= (count q) 240) (str/ends-with? q "?"))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   halt-for
-  "The halt record for a stage that reached `outcome`, as a value.
+  "The halt record for a stage that reached `outcome`, as a value: a blocker in its four parts —
+   the one-sentence question, its context, what follows the answer, and a recommendation only
+   when the caller holds a genuine one — this module has no view of its own on what a stopped
+   stage should do, so it never supplies one.
 
    Pure, and separate from writing it, because what a halt SAYS is the part worth
    testing and the part a reader will argue with. The prose is deliberately thin:
@@ -49,19 +59,33 @@
    already made and recorded.
 
    `needs` is the caller's, because only the stage that ran knows what it could
-   not settle. Absent, the question falls back to the honest general one — a
-   reader is better served by `the driver cannot take this further` than by a
-   confident sentence nobody derived."
-  [{:keys [stage outcome needs summary tried options]}]
-  (cond-> {:format  :blocker
-           :summary (or summary
-                        (str "the " (name stage) " stage stopped at "
-                             (name outcome) " and the driver cannot take it further"))
-           :needs   (or needs
-                        (str "a decision about " (name stage)
-                             " — everything derivable has been derived"))}
-    (seq tried)   (assoc :tried (mapv attempt tried))
-    (seq options) (assoc :options (vec options))))
+   not settle. When it is a question it is asked as written; when it says what is needed rather
+   than asking — a phrase, or a paragraph a round derived — it moves into the context under an
+   honest general question about the stage, so a halt can never be refused for its wording: a
+   lane park that fails to append parks nothing. Absent, the question is that general one, and
+   the context says everything derivable has been derived."
+  [{:keys [stage outcome needs summary recommendation after tried options]}]
+  (let [base    (or summary
+                    (str "The " (name stage) " stage stopped"
+                         (when outcome (str " at " (name outcome)))
+                         " and the driver cannot take it further."))
+        asked?  (question? needs)
+        stopped (if outcome (str ", now that it stopped at " (name outcome)) "")
+        context (cond
+                  asked?             base
+                  (str/blank? needs) (str base " Everything derivable has been derived.")
+                  :else              (str base "\n\nIt needs " (str/trim (str needs))))]
+    (cond-> {:format  :blocker
+             :summary context
+             :needs   (if asked?
+                        (str/trim (str needs))
+                        (str "How should the " (name stage) " stage go on" stopped "?"))
+             :after   (or after
+                          (str "The workstream stays parked until you answer; the driver does not run "
+                               "this stage again until a later record moves the ledger on."))}
+      (not (str/blank? recommendation)) (assoc :recommendation recommendation)
+      (seq tried)   (assoc :tried (mapv attempt tried))
+      (seq options) (assoc :options (vec options)))))
 
 (defn- declared-move
   "The move `design` declares that a person must grant (`report/owes-a-person?`) — its stance
@@ -284,10 +308,15 @@
    record moves the ledger on — which is a fresh report about a wall still
    standing rather than a repetition of one nobody read."
   [project ws-id stage needs]
-  (halt-for {:stage   stage
-             :summary (str "the driver cannot run the " (name stage)
-                           " stage on this workstream")
-             :needs   (str needs ", or " (undrive-line project ws-id))}))
+  (halt-for {:stage          stage
+             :summary        (str "The driver cannot run the " (name stage)
+                                  " stage on this workstream. It needs " needs
+                                  ", or " (undrive-line project ws-id) ".")
+             :needs          (str "How should the " (name stage)
+                                  " stage get to run on this workstream?")
+             :recommendation "Supply what it needs; stop driving the workstream only if nobody will."
+             :after          (str "Nothing runs until one of those changes; the next stage record "
+                                  "moves the ledger on, and the driver tries the stage again.")}))
 
 (def ^:private wall-needs
   "The two ways `tick!` declines that mean something is WRONG rather than that

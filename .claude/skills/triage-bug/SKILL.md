@@ -99,7 +99,8 @@ Depth is gated on the **determination**, not purely on the owner:
   triage: investigate the codebase, propose 1–3 directions with effort (or
   `:squirrel`), enrich the title and prepend the enriched-description callout, and
   transition **Status "Needs verification" → "Not started"**. Emit the populated
-  `:directions`, `:notion-writes` (as today), and `:routing {… :depth :deep}`.
+  `:questions` (one per independent defect, each with its directions),
+  `:notion-writes` (as today), and `:routing {… :depth :deep}`.
 - **A not-a-bug / needs-info / can't-verify report is shallow, regardless of owner** —
   including one routed to Jaap. Shallow also covers every Ataberk/Eric route
   unconditionally. Set Ball Holder + App Domain and **nothing else**. No solution
@@ -107,7 +108,7 @@ Depth is gated on the **determination**, not purely on the owner:
   verify from the codebase**. Notion **Status stays "Needs verification"** — the owner
   picks it up from there (Jaap dispositions his own not-a-bug/needs-info reports in
   Notion). You may read the report and take a light look to *confirm the area*, but do
-  not root-cause. Emit `:directions []` and `:notion-writes nil`; set
+  not root-cause. Emit `:questions []` and `:notion-writes nil`; set
   `:routing {… :depth :shallow}`.
 
 A not-a-bug / needs-info report is **never** deep and **never** transitions Notion
@@ -228,7 +229,7 @@ video.
    - Is this actually a bug? (vs feature request, vs duplicate, vs noise — `:determination`)
    - If a bug: what part of the system is affected? what's the likely root cause?
    - **Is the defect at the implementation layer or the design layer?** See "The design reading" above — this is `:design-frame`, and it is what tells the next session whether it is fixing something or deciding something.
-   - What are 1–3 candidate solution directions? T-shirt effort per direction, or `:squirrel` where the size genuinely waits on the design.
+   - Which independent defects does the ticket carry? Each is one question. For each: 1–3 candidate fixes (its directions), T-shirt effort per direction, or `:squirrel` where the size genuinely waits on the design.
 6. Compose the report EDN (schema in Step 2 below) to a temp `.edn` file, then append it to the nido record as a `triage` entry:
 
    ```bash
@@ -264,10 +265,14 @@ report (non-zero exit + an explain dump) — fix and retry until it's accepted.
                                  :source "docs/reference/malli.md"   ; lane or reference doc
                                  :evidence "src/order/calc.clj:88"}]
                  :note         "why, or why you can't tell"}         ; optional
- :directions    [{:label "short NAME for the branch — never a letter"
-                  :shape "1 sentence"
-                  :effort :M    ; :XS :S :M :L :XL — or :squirrel to defer sizing
-                  :confidence {:level :medium :reason "one line"}}]  ; 0–6 of them
+ :questions     [{:question       "one sentence ending in ?, about ONE defect"
+                  :context        "what the person needs to answer it: the defect, where it lives"
+                  :recommendation "which fix you would build, and why — omit unless you genuinely hold one"
+                  :after          "what happens once it is answered"
+                  :directions     [{:label "short NAME for the fix — never a letter"
+                                    :shape "1 sentence"
+                                    :effort :M    ; :XS :S :M :L :XL — or :squirrel to defer sizing
+                                    :confidence {:level :medium :reason "one line"}}]}]  ; 1–6 per question
  :notion-writes {:type "bug"          ; nil for a Slack run (no Notion writes)
                  :effort :M     ; :XS :S :M :L :XL :squirrel ; nil for a Slack run
                  :status-transition ["Needs verification" "Not started"]  ; omit/nil if no transition
@@ -280,16 +285,19 @@ report (non-zero exit + an explain dump) — fix and retry until it's accepted.
 Notes:
 - **`:routing` is required for a Notion run** (nil only for Slack). A **shallow** route
   (Ataberk/Eric always, or a not-a-bug/needs-info report even when routed to Jaap)
-  emits `:directions []` and `:notion-writes nil` — routing is the whole outcome. A
-  **deep** route (Jaap, and only for `:determination :bug`) populates `:directions` and
+  emits `:questions []` and `:notion-writes nil` — routing is the whole outcome. A
+  **deep** route (Jaap, and only for `:determination :bug`) populates `:questions` and
   `:notion-writes` as below. See Routing / Depth above.
 - `:notion-writes` is **nil for Slack runs** — there are no Notion writes.
 - There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report (Slack runs only; a Notion report is always routed, never dismissed).
 - **`:design-frame` is optional but expected on a deep route.** A shallow route emits `{:defect-layer :unknown}`; omit the key entirely only when you did no investigation at all. Pre-spine reports have no frame, which is why the schema still accepts its absence.
 - **`:squirrel` is the joker** — use it for the report's `:effort` when sizing genuinely depends on an unmade decision, which in practice means `:defect-layer :design`. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort when it authors the design record — sizing follows from the design, not the other way round.
 - **A direction may defer its own size** with `:squirrel`, and doing so does not make it unpickable. A human picks a branch at the gate to settle the DIRECTION; the size is downstream, and a branch whose size genuinely waits on the design is still an answer — the choice is recorded and `/continue-ticket` sizes it when it writes the design record. Don't manufacture a size you can't defend to keep a branch offerable.
-- **At most 6 directions**, the same cap a blocker's `:options` carries, off the same letter set — they are answered by letter at the gate. In practice 1–3; seven branches is a conversation, not a question with an answer.
-- **`:label` is a short NAME for the branch, never a letter.** The letter is derived from position at the gate and on the card; a label of `"A"` renders twice and says nothing about what taking the branch commits you to.
+- **One question per independent defect.** A question's directions are alternatives to EACH OTHER — fixes of the same defect, of which one is built; a question may carry a single "do this" direction. Two independent fixes are two questions, because one pick across them drops one. The gate shows the questions one at a time in one card; the person chooses a fix per question (or leaves it open) and accepts once. The Notion Effort becomes the largest of the chosen fixes.
+- **`:recommendation` only when it is genuine.** Give one when you genuinely hold a view on which fix is right, never as filler — a question with no recommendation is honest, one with an invented one misleads.
+- **At most 6 directions per question**, the same cap a blocker's `:options` carries. In practice 1–3; seven branches is a conversation, not a question with an answer.
+- **`:label` is a short NAME for the fix, never a letter.** The gate shows each direction as a button — its name in bold, then its shape, then its effort — and a label of `"A"` says nothing about what taking the fix commits you to.
+- A report written with one flat `:directions` list is refused; reports stored before still read as one question.
 - After appending, print the report into chat with `bb nido:ticket:report :project brian :br <key>` (renders the stored report as markdown) so the user sees it on `nido enter`.
 
 ## Step 3 — Confirmation (chat, liberal parsing)

@@ -360,10 +360,12 @@ what blocks it:
 cat > /tmp/blocker.edn <<'EDN'
 {:format  :blocker
  :summary "<what blocks — conflict / CI finding that resisted / review finding still open — and what was tried>"
- :needs   "<the decision the human must make, then re-run /drive-home>"
+ :needs   "<the decision the human must make, as one question ending in ?>"
+ :recommendation "<the answer your reasoning supports — omit unless you genuinely hold one>"
+ :after   "<what happens once it is answered — e.g. re-run /drive-home>"
  ;; REQUIRED when the decision is a choice between branches you can already see.
- ;; Two to six of them, in the order you want them read; the gate letters them
- ;; A/B/… and resumes you with the one the human clicks.
+ ;; Two to six of them, in the order you want them read; the gate shows each as
+ ;; a button and resumes you with the one the human clicks.
  :options [{:label        "<the branch, a few words — this is the button>"
             :summary      "<what taking it means, concretely>"
             :consequence  "<what it costs / forecloses — size, follow-on calls>"
@@ -377,11 +379,12 @@ bb nido:ticket:append :project <project> :br <BR-####> :kind blocker :file /tmp/
 **A choice goes in `:options`, not in `:needs` prose.** The append is REJECTED if
 `:needs`/`:summary` enumerate branches ("Option A … Option B …") without
 `:options` — re-emit it structured and the append succeeds. The reason is what
-happens at the gate: options render as lettered cards with one button each, and a
+happens at the gate: options render as one button each, and a
 click resumes you with that branch spelled out in full. Written as prose, the only
 way to answer is a free-text essay — which is the answer that does not arrive.
-Leave `:needs` as the question itself ("a product decision on the Keep Old
-branch"), and put `:recommended? true` on the branch your own derivation supports
+Leave `:needs` as the question itself ("What should happen to the Keep Old
+branch?") — one sentence ending in `?`, or the append is refused, as it is without
+`:after` — and put `:recommended? true` on the branch your own derivation supports
 — it is a hint, and the gate still waits.
 
 Omit `:options` when the halt genuinely has no branches ("I need the Stripe test

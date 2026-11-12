@@ -151,9 +151,11 @@
          "Each hand-back nido gives you — a seat's turn that ended, or an act of the person's — you "
          "answer with exactly one decision, recorded with `bb nido:seats:decide :hand-back <id>` and "
          "either `:seat <id> :text \"…\"` (or `:instruct '[{:seat … :text …} …]'` for several seats) "
-         "or `:escalate \"…\"`, naming what the person is needed for — with `:summary \"…\"` and "
-         "`:options '[{:label … :summary … :consequence … :recommended? true} …]'` when it is the "
-         "question.\n\n"
+         "or `:escalate \"…?\"`, the one-sentence question the person is needed for, with "
+         "`:summary \"…\"` (the context) and `:after \"…\"` (what happens once they answer), "
+         "`:recommendation \"…\"` only when you genuinely hold a view on the answer, and "
+         "`:options '[{:label … :summary … :consequence … :recommended? true} …]'` when it names "
+         "the branches.\n\n"
          "Seats: " (seats-line (rseats/seats project ws-id)) "\n"
          "Governing design: " (design-line design) "\n"
          "Position: " (name position) (when next (str ", next " (pr-str next))) "\n\n"
@@ -234,7 +236,9 @@
   (deciding
    project ws-id
    #(vec (for [b (open-blockers project ws-id)
-               :when (re-matches #"seat .+ could not be started" (str (:needs b)))]
+               ;; Both wordings: blockers written before questions were one sentence still stand.
+               :when (re-matches #"(?:seat .+ could not be started|How should seats? .+ be carried, now that (?:it|they) could not be started\?)"
+                                 (str (:needs b)))]
            (do (ws/append-entry! project ws-id {:kind :blocker-answered}
                                  (pr-str {:format :blocker-answered :blocker-seq (:seq b) :resumed nil :by :nido
                                           :summary "the seat it named has since been occupied"}))
@@ -269,8 +273,12 @@
                       #(when-not (some (fn [b] (= needs (:needs b))) (open-blockers project ws-id))
                          (drive/park! project ws-id
                                       {:stage   :reseat :outcome :uncarried
-                                       :summary (str "the seats of this generation cannot be occupied: " (ex-message e))
-                                       :needs   needs})))
+                                       :summary (str "The seats of this generation cannot be occupied: " (ex-message e))
+                                       :needs   needs
+                                       :recommendation (str "Fix what stopped the seat starting — the error above — "
+                                                            "and let nido retry it.")
+                                       :after   (str "nido tries the seat again on every conduct pass, and answers "
+                                                     "this itself once every seat is held.")})))
                      {:retired retired :escalated ids})]
       (cond
         (empty? empty)
@@ -284,7 +292,7 @@
             (answer-filled! project ws-id)
             {:retired retired :occupied [occupied]})
           (catch Exception e
-            (escalate (str "seat " (str/join ", " ids) " could not be started") e)))
+            (escalate (str "How should seat " (str/join ", " ids) " be carried, now that it could not be started?") e)))
 
         :else
         (try
@@ -295,8 +303,8 @@
           ;; the whole seat's is, answered once a later pass holds every seat.
           (catch Exception e
             (escalate (if (embodied/refused? e)
-                        (str "no embodiment carries seats " (str/join ", " ids))
-                        (str "seat " (str/join ", " ids) " could not be started"))
+                        (str "Which embodiment should carry seats " (str/join ", " ids) ", which none carries now?")
+                        (str "How should seats " (str/join ", " ids) " be carried, now that they could not be started?"))
                       e)))))))
 
 ;; ── hand-backs ──────────────────────────────────────────────────────────────
@@ -425,11 +433,11 @@
         ;; its record, and the card shows its :needs as a note.
         halt        (when (and (= :escalate verb) (parks? next))
                       (cond-> {:stage :conduct :outcome :escalated
-                               :summary (or (:summary body)
-                                            (str "Raised by the workstream's conductor while it was "
-                                                 (str/replace (name (or position :unplaceable)) "-" " ") "."))
-                               :needs (:needs body)}
-                        (:options body) (assoc :options (:options body))))]
+                               :summary (:summary body)
+                               :needs   (:needs body)
+                               :after   (:after body)}
+                        (:recommendation body) (assoc :recommendation (:recommendation body))
+                        (:options body)        (assoc :options (:options body))))]
     (ws/appending!
      project ws-id
      (fn [{:keys [check! append!]}]
@@ -505,7 +513,10 @@
           (let [{:keys [position next owes]} (position project ws-id)]
             [(record-decision! project ws-id (cond-> {:format :conduct-decision :hand-back (:id m)
                                                       :position position :by :nido
-                                                      :decision [:escalate {:needs "the conductor reached no decision on this hand-back — decide it, or tell the conductor how"}]}
+                                                      :decision [:escalate
+                                                                 {:needs "What should happen with this hand-back, which the conductor reached no decision on?"
+                                                                  :summary "The conductor's turn ended without deciding a hand-back it was given, so the seat that handed it back is waiting."
+                                                                  :after "Your answer reaches the conductor on its next pass, which instructs the waiting seat."}]}
                                                next (assoc :next next)
                                                owes (assoc :owes owes)))])))
       [])))

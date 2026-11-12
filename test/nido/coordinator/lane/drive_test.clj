@@ -9,7 +9,8 @@
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.lane.pipeline :as pipeline]))
+   [nido.coordinator.lane.pipeline :as pipeline]
+   [nido.coordinator.report :as report]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -53,7 +54,22 @@
   (let [h (drive/halt-for {:stage :verify-baseline :outcome :disputed})]
     (is (str/includes? (:summary h) "verify-baseline"))
     (is (str/includes? (:summary h) "disputed"))
-    (is (str/includes? (:needs h) "everything derivable"))))
+    (is (str/includes? (:summary h) "Everything derivable"))
+    (is (str/ends-with? (:needs h) "?") "the question is a question, in one sentence")
+    (is (some? (:after h)) "and says what follows the answer")
+    (is (some? (report/validate-event :blocker h)) "so it can never be refused for its parts")))
+
+(deftest a-stated-need-that-is-not-a-question-becomes-its-context
+  ;; A stage's need is often a paragraph a round derived; the write contract wants one
+  ;; sentence of question, so the paragraph is kept whole as context under a general one.
+  (let [h (drive/halt-for {:stage :decide-design :outcome :disputed
+                           :needs "which way to cut phase three"})]
+    (is (str/includes? (:summary h) "which way to cut phase three"))
+    (is (= "How should the decide-design stage go on, now that it stopped at disputed?" (:needs h))))
+  (is (= "Cut phase three by stratum?"
+         (:needs (drive/halt-for {:stage :decide-design :outcome :disputed
+                                  :needs "Cut phase three by stratum?"})))
+      "a need that is a question is asked as written"))
 
 (deftest a-zero-round-attempt-does-not-claim-a-round
   ;; A stage that could not start ran no rounds, and saying "after 0 rounds"
@@ -74,7 +90,7 @@
         (is (some? (:seq r)))
         (let [e (ws/latest-entry :brian id :blocker)]
           (is (= :blocker (:format e)))
-          (is (= "which way to cut phase three" (:needs e)))
+          (is (str/includes? (:summary e) "which way to cut phase three"))
           (is (= :disputed (:outcome (first (:tried e))))))))))
 
 (deftest parking-leaves-the-workstream-owed-by-a-person
@@ -269,7 +285,7 @@
         (let [e (ws/latest-entry :brian id :blocker)]
           (is (= 3 (count (:tried e))) "every attempt is on the halt")
           (is (str/includes? (:summary e) "failed to run 3 times"))
-          (is (str/includes? (:needs e) "machinery")))))))
+          (is (str/includes? (:summary e) "machinery")))))))
 
 (deftest a-transient-failure-that-clears-is-not-parked
   (with-tmp
@@ -366,8 +382,8 @@
           (is (some? halt) "and now the ledger says it too")
           (is (str/includes? (:summary halt) "verify-baseline")
               "the halt names the stage that could not run")
-          (is (str/includes? (:needs halt) "bb nido:session:up"))
-          (is (str/includes? (:needs halt) "bb nido:drive:remove")
+          (is (str/includes? (:summary halt) "bb nido:session:up"))
+          (is (str/includes? (:summary halt) "bb nido:drive:remove")
               "and the one branch a person can take without deciding anything"))))))
 
 (deftest a-mechanical-stage-with-no-runner-parks
@@ -390,7 +406,7 @@
                 halt (first (blockers-of id))]
             (is (= :no-runner (:skipped out)))
             (is (str/includes? (:summary halt) "verify-baseline"))
-            (is (str/includes? (:needs halt) "mechanical-stages"))))))))
+            (is (str/includes? (:summary halt) "mechanical-stages"))))))))
 
 (deftest the-halt-names-no-options-so-no-click-can-clear-it
   ;; A lettered option resumes a parked agent with an answer, and a stage that
@@ -584,6 +600,6 @@
                                                                   :findings [])))
                                         (entries p w k)))]
           (drive/run-stage! :brian id :decide-design {:cwd "/tmp" :sleep-fn (fn [_])}))
-        (let [needs (:needs (ws/latest-entry :brian id :blocker))]
+        (let [needs (:summary (ws/latest-entry :brian id :blocker))]
           (is (str/includes? needs "For you to decide: is the pool in scope?"))
           (is (not (str/includes? needs "a stale question"))))))))

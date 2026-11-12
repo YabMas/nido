@@ -184,7 +184,9 @@ needs something rule 4 forbids. Then **park**:
 cat > <run-artifacts-dir>/blocker.edn <<'EDN'
 {:format  :blocker
  :summary "what failed, what you found, what you did"
- :needs   "the one thing a person must decide or do"
+ :needs   "the one thing a person must decide, as one question ending in ?"
+ :recommendation "<the answer your reasoning supports, and why — omit unless you genuinely hold one>"
+ :after   "<what happens once the person answers: what runs next, what waits>"
  :options [{:label "…" :summary "…" :consequence "…" :recommended? true}
            {:label "…" :summary "…"}]}
 EDN

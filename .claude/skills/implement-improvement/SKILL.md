@@ -50,8 +50,10 @@ Red because of you: fix and re-run. Red on main already (check with `jj new main
 
 ```bash
 cat > artifacts/blocker.edn <<'EDN'
-{:format :blocker :summary "…" :needs "…"
- :options [{:letter "a" :label "…" :costs "…"} {:letter "b" :label "…" :costs "…"}]}
+{:format :blocker :summary "<what is red on main, and why it is not yours>"
+ :needs "<one question ending in ?>"
+ :recommendation "<the answer you would give — omit unless you genuinely hold one>" :after "<what happens once it is answered>"
+ :options [{:label "…" :summary "…" :consequence "…" :recommended? true} {:label "…" :summary "…"}]}
 EDN
 bb nido:workstream:entry:add :project nido :ws-id <this-ws-id> :kind blocker :file artifacts/blocker.edn
 ```

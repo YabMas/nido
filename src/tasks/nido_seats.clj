@@ -67,15 +67,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   decide*
-  "Record the conductor's decision on :hand-back <id> — :escalate \"what the person is needed
-   for\" (with :summary \"…\" and :options '[{:label … :summary …} …]' when it is the question),
+  "Record the conductor's decision on :hand-back <id> — :escalate \"the one-sentence question?\"
+   with :summary \"the context\" and :after \"what happens once it is answered\", an optional
+   :recommendation \"…\" only when the conductor genuinely holds a view, and :options
+   '[{:label … :summary …} …]' when it names the branches;
    :seat <id> :text \"…\" for one instruction, or :instruct '[{:seat … :text …} …]' for several.
    Refused from any session but the conductor's."
-  [{:keys [hand-back escalate summary options seat text instruct] :as opts}]
+  [{:keys [hand-back escalate summary after recommendation options seat text instruct] :as opts}]
   (let [[p id] (here opts)
         decision (cond
                    escalate [:escalate (cond-> {:needs (str escalate)}
-                                         summary (assoc :summary (str summary))
+                                         summary        (assoc :summary (str summary))
+                                         after          (assoc :after (str after))
+                                         recommendation (assoc :recommendation (str recommendation))
                                          options (assoc :options (edn/read-string (str options))))]
                    seat     [:instruct [{:seat (seat-id p id seat) :text (str text)}]]
                    instruct [:instruct (mapv #(update % :seat (partial seat-id p id)) (edn/read-string (str instruct)))]
@@ -125,7 +129,7 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   replace-cmd [& args] (run* replace* args #{:seat}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  decide-cmd [& args] (run* decide* args #{:hand-back :escalate :summary :options :seat :text :instruct}))
+  decide-cmd [& args] (run* decide* args #{:hand-back :escalate :summary :after :recommendation :options :seat :text :instruct}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   record-cmd [& args]
   (run* record* args #{:to :about :statement :terms :note :ids :why :tensions}))

@@ -1775,7 +1775,7 @@
     (is (true? (:recommended? third)))
     (is (not-any? :recommended? (butlast (:options b)))
         "one branch carries the verdict's answer, not several")
-    (is (str/includes? (:needs b) "strained")
+    (is (str/includes? (:summary b) "strained")
         "the gate states the answer it holds instead of asking the question again")
     (is (= b (report/validate-event :blocker b))
         "a three-branch halt is still a halt the ledger will take")))
@@ -1827,8 +1827,8 @@
            [{:disposition :park :title "start races the socket" :same-as "aeee857f" :attempts 2
              :because "two repairs each narrowed the window and left a smaller one"}]
            nil)]
-    (is (not (str/includes? (:needs b) "design")))
-    (is (str/includes? (:needs b) "third attempt")
+    (is (not (str/includes? (:summary b) "design")))
+    (is (str/includes? (:summary b) "third attempt")
         "the question a recurrence park asks is whether the remedy is a decision,
          and the human has to be able to tell which question they answered")
     (is (not-any? #(str/includes? (:summary %) "Supersede") (:options b))
@@ -2707,7 +2707,7 @@
         blocker (t/parked-blocker rows {:verdict :sound})]
     (is (= ["f94e0553"] (mapv :same-as rows))
         "the ledger row is the only thing the gate and the next run read the mark from")
-    (is (str/includes? (:needs blocker) "third attempt")
+    (is (str/includes? (:summary blocker) "third attempt")
         "a park on recurrence asks whether the remedy is a decision")
     (is (not (str/includes? (:needs blocker) "Does the design stand?")))
     (is (= blocker (report/validate-event :blocker blocker))))
@@ -2715,7 +2715,7 @@
                    :carry {:inherited-open [{:id "ip" :title "t" :same-as "aeee857f" :attempts 1
                                              :disposition :park :inherited true}]}}
         blocker   (t/parked-blocker (verdict/owed-rows inherited) nil)]
-    (is (str/includes? (:needs blocker) "third attempt")
+    (is (str/includes? (:summary blocker) "third attempt")
         "a park carried to the next run is still the same recurrence")))
 
 (deftest a-stop-over-a-remainder-the-round-does-not-hold-is-unresolved
@@ -2912,7 +2912,7 @@
   ;; were "fixed in an earlier round and came back".
   (let [b (t/parked-blocker [{:id "593ee1d3" :disposition :park :title "t" :same-as "303ca07e"}]
                             nil)]
-    (is (not (str/includes? (:needs b) "fixed in an earlier round")))))
+    (is (not (str/includes? (:summary b) "fixed in an earlier round")))))
 
 (deftest a-gate-defers-to-a-verdict-that-classifies-its-parks-as-implementation
   ;; The blocker said the design was in question while the same run's verdict
@@ -2922,8 +2922,8 @@
         b (t/parked-blocker [{:id "593ee1d3" :disposition :park :title "t"}
                              {:id "3d7af6b0" :disposition :park :title "u"}]
                             v)]
-    (is (not (str/includes? (:needs b) "the design is in question")))
-    (is (str/includes? (:needs b) "classifies each as implementation"))
+    (is (not (str/includes? (:summary b) "the design is in question")))
+    (is (str/includes? (:summary b) "classifies each as implementation"))
     (is (= b (report/validate-event :blocker b)))))
 
 (deftest a-halt-says-when-the-run-stopped-on-something-else

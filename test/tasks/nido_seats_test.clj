@@ -36,3 +36,17 @@
                          (nido-seats/decide* {:project "brian" :ws-id "w" :hand-back "h" :instruct "[{:seat \"42\" :text \"go\"}]"})
                          ;; the generation's own number, once its ids are fixed, is still its whole seat — the conductor's
                          (nido-seats/send* {:project "brian" :ws-id "w" :to "1" :text "x"}))))))
+
+(deftest an-escalation-carries-every-part-of-its-question
+  (let [seen (atom nil)]
+    (with-redefs [conductor/decide! (fn [_ _ entry] (reset! seen entry))]
+      (nido-seats/decide* {:project "brian" :ws-id "w" :hand-back "h"
+                           :escalate "Should the importer go through the aggregate?"
+                           :summary "It writes rows directly." :after "The seat rewrites it once you answer."
+                           :recommendation "Yes — the aggregate holds the invariant."})
+      (is (= [:escalate {:needs "Should the importer go through the aggregate?"
+                         :summary "It writes rows directly."
+                         :after "The seat rewrites it once you answer."
+                         :recommendation "Yes — the aggregate holds the invariant."}]
+             (:decision @seen))
+          "the parking escalation's contract asks for :after, so the one verb that writes it carries it"))))
