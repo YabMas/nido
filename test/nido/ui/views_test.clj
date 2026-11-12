@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [hiccup2.core :as h]
+            [nido.coordinator.report.ask :as ask]
             [nido.coordinator.work :as work]
             [nido.ui.views :as views]))
 
@@ -87,50 +88,82 @@
     (is (str/includes? html "/gate/brian/ws-1/apply"))
     (is (not (str/includes? html "dismiss instead")))))
 
-(deftest a-direction-is-lettered-on-the-card-and-under-the-button
-  ;; The letter is the whole affordance: the button says "A", so the card has to
-  ;; say "A" too or the reader has nothing to match it against. Both are derived
-  ;; from POSITION (report/option-letter), which is why they cannot drift.
-  (let [gate (assoc triage-gate
-                    :actions (work/gate-actions
-                              :triage true nil
-                              {:report-format :triage-report
-                               :directions (get-in triage-gate [:report :directions])
-                               :seq 4}))
-        html (views/gate-pane gate)]
-    (is (str/includes? html "class=\"option-letter\">A<"))
-    (is (str/includes? html "/gate/brian/ws-1/direction-a?entry=4")
-        "and the button carries the ledger position it was rendered at")
-    (is (str/includes? html "Defer decision")
-        "beside branches, the accept says what accepting without one means"))
-  (is (not (str/includes? (views/gate-pane triage-gate) "Defer decision"))
-      "a gate whose action set holds no directions says Apply, as it always did"))
+(def ^:private two-question-report
+  {:format :triage-report :seq 4 :at "2026-06-18T00:00:00Z"
+   :ticket-key "BR-7" :determination :bug
+   :title "Checkout off by a cent" :summary "Rounding on each line."
+   :confidence {:level :high :reason "repro"}
+   :questions [{:question "Where should the total be rounded?" :context "Each line rounds."
+                :recommendation "Round once — the smallest fix." :after "The fix is built."
+                :directions [{:label "Round once" :shape "On the total." :effort :S}
+                             {:label "Money type" :shape "Unrepresentable." :effort :L}]}
+               {:question "Should the receipt show it?" :context "c2" :after "a2"
+                :directions [{:label "Show it" :shape "A line." :effort :XS}]}]
+   :notion-writes {:type "bug" :effort :M :status-transition ["Needs verification" "Not started"]
+                   :title "Checkout off by a cent" :description-prepend "Rounding bug."}
+   :trail []})
 
-(deftest the-on-apply-block-says-what-the-effort-will-actually-be
-  ;; It lists what lands on the ticket, and once a direction can be clicked the
-  ;; report's own effort is no longer that: a chosen branch's size is what lands.
-  (let [effort-line (fn [report]
-                      (->> (str/split-lines
-                            (str/replace (views/gate-pane (assoc triage-gate :report report))
-                                         #"><" ">\n<"))
-                           (filter #(str/includes? % "Effort:")) first))
-        deferred    (assoc-in (:report triage-gate) [:notion-writes :effort] :squirrel)]
-    (is (str/includes? (effort-line deferred) "the direction you choose")
-        "a deferred size beside choosable branches: the click is what sets it")
-    (is (str/includes? (effort-line (assoc deferred :directions [])) "size deferred")
-        "and with no branches there is nothing to set it — the size follows from
-         the design, which is what :squirrel means")
-    (is (str/includes? (effort-line (assoc-in deferred [:directions 0 :effort] :squirrel))
-                       "the direction you choose")
-        "a branch that defers its own size is still choosable, so the line still
-         says the choice is what decides — each branch's own size is on the card")))
+(defn- two-question-gate []
+  (let [actions (work/gate-actions :triage false nil
+                                   {:report-format :triage-report :seq 4
+                                    :questions (:questions two-question-report)})]
+    (assoc sample-gate :report two-question-report :actions actions :session nil
+           :ask (ask/ask :accept-triage {:report two-question-report :entries [two-question-report]
+                                          :actions actions}))))
 
-(deftest a-legacy-letter-label-is-not-rendered-twice
-  ;; Reports written while the skill's template showed `:label "A"` are full of
-  ;; them, and the head read "A A · S".
-  (let [html (views/gate-pane (assoc-in triage-gate [:report :directions 0 :label] "A"))]
-    (is (str/includes? html "<span class=\"option-letter\">A</span><span class=\"meta\">")
-        "the letter chip is followed straight by the meta line, with no <strong>A</strong>")))
+(deftest a-verdict-of-several-questions-is-one-stepper-card
+  (let [pane (views/gate-pane (two-question-gate))
+        at   #(or (str/index-of pane %) (throw (ex-info (str "missing " %) {})))]
+    (is (str/includes? pane "Question <span data-text=\"$qcard.step + 1\">1</span> of 2")
+        "it says which of how many is shown")
+    (is (= 2 (count (re-seq #"class=\"qc-mark\"" pane))) "one marker per question")
+    (is (str/includes? pane "data-show=\"$qcard.step === 1\"") "only the shown question is visible")
+    (is (str/includes? pane "◂ Previous"))
+    (is (str/includes? pane "Next ▸"))
+    (is (str/includes? pane "{qcard: {step: 0, answers: {q0: &apos;&apos;, q1: &apos;&apos;}}}")
+        "a choice is page state until Accept")
+    (is (< (at "<strong>Round once</strong>") (at "On the total.") (at "Effort: S"))
+        "an option's name in bold, then what it does, then its cost")
+    (is (str/includes? pane "$qcard.answers.q0 = ($qcard.answers.q0 === &apos;A&apos;) ? &apos;&apos; : &apos;A&apos;")
+        "choosing marks it, and choosing it again leaves the question open")
+    (is (not (re-find #"qc-opt[^\"]*\"[^>]*data-on:click=\"@post" pane))
+        "no choice submits on its own")
+    (is (not (re-find #">[A-C]\.?\s*<|>[A-C]\. " pane)) "no letter on screen")
+    (is (not (str/includes? pane "option-letter")))
+    (is (str/includes? pane "/gate/brian/ws-1/apply?entry=4") "Accept posts once, at the position it was drawn at")
+    (is (= 1 (count (re-seq #"class=\"btn btn-primary\"" pane))) "Accept is the one primary")
+    (is (< (at "Should the receipt show it?") (at "/gate/brian/ws-1/apply") (at "/gate/brian/ws-1/defer"))
+        "Accept and Defer sit after the questions")
+    (is (str/includes? pane "Recommended</span>Round once — the smallest fix."))
+    (is (str/includes? pane "Once answered</span>The fix is built."))
+    (is (str/includes? pane "Accept the triage of “Checkout off by a cent”?") "the headline leads")))
+
+(deftest a-pending-stepper-shows-its-choices-without-buttons
+  (let [pane (views/gate-pane (assoc (two-question-gate) :pending? true))]
+    (is (str/includes? pane "Round once"))
+    (is (not (str/includes? pane "/gate/brian/ws-1/")) "no action can be posted")
+    (is (not (str/includes? pane "class=\"qc-opt\" data")) "choices are not buttons")))
+
+(deftest the-question-card-reads-only-its-arguments
+  (let [g    (two-question-gate)
+        html (str (h/html (views/question-card "brian" "ws-1" (:ask g) (:actions g)
+                                               {:route (fn [p w a] (str "/x/" p "/" w "/" (name a)))})))]
+    (is (str/includes? html "/x/brian/ws-1/apply?entry=4") "every POST is built by the route it is given")
+    (is (not (str/includes? html "/gate/")))
+    (is (not (str/includes? html "orient")) "no orientation band")
+    (is (not (str/includes? html "holds up")) "no holding line")))
+
+(deftest the-record-names-each-question-and-no-letter
+  (let [html (views/gate-pane (assoc sample-gate :report two-question-report))]
+    (is (str/includes? html "<h3>Where should the total be rounded?</h3>"))
+    (is (str/includes? html "<h3>Should the receipt show it?</h3>"))
+    (is (not (str/includes? html "option-letter")))
+    (is (str/includes? html "the largest size among the fixes you choose, or M if you defer"))))
+
+(deftest a-legacy-triage-record-still-renders-its-directions
+  (let [html (views/gate-pane triage-gate)]
+    (is (str/includes? html "<h3>Solution directions</h3>"))
+    (is (str/includes? html "round once"))))
 
 (deftest gate-pane-empty-is-calm
   (is (str/includes? (views/gate-pane nil) "Nothing needs you")))
@@ -1668,9 +1701,12 @@
 (def ^:private sample-ask
   {:kind :answer-blocker
    :question "Where should students see interactive elements?"
-   :context ["Students run AI dialogues in brian-mobile."]
-   :options [{:letter "A" :label "Web only" :summary "Through the Preview tab." :recommended? true :action :option-a}
-             {:letter "B" :label "brian-mobile too" :summary "Mobile work." :consequence "A second ticket." :action :option-b}]
+   :questions [{:question "Where should students see interactive elements?"
+                :context ["Students run AI dialogues in brian-mobile."]
+                :recommendation "Web only — no mobile work."
+                :after "The ticket is built for the surface you choose."
+                :options [{:letter "A" :label "Web only" :summary "Through the Preview tab." :recommended? true :action :option-a}
+                          {:letter "B" :label "brian-mobile too" :summary "Mobile work." :consequence "A second ticket." :action :option-b}]}]
    :answer-does [{:action :option-a :label "A" :does "Records A as your answer."}]
    :goal {:goal "Let a teacher embed interactive elements." :done-when ["A teacher can attach one."]}
    :note "The conductor adds: the seat waits on this."})
@@ -1684,7 +1720,8 @@
           at   #(str/index-of pane %)]
       (doseq [s ["Students run AI dialogues" "Web only" "recommended" "A second ticket."
                  "Records A as your answer." "Let a teacher embed" "A teacher can attach one."
-                 "The conductor adds"]]
+                 "The conductor adds" "Web only — no mobile work."
+                 "The ticket is built for the surface you choose."]]
         (is (str/includes? pane s)))
       (is (< (at "Where should students") (at "The record: markdown") (at "bug — reproduced."))
           "the question leads, and the record it was read from is folded under it"))))
@@ -1718,16 +1755,19 @@
       (is (str/includes? pane "arc-step current") "the current stage marked")
       (is (str/includes? pane "The work this blocker stopped waits on your answer.")))
     (testing "each answer is its button, recommended one primary"
-      (is (re-find #"class=\"btn btn-primary\"[^>]*>A\. Web only<" pane))
-      (is (re-find #"class=\"btn\"[^>]*>B\. brian-mobile too<" pane))
-      (is (= 1 (count (re-seq #">A\. Web only<" pane))) "no second button for an option"))
+      (is (re-find #"class=\"qc-opt primary\" data-on:click=\"@post\(&apos;/gate/brian/ws-1/option-a\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>Web only</strong>" pane))
+      (is (re-find #"class=\"qc-opt\" data-on:click=\"@post\(&apos;/gate/brian/ws-1/option-b\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>brian-mobile too</strong>" pane))
+      (is (= 1 (count (re-seq #"option-a\?entry" pane))) "no second button for an option")
+      (is (not (str/includes? pane "class=\"btn btn-primary\"")) "and no other row is primary beside it"))
     (testing "what an option does is said once"
       (is (= 1 (count (re-seq #"Choosing an answer records it\." pane)))))
     (testing "other actions and the reply sit beside what they do, after the options"
-      (is (< (at "B. brian-mobile too") (at "Marks the workstream done.")
+      (is (< (at "<strong>brian-mobile too</strong>") (at "Marks the workstream done.")
              (at "Sends your words to the parked session.") (at "The record: markdown"))))
-    (testing "the question is the largest text"
-      (is (str/includes? pane "class=\"ask-q\"")))))
+    (testing "the question line is calm, and nothing is set at the old question size"
+      (is (str/includes? pane "class=\"qc-q\""))
+      (is (not (str/includes? pane "fs-xl")))
+      (is (not (str/includes? (views/shell {:active :needs} [:div]) "--fs-xl"))))))
 
 (deftest a-pending-gate-offers-no-control
   (let [pane (views/gate-pane (assoc oriented-gate :pending? true))]
@@ -1738,7 +1778,7 @@
 
 (deftest a-failed-action-shows-above-the-first-control
   (let [pane (views/gate-pane (assoc oriented-gate :error-msg "it broke"))]
-    (is (< (str/index-of pane "it broke") (str/index-of pane "A. Web only")))))
+    (is (< (str/index-of pane "it broke") (str/index-of pane "Where should students")))))
 
 (deftest notices-are-on-operations-not-the-needs-you-list
   (let [cards (str (views/operations-home-fragment
@@ -1768,8 +1808,20 @@
                                :report {:format :design-verdict :verdict :sound :reason "LATER-READING"}
                                :ask-record {:format :design-verdict :verdict :invalidated :reason "OWED-READING"}
                                :ask {:kind :acknowledge-invalidation :question "Redesign it?"
-                                     :context [] :options [] :answer-does []}
+                                     :questions [{:question "Redesign it?" :context [] :options []}]
+                                     :answer-does []}
                                :actions []})]
     (is (str/includes? html "OWED-READING"))
     (is (not (str/includes? html "LATER-READING")))))
 
+
+(deftest the-workstream-pane-sends-a-questioned-accept-to-needs-you
+  (with-redefs [work/grantable? (constantly false)]
+    (let [html (str (h/html (#'views/pane-action-bar "brian" "ws-1" nil :triage [{:parked? true :name "s"}]
+                                                     two-question-report nil nil false)))]
+      (is (str/includes? html "href=\"/?sel=brian:ws-1\"")
+          "an Accept that submits questions is answered where they are shown")
+      (is (str/includes? html "Accept on Needs you ▸"))
+      (is (str/includes? html "Defer decision on Needs you ▸") "Defer accepts too, every question left open")
+      (is (not (str/includes? html "/apply")) "the pane never accepts a verdict whose questions it hides")
+      (is (not (str/includes? html "/defer"))))))

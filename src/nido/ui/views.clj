@@ -1,6 +1,7 @@
 (ns nido.ui.views
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [hiccup2.core :as h]
             [nido.coordinator.report :as report]
             [nido.coordinator.view.recoveries :as recoveries-view]
@@ -21,8 +22,7 @@
           --fs-xs: 12px;  /* labels, metadata, chips */
           --fs-sm: 13px;  /* secondary text, dense rows */
           --fs-md: 15px;  /* body prose */
-          --fs-lg: 18px;  /* page and pane titles, the big number on a card */
-          --fs-xl: 22px;  /* the one question a gate pane asks */
+          --fs-lg: 18px;  /* page and pane titles, a question's line, the big number on a card */
           --font-prose: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
           --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
           --measure: 72ch; /* the reading width of a prose block */
@@ -159,11 +159,33 @@
         .arc-step.current { color:var(--text-strong); font-weight:600; } .arc-step.current .arc-step-g { color:var(--working-dim); }
         .arc-step.stale { color:var(--waiting); }
         .arc-step.skipped { color:var(--waiting-dim); }
-        .ask { margin:0 0 16px; }
-        .pane h2.ask-q, .ask-q { font-size:var(--fs-xl); font-weight:600; color:var(--text-strong);
-                                 margin:0 0 12px; line-height:1.3; max-width:var(--measure);
-                                 border-top:none; padding-top:0; }
-        .ask-ctx p { color:var(--text); margin:0 0 10px; max-width:var(--measure); }
+        .qcard { border:1px solid var(--border); border-radius:6px; background:var(--surface-raised);
+                 padding:14px 16px; margin:0 0 20px; }
+        .qc-head { margin:0 0 10px; color:var(--text-muted); font-size:var(--fs-sm); max-width:var(--measure); }
+        .qc-nav { display:flex; align-items:center; gap:6px; margin:0 0 10px; font-size:var(--fs-xs);
+                  color:var(--text-faint); text-transform:uppercase; letter-spacing:0.04em; }
+        .qc-mark { background:none; border:0; padding:0 2px; cursor:pointer; color:var(--text-faint);
+                   font-size:var(--fs-sm); line-height:1; }
+        .qc-mark.answered { color:var(--ok); }
+        .qc-mark.current { color:var(--text-strong); text-decoration:underline; }
+        .qc-q { font-size:var(--fs-lg); font-weight:500; color:var(--text-strong); margin:0 0 10px;
+                line-height:1.4; max-width:var(--measure); }
+        .qc-ctx p, .qc-rec, .qc-after { font-size:var(--fs-md); color:var(--text); margin:0 0 8px;
+                                       max-width:var(--measure); }
+        .qc-k { font-weight:600; color:var(--text-muted); margin-right:6px; }
+        .qc-opts { display:grid; gap:8px; margin:12px 0 6px; }
+        .qc-opt { display:block; width:100%; max-width:var(--measure); text-align:left; font:inherit;
+                  color:var(--text); background:var(--surface); border:1px solid var(--border);
+                  border-radius:6px; padding:9px 12px; cursor:pointer; }
+        .qc-opt:hover { background:var(--surface-hover); }
+        .qc-opt.primary { background:var(--accent-bg); border-color:var(--accent-border); }
+        .qc-opt.chosen { background:var(--recommended-bg); border-color:var(--recommended); }
+        .qc-opt.static { cursor:default; }
+        .qc-opt-label { display:block; color:var(--text-strong); }
+        .qc-opt-sum { display:block; }
+        .qc-opt-cons { display:block; color:var(--text-muted); font-size:var(--fs-sm); }
+        .qc-chosen { color:var(--recommended); font-size:var(--fs-xs); margin-left:6px; }
+        .qc-step { display:flex; gap:8px; margin:10px 0 0; }
         .ask-note { color:var(--text-muted); font-style:italic; max-width:var(--measure); }
         .controls { display:grid; gap:8px; margin:6px 0 20px; }
         .ans-row { display:grid; grid-template-columns:minmax(150px, max-content) 1fr; gap:12px;
@@ -963,12 +985,6 @@
       ;; here would be the one copy free to be wrong.
       "Recording your answer… resuming the agent if one is still listening."
 
-      (work/direction-action? action-id)
-      ;; Same silence about which letter, and for the same reason. What it does
-      ;; name is the size, because that is the part of the choice that leaves the
-      ;; ledger and lands on the ticket.
-      "Applying the verdict with the direction you chose — its size becomes the ticket's."
-
       :else
       (case action-id
         :promote "Promoting…"
@@ -977,6 +993,7 @@
         ;; WITHOUT resuming anybody — so the one sentence a reader got about this
         ;; button described a different button.
         :apply   "Applying the routing and recording your acceptance on the ledger."
+        :defer   "Applying the routing with every question left open for whoever builds it."
         :dismiss "✓ Dismissed — off your radar. Nothing written to Notion."
         :restore "✓ Restored — back in the triage queue."
         :start-triage "Starting triage… spawning the agent to investigate."
@@ -1043,7 +1060,7 @@
    every gate."
   ([project ws-id actions session] (action-bar project ws-id actions session gate-route))
   ([project ws-id actions session route]
-   (let [buttons   (filter #(or (= :mutation (:kind %)) (:input %)) actions)
+   (let [buttons   (filter #(or (#{:mutation :link} (:kind %)) (:input %)) actions)
          free-text (some #(when (and (= :resume (:kind %)) (not (:input %))) %) actions)
          ;; "Answer" is the free text a gate offers when nobody is parked: it is recorded on the
          ;; ledger as the blocker's answer and resumes nobody, so the copy must not promise a resume.
@@ -1062,7 +1079,10 @@
            (str (:label evidence) " ▸")]]])
       (when (seq buttons)
         (into [:div.actions {:style "margin-top:16px"}]
-              (for [a buttons] (action-button project ws-id a route))))
+              (for [a buttons]
+                (if (= :link (:kind a))
+                  [:a {:class (style-class (:style a)) :href (:href a) :title (:title a)} (:label a)]
+                  (action-button project ws-id a route)))))
       (when free-text
         [:div.reply
          [:div.meta {:style "text-transform:uppercase;font-size:var(--fs-xs)"}
@@ -1084,8 +1104,7 @@
 (defn- triage-report-card
   "Curated render of a typed triage report: determination + confidence chips, summary,
    directions, an On-apply block, and a collapsed investigation trail (§5)."
-  [{:keys [title determination summary confidence design-frame directions
-           notion-writes trail]}]
+  [{:keys [title determination summary confidence design-frame notion-writes trail] :as report}]
   [:div.md
    (when title [:h2 title])
    [:div.report-meta
@@ -1095,6 +1114,7 @@
       [:span {:class (str "chip c-layer-" (name layer))} (name layer) " defect"])
     [:span.meta (:reason confidence)]]
    (md/render summary)
+   (let [questions (report/triage-questions report)] (list
    (when design-frame
      (let [{:keys [governing violated note]} design-frame]
        [:div
@@ -1106,43 +1126,23 @@
           (into [:ul]
                 (for [{:keys [rule source evidence]} violated]
                   [:li rule " " [:span.meta "(" source ")"] " — " [:code evidence]])))]))
-   (when (seq directions)
+   ;; One section per question the report asks, each its directions. The letters a choice is
+   ;; recorded by stay in the record and off the screen: what is read is the label.
+   (for [{:keys [question context recommendation after directions]} questions
+         :when (seq directions)]
      [:div
-      [:h3 "Solution directions"]
-      ;; Lettered only when every branch HAS a letter (report/answerable?). The
-      ;; alternative is a card that letters the first twenty-six and leaves the
-      ;; rest described with nothing to pick them by, which is the disagreement
-      ;; between card and action bar this whole shape exists to avoid — so past
-      ;; the alphabet it falls back to the plain list, and the action bar offers
-      ;; none, and the two still agree.
-      (if-not (report/answerable? directions)
-        (into [:ul]
-              (for [{:keys [label shape effort confidence]} directions]
-                [:li [:strong label] " · " (report/effort-label effort)
-                 " · " (name (:level confidence)) " — " shape]))
-      ;; Lettered, and lettered from POSITION at both ends — the letter is what
-      ;; the button below the report says, so a reader picks a direction by
-      ;; matching a letter rather than by re-reading three shapes to work out
-      ;; which button is which. Same idiom as option-card, and the same reason.
-      ;;
-      ;; The letters render whether or not the buttons do. A report stored before
-      ;; directions were answerable is offered none (work/gate-actions), and a
-      ;; card that lettered only what could be clicked would be describing a
-      ;; different set of branches from the one the report enumerated.
+      [:h3 (or question "Solution directions")]
+      (when-not (str/blank? context) [:p context])
+      (when-not (str/blank? recommendation) [:p [:span.meta "Recommended: "] recommendation])
+      (when-not (str/blank? after) [:p [:span.meta "Once answered: "] after])
       (into [:div.options]
-            (map-indexed
-             (fn [i {:keys [label shape effort confidence]}]
-               [:div.option
-                [:div.option-head
-                 [:span.option-letter (report/option-letter i)]
-                 ;; A label that IS the letter is dropped rather than repeated —
-                 ;; reports written while the skill's template showed `:label "A"`
-                 ;; are full of them, and the head read "A A · S".
-                 (when-not (= label (report/option-letter i)) [:strong label])
-                 [:span.meta (report/effort-label effort)
-                  " · " (name (:level confidence)) " confidence"]]
-                [:p shape]])
-             directions)))])
+            (for [{:keys [label shape effort confidence]} directions]
+              [:div.option
+               [:div.option-head
+                [:strong label]
+                [:span.meta (report/effort-label effort)
+                 (when confidence (str " · " (name (:level confidence)) " confidence"))]]
+               [:p shape]]))])
    (when notion-writes
      [:div
       [:h3 "On apply →"]
@@ -1150,18 +1150,14 @@
             (concat
              [[:li "Type: " (or (:type notion-writes) "unchanged")]
               ;; What the ticket's size will be, which is not simply the report's
-              ;; once a direction can be clicked: a chosen branch's own size is
-              ;; what lands (work/accepted-report). Asked of report/answerable?
-              ;; rather than of the buttons, which this block cannot see — it is
-              ;; the same predicate gate-actions offers them under.
-              ;;
-              ;; A branch may itself defer, so "the size of the direction you
-              ;; choose" is the honest phrasing either way: each branch's own size
-              ;; is on the card beside its letter, and this says which of them
-              ;; decides.
+              ;; once directions can be chosen: the largest chosen size lands
+              ;; (work/accepted-report). Asked of report/answerable? rather than of
+              ;; the buttons, which this block cannot see — it is the predicate
+              ;; gate-actions offers Accept under.
               [:li "Effort: "
-               (if (and (seq directions) (report/answerable? directions))
-                 (str "the size of the direction you choose, or "
+               (if (and (some (comp seq :directions) questions)
+                        (every? (comp report/answerable? :directions) questions))
+                 (str "the largest size among the fixes you choose, or "
                       (if (= :squirrel (:effort notion-writes))
                         "left open if you defer"
                         (str (name (:effort notion-writes)) " if you defer")))
@@ -1174,7 +1170,7 @@
       [:summary "Investigation trail (" (count trail) ")"]
       (into [:ul]
             (for [{:keys [ref note]} trail]
-              [:li [:code ref] " — " note]))])])
+              [:li [:code ref] " — " note]))])))])
 
 (defn- intent-card
   "What the task is for. Never folded: it is the yardstick goal-served is checked
@@ -1406,24 +1402,27 @@
       " · no session was live to resume — the next one reads it here")]])
 
 (defn- triage-accepted-card
-  "A human's acceptance of a triage verdict, as it reads back on the timeline.
-   Both outcomes are stated in the same shape, because they are the same act: the
-   routing was accepted, and either a direction was taken or one deliberately was
-   not. Absence is the second answer, so it is written out rather than left as a
-   blank the reader has to interpret."
-  [{:keys [triage-seq direction]}]
-  [:div.md
-   [:h2 "Accepted"]
-   (if direction
-     [:div.option
-      [:div.option-head
-       [:span.option-letter (:letter direction)]
-       [:strong (:label direction)]
-       [:span.meta (name (:effort direction)) " — the ticket's size follows the branch"]]
-      [:p (:shape direction)]]
-     [:p "No direction chosen — the routing stands and the implementation "
-      "direction is left open."])
-   [:p.meta "accepts the triage report at entry " triage-seq]])
+  "A human's acceptance of a triage verdict, as it reads back on the timeline: one line per
+   question it answered, either the fix chosen or that the question was left open. An open
+   question is written out rather than left blank, because leaving it open is an answer too."
+  [{:keys [triage-seq] :as accepted}]
+  (let [answers (report/accepted-answers accepted)]
+    [:div.md
+     [:h2 "Accepted"]
+     (if (seq answers)
+       (into [:div.options]
+             (for [{:keys [question direction]} answers]
+               [:div.option
+                (when question [:p.meta question])
+                (if direction
+                  (list [:div.option-head
+                         [:strong (:label direction)]
+                         [:span.meta (report/effort-label (:effort direction))]]
+                        [:p (:shape direction)])
+                  [:p "Left open — for whoever builds it."])]))
+       [:p "No direction chosen — the routing stands and the implementation "
+        "direction is left open."])
+     [:p.meta "accepts the triage report at entry " triage-seq]]))
 
 (defn- pr-opened-card [{:keys [url title summary]}]
   [:div.md
@@ -1867,80 +1866,157 @@
         [:p.orient-k "What this decision holds up"]
         [:p.orient-hold holding]])]))
 
-(defn- question-block
-  "The question the gate asks — the pane's largest text — with what it presupposes and any
-   conductor note, in reading order."
-  [{:keys [question context note]}]
-  [:div.ask
-   [:h2.ask-q question]
-   (when (seq context) (into [:div.ask-ctx] (map (fn [c] [:p c])) context))
-   (when note [:p.ask-note note])])
-
 (defn- does-of
   "What giving action `id` does, as the Ask words it."
   [ask id]
   (some #(when (= id (:action %)) (:does %)) (:answer-does ask)))
 
-(defn- control-rows
-  "Every control the gate offers, as rows in one order: the Ask's options, then each other mutation
-   beside what it does, then the reply and the evidence boxes beside what they do. Each option IS
-   its button — lettered and labelled as the option, beside its summary and consequence — and the
-   recommended one is the primary button. What choosing an option does is the same for every option
-   on a gate (report.ask words it without the letter), so it is said once, under them.
+(defn- answer-signal
+  "The page signal holding question `i`'s choice: a letter, or '' while it is open."
+  [i]
+  (str "$qcard.answers.q" i))
 
-   A failed action's error sits above the first row. A pending gate renders no control at all: the
-   option rows without buttons and the working message, so a poll cannot hand back a fresh button
-   while the agent runs."
-  [project ws-id {:keys [options] :as ask} actions session pending? error-msg]
-  (let [by-id      (into {} (map (juxt :id identity)) actions)
-        opt-ids    (set (map :action options))
-        option-row (fn [{:keys [letter label summary consequence recommended? action]}]
-                     [:div {:class (str "ans-row ans-opt" (when recommended? " rec"))}
-                      (if (or pending? (nil? (by-id action)))
-                        [:span.ans-letter letter]
-                        (action-button project ws-id
-                                       (assoc (by-id action)
-                                              :label (str letter ". " label)
-                                              :style (when recommended? :primary))
-                                       gate-route))
-                      [:div.ans-body
-                       (when (or pending? (nil? (by-id action))) [:strong label])
-                       (when recommended? [:span.chip.c-opt-rec "recommended"])
-                       (when-not (str/blank? summary) [:p summary])
-                       (when consequence [:p.ans-cons consequence])]])
-        opt-does   (distinct (keep #(does-of ask %) opt-ids))
-        others     (remove #(or (opt-ids (:id %))
-                                (not (or (= :mutation (:kind %)) (:input %))))
-                           actions)
-        boxes      (filter #(or (= :evidence (:kind %))
-                                (and (= :resume (:kind %)) (not (:input %))))
-                           actions)]
-    [:div.controls
+(defn- post-expr
+  "The click expression posting action descriptor `d` through `route`, with the reading position
+   it was rendered at when it carries one."
+  [route project ws-id {:keys [id] entry-seq :seq}]
+  (str "@post('" (cond-> (route project ws-id id) entry-seq (str "?entry=" entry-seq)) "')"))
+
+(defn- option-choice
+  "One option of question `i`, as the button that answers it: its label in bold, then its summary,
+   then its consequence, and never its letter. An option tied to an offered action posts that
+   action; one that is not is a choice — clicking marks it chosen in the page, clicking it again
+   leaves the question open — that the Ask's submit sends. A pending card renders it with no
+   button at all."
+  [{:keys [project ws-id route by-id pending? primary-option?]} i
+   {:keys [letter label summary consequence recommended? action] :as opt}]
+  (let [chosen (str (answer-signal i) " === '" letter "'")
+        body   (list [:span.qc-opt-label [:strong label]
+                      (when recommended? [:span.chip.c-opt-rec "recommended"])
+                      (when-not action [:span.qc-chosen {"data-show" chosen} "✓ chosen"])]
+                     (when-not (str/blank? summary) [:span.qc-opt-sum summary])
+                     (when consequence [:span.qc-opt-cons consequence]))
+        d      (when action (by-id action))]
+    (cond
+      (or pending? (and action (nil? d))) [:div.qc-opt.static body]
+      d   [:button {:type "button"
+                    :class (str "qc-opt" (when (primary-option? opt) " primary"))
+                    "data-on:click" (post-expr route project ws-id d)}
+           body]
+      :else [:button {:type "button" :class "qc-opt"
+                      "data-class:chosen" chosen
+                      "data-attr:aria-pressed" chosen
+                      "data-on:click" (str (answer-signal i) " = (" chosen ") ? '' : '" letter "'")}
+             body])))
+
+(defn- question-section
+  "Question `i` of `n`: its line, then its context, recommendation and what follows the answer as
+   body text, then its options. Only the shown one is visible when there are several."
+  [ctx i n {:keys [question context recommendation after options]}]
+  [:section (cond-> {:class "qc-question"} (> n 1) (assoc "data-show" (str "$qcard.step === " i)))
+   [:p.qc-q question]
+   (when (seq context) (into [:div.qc-ctx] (map (fn [c] [:p c])) context))
+   (when recommendation [:p.qc-rec [:span.qc-k "Recommended"] recommendation])
+   (when after [:p.qc-after [:span.qc-k "Once answered"] after])
+   (when (seq options)
+     (into [:div.qc-opts] (map #(option-choice ctx i %)) options))])
+
+(defn- stepper-nav
+  "Where the reader is among `n` questions: which is shown, one marker per question saying whether
+   it is answered (● answered, ○ open — the glyph says it, not only the colour), and a jump to each."
+  [n]
+  (into [:div.qc-nav
+         [:span "Question " [:span {"data-text" "$qcard.step + 1"} "1"] " of " n]]
+        (for [i (range n)]
+          [:button {:type "button" :class "qc-mark"
+                    :aria-label (str "Question " (inc i))
+                    "data-class:answered" (str (answer-signal i) " !== ''")
+                    "data-class:current" (str "$qcard.step === " i)
+                    "data-text" (str (answer-signal i) " !== '' ? '●' : '○'")
+                    "data-on:click" (str "$qcard.step = " i)}
+           "○"])))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :any :map] :any]}
+  question-card
+  "One Ask, answered: its questions one at a time, their choices, and every action the gate offers
+   beside what it does. Reads nothing but its arguments, so any pane can drop it in: `ask` is a
+   report.ask Ask, `actions` the gate's action descriptors, and `opts` {:route :pending?
+   :error-msg :session} — `:route` (project ws-id action-id) -> the URL every POST it renders goes
+   to (default the Needs-you /gate route), `:pending?` a gate whose agent is running, which renders
+   its questions with no control for any action, `:error-msg` a failed action's message, set
+   above the first question, and `:session` the session a Reply resumes.
+
+   Several questions share one card with a stepper; choices made in it are page state
+   (`qcard.answers`) until the Ask's `:submit` sends them all, so a question may be left open. The
+   submit, or with none the recommended option, is the one primary button."
+  [project ws-id {:keys [question questions submit note] :as ask} actions
+   {:keys [route pending? error-msg session] :or {route gate-route}}]
+  (let [by-id     (into {} (map (juxt :id identity)) actions)
+        n         (count questions)
+        options   (mapcat :options questions)
+        opt-ids   (set (keep :action options))
+        ;; With a submit, it is the one primary; without, the recommended option that answers by
+        ;; itself is — and no other row may also be.
+        primary-option? (fn [o] (and (nil? submit) (:recommended? o) (:action o)))
+        primary-taken?  (or submit (some primary-option? options))
+        opt-does  (distinct (keep #(does-of ask %) opt-ids))
+        submit-d  (when submit (by-id submit))
+        others    (remove #(or (opt-ids (:id %)) (= submit (:id %))
+                               (not (or (= :mutation (:kind %)) (:input %))))
+                          actions)
+        boxes     (filter #(or (= :evidence (:kind %))
+                               (and (= :resume (:kind %)) (not (:input %))))
+                          actions)
+        ctx       {:project project :ws-id ws-id :route route :by-id by-id
+                   :pending? pending? :primary-option? primary-option?}
+        row       (fn [d style]
+                    [:div.ans-row
+                     (action-button project ws-id (assoc d :style style) route)
+                     [:div.ans-body [:p.ans-cons (does-of ask (:id d))]]])]
+    [:div (cond-> {:class "qcard"}
+            (or submit (> n 1))
+            (assoc "data-signals"
+                   (str "{qcard: {step: 0, answers: {"
+                        (str/join ", " (map #(str "q" % ": ''") (range n)))
+                        "}}}")))
      (when (and error-msg (not pending?)) [:div.action-err "⚠ " error-msg])
-     (map option-row options)
-     (when (and (seq options) (seq opt-does))
-       (into [:div] (map (fn [d] [:p.ans-does d])) opt-does))
+     (when (and (> n 1) (not= question (:question (first questions))))
+       [:p.qc-head question])
+     (when (> n 1) (stepper-nav n))
+     (map-indexed #(question-section ctx %1 n %2) questions)
+     (when (> n 1)
+       [:div.qc-step
+        [:button {:type "button" :class "btn"
+                  "data-attr:disabled" "$qcard.step === 0"
+                  "data-on:click" "$qcard.step = Math.max(0, $qcard.step - 1)"} "◂ Previous"]
+        [:button {:type "button" :class "btn"
+                  "data-attr:disabled" (str "$qcard.step === " (dec n))
+                  "data-on:click" (str "$qcard.step = Math.min(" (dec n) ", $qcard.step + 1)")} "Next ▸"]])
+     (when (seq opt-does) (into [:div] (map (fn [d] [:p.ans-does d])) opt-does))
+     (when note [:p.ask-note note])
      (if pending?
-       [:div.ans-row [:span.meta "working… the agent is running."]]
-       (list
+       [:div.controls [:div.ans-row [:span.meta "working… the agent is running."]]]
+       [:div.controls
+        (when submit-d (row submit-d :primary))
         (for [a others]
-          [:div.ans-row
-           (action-button project ws-id a gate-route)
-           [:div.ans-body [:p.ans-cons (does-of ask (:id a))]]])
+          (row a (if (and primary-taken? (= :primary (:style a))) :default (:style a))))
         (when (seq boxes)
           (list (into [:div] (keep (fn [a] (when-let [d (does-of ask (:id a))] [:p.ans-does d]))) boxes)
-                (action-bar project ws-id boxes session)))))]))
+                ;; The reply's send button is drawn primary for a gate that has nothing else to
+                ;; press; beside a card's own primary it would be a second one on one decision.
+                (cond->> (action-bar project ws-id boxes session route)
+                  primary-taken? (walk/postwalk #(if (= :button.btn.btn-primary %) :button.btn %)))))])]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   gate-pane
   "The detail pane: one gate in full. nil -> calm placeholder.
 
    Top to bottom: the title and links; the orientation band; any auto-mode denials recorded while
-   nido drives the session; the Ask's question, context and note; the control rows; and the record
-   the Ask was read from, folded. A `:pending?` gate (its agent is running after Apply/Reply) shows
-   no control — deriving that from the agent's live phase, so a poll can't flip it back to a fresh
-   Apply button. `:error-msg` (a failed action) renders above the controls, which stay clickable to
-   retry."
+   nido drives the session; the Ask, through `question-card`; and the record the Ask was read
+   from, folded. A `:pending?` gate (its agent is running after Apply/Reply) shows no control —
+   deriving that from the agent's live phase, so a poll can't flip it back to a fresh Apply
+   button. `:error-msg` (a failed action) renders at the top of the card, whose controls stay
+   clickable to retry."
   [{:keys [ws-id project origin label tag links report ask ask-record actions session pending?
            error-msg denials]
     :as gate}]
@@ -1958,8 +2034,9 @@
          [:div.denials [:p.meta "Permission denials while nido drives it:"]
           (into [:ul] (map denial-line) denials)])
        (if ask
-         (list (question-block ask)
-               (control-rows project ws-id ask actions session pending? error-msg)
+         (list (question-card project ws-id ask actions
+                              {:route gate-route :pending? pending? :error-msg error-msg
+                               :session session})
                ;; Folded: the record the Ask was read from, not the gate's latest report — a
                ;; verdict appended after an unanswered one is not the evidence behind the question.
                (when-let [r (or ask-record report)]
@@ -2554,18 +2631,30 @@
   (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
     (action-bar project ws-id
-                (work/gate-actions stage parked? origin
+                (mapv
+                 ;; Accepting a verdict that asks questions — Accept with its answers, or Defer
+                 ;; with every one left open — is done where they are shown: this pane shows none
+                 ;; of them, so both link to the gate on Needs you rather than accepting a verdict
+                 ;; whose questions nobody saw.
+                 (fn [{:keys [answers id] :as a}]
+                   (if (or (= :questions answers) (= :defer id))
+                     {:id (:id a) :kind :link :style (:style a)
+                      :label (str (:label a) " on Needs you ▸")
+                      :title "Answer the verdict's questions where they are shown"
+                      :href (str "/?sel=" project ":" ws-id)}
+                     a))
+                 (work/gate-actions stage parked? origin
                                    {:report-format (:format report)
                                     :grantable?    (work/grantable? project ws-id)
                                     :options       (:options report)
-                                    :directions    (:directions report)
+                                    :questions     (report/triage-questions report)
                                     ;; The pane draws the same button the inbox
                                     ;; does, off the same reading of the same
                                     ;; position — a design decision is owed a
                                     ;; person whether or not an agent is parked.
                                     :awaiting      (work/awaiting-human position)
                                     :gate-criterion (get-in plan [:owed-gate :criterion])
-                                    :seq           (:seq report)})
+                                    :seq           (:seq report)}))
                 session pane-route)))
 
 (defn- file-findings-form

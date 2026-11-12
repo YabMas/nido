@@ -60,9 +60,16 @@
   (Operation action-bar "One action set, rendered."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:actions :any]
                             [:session :any] [:route [:? :any]]] :any]})
+  (Operation question-card
+    "One Ask, answered: its questions one at a time, their options, and every action the gate
+     offers beside what it does. Reads nothing but its arguments — the page supplies only how a
+     click is routed — so any pane can drop it in."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ask :map]
+                            [:actions :any] [:opts :map]] :any]
+     :delegates [action-bar]})
   (Operation gate-pane "One gate in full: what it is, what it holds, what you can do."
     {:signature [:=> [:catn [:gate :map]] :any]
-     :delegates [action-bar origin-badge report/report->markdown render]})
+     :delegates [question-card origin-badge report/report->markdown render]})
   (Operation needs-page "The home page: the needs-you master and the selected gate."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
      :delegates [shell needs-fragment gate-pane]})

@@ -690,3 +690,25 @@
                      "no landing recorded"))
   (is (str/includes? (server/resolve-failure-msg {:decision :between-phases}) "Assert its gate"))
   (is (nil? (server/resolve-failure-msg {:decision :phase-opened}))))
+
+(deftest post-accept-folds-the-card-answers-in-question-order
+  (let [calls (atom [])]
+    (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
+                  nido.coordinator.work/all-gates    (fn [] [])]
+      (server/handle-request {:request-method :post :uri "/gate/brian/ws-qc/apply"
+                              :query-string "entry=6"
+                              :body (java.io.ByteArrayInputStream.
+                                     (.getBytes "{\"qcard\":{\"step\":1,\"answers\":{\"q0\":\"B\",\"q1\":\"\",\"q2\":\"A\"}}}"))})
+      (Thread/sleep 50)
+      (is (= [["brian" "ws-qc" :apply {:seq 6 :answers ["B" nil "A"]}]] @calls)
+          "the card's answers arrive one per question, in order, a blank kept as nil —
+           and the body is read once, so the position and the answers both survive"))))
+
+(deftest post-accept-without-a-card-carries-only-the-position
+  (let [calls (atom [])]
+    (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
+                  nido.coordinator.work/all-gates    (fn [] [])]
+      (server/handle-request {:request-method :post :uri "/gate/brian/ws-old/apply"
+                              :query-string "entry=3"})
+      (Thread/sleep 50)
+      (is (= [["brian" "ws-old" :apply 3]] @calls)))))

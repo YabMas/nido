@@ -465,6 +465,17 @@
               (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))
         true))))
 
+(defn- card-answers
+  "The question card's `answers` signal — {:q0 \"A\" :q1 \"\" …} — as one letter or nil per
+   question, in question order. A gap in the indices is a question with no answer sent, so it
+   becomes nil rather than closing up and shifting every later answer onto the wrong question."
+  [answers]
+  (let [idx (into {} (keep (fn [[k v]]
+                             (when-let [[_ n] (re-matches #"q(\d+)" (name k))]
+                               [(parse-long n) (when-not (str/blank? (str v)) (str v))])))
+                  answers)]
+    (if (empty? idx) [] (mapv idx (range (inc (apply max (keys idx))))))))
+
 (defn- click-payload
   "What a gate click carries besides its action id, which depends on the action:
    the reply textarea's text for :reply, the evidence textarea's for :assert-gate,
@@ -482,10 +493,19 @@
    `work/approve!` saw nil, took its stale branch, and no design was ever
    approved from the web."
   [{:keys [body] :as req} action-id]
-  (cond
-    (= :reply action-id)                     (:reply (parse-json-body body))
-    (= :assert-gate action-id)               (:evidence (parse-json-body body))
-    (work/position-carrying-action? action-id) (:entry (view-state/parse req))))
+  ;; Read once: the body is a stream, and a second slurp of it is empty.
+  (let [signals (delay (parse-json-body body))]
+    (cond
+      (= :reply action-id)                     (:reply @signals)
+      (= :assert-gate action-id)               (:evidence @signals)
+      ;; An Accept that submits questions also carries the card's choices — its
+      ;; `qcard.answers` signal, one `q<i>` per question — as the answers in order, a blank
+      ;; for a question left open. What each letter means is the resolver's to read off the
+      ;; ledger; this only keeps the order.
+      (and (= :apply action-id) (map? (get-in @signals [:qcard :answers])))
+      {:seq     (:entry (view-state/parse req))
+       :answers (card-answers (get-in @signals [:qcard :answers]))}
+      (work/position-carrying-action? action-id) (:entry (view-state/parse req)))))
 
 (defn- gate-action-response-fragment
   "The pane/gate fragment for a POST'd gate action: the per-action success toast

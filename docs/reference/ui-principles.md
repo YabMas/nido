@@ -16,12 +16,15 @@ what follows is about getting a cold reader to a sound decision quickly.
 ## 1. Hierarchy — one focal point per pane
 
 **Rule.** A pane has exactly one element at the top of its hierarchy. On a gate
-pane that is the question: it is the largest text on the pane (`--fs-xl`), and
-nothing else is set as large. Titles are `--fs-lg`; section headings are
-smaller than titles.
+pane that is the question. It leads by place and by frame, not by size: it
+opens the question card, the one bordered block the pane's controls live in,
+and is set at `--fs-lg` one weight lighter than a title, so it reads as the
+thing to answer rather than as a shout. Section headings are smaller than
+titles, and nothing outside the card is framed like it.
 
-**Check.** Find the largest text on the pane. If it is not the thing the pane
-exists to say, or if two things tie, the pane fails.
+**Check.** Find what the eye lands on after the title. If it is not the thing
+the pane exists to ask, or if two blocks are framed as the card is, the pane
+fails.
 
 **From.** GOV.UK Design System, *Question pages*: the question is the page
 heading. BLUF and Minto's pyramid principle: the ask leads, the support follows.
@@ -33,8 +36,8 @@ heading. BLUF and Minto's pyramid principle: the ask leads, the support follows.
 `BR-7285`, `ws-…`, `bb nido:…`. A prose block is bounded to a reading measure
 (`--measure`, ~72ch) and is never clipped or line-clamped; only a one-line
 label in a list row may be ellipsised, because its row opens the full text. Sizes come only from
-the five-step scale: `--fs-xs` 12 (labels, chips), `--fs-sm` 13 (secondary),
-`--fs-md` 15 (body), `--fs-lg` 18 (titles), `--fs-xl` 22 (the question).
+the four-step scale: `--fs-xs` 12 (labels, chips), `--fs-sm` 13 (secondary),
+`--fs-md` 15 (body), `--fs-lg` 18 (titles and the question).
 
 **Check.** A paragraph in monospace, a prose line wider than the measure, a
 `font-size` that is not a token (`nido.ui.tokens-test` fails on one), or text
@@ -83,9 +86,22 @@ box — is a row beside what it does. What is the same for every answer (what
 choosing one records) is said once, not once per answer. Global controls (halt,
 breakers, fire) never sit among a decision's answers.
 
+**An Ask of several questions** — a triage verdict with one question per
+defect — cannot let each answer give itself, because no one answer is the
+whole of it. Its questions sit in one card, one question at a time, with a
+line saying which of how many is shown, a marker per question saying whether
+it is answered, and Previous/Next to move between them. Each answer is a
+choice within its question: a button whose first line is its name in bold,
+then what it does, then its cost — never a letter, which stays in the
+record. Choosing records nothing; the one submitting action (Accept) is the
+primary button, in a row after the card beside what it does, and a question
+may be left open. Defer stands beside it, for a verdict whose questions should
+wait for the design work rather than be answered now.
+
 **Check.** An answer described in one place and clicked in another; a
 consequence missing from beside its control; the same sentence repeated per
-option; two primary buttons on one decision.
+option; two primary buttons on one decision; two questions of one card
+visible at once, or a choice that submits on its own.
 
 **From.** Claude Code's permission prompt and LangChain's Agent Inbox: the
 options an interrupt allows are the actions it renders. GOV.UK question pages:

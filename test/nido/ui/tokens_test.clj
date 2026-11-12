@@ -30,4 +30,4 @@
 (deftest the-tokens-are-declared-once
   (let [s (slurp "src/nido/ui/views.clj")]
     (is (= 1 (count (re-seq #":root \{" s))))
-    (is (= 5 (count (re-seq #"--fs-(xs|sm|md|lg|xl):" s))) "a type scale of five sizes")))
+    (is (= 4 (count (re-seq #"--fs-(xs|sm|md|lg):" s))) "a type scale of four sizes")))
