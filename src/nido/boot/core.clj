@@ -34,6 +34,7 @@
    [nido.coordinator.source.slack-events :as slack-events-source]
    [nido.coordinator.source.improvement :as improvement-source]
    [nido.coordinator.source.start-failures :as start-failures-source]
+   [nido.coordinator.source.drain :as drain-source]
    [nido.coordinator.source.sweep :as sweep-source]
    [nido.coordinator.source.review-queue-nightly :as review-queue-nightly-source]
    [nido.coordinator.record.state :as cstate]
@@ -780,6 +781,16 @@
           :when   (not (contains? polled [project view]))]
       {:type :notion-view :view view :project project :poll (views/board-poll project)})))
 
+(defn- drain-source-configs
+  "One :drain source-config per project in the daemon's project universe: nido polls its own
+   drains, whether or not any trigger names them. A project with no drain costs a ledger listing
+   per poll. Its fires match no trigger's source, so they spawn nothing through trigger routing.
+   None while the :drain plugin is unregistered, as for every other source type."
+  [triggers-by-project]
+  (when (sources/lookup :drain)
+    (for [project (keys triggers-by-project)]
+      {:type :drain :project project :poll "2m"})))
+
 (defn- discover-source-configs
   "Walk loaded triggers and return distinct source-configs whose type is
    registered, plus the board-view configs nido polls for itself (see
@@ -797,7 +808,8 @@
                           (not (false? (:enabled? t)))
                           (sources/lookup (:type src)))]
            src)
-         (board-source-configs triggers-by-project))
+         (board-source-configs triggers-by-project)
+         (drain-source-configs triggers-by-project))
        distinct))
 
 (defn- start-source! [source-config]
@@ -1506,6 +1518,7 @@
   (sweep-source/register!)                            ; register the daily improvement sweep
   (review-queue-nightly-source/register!)             ; register the nightly review-queue grooming
   (start-failures-source/register!)                   ; register the failed-session-start source
+  (drain-source/register!)                            ; register the drains' census and slice-start source
   (loop []
     (tick!)
     (Thread/sleep poll-ms)
