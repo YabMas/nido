@@ -13,6 +13,7 @@
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as workstream]))
 
@@ -88,11 +89,14 @@
    ref; :review-run when it carries a :review-run ref — a workstream minted to
    HOLD a review-loop analysis rather than to do work, which is why it is a
    source of its own: every other bucket names somewhere work arrived FROM, and
-   this one names a reading nido made of itself. Else :notion — the
+   this one names a reading nido made of itself; :drain and :slice when its ledger holds a drain's
+   or a slice's birth entry — work nido coordinates, shown on its own page. Else :notion — the
    default/coordinator bucket, so a ref-less coordinator workstream is never
    dropped from every view."
   [ws]
   (cond
+    (drain/drain? ws)                                             :drain
+    (drain/slice? ws)                                             :slice
     (standing/born-scratch? ws)                                   :scratch
     (some #(= :github-issue (:adapter %)) (:external-refs ws))   :github
     (some #(= :slack-message (:adapter %)) (:external-refs ws))  :slack

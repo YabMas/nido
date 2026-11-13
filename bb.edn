@@ -850,6 +850,11 @@
    :doc "What this worktree's workstream owes, and whether a person owes it. A reading: exits 0 whatever it finds. [:cwd <dir>]"
    :task (apply nido-owed/owed-cmd *command-line-args*)}
 
+  nido:drain:census
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "Take a drain's census now: run its current recipe's counter against the project's main checkout and append the reading when it moved. Exits 1 on a failed reading. [:cwd <dir>] or :project <p> :drain <ws-id>"
+   :task (apply nido-drain/census-cmd *command-line-args*)}
+
   nido:activate
   {:requires ([tasks.nido-activate :as nido-activate])
    :doc "Hand this session's workstream to nido's recipe: append its :activated entry and print what the session's agent is to do now — write the owed records from what it already understands. Until then a session is a plain one: no conductor, nothing owed. [:cwd <dir>] or :project <p> :ws <ws-id>"

@@ -30,6 +30,7 @@
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
@@ -89,6 +90,20 @@
    ;; taking it — or dismissing it — is a person's. Below every record of the arc, so work that
    ;; went on past it is read by that work.
    :triage-awaiting
+   ;; A drain and a slice follow recipes of their own (`class-position`), read after the halts
+   ;; above and in place of the standard arc, which neither owes.
+   :drain-chartered
+   :recipe-proposed
+   :awaiting-census
+   :draining
+   :drain-exhausted
+   :slice-started
+   ;; The slice's implementation is complete and no review judged it against the recipe version
+   ;; it runs under. Not :implemented: the standard diff review's yardstick is a design, which a
+   ;; slice does not owe.
+   :slice-implemented
+   :slice-reviewed
+   :slice-cleared
    :analysed
    :intake
    :unplaceable])
@@ -294,7 +309,9 @@
    :acknowledge-invalidation :design
    :implement                :implementation
    :review-implementation    :implementation
-   :address-findings         :implementation})
+   :address-findings         :implementation
+   :review-slice             :implementation
+   :clear-slice              :implementation})
 
 (def ^:private stage-of-claim
   "The spine stage each round that takes a claim is work in."
@@ -579,7 +596,7 @@
    then the record arc. Each clause names a fact that is true of the ledger, so
    a position is always answerable by pointing at an entry."
   [{:keys [closed? closed-outcome findings-open? blocker-seq retraction ks decided? approved?
-           cleared? verified? re-entry trail-records layers triage-unaccepted?]}]
+           cleared? verified? re-entry trail-records layers triage-unaccepted? class-position]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
   ;; true, is true for ever. `re-entry` is the reading that says how far up the
@@ -617,6 +634,8 @@
     closed?                        :shipped
     blocker-seq                    :blocked
     findings-open?                 :findings-open
+    ;; A drain or a slice is read against its own recipe, never the standard arc it does not owe.
+    class-position                 class-position
 
     ;; Standing's answer, placed: what the retraction unseats decides where the
     ;; work goes back to, and each position's next stage writes its replacement.
@@ -772,6 +791,22 @@
    ;; The arc's last move is a person's: landing a published draft is their gesture, and a
    ;; board that called it nobody's showed a ready PR as finished.
    :published         {:stage :land                  :mode :human}
+   ;; A drain's recipe: the coordinator proposes a recipe, the person approves it, nido takes the
+   ;; census, the coordinator runs the drain, and the person closes it once the census reads zero.
+   :drain-chartered   {:stage :propose-recipe        :mode :authoring}
+   :recipe-proposed   {:stage :approve-recipe        :mode :human}
+   :awaiting-census   {:stage :take-census           :mode :mechanical}
+   :draining          {:stage :coordinate            :mode :authoring}
+   :drain-exhausted   {:stage :close-drain           :mode :human}
+   ;; A slice's recipe: implemented and reviewed against its recipe version, cleared by its drain's
+   ;; coordinator, landed by the person (or under the person's grant).
+   :slice-started     {:stage :implement             :mode :working-copy}
+   ;; Its own stage, never :review-implementation: that runner reads only a governing design, so a
+   ;; slice reviewed by it is judged against nothing. No runner reviews against a recipe version
+   ;; yet, so the stage waits on a person rather than being run blind.
+   :slice-implemented {:stage :review-slice          :mode :human}
+   :slice-reviewed    {:stage :clear-slice           :mode :authoring}
+   :slice-cleared     {:stage :land                  :mode :human}
    :shipped           nil
    ;; Terminal, and not for want of a stage: the analysis is complete when it is
    ;; filed. What happens to its proposals is a decision, which is a human's and
@@ -892,6 +927,7 @@
    :sufficient           :advance   ; the baseline holds; a design may be decided against it
    :clean                :advance   ; the diff review found nothing
    :converged            :advance   ; it found things and they were all fixed
+   :census-taken         :advance   ; a drain's census reading was taken
 
    ;; ── the machinery failed, not the work ──
    :codex-failed         :retry
@@ -1091,7 +1127,13 @@
    ;; A driver never asks for one, so a dry run reaching this table means
    ;; something upstream is misconfigured — which is a human's to see, not a
    ;; thing to advance past.
-   :dry-run              :escalate})
+   :dry-run              :escalate
+   ;; ── a drain's census could not be read: what the counter printed, or that it ran at all, is a
+   ;; person's to look at ──
+   :counter-failed       :escalate
+   :unreadable           :escalate
+   :invalid              :escalate
+   :no-recipe            :escalate})
 
 (defn ^{:malli/schema [:=> [:cat :keyword] :keyword]}
   disposition
@@ -1105,6 +1147,47 @@
   (get disposition-of-status status :escalate))
 
 ;; ── The arc, at stage granularity ───────────────────────────────────────────
+
+(defn- drain-position
+  "Where drain `w` is on the drain recipe."
+  [w]
+  (let [census (drain/newest-census w)]
+    (cond
+      (seq (drain/pending-proposals w)) :recipe-proposed
+      (nil? (drain/version w))          :drain-chartered
+      (nil? census)                     :awaiting-census
+      (zero? (:remaining census))       :drain-exhausted
+      :else                             :draining)))
+
+(defn- reviewed-under-version?
+  "Whether a :review on slice `w` was judged against the recipe version the slice runs under — it
+   cites that :recipe entry's seq as `{:recipe {:seq v}}`. A review that cites none, a designless
+   one included, judged the slice against no yardstick and does not count."
+  [project w]
+  (when-let [v (drain/slice-version w)]
+    (some #(= v (get-in (ws/entry-at-seq project (:id w) (:seq %)) [:recipe :seq]))
+          (filter #(= :review (:kind %)) (:entries w)))))
+
+(defn- slice-position
+  "Where slice `w` is on the slice recipe. A slice owes no intent, baseline or design: its plan on
+   the drain and its recipe version are its yardstick."
+  [project w ks layers?]
+  (let [drain-w (some->> (drain/drain-of w) (ws/read-ws project))]
+    (cond
+      (and drain-w (drain/cleared? drain-w (:id w))) :slice-cleared
+      (reviewed-under-version? project w)             :slice-reviewed
+      (contains? ks :implementation-completed)        :slice-implemented
+      layers?                                         :implementing
+      :else                                           :slice-started)))
+
+(defn- class-position
+  "The position a drain or a slice is at on its own recipe, or nil for every other workstream,
+   which the standard arc places."
+  [project w ks]
+  (cond
+    (drain/drain? w) (drain-position w)
+    (drain/slice? w) (slice-position project w ks
+                                     (some #(= :layer-completed (:kind %)) (:entries w)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   of
@@ -1158,7 +1241,8 @@
           layers (layer-progress project ws-id w design 0)
           verdict (standing/verdict project ws-id whole)
           decision (when design (standing/proceeding-decision project ws-id (:seq design)))
-          facts  {:closed?        (some? (or closed settled))
+          facts  {:class-position (class-position project whole ks)
+                  :closed?        (some? (or closed settled))
                          :closed-outcome (:outcome closed)
                          :trail-records  (trail-records w design re)
                          :verdict-seq    (when (and verdict (not (:accepted? verdict))) (:seq verdict))

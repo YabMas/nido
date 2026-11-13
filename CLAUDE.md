@@ -561,7 +561,7 @@ is gone: every live session belongs to a workstream (the daemon adopts orphans i
 workstreams every 5 minutes), machine facts (ports, RSS, lifecycle) live on each workstream's
 session rows, closed-but-still-running workstreams surface in the Active tab's winding-down
 band, and global ops levers (halt, breakers, fire-trigger) sit behind the rail's health dot.
-`/system` redirects to `/workstreams`. The Workstreams overview (`/workstreams`) filters by **scope** (project), **source** (All/Notion/GitHub/Slack/Scratch, with per-source counts) and **context-dependent facets** (App Domain / Type for the Notion source) — the cockpit's overview surface. The TUI stays a lean session launcher. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
+`/system` redirects to `/workstreams`. The Workstreams overview (`/workstreams`) filters by **scope** (project) only — the cockpit's overview surface. Drains and their slices are not on it; they have their own page. The TUI stays a lean session launcher. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
 disable with `:no-dashboard true`. `bb nido:coordinator:status` shows a `Dashboard:`
 line (port + reachability).
 

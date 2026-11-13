@@ -270,7 +270,10 @@
    ;; Not a loop and no agent at all: the one write a proceeding decision on a
    ;; design owing nobody still owes. Contention ADVANCES rather than retrying,
    ;; so it spends no attempt here and is re-asked on the next tick.
-   :clear-design    {:task 'tasks.nido-review/clear-cmd* :label "clearance"}})
+   :clear-design    {:task 'tasks.nido-review/clear-cmd* :label "clearance"}
+   ;; A drain's census, taken now rather than on source-drain's next poll — the same reading the
+   ;; poll takes, through the one place a counter's output is read.
+   :take-census     {:task 'tasks.nido-drain/census-cmd* :label "census"}})
 
 (defn ^{:malli/schema [:=> [:cat :any] :map]}
   fireable
