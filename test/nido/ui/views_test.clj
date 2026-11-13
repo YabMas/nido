@@ -1825,3 +1825,18 @@
     (is (not (str/includes? html "action-bar")) "no action bar beside the card"))
   (let [html (gate-in-pane (assoc (two-question-gate) :error-msg "it broke"))]
     (is (= 1 (count (re-seq #"it broke" html))) "the error is said once, on the card")))
+
+(deftest the-pane-and-its-board-row-say-the-same-thing
+  (let [pane (views/workstream-pane
+              {:project "nido" :ws-id "ws-c" :origin :scratch :stage :in-progress :label "c"
+               :position {:at :baselined :next {:stage :verify-baseline :mode :mechanical}}
+               :status {:owed-by :machine :live true}
+               :doing {:source :claim :kind :baseline-round :round 1 :phase :judging :findings 0}
+               :holds {:baseline {:seq 3 :record {:area "x"} :verified? false}}
+               :entries []}
+              {})
+        h2   (second (re-find #"(?s)<h2>(Status.*?)</h2>" pane))]
+    (is (str/includes? h2 "Status — Baseline written") "an unverified baseline is written, not done")
+    (is (str/includes? h2 "st-mark live") "the heading carries the board row's mark")
+    (is (not (re-find #">in-progress\b" pane)) "the board's band word is not a second status")
+    (is (not (str/includes? pane "class=\"no\">not verified")) "a baseline awaiting its round is not an error")))

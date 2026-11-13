@@ -34,7 +34,7 @@
   {:about [arc stage-active workstream workstream-pane] :evidence "test"})
 
 (Claim no-restated-lines
-  "workstream-pane renders no position line (next · … — waiting on …), and the one place text wsv/doing-label produces appears in it is beside the stage-list row whose :now is :running. A Workstreams board row renders its position and at most one state mark — running or halted — with the next move, who owes it and what runs only in titles; a merge phase alone keeps its words."
+  "workstream-pane renders no position line (next · … — waiting on …) and no board band word, and the one place text wsv/doing-label produces appears in it is beside the stage-list row whose :now is :running. Its Status heading carries the position label and the same state mark a Workstreams board row shows. A Workstreams board row renders its position and at most one state mark — running or halted — with the next move, who owes it and what runs only in titles; a merge phase alone keeps its words. The position labels for a baseline or design not yet verified or decided read \"Baseline written\" and \"Design written\", and an unverified baseline card is not drawn as an error."
   {:about [workstream-pane workstreams-fragment] :evidence "test"})
 
 (Claim ask-carries-no-holding

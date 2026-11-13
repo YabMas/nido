@@ -2007,9 +2007,9 @@
    vocabulary at somebody who only wants to know what is going on."
   {:intake            "Not started"
    :intent-stated     "Intent stated"
-   :baselined          "Baselined"
+   :baselined          "Baseline written"
    :baseline-verified "Baseline verified"
-   :designed          "Designed"
+   :designed          "Design written"
    :design-decided    "Decision made"
    :design-cleared    "Cleared"
    :design-approved   "Approved"
@@ -2263,7 +2263,7 @@
                 (or (get-in baseline [:record :area]) "—")
                 (if (:verified? baseline)
                   [:span.ok "✓ verified — a decision can be made against it"]
-                  [:span.no "not verified — a design citing it cannot be decided"]))
+                  [:span.meta "not verified yet — a design citing it cannot be decided until it is"]))
      [:div.hold.empty [:div.hh [:span.hk "baseline"]] [:div.hb "no baseline yet"]])
    (if design
      (hold-card "design" design
@@ -2621,7 +2621,6 @@
                             :error-msg error-msg})
            [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)}
             (pane-heading origin label links tag)
-            [:p.meta (name stage) " " (state-mark status doing)]
             (links-row links)
 
             ;; Two sections, and the split is the pane's whole claim: what is
@@ -2629,7 +2628,7 @@
             ;; stream, so the standing records and the log of every superseded
             ;; revision of them read as the same kind of thing — which is exactly
             ;; the confusion the standing records were added to end.
-            [:h2 (status-heading position)]
+            [:h2 (status-heading position) " " (state-mark status doing)]
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
             ;; that can show the work having been sent back to an earlier stage.
