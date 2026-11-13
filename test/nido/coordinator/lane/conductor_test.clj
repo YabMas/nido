@@ -583,7 +583,7 @@
           ;; Answered, the hand-back is owed no conductor, so what follows reads work alone.
           (with-redefs [conductor/conducting? (constantly true)]
             (conductor/decide! :brian id {:hand-back (:id (first (seats/hand-backs :brian id)))
-                                          :decision [:escalate {:needs "x"}]}))
+                                          :decision [:escalate (esc "x")]}))
           (conduct/retire! :brian id occupant {})
           (session/update-substrate! :brian id occupant #(assoc-in % [:claude :driver] :retired))
           (reset! launched [])
@@ -735,7 +735,7 @@
             (let [retired (atom [])]
               (with-redefs [seats/retire-conductor! (fn [_ id] (swap! retired conj id) {:session (str id "--conductor")})]
                 (is (= [] (conductor/conductors! :brian)) "and keeps it while the hand-back is owed")
-                (in-session c #(conductor/decide! :brian old {:hand-back (:id hb) :decision [:escalate {:needs "x"}]}))
+                (in-session c #(conductor/decide! :brian old {:hand-back (:id hb) :decision [:escalate (esc "x")]}))
                 (conductor/conductors! :brian)
                 (is (= [old] @retired) "answered, a conductor on no work is retired"))))
           (testing "a conductor running where no work is"
@@ -823,7 +823,7 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :implementing :next {:stage :implement :mode :agent}})]
           (let [hb (turn "fix-it" "2026-11-13T10:00:00Z")
-                [_ e] (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:escalate {:needs "what did you mean?"}]}))
+                [_ e] (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:escalate (esc "what did you mean?")]}))
                 blocker (get-in e [:parked :seq])]
             (is (some? blocker) "the escalation parks a blocker")
             (is (= [] (conductor/answers-in-place! (prompt "fix-it" "2000-01-01T00:00:00Z")))
@@ -839,7 +839,7 @@
           (testing "an escalation on a turn nido gave is not answered by a prompt"
             (let [hb (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
                                                                  :event {} :instruction {:token "t9"} :run nil}]}))]
-              (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:escalate {:needs "x"}]}))
+              (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:escalate (esc "x")]}))
               (is (= [] (conductor/answers-in-place! (prompt "fix-it" "2099-01-03T00:00:00Z")))))))))))
 
 (def ^:private a-baseline
