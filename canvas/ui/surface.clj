@@ -48,6 +48,17 @@
      class rule the dashboard's pages and blocks name."
     {:signature [:=> [:catn] :string]}))
 
+(Module ui-datastar
+  "The Datastar runtime a dashboard chrome loads.
+
+   HIDES which Datastar bundle — which pinned version, from where — a chrome loads. It is not
+   part of the visual language: it is the runtime a block's data- attributes are written for, and
+   the dashboard's pages and the component catalog both take it from here, so they cannot load
+   two different ones."
+  (Operation datastar-script
+    "The script element every dashboard chrome loads Datastar with: the one pinned bundle."
+    {:signature [:=> [:catn] :any]}))
+
 (Module ui-components-state
   "A workstream's state as a reader sees it: the words each facet is said in, and the mark that
    says it.
@@ -313,3 +324,34 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session :any]
                             [:action :keyword]] :any]
      :delegates [set-app-state!]}))
+
+(Module ui-catalog-scenes
+  "Each block's named renderings over literal sample data, and the registry that indexes them.
+
+   HIDES the sample data — which values make a block show the state worth looking at. A scene is
+   a literal value and a router that goes nowhere, which is what the catalog and its test both
+   need, and what makes the blocks' independence checkable rather than asserted."
+  (Operation groups
+    "The registry: one group per block vocabulary, each naming its blocks and holding their
+     scenes in reading order — a title, a note saying what the scene is for, and a thunk
+     returning hiccup."
+    {:signature [:=> [:catn] :any]}))
+
+(Module ui-catalog
+  "The component catalog: /_catalog.
+
+   HIDES the catalog's own chrome — how a scene is framed, labelled and selected, the rules that
+   chrome is drawn with, and the three query-string names it reads its own selection from.
+   Composes `ui-components-*` and emits `ui-stylesheet`; it holds no markup of a block, and its
+   chrome's rules declare no token and read every colour and font size as var(--…), so a scene
+   that looks wrong is the block being wrong.
+
+   It parses its own query string rather than going through `ui-view-state`, which is the one
+   place in this band where a URL name is not repeated on two sides: three names it both writes
+   and reads, in one table, in one namespace."
+  (Operation catalog-page
+    "The catalog: a sidebar of blocks, every scene of the selected one rendered in the app's own
+     stylesheet with Datastar live, and the two axes these blocks vary over in the app — which
+     surface a block sits on, and how wide its column is."
+    {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
+     :delegates [stylesheet datastar-script groups]}))

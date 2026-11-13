@@ -46,7 +46,8 @@
   (is (every? #(str/starts-with? % "src/nido/ui/") sources))
   (doseq [f ["src/nido/ui/views.clj" "src/nido/ui/server.clj" "src/nido/ui/stylesheet.clj"
              "src/nido/ui/components/state.clj" "src/nido/ui/components/row.clj"
-             "src/nido/ui/components/ask.clj"]]
+             "src/nido/ui/components/ask.clj" "src/nido/ui/catalog.clj"
+             "src/nido/ui/catalog/scenes.clj"]]
     (is (some #{f} sources) (str f " is not being checked"))))
 
 (deftest the-tokens-are-declared-once

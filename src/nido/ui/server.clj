@@ -9,6 +9,7 @@
             [nido.session.fleet :as fleet]
             [nido.ui.dev :as dev]
             [nido.coordinator.control :as control]
+            [nido.ui.catalog :as catalog]
             [nido.ui.components.ask :as ask]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
@@ -694,6 +695,12 @@
           :else nil)
         (ops-fragment-response (:scope (view-state/parse req))))
 
+      ;; POST /_catalog/nowhere/… — where a catalog scene's buttons post. Every control a
+      ;; block renders is present and shaped exactly as it is on a real page; this is what
+      ;; makes clicking one change nothing. Nothing is read and nothing is written.
+      (and (= "_catalog" (first segs)) (= "nowhere" (second segs)))
+      {:status 204 :headers {}}
+
       :else
       (html-response 404 (views/not-found-page)))))
 
@@ -720,6 +727,12 @@
           (ws-redirect project ws-id)
           (let [screen (derive-screen vs)]
             (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))))
+
+      ;; GET /_catalog — the component catalog. Linked from nothing: a dev surface a person
+      ;; reaches by typing it. It reads nothing but its own query string, so it is served on
+      ;; every dashboard rather than behind a flag that would make two dashboards differ.
+      ["_catalog"]
+      (html-response 200 (catalog/catalog-page (:query-string req)))
 
       ;; GET /system — dissolved; the rail lost the destination, redirect callers on.
       ["system"]

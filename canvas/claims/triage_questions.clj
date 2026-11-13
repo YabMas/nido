@@ -75,7 +75,7 @@
   {:about [apply!] :evidence "test"})
 
 (Claim card-is-self-contained
-  "nido.ui.views/question-card is (question-card project ws-id ask actions opts), with opts {:route :pending? :error-msg :session}. It renders every control the Ask's gate offers — the questions with their choices, Previous/Next, and each action the gate offers beside the Ask's :does for it — and reads nothing but its arguments: no orientation band, no :holding, no position or doing line. Every POST it renders is built by opts' :route."
+  "nido.ui.components.ask/question-card is (question-card project ws-id ask actions opts), with opts {:route :pending? :error-msg :session}. It renders every control the Ask's gate offers — the questions with their choices, Previous/Next, and each action the gate offers beside the Ask's :does for it — and reads nothing but its arguments: no orientation band, no :holding, no position or doing line. Every POST it renders goes to the path opts' :route builds; the card adds only the reading position, as ?entry=<seq>, for an action descriptor that carries :seq."
   {:about [question-card] :evidence "test"})
 
 (Claim stepper-card

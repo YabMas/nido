@@ -9,6 +9,7 @@
             [nido.coordinator.control :as control]
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
+            [nido.ui.datastar :as datastar]
             [nido.ui.stylesheet :as css]
             [nido.ui.components.state :as state]
             [nido.ui.components.row :as row]
@@ -232,7 +233,7 @@
         [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
         [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
         [:title (or title "nido") " — nido"]
-        [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
+        (datastar/datastar-script)
         [:style (h/raw (css/stylesheet))]]
        [:body {:data-signals__ifmissing "{opsOpen: false}"}
         (rail ctx)
