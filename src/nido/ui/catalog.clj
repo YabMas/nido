@@ -25,6 +25,7 @@
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.ui.catalog.scenes :as scenes]
+            [nido.ui.components.chat :as chat]
             [nido.ui.datastar :as datastar]
             [nido.ui.stylesheet :as css]))
 
@@ -83,12 +84,22 @@
         .cat-rail-i { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
         .cat-pair { display:flex; gap:14px; align-items:baseline; }
         .cat-pair .cat-scene-fn { min-width:190px; }
+        .cat-picking .cat-frame * { cursor:crosshair; }
+        .cat-pick-hover { outline:2px solid var(--accent); outline-offset:1px; }
+        .catc { grid-column:1 / -1; display:grid; grid-template-columns: 1fr 400px; height:100vh; }
+        .catc-frame { border:0; width:100%; height:100vh; background:var(--bg); }
+        .catc-side { border-left:1px solid var(--border); display:flex; flex-direction:column;
+                     padding:12px 14px; gap:10px; min-height:0; height:100vh; }
+        .catc-bar { display:flex; gap:8px; align-items:baseline; }
+        .catc-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
+        .catc-pick.on { background:var(--accent-bg); border-color:var(--accent-border); color:var(--accent-strong); }
+        .catc-side .chat { flex:1; }
 ")
 
 (def ^:private params
   "The query-string names this page reads its selection from. Read by `select` below and by every
    link the page writes, so neither side can be renamed without the other."
-  {:block "block" :surface "surface" :width "width"})
+  {:block "block" :surface "surface" :width "width" :embed "embed"})
 
 (def ^:private surfaces
   "Which background a scene is framed on — the three the dashboard's blocks actually sit on. A
@@ -131,12 +142,14 @@
                              (or (some #(when (= want (first %)) %) axis) (first axis))))
         group (let [want (get q (:block params))]
                 (or (some #(when (= want (:id %)) %) groups) (first groups)))]
-    {:group group :surface (pick surfaces :surface) :width (pick widths :width)}))
+    {:group group :surface (pick surfaces :surface) :width (pick widths :width)
+     :embed? (= "1" (get q (:embed params)))}))
 
 (defn- href
   "A link to this page with one field of the selection changed."
-  [{:keys [group surface width]} k v]
-  (let [cur {:block (:id group) :surface (first surface) :width (first width)}]
+  [{:keys [group surface width embed?]} k v]
+  (let [cur {:block (:id group) :surface (first surface) :width (first width)
+             :embed (if embed? "1" "0")}]
     (str "/_catalog?"
          (str/join "&" (for [[field name'] params]
                          (str name' "=" (if (= field k) v (get cur field))))))))
@@ -166,8 +179,66 @@
      [:div.cat-scene
       [:div.cat-scene-head [:span.cat-scene-fn "scene"] [:span.cat-scene-t title]]
       (when-let [n (:note scene)] [:p.cat-scene-n n])
-      [:div {:class (str "cat-frame " (nth surface 2) " " (nth width 2))}
+      [:div {:class (str "cat-frame " (nth surface 2) " " (nth width 2))
+             "data-block" name "data-scene" title}
        (render)]])))
+
+;; ---------------------------------------------------------------------------
+;; The element picker
+
+(def ^:private picker-js
+  "Select mode, inside the embedded scene page. The page around it turns it on with a
+   `nido-pick` message; hovering then outlines an element of a scene, and a click names it to the
+   page around it in a `nido-picked` message — block, scene, a path, and what it renders as —
+   and turns select mode off. A click in select mode does nothing else, so a scene's own controls
+   are not pressed by picking them.
+
+   The path is one step per element from the scene's frame down: its tag, its first class, and
+   its position among its element siblings. A scene is a literal value rendered by a function
+   that reads nothing, so the same element gets the same path on every render of the same code.
+
+   It also tells the page around it where it is (`nido-location`), so a reload can return to the
+   same block."
+  "(function(){
+  if (window.parent === window) return;
+  var on = false, hovered = null;
+  function frameOf(el){ return el && el.closest ? el.closest('.cat-frame') : null; }
+  function step(el){
+    var i = 0, s = el;
+    while ((s = s.previousElementSibling)) i++;
+    var cls = (el.classList && el.classList[0]) ? '.' + el.classList[0] : '';
+    return el.tagName.toLowerCase() + cls + ':' + i;
+  }
+  function path(el, frame){
+    var steps = [];
+    for (var n = el; n && n !== frame; n = n.parentElement) steps.unshift(step(n));
+    return steps.join(' > ');
+  }
+  function unhover(){ if (hovered) hovered.classList.remove('cat-pick-hover'); hovered = null; }
+  function setOn(v){ on = v; document.body.classList.toggle('cat-picking', v); if (!v) unhover(); }
+  document.addEventListener('mouseover', function(e){
+    if (!on) return;
+    var f = frameOf(e.target);
+    unhover();
+    if (f && e.target !== f) { hovered = e.target; hovered.classList.add('cat-pick-hover'); }
+  }, true);
+  document.addEventListener('click', function(e){
+    if (!on) return;
+    var f = frameOf(e.target);
+    e.preventDefault(); e.stopPropagation();
+    if (!f || e.target === f) return;
+    var el = e.target;
+    el.classList.remove('cat-pick-hover');
+    window.parent.postMessage({type: 'nido-picked', block: f.dataset.block, scene: f.dataset.scene,
+      path: path(el, f), text: (el.textContent || '').trim().slice(0, 160),
+      html: el.outerHTML.slice(0, 600)}, '*');
+    setOn(false);
+  }, true);
+  window.addEventListener('message', function(e){
+    if (e.data && e.data.type === 'nido-pick') setOn(!!e.data.on);
+  });
+  window.parent.postMessage({type: 'nido-location', href: location.pathname + location.search}, '*');
+})();")
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :string]] :string]}
   catalog-page
@@ -192,6 +263,7 @@
         [:style (h/raw (css/stylesheet))]
         [:style (h/raw chrome-css)]]
        [:body
+        (when (:embed? sel) [:script (h/raw picker-js)])
         [:div.cat
          [:nav.cat-side
           [:h1 "Components"]
@@ -207,3 +279,73 @@
           [:h2 (:title group)]
           (when-let [n (:note group)] [:p.cat-scene-n n])
           (map #(scene-block sel %) (:blocks group))]]]]))))
+
+;; ---------------------------------------------------------------------------
+;; The catalog with its chat
+
+(def ^:private host-js
+  "The page around the scene frame. Select toggles the frame's select mode; a picked element
+   arrives as a `nido-picked` message and is attached to the composer by writing the panel's two
+   reference signals through hidden bound inputs — the one way plain script can set Datastar page
+   state. The server reloads the frame by setting the `catcFrame` signal to the origin the frame
+   should load from, with a fragment that makes every reload a change; `nidoReloadFrame` then
+   loads the frame where it last said it was, keeping its block."
+  "(function(){
+  var frame = document.getElementById('catc-frame');
+  var btn = document.getElementById('catc-pick');
+  var at = null, picking = false;
+  function setPicking(v){ picking = v; btn.classList.toggle('on', v);
+    frame.contentWindow.postMessage({type: 'nido-pick', on: v}, '*'); }
+  btn.addEventListener('click', function(){ setPicking(!picking); });
+  function put(id, v){ var el = document.getElementById(id); el.value = v;
+    el.dispatchEvent(new Event('input', {bubbles: true})); }
+  window.addEventListener('message', function(e){
+    var d = e.data || {};
+    if (d.type === 'nido-location') at = d.href;
+    if (d.type === 'nido-picked') {
+      setPicking(false);
+      put('catc-ref', JSON.stringify({block: d.block, scene: d.scene, path: d.path,
+                                      text: d.text, html: d.html}));
+      put('catc-ref-label', d.block + ' · ' + d.scene + ' · ' + d.path);
+    }
+  });
+  window.nidoReloadFrame = function(base){
+    base = (base || '').split('#')[0];
+    var u = new URL(base + (at || '/_catalog?embed=1'), location.href);
+    u.searchParams.set('t', Date.now());
+    frame.src = u.toString();
+  };
+})();")
+
+(defn ^{:malli/schema [:=> [:cat :Conversation :string :map] :string]}
+  chat-page
+  "The catalog with a chat sidebar: the scene page in a frame at `frame-src`, and beside it the
+   chat panel over `transcript`, with `panel` its id and routes (see `nido.ui.components.chat`).
+   Select puts the frame into select mode, and the element picked there is attached to the next
+   message. Reads nothing: the conversation and where the frame points are its caller's."
+  [transcript frame-src panel]
+  (let [{:keys [ref ref-label]} (chat/signals (:id panel))]
+    (str
+     (h/html
+      [:html {:lang "en"}
+       [:head
+        [:meta {:charset "utf-8"}]
+        [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
+        [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
+        [:title "nido components"]
+        (datastar/datastar-script)
+        [:style (h/raw (css/stylesheet))]
+        [:style (h/raw chrome-css)]]
+       [:body
+        [:div.catc {"data-signals" "{catcFrame: ''}"
+                    "data-effect" "$catcFrame && window.nidoReloadFrame($catcFrame)"}
+         [:iframe#catc-frame.catc-frame {:src frame-src :title "Components"}]
+         [:aside.catc-side
+          [:div.catc-bar
+           [:h1 "Chat"]
+           [:button#catc-pick.btn.catc-pick {:title "Pick an element of a scene to talk about"}
+            "Select"]]
+          (-> (chat/chat-panel transcript panel)
+              (conj [:input#catc-ref {:type "hidden" "data-bind" ref}]
+                    [:input#catc-ref-label {:type "hidden" "data-bind" ref-label}]))]]
+        [:script (h/raw host-js)]]]))))

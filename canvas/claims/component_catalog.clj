@@ -6,7 +6,7 @@
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.strata :refer [ui-blocks ui-state-marks ui-visual-language]]
             [canvas.ui.surface :refer [handle-request question-card shell status-heading
-                                        ui-catalog ui-catalog-scenes ui-components-ask ui-components-row
+                                        ui-catalog ui-catalog-chat ui-catalog-scenes ui-components-ask ui-components-row
                                         ui-components-state ui-datastar ui-server ui-stylesheet
                                         ui-views workstreams-fragment]]))
 
@@ -43,8 +43,8 @@
   {:about [ui-catalog ui-catalog-scenes ui-stylesheet ui-datastar] :evidence "round"})
 
 (Claim catalog-is-unlinked
-  "GET /_catalog is served by the one dashboard handler, on every dashboard, and nothing in the product's chrome links to it. The dashboard does not behave differently depending on how it was started, and the route reads nothing but the scene registry and its own query string: it renders sample data and touches no ledger, no session registry and no process."
-  {:about [handle-request ui-catalog] :evidence "round"})
+  "GET /_catalog is served by the one dashboard handler, on every dashboard, and nothing in the product's chrome links to it. Its scene page reads nothing but the registry and its query string. Only the catalog's chat sidebar reaches a process, and only through the conversation host and the preview."
+  {:about [ui-catalog ui-catalog-chat handle-request] :evidence "round"})
 
 (Claim markup-unchanged
   "The split changes no page main's dashboard renders: for every page and every fragment main serves, the markup produced over given arguments is what main produces over the same arguments. No assertion the existing ui tests make is removed, relaxed or re-aimed at something weaker."

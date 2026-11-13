@@ -514,6 +514,56 @@
         .rec-evt-at { color:var(--text-faint); min-width:64px; }
         .rec-evt-kind { color:var(--accent-strong); min-width:104px; }
         .rec-evt-what { color:var(--text); overflow:hidden; text-overflow:ellipsis; }
+        /* The chat panel: a transcript, then the composer. The person's words are set off by a
+           tint, the agent's are plain prose; a tool call is a one-line disclosure. */
+        .chat { display:flex; flex-direction:column; gap:10px; min-height:0; font-size:var(--fs-sm); }
+        .chat-log { display:flex; flex-direction:column; gap:8px; overflow-y:auto; min-height:0; flex:1; }
+        .chat-msg { max-width:var(--measure); }
+        .chat-msg p { margin:0 0 6px; }
+        .chat-you { align-self:flex-end; background:var(--accent-bg); border:1px solid var(--accent-border);
+                    border-radius:6px; padding:6px 10px; color:var(--text-strong); }
+        .chat-agent { color:var(--text); }
+        .chat-caret { color:var(--running); margin-left:2px; }
+        .chat-thought summary, .chat-tool summary { cursor:pointer; color:var(--text-muted);
+                    font-size:var(--fs-xs); list-style:none; display:flex; gap:6px; align-items:baseline; }
+        .chat-thought-text { color:var(--text-faint); font-style:italic;
+                    padding:4px 0 0 12px; }
+        .chat-tool { border:1px solid var(--border-subtle); border-radius:4px; background:var(--surface-sunken);
+                     padding:4px 8px; }
+        .chat-tool[open] summary { margin-bottom:6px; }
+        .chat-tool-t { font-family:var(--font-mono); color:var(--text); overflow:hidden; text-overflow:ellipsis;
+                       white-space:nowrap; }
+        .chat-tool-out, .chat-diff pre { font-family:var(--font-mono); font-size:var(--fs-xs); margin:0;
+                       max-height:240px; overflow:auto; background:var(--surface-code);
+                       padding:6px; border-radius:3px; }
+        .chat-diff { margin-top:6px; }
+        .chat-diff-path { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--text-muted); }
+        .chat-diff-old { color:var(--failed-dim); }
+        .chat-diff-new { color:var(--ok-dim); }
+        .chat-st { font-size:var(--fs-xs); }
+        .chat-st-waiting { color:var(--waiting); }
+        .chat-st-running { color:var(--running); }
+        .chat-st-ok { color:var(--ok); }
+        .chat-st-failed { color:var(--failed); }
+        .chat-perm { border:1px solid var(--needs-dim); border-radius:6px; background:var(--needs-bg); padding:8px 10px; }
+        .chat-perm-q { margin:0 0 8px; color:var(--text-strong); }
+        .chat-perm-opts { display:flex; gap:8px; flex-wrap:wrap; }
+        .chat-perm.answered { border-color:var(--border-subtle); background:transparent; display:flex; gap:8px;
+                              align-items:baseline; color:var(--text-muted); font-size:var(--fs-xs); }
+        .chat-perm-a { color:var(--text); }
+        .chat-err { display:flex; gap:8px; align-items:baseline; color:var(--failed-strong); background:var(--failed-bg);
+                    border-radius:4px; padding:6px 10px; }
+        .chat-compose { display:flex; flex-direction:column; gap:6px; }
+        .chat-compose textarea { width:100%; resize:vertical; background:var(--surface-sunken); color:var(--text);
+                    border:1px solid var(--border); border-radius:4px; padding:6px 8px; font:inherit; }
+        .chat-compose textarea:focus { outline:none; border-color:var(--accent-border); }
+        .chat-actions { display:flex; justify-content:flex-end; gap:8px; }
+        .chat-ref { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent-strong);
+                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:4px; }
+        .chat-ref.attached { display:flex; gap:6px; align-items:center; border:1px solid var(--accent-border);
+                    border-radius:3px; padding:2px 6px; margin:0; }
+        .chat-ref.attached span { overflow:hidden; text-overflow:ellipsis; flex:1; }
+        .chat-ref-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-xs); }
 "))
 ;; ---------------------------------------------------------------------------
 ;; What a chrome asks for

@@ -27,7 +27,8 @@
    [nido.ui.components.state :as state]))
 
 (def ^:private component-namespaces
-  ['nido.ui.components.state 'nido.ui.components.row 'nido.ui.components.ask])
+  ['nido.ui.components.state 'nido.ui.components.row 'nido.ui.components.ask
+   'nido.ui.components.chat])
 
 (defn- blocks []
   (mapcat :blocks (scenes/groups)))
@@ -175,7 +176,10 @@
         "Datastar from the one place a dashboard page loads it from, not a URL of its own")
     (is (str/includes? html ".cat-frame") "its own chrome rules")
     (is (str/includes? html "Components"))
-    (is (str/includes? html "State marks") "the first group renders when nothing is selected")))
+    (is (str/includes? html "Ask for a change…") "the first group, the chat panel, renders when nothing is selected")))
+
+(deftest the-chat-panel-leads-the-catalog
+  (is (= "chat" (:id (first (scenes/groups))))))
 
 (deftest the-page-selects-by-query-string-and-survives-a-bad-one
   (is (str/includes? (catalog/catalog-page "block=ask") "Approve the component-catalog design?"))

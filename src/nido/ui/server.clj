@@ -9,7 +9,7 @@
             [nido.session.fleet :as fleet]
             [nido.ui.dev :as dev]
             [nido.coordinator.control :as control]
-            [nido.ui.catalog :as catalog]
+            [nido.ui.catalog.chat :as catalog-chat]
             [nido.ui.components.ask :as ask]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
@@ -728,11 +728,12 @@
           (let [screen (derive-screen vs)]
             (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))))
 
-      ;; GET /_catalog — the component catalog. Linked from nothing: a dev surface a person
-      ;; reaches by typing it. It reads nothing but its own query string, so it is served on
-      ;; every dashboard rather than behind a flag that would make two dashboards differ.
+      ;; GET /_catalog — the component catalog and its chat. Linked from nothing: a dev surface
+      ;; a person reaches by typing it, served on every dashboard rather than behind a flag that
+      ;; would make two dashboards differ. Its scene page reads nothing but its query string; the
+      ;; chat beside it is nido.ui.catalog.chat's.
       ["_catalog"]
-      (html-response 200 (catalog/catalog-page (:query-string req)))
+      (html-response 200 (catalog-chat/page (:query-string req)))
 
       ;; GET /system — dissolved; the rail lost the destination, redirect callers on.
       ["system"]
@@ -819,9 +820,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   handle-request [{:keys [request-method] :as req}]
-  (case request-method
-    :post (handle-post req)
-    (handle-get req)))
+  ;; /_catalog/chat/* first: its stream is the one response that stays open.
+  (or (catalog-chat/handle! req)
+      (case request-method
+        :post (handle-post req)
+        (handle-get req))))
 
 ;; ---------------------------------------------------------------------------
 ;; Slow-request log

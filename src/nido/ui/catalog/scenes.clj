@@ -15,6 +15,7 @@
    `:name` on a block is the published function's own name, and the catalog test holds the
    registry to covering every one of them."
   (:require [nido.ui.components.ask :as ask]
+            [nido.ui.components.chat :as chat]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]))
 
@@ -494,19 +495,127 @@
                                 [:span.cat-ret (str "$qcard." (ask/card-signal id))]]))}]}])
 
 ;; ---------------------------------------------------------------------------
+;; The chat panel
+
+(def ^:private chat-routes
+  "Where a scene's panel posts: the catalog's dead end, for every control."
+  {:id         "scene-chat"
+   :send-url   "/_catalog/nowhere/chat/send"
+   :cancel-url "/_catalog/nowhere/chat/cancel"
+   :answer-url (fn [item option] (str "/_catalog/nowhere/chat/permission/" item "/" option))})
+
+(defn- transcript
+  "A literal transcript of `items`, each given the id its position would give it."
+  [busy? & items]
+  {:busy? busy? :items (vec (map-indexed (fn [i item] (assoc item :id (str "i" i))) items))})
+
+(def ^:private you
+  {:kind :user :text "Make the needs-you chip a little quieter — it shouts beside the title."
+   :context "position-chip · every position · div.cat-rail > div:3 > span.pos-chip.pos-you"})
+
+(def ^:private reply
+  {:kind :agent :text "The chip takes `--needs` at full strength. I will move it to `--needs-dim`
+for the text and keep the tint, so it still reads as **yours** without competing with the title."})
+
+(def ^:private edit-call
+  {:kind :tool :title "Edit src/nido/ui/stylesheet.clj" :status :completed :tool-kind :edit
+   :body nil
+   :diffs [{:path "src/nido/ui/stylesheet.clj"
+            :old ".pos-you { background:var(--needs-bg); color:var(--needs); }"
+            :new ".pos-you { background:var(--needs-bg); color:var(--needs-dim); }"}]})
+
+(defn- chat-scenes []
+  [{:name "chat-panel"
+    :note "A conversation with an agent: its transcript, then the composer. Reads a transcript
+           value only, so a workstream pane or a question card can host one as the catalog does."
+    :scenes [{:title "empty"
+              :note "Nothing said yet: only the composer, waiting for the first message."
+              :render #(chat/chat-panel (transcript false) chat-routes)}
+             {:title "your message"
+              :note "The person's words, with the element they picked shown above them."
+              :render #(chat/chat-panel (transcript true you) chat-routes)}
+             {:title "a streaming reply"
+              :note "A turn running: the reply grows, the caret marks where, and Send is Stop."
+              :render #(chat/chat-panel
+                        (transcript true you
+                                    {:kind :thought :text "The chip sits beside an --fs-lg title…"}
+                                    (assoc reply :text "The chip takes `--needs` at full strength. I will"
+                                           :streaming? true))
+                        chat-routes)}
+             {:title "a finished reply"
+              :note "A turn ended: the reply settled, a tool call folded, and Send is back."
+              :render #(chat/chat-panel (transcript false you edit-call reply) chat-routes)}
+             {:title "a permission request"
+              :note "The agent asks before a tool runs: the request and its answers, each a button."
+              :render #(chat/chat-panel
+                        (transcript true you
+                                    {:kind :permission :title "Run bb nido:test :only nido.ui"
+                                     :request-id 3 :answer nil
+                                     :options [{:id "allow" :name "Allow" :kind :allow_once}
+                                               {:id "always" :name "Always allow" :kind :allow_always}
+                                               {:id "deny" :name "Deny" :kind :reject_once}]})
+                        chat-routes)}
+             {:title "an error"
+              :note "A turn that failed: what went wrong, and the composer ready again."
+              :render #(chat/chat-panel
+                        (transcript false you {:kind :error :text "The agent process stopped."})
+                        chat-routes)}]}
+   {:name "chat-item"
+    :note "One transcript item, under the DOM id a stream patches it by."
+    :scenes [{:title "a tool call, collapsed"
+              :note "How a tool call reads in passing: its status mark and what it did, one line."
+              :render #(chat/chat-item (assoc edit-call :id "i0") chat-routes)}
+             {:title "a tool call, expanded"
+              :note "Opened: its output and its diff. Click the line to fold it."
+              :render #(update (chat/chat-item (assoc edit-call :id "i0") chat-routes) 2
+                               ;; The same markup with the disclosure opened, as a click opens it.
+                               (fn [details] (into [(first details) {:open true}] (rest details))))}
+             {:title "a running and a failed tool call"
+              :note "The other two statuses, against each other."
+              :render #(list (chat/chat-item {:id "i0" :kind :tool :title "bb nido:test" :status :in-progress
+                                              :diffs []} chat-routes)
+                             (chat/chat-item {:id "i1" :kind :tool :title "Read src/missing.clj"
+                                              :status :failed :body "File does not exist." :diffs []}
+                                             chat-routes))}
+             {:title "an answered permission request"
+              :note "Once answered, a request folds to one line saying what was chosen."
+              :render #(chat/chat-item {:id "i0" :kind :permission :title "Run bb nido:test"
+                                        :answer "allow" :request-id 3
+                                        :options [{:id "allow" :name "Allow" :kind :allow_once}]}
+                                       chat-routes)}]}
+   {:name "composer"
+    :note "The composer alone: the attached element, the text box, and Send — or Stop."
+    :scenes [{:title "ready" :render #(chat/composer "scene-chat" false chat-routes)}
+             {:title "a turn running" :render #(chat/composer "scene-chat" true chat-routes)}]}
+   {:name "signals"
+    :note "The page-state names a panel keeps its draft and attached element under. Words, not
+           markup — but the one thing two panels on one page must not share."
+    :scenes [{:title "one set per panel"
+              :render #(into [:div]
+                             (for [id ["catalog-chat" "ws-20261113-609f4c-chat"]]
+                               [:div.cat-pair
+                                [:span.cat-scene-fn id]
+                                [:span.cat-ret (pr-str (chat/signals id))]]))}]}])
+
+;; ---------------------------------------------------------------------------
 ;; The registry
 
 (defn ^{:malli/schema [:=> [:cat] :any]}
   groups
-  "One group per block vocabulary, in the order the levels stack: the marks a row is written in,
-   the rows a page is written in, and the Ask a gate is answered on.
+  "One group per block vocabulary. The chat panel comes first, because the catalog is where a
+   person asks it for changes; the rest follow in the order the levels stack: the marks a row is
+   written in, the rows a page is written in, and the Ask a gate is answered on.
 
    A group is {:id :title :note :blocks}, and a block is {:name :note :scenes} where `:name` is
    the published function's own name — which is what lets the catalog test hold this registry to
    covering every one of them. A scene is {:title :note :render}, and `:render` is a thunk so
    that a broken block fails where it is rendered rather than when this registry is read."
   []
-  [{:id "state" :title "State marks"
+  [{:id "chat" :title "Chat"
+    :note "A conversation with an agent. The panel is a block over a transcript, so every state
+           here is a literal transcript; the buttons post to a dead end."
+    :blocks (chat-scenes)}
+   {:id "state" :title "State marks"
     :note "A workstream's state as a reader sees it. Every one of these is judged against its
            siblings rather than alone — a mark only means something relative to the other marks
            on the same row."

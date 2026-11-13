@@ -12,6 +12,8 @@
             [canvas.coordinator.record.state :refer [SessionName WorkstreamId]]
             [canvas.coordinator.report :as report]
             [canvas.coordinator.work :as work :refer [Screen]]
+            [canvas.integration.acp :as acp]
+            [canvas.session.chat :as chat]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -57,7 +59,12 @@
    two different ones."
   (Operation datastar-script
     "The script element every dashboard chrome loads Datastar with: the one pinned bundle."
-    {:signature [:=> [:catn] :any]}))
+    {:signature [:=> [:catn] :any]})
+  (Operation patch-elements-event
+    "One server-sent event patching markup into a page, by id or appended under a selector."
+    {:signature [:=> [:catn [:html :string] [:opts [:? :map]]] :string]})
+  (Operation patch-signals-event "One server-sent event merging signals into page state."
+    {:signature [:=> [:catn [:json :string]] :string]}))
 
 (Module ui-components-state
   "A workstream's state as a reader sees it: the words each facet is said in, and the mark that
@@ -155,6 +162,28 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ask :map]
                             [:actions :any] [:opts :map]] :any]
      :delegates [action-bar card-signal]}))
+
+(Module ui-components-chat
+  "A conversation with an agent, as a panel.
+
+   HIDES how a transcript reads — item order, a tool call collapsed and expanded, the permission
+   prompt's buttons, the composer and the element attached to it. Takes a transcript value plus
+   where its controls post, so the catalog, a workstream pane or a question card can each host
+   one without the panel knowing which."
+  (Operation signals
+    "The names of a panel's page-state signals — its draft, the attached reference and its label —
+     which a server reading a send reads back by the same names."
+    {:signature [:=> [:catn [:id :string]] :map]})
+  (Operation chat-item "One transcript item, under the DOM id the panel gives it."
+    {:signature [:=> [:catn [:item :map] [:routes :map]] :any]})
+  (Operation composer "The composer: the attached element, the text box, and Send or Stop."
+    {:signature [:=> [:catn [:id :string] [:busy? :boolean] [:routes :map]] :any]
+     :delegates [signals]})
+  (Operation chat-panel
+    "The whole panel: its transcript, then the composer. `opts` carries the panel's id, where
+     sending, cancelling and answering a permission post, and the stream URL that keeps it live."
+    {:signature [:=> [:catn [:transcript acp/Conversation] [:opts :map]] :any]
+     :delegates [chat-item composer signals]}))
 
 (Module ui-views
   "The dashboard's pages and fragments, and the twenty per-kind cards a ledger record reads as.
@@ -352,6 +381,33 @@
   (Operation catalog-page
     "The catalog: a sidebar of blocks, every scene of the selected one rendered in the app's own
      stylesheet with Datastar live, and the two axes these blocks vary over in the app — which
-     surface a block sits on, and how wide its column is."
+     surface a block sits on, and how wide its column is. Embedded, it also carries the element
+     picker, which names a picked element by block, scene and path and hands it to the page
+     around it."
     {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
-     :delegates [stylesheet datastar-script groups]}))
+     :delegates [stylesheet datastar-script groups]})
+  (Operation chat-page
+    "The catalog with a chat sidebar: the scene page in a frame, the chat panel over a transcript
+     beside it, and Select, which puts the frame into select mode. Reads nothing: the conversation
+     and where the frame points are its caller's."
+    {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:panel :map]] :string]
+     :delegates [stylesheet datastar-script chat-panel signals]}))
+
+(Module ui-catalog-chat
+  "The catalog's chat: the page around the scene frame, and the routes its panel posts to.
+
+   HIDES which conversation the catalog talks to (one design session, made on the first send),
+   how a picked element is worded for the agent, which frame source the page shows, and that a
+   finished turn refreshes the preview. The panel's markup is the chat block's; the conversation
+   and the preview are the Session band's."
+  (Operation page
+    "/_catalog: the scene page alone when it is the frame, else the catalog with its chat."
+    {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
+     :delegates [catalog-page chat-page chat/transcript chat/started? chat/preview-url]})
+  (Operation handle!
+    "One request under /_catalog/chat: the stream, a send, a cancel or a permission answer; nil
+     for any other path."
+    {:signature [:=> [:catn [:req :map]] [:maybe :map]]
+     :delegates [chat-item composer signals patch-elements-event patch-signals-event
+                 chat/transcript chat/send! chat/cancel! chat/answer-permission! chat/subscribe!
+                 chat/refresh! chat/note-error!]}))

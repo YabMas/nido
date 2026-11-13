@@ -28,8 +28,9 @@
    :may-depend [Platform]})
 
 (Band Integration
-  "Outbound adapters: Notion, Slack, GitHub, video transcription."
-  {:prefix ["nido.notion." "nido.slack." "nido.github." "nido.transcribe."]
+  "Outbound adapters: Notion, Slack, GitHub, video transcription, and the Agent Client Protocol
+   a coding agent is spoken to over."
+  {:prefix ["nido.notion." "nido.slack." "nido.github." "nido.transcribe." "nido.acp."]
    :may-depend [Platform]})
 
 (Band Session
