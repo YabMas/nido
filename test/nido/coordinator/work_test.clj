@@ -4477,3 +4477,12 @@
           (is (empty? (:created c)) "nothing is filed onto the thread")
           (is (nil? (workstream/find-by-ref-id :brian "BR-4900")))
           (is (empty? (workstream/entries-of :brian (:id ws) :triage-accepted))))))))
+
+(deftest a-queued-message-to-a-dead-session-is-not-work
+  (let [observed #'nido.coordinator.work/observed-doing
+        answering {:source :session :phase :answering :session "run-x"}]
+    (is (nil? (observed answering {:live false :stalled true}))
+        "nothing live: the workstream reads halted, not running")
+    (is (= answering (observed answering {:live true})))
+    (is (= {:source :claim :kind :design-round} (observed {:source :claim :kind :design-round} {:live false}))
+        "a claim is its own evidence")))

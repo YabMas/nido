@@ -589,6 +589,15 @@
     (= :machine owed-by) :queued
     :else                :idle))
 
+(defn- observed-doing
+  "`doing` as status observed it. A session's activity counts only while status finds something
+   live: a message queued for a session whose process is gone — a gate reply to a run that ended
+   days ago — is waiting, not work, and reading it as work drew a running stage beside the halted
+   mark. A claim or a merge is its own evidence and passes as it is."
+  [doing status]
+  (when-not (and (= :session (:source doing)) (not (:live status)))
+    doing))
+
 (defn- with-status
   "A spine row with its band, needs-you, engagement and what is underway — status's answers, and
    nothing stored beneath them.
@@ -639,8 +648,9 @@
                          :needs-you  (= :person (:owed-by st))
                          :engagement (engagement-of st)
                          ;; What is underway, at status's band, so a row cannot say :done and
-                         ;; running at once.
-                         :doing      (wsv/doing-at project ws-id closed band))
+                         ;; running at once — and at status's liveness, so it cannot say halted
+                         ;; and running at once either.
+                         :doing      (observed-doing (wsv/doing-at project ws-id closed band) st))
             (not (contains? unrendered-bands band))
             (assoc :phase (wsv/phase-progress project ws-id)))))))))
 
