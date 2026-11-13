@@ -3412,6 +3412,18 @@
      :already?    already?
      :instruction (str activation-preamble (:practice (seats/default-embodiment)))}))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
+  deactivate!
+  "Take nido's recipe off `ws-id` for a person: append its :deactivated entry, from `session` when
+   given from one. From then no conductor starts on it, nothing is owed on it, and its designs no
+   longer gate its landing; activating it again turns the recipe back on. Answers {:ws-id :was?},
+   :was? false when the recipe was not running and nothing was appended."
+  [project ws-id session]
+  (let [p    (keyword (name project))
+        was? (boolean (some-> (cws/read-ws p ws-id) standing/activated?))]
+    (cws/deactivate! p ws-id session)
+    {:ws-id ws-id :was? was?}))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :any]}
   start!
   "Bring the session `session-name` up on the workstream holding it — a fresh one-off when none

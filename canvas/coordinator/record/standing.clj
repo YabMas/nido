@@ -94,9 +94,15 @@
     "Whether the workstream was born a one-off: its ledger holds the birth entry."
     {:signature [:=> [:catn [:w :any]] :boolean]})
   (Operation activated?
-    "Whether a person activated nido's recipe on the workstream: its ledger holds the :activated
-     entry. Nothing drives, and nothing is owed on, one that does not."
-    {:signature [:=> [:catn [:w :any]] :boolean]})
+    "Whether nido's recipe runs on the workstream: the newer of its :activated and :deactivated
+     entries is an :activated one. Nothing drives, and nothing is owed on, one where it does not."
+    {:signature [:=> [:catn [:w :any]] :boolean]
+     :delegates [workstream/activation]})
+  (Operation deactivated?
+    "Whether a person took nido's recipe off the workstream: the newer of its :activated and
+     :deactivated entries is a :deactivated one. Its designs then no longer gate its landing."
+    {:signature [:=> [:catn [:w :any]] :boolean]
+     :delegates [workstream/activation]})
   (Operation person-started-at
     "When a person last started the workstream, as the ledger records it — its :activated entry, or
      a person's :in-progress choice or reopen, whichever is newest — or nil. What a conductor reads,

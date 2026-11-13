@@ -685,10 +685,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   activated?
-  "Whether nido's recipe runs on the workstream: its ledger holds an :activated entry. Until
-   one is written a workstream is a plain one — nothing drives it and nothing is owed on it."
+  "Whether nido's recipe runs on the workstream: the newer of its :activated and :deactivated
+   entries is an :activated one. Until one is written, and again after a person deactivates it, a
+   workstream is a plain one — nothing drives it and nothing is owed on it."
   [w]
-  (boolean (some #(= :activated (:kind %)) (:entries w))))
+  (= :activated (ws/activation w)))
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  deactivated?
+  "Whether a person took nido's recipe off the workstream: the newer of its :activated and
+   :deactivated entries is a :deactivated one. Distinct from never activated — a deactivated
+   workstream may hold designs the recipe wrote, and they no longer govern its landing."
+  [w]
+  (= :deactivated (ws/activation w)))
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
   person-started-at

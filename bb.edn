@@ -840,6 +840,11 @@
    :doc "Hand this session's workstream to nido's recipe: append its :activated entry and print what the session's agent is to do now — write the owed records from what it already understands. Until then a session is a plain one: no conductor, nothing owed. [:cwd <dir>] or :project <p> :ws <ws-id>"
    :task (apply nido-activate/activate-cmd *command-line-args*)}
 
+  nido:deactivate
+  {:requires ([tasks.nido-deactivate :as nido-deactivate])
+   :doc "Take nido's recipe off this session's workstream: append its :deactivated entry. Its conductor stops, nothing is owed, and its designs no longer gate its landing; `nido:activate` turns it back on. [:cwd <dir>] or :project <p> :ws <ws-id>"
+   :task (apply nido-deactivate/deactivate-cmd *command-line-args*)}
+
   nido:attach
   {:requires ([tasks.nido-attach :as nido-attach])
    :doc "Attach to this worktree's workstream and let its ledger pick the stage: follow whatever is running, else run what is due, else say what is owed. Takes no stage. [:cwd <dir>]"

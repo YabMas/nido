@@ -3823,6 +3823,16 @@
    [:format  [:= :scratch]]
    [:session {:optional true} string?]])
 
+(def Deactivated
+  "A person took nido's recipe off this workstream: no conductor drives it, nothing is owed on it,
+   and the designs it holds no longer gate its landing. An :activated entry after it turns the
+   recipe back on."
+  [:map {:closed true}
+   [:format  [:= :deactivated]]
+   [:by      [:= :person]]
+   [:session {:optional true} string?]
+   [:note    {:optional true} string?]])
+
 (def Activated
   "A person's grant that nido's recipe runs on this workstream: from here a conductor drives it
    and its seats are instructed stage by stage. Written at most once, by the activate verb. A
@@ -4052,6 +4062,7 @@
    :findings-resolved        FindingsResolved
    :scratch                  Scratch
    :activated                Activated
+   :deactivated              Deactivated
    :notion-status            NotionStatus
    :layer-completed          LayerCompleted
    :issue                    Issue
@@ -4770,6 +4781,11 @@
 
 (defn- scratch->markdown [{:keys [session]}]
   (str "# One-off" (when session (str " for session " session))))
+
+(defn- deactivated->markdown [{:keys [session note]}]
+  (str/join "\n" (remove nil? ["# Pipeline deactivated by a person"
+                               (when session (str "_from session " session "_"))
+                               note])))
 
 (defn- activated->markdown [{:keys [session note]}]
   (str/join "\n" (remove nil? ["# Pipeline activated by a person"
@@ -5552,6 +5568,7 @@
     :findings-resolved        (findings-resolved->markdown report)
     :scratch                  (scratch->markdown report)
     :activated                (activated->markdown report)
+    :deactivated              (deactivated->markdown report)
     :notion-status            (notion-status->markdown report)
     :layer-completed          (layer-completed->markdown report)
     :generation               (generation->markdown report)
@@ -5608,6 +5625,7 @@
                                    (count (:items report)) " resolved")
     :scratch                  "One-off"
     :activated                "Pipeline activated"
+    :deactivated              "Pipeline deactivated"
     :notion-status            (str "Notion status: " (:status report))
     :layer-completed          (str "Layer " (:layer report) "/" (:of report)
                                    (some->> (:seat report) (str " of "))  " done")

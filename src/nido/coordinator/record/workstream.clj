@@ -84,7 +84,7 @@
    Kept apart because the work's own records are what everything asking `what happened last`
    means: a close appended after a completed implementation must not become the answer to
    `how did the merge run end`."
-  #{:closed :reopened :stage-set :findings-resolved :scratch :activated :notion-status
+  #{:closed :reopened :stage-set :findings-resolved :scratch :activated :deactivated :notion-status
     :conduct-decision})
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
@@ -270,11 +270,19 @@
                    (fn [w] (when-not (and (nil? (closure w)) (= stage (:stage (newest-choice w))))
                              (cond-> {:format :reopened :stage stage} by (assoc :by by)))))))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe [:enum :activated :deactivated]]]}
+  activation
+  "The kind of the newest :activated or :deactivated entry in `w`'s ledger — whether a person's
+   last word on nido's recipe was to run it or to stop it — or nil when neither was ever said."
+  [w]
+  (->> (:entries w) (filter #(#{:activated :deactivated} (:kind %))) last :kind))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :Workstream]}
   activate!
   "Append the person's :activated entry — the grant that nido's recipe runs on the workstream —
-   naming `session` when it was given from one. At most one is ever written: a second call
-   appends nothing. Throws if the workstream is absent or closed. Returns the record."
+   naming `session` when it was given from one. Appends nothing while the recipe already runs; a
+   deactivated workstream is activated again. Throws if the workstream is absent or closed.
+   Returns the record."
   [project ws-id session]
   (let [w (or (read-ws project ws-id)
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
@@ -282,8 +290,20 @@
       (throw (ex-info (str "Workstream " ws-id " is closed: there is nothing to activate")
                       {:reason :closed :ws-id ws-id}))))
   (record-status! project ws-id
-                  (fn [w] (when-not (some #(= :activated (:kind %)) (:entries w))
+                  (fn [w] (when-not (= :activated (activation w))
                             (cond-> {:format :activated :by :person} session (assoc :session session))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :Workstream]}
+  deactivate!
+  "Append the person's :deactivated entry — nido's recipe stops running on the workstream: no
+   conductor, nothing owed, and its designs no longer gate its landing. Appends nothing unless the
+   recipe runs. Throws if the workstream is absent. Returns the record."
+  [project ws-id session]
+  (when-not (read-ws project ws-id)
+    (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+  (record-status! project ws-id
+                  (fn [w] (when (= :activated (activation w))
+                            (cond-> {:format :deactivated :by :person} session (assoc :session session))))))
 
 (def ^:private parsed-entries
   "Entry file → its parsed payload, keyed on [path kind file-stamp].

@@ -140,6 +140,14 @@
 
     (str "  No route recorded for " reason " — say so rather than working around it.")))
 
+(defn- landing-design
+  "The design a landing of `ws-id` is held to: its governing design, or nil when a person
+   deactivated nido's recipe on it — the recipe wrote that design, and stopping the recipe is the
+   person's word that its records no longer decide what lands."
+  [project ws-id]
+  (when-not (some-> (cws/read-ws project ws-id) standing/deactivated?)
+    (standing/governing-design project ws-id)))
+
 (defn- standing-check
   "Refuse unless this session's design DECISION stands: not retracted, cleared —
    by a round that owed nobody, or by a person's grant — and the exact baseline
@@ -153,7 +161,7 @@
    this is for."
   [cwd]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
-    (if-let [design (standing/governing-design project ws-id)]
+    (if-let [design (landing-design project ws-id)]
       (let [st (standing/of-design project ws-id design)]
         (if (:cleared? st)
           (do (println (str "land:check ok · design at entry " (:seq design)
@@ -169,7 +177,9 @@
             (println "\nHow to clear it:")
             (println (way-out b))
             1)))
-      (do (println "land:check ok · this workstream's design record holds nothing to stand on")
+      (do (println (if (some-> (cws/read-ws project ws-id) standing/deactivated?)
+                     "land:check ok · nido's recipe is deactivated here — no design gates the landing"
+                     "land:check ok · this workstream's design record holds nothing to stand on"))
           0))
     (do (println (str "land:check ok · " cwd " is no nido session — nothing to stand on"))
         0)))
@@ -315,7 +325,7 @@
   [cwd]
   (if-let [[project worktree] (nido-design/coords cwd)]
     (let [[p ws-id] (stages/project+ws-from-cwd cwd)
-          design    (when ws-id (standing/governing-design p ws-id))
+          design    (when ws-id (landing-design p ws-id))
           held      (try {:design (when design (held-to p ws-id design))}
                          (catch clojure.lang.ExceptionInfo e {:error (ex-message e)}))
           judged    (judged-claims (:design held))
@@ -335,6 +345,9 @@
 
         (let [declared (design/declared-claims head)]
           (cond
+            (and ws-id (some-> (cws/read-ws p ws-id) standing/deactivated?))
+            (do (println "land:check ok · nido's recipe is deactivated here — no design holds its claims") 0)
+
             (and (empty? declared) (empty? judged))
             (do (println "land:check ok · no claim is declared or judged here") 0)
 
@@ -428,7 +441,7 @@
             ;; a push leaves an empty working copy on top of what it pushed.
             tip    (layers/resolve-rev cwd "heads(::@ ~ empty())")
             landed (when tip (layers/resolve-rev cwd (str tip " & ::main@origin")))
-            design (standing/governing-design project ws-id)
+            design (landing-design project ws-id)
             st     (when design (standing/of-design project ws-id design))]
         (cond
           ;; A stale main@origin would read as a tip nobody pushed, and send the way out to a push

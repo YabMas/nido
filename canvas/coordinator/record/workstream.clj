@@ -100,11 +100,20 @@
      its close no longer stands."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]] Workstream]
      :delegates [read-ws closure newest-choice append-lock-path]})
+  (Operation activation
+    "A person's last word on nido's recipe for a workstream — :activated or :deactivated, the
+     newer of the two entries — or nil when neither was said."
+    {:signature [:=> [:catn [:w :any]] [:maybe [:enum :activated :deactivated]]]})
   (Operation activate!
     "Record a person's grant that nido's recipe runs on a workstream: an :activated entry, written
-     at most once and never on a closed workstream."
+     only while the recipe does not run and never on a closed workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] Workstream]
-     :delegates [read-ws closure append-lock-path]})
+     :delegates [read-ws closure activation append-lock-path]})
+  (Operation deactivate!
+    "Record a person taking nido's recipe off a workstream: a :deactivated entry, written only
+     while the recipe runs."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] Workstream]
+     :delegates [read-ws activation append-lock-path]})
   (Operation append-lock-path
     "The lock serialising appends to ONE workstream — per workstream, so two unrelated ones
      never queue behind each other."

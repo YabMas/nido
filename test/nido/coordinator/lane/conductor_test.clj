@@ -1056,6 +1056,23 @@
           (is (= {:carried {:seat 1 :session "fix-it"}} (conductor/carry! :brian id "fix-it" nil nil :start))
               "and a person's start is carried"))))))
 
+(deftest a-person-can-take-the-recipe-off-again
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (is (nil? (ws/activation (ws/read-ws :brian id))) "never said either way")
+        (ws/deactivate! :brian id nil)
+        (is (empty? (ws/entries-of :brian id :deactivated)) "a plain workstream has nothing to take off")
+        (ws/activate! :brian id "s")
+        (let [w (ws/deactivate! :brian id "s")]
+          (is (not (standing/activated? w)))
+          (is (standing/deactivated? w)))
+        (ws/deactivate! :brian id nil)
+        (is (= 1 (count (ws/entries-of :brian id :deactivated))) "deactivating twice writes once")
+        (let [w (ws/activate! :brian id nil)]
+          (is (standing/activated? w) "activating again turns the recipe back on")
+          (is (not (standing/deactivated? w))))))))
+
 (deftest a-runs-start-is-carried-whether-or-not-activated
   (with-tmp
     (fn []
