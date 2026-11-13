@@ -274,21 +274,34 @@
       [:a {:href (str "/workstreams?scope=" scope)} "Scratch"]
       " holds " scope "'s workstreams meanwhile."])))
 
+(defn- structure-tabs
+  "The Structure slice's two views of the focused project: its declared design, and the drains
+   rolling a pattern out across it."
+  [scope current]
+  (let [q (str "?scope=" (java.net.URLEncoder/encode (str scope) "UTF-8"))]
+    [:nav.structure-tabs
+     [:a {:href (str "/structure" q) :class (when (= :design current) "active")} "Declared design"]
+     [:a {:href (str "/structure/drains" q) :class (when (= :drains current) "active")} "Drains"]]))
+
 (defn ^{:malli/schema [:=> [:cat :map :map :string] :any]}
   structure-page
   "The Structure slice: the focused project's declared design on `main`, in fukan's explorer
-   framed edge to edge. `explorer` is what `nido.ui.structure/ensure!` answered; `view` is the
-   query the frame opens on. A project with no design, or no `main`, gets a sentence instead —
-   anything the explorer itself has to say, starting or failing, it says inside the frame."
+   framed edge to edge beneath the slice's tabs. `explorer` is what `nido.ui.structure/ensure!`
+   answered; `view` is the query the frame opens on. A project with no design, or no `main`, gets
+   a sentence instead — anything the explorer itself has to say, starting or failing, it says
+   inside the frame."
   [{:keys [scope] :as ctx} {:keys [status]} view]
   (case status
     (:starting :serving :failed)
     (shell (assoc ctx :active :structure :title "Structure" :bleed? true)
-           [:iframe.structure-frame
-            {:src   (str "/structure/explorer/" (java.net.URLEncoder/encode (str scope) "UTF-8")
-                         "/?" view)
-             :title (str scope "'s declared design")}])
+           [:div.structure-wrap
+            (structure-tabs scope :design)
+            [:iframe.structure-frame
+             {:src   (str "/structure/explorer/" (java.net.URLEncoder/encode (str scope) "UTF-8")
+                          "/?" view)
+              :title (str scope "'s declared design")}]])
     (shell (assoc ctx :active :structure :title "Structure")
+           (structure-tabs scope :design)
            [:h1 "Structure"]
            [:p.meta (if (= :no-main status)
                       (str scope " has no main bookmark to read a design from.")
@@ -436,8 +449,12 @@
    (h/html
     (if (seq gates)
       [:div {:id "needs"}
+       ;; A drain its slices raised escalations through opens the drains page, which lists
+       ;; them beside the drain's own, each with the workstream it is answered on.
        (for [g gates]
-         (row/gate-row g (str "/workstreams/" (:project g) "/" (:ws-id g))))]
+         (row/gate-row g (if (seq (:raised-by g))
+                           (str "/drains?scope=" (:project g))
+                           (str "/workstreams/" (:project g) "/" (:ws-id g)))))]
       [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
 
 (defn- gate-action-fragment
@@ -2620,3 +2637,122 @@
 (defn ^{:malli/schema [:=> [:cat] :any]}
   not-found-page []
   (shell {:title "404"} [:h1 "Not found"]))
+
+;; ---------------------------------------------------------------------------
+;; Drains — each open drain with its slices beneath it (nido.coordinator.view.drains)
+
+(def ^:private drain-phase-label
+  {:chartered "chartered — the coordinator proposes a recipe"
+   :recipe-proposed "a recipe awaits your approval"
+   :awaiting-census "awaiting its first census"
+   :draining "draining"
+   :exhausted "census reads zero — yours to close"
+   :closed "closed"})
+
+(defn- drain-base [{:keys [project ws-id]}] (str "/drains/" project "/" ws-id))
+
+(defn- drains-scope-query
+  "The query that keeps a drains-page request under the scope the page was rendered for — the poll,
+   every act and the start, so a response never renders another scope's drains."
+  [scope]
+  (if (and scope (not= "all" scope)) (str "?scope=" scope) ""))
+
+(defn- drain-button [label url scope]
+  [:button.btn {"data-on:click" (str "@post('" url (drains-scope-query scope) "')")} label])
+
+(defn- trend-line [trend]
+  (when (seq trend) (str/join " → " trend)))
+
+(defn- slice-row [d scope {:keys [ws-id state sites misfits]}]
+  [:tr
+   [:td.mono ws-id]
+   [:td (str/join ", " sites)]
+   [:td (name state) (when (pos? misfits) [:span.meta (str " · " misfits " open misfit" (when (> misfits 1) "s"))])]
+   [:td (when (#{:started :cleared :landing-failed} state)
+          (drain-button (if (= :cleared state) "Land" "Land (override)")
+                        (str (drain-base d) "/land/" ws-id) scope))]])
+
+(defn- drain-card [scope {:keys [ws-id project charter phase version census trend proposals plans
+                                 slices by-state misfits residue escalations] :as d}]
+  [:div.drain-card {:id (str "drain-" ws-id) :style "margin:0 0 28px"}
+   [:div.ops-head
+    [:strong (:exit charter)]
+    [:span.meta (str project " · " ws-id)]]
+   [:p (get drain-phase-label phase (name phase))
+    [:span.meta (str " · recipe " (if version (str "v" version) "none")
+                     (when census (str " · census " (:remaining census) " remaining"))
+                     (when (> (count trend) 1) (str " (" (trend-line trend) ")")))]]
+   (when (seq escalations)
+     [:div [:strong "Escalated to you"]
+      [:ul (for [e escalations] [:li (when (:slice e) [:span.mono (str (:slice e) ": ")])
+                                 (or (:summary e) (:needs e))
+                                 " " [:a {:href (str "/workstreams/" project "/" (or (:slice e) ws-id))}
+                                      "answer"]])]])
+   (for [p proposals]
+     [:div.meta {:style "margin:6px 0"}
+      (str "Recipe proposal #" (:seq p) ": " (:reason p) " ")
+      (drain-button "Approve" (str (drain-base d) "/approve/" (:seq p)) scope)])
+   (when (= :exhausted phase)
+     [:div {:style "margin:6px 0"} (drain-button "Close the drain" (str (drain-base d) "/close") scope)])
+   [:p.meta (str (count slices) " slices"
+                 (when (seq by-state)
+                   (str " — " (str/join ", " (for [[st n] (sort-by key by-state)] (str n " " (name st))))))
+                 (when (seq plans) (str " · " (count plans) " planned"))
+                 (when (seq misfits) (str " · " (count misfits) " open misfits"))
+                 (when (seq residue) (str " · " (count residue) " residue items")))]
+   (when (seq slices)
+     [:table
+      [:thead [:tr [:th "slice"] [:th "sites"] [:th "state"] [:th ""]]]
+      [:tbody (for [s slices] (slice-row d scope s))]])])
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map] [:? [:maybe :string]] [:? [:maybe :string]]] :string]}
+  drains-fragment
+  "The drains list, patched by the poll — and, after an act, with what the act was refused for.
+   `scope` is the scope the page was requested under; every act it renders posts under it."
+  [drains & [notice scope]]
+  (str
+   (h/html
+    [:div {:id "drains"}
+     (when notice [:p.meta {:style "color:var(--failed)"} notice])
+     (if (empty? drains)
+       [:p.ops-empty "No drain is open. Start one below once a pattern is established."]
+       (for [d drains] (drain-card scope d)))])))
+
+(defn- drain-start-form
+  "The person's start of a drain: the project (fixed by the scope when it names one), the exit
+   criterion, and the workstream or landed commit that established the pattern. Posts to
+   /drains/start, which routes through lane-drain's start."
+  [{:keys [scope projects]}]
+  (let [scoped? (and scope (not= "all" scope))
+        input   (fn [sig placeholder]
+                  [:input {"data-bind" sig :placeholder placeholder
+                           :style "width:100%;box-sizing:border-box;margin-top:6px;"}])]
+    [:div.drain-start {:style "margin:0 0 28px"}
+     [:strong "Start a drain"]
+     (if scoped?
+       [:p.meta (str "in " scope)]
+       [:select {"data-bind" "drain_project" :style "margin-top:6px;"}
+        [:option {:value ""} "project…"]
+        (for [p projects] [:option {:value p} p])])
+     (input "drain_exit" "exit criterion — what is true when the drain is done")
+     (input "drain_established_ws" "established by workstream (ws-id)")
+     (input "drain_established_commit" "or by landed commit (rev)")
+     [:div {:style "margin-top:6px"}
+      [:button.btn {"data-on:click" (str "@post('/drains/start" (drains-scope-query scope) "')")}
+       "Start the drain"]]]))
+
+(defn ^{:malli/schema [:=> [:cat :map [:vector :map]] :any]}
+  drains-page
+  "The Structure slice's drains view: every open drain of the focused project — its phase, recipe
+   version, newest census and its trend, its slices by state, and what it has escalated — with the
+   person's acts on it: start a drain, approve a recipe, land a slice, close the drain."
+  [ctx drains]
+  (shell
+   (assoc ctx :active :structure :title "Drains")
+   (structure-tabs (:scope ctx) :drains)
+   [:div.ops-col {:data-on-interval__duration.5s (str "@get('/_fragment/drains"
+                                                       (drains-scope-query (:scope ctx))
+                                                       "')")}
+    [:h1 "Drains"]
+    (drain-start-form ctx)
+    (h/raw (drains-fragment drains nil (:scope ctx)))]))

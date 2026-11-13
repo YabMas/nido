@@ -253,6 +253,16 @@
       (#'tui/update-board (board-state :all) (msg/key-press "d"))
       (is (= [["w1" :done]] @calls) "d → set-stage! :done"))))
 
+(deftest board-done-names-a-refusal
+  ;; A slice is done only by landing and a drain only on its observed exit: set-stage! refuses
+  ;; both, and the status line must say so rather than report the close.
+  (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "s1"})
+                nido.coordinator.work/set-stage! (fn [_ _ _] {:decision :refused :message "land it"})
+                nido.ui.tui/current-rows (constantly [])]
+    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "d"))]
+      (is (str/includes? (:status s') "land it"))
+      (is (not (str/starts-with? (:status s') "marked"))))))
+
 (deftest board-d-on-winding-down-row-arms-bring-down
   ;; d on a winding-down row is contextual: it arms the bring-down busy action
   ;; instead of falling through to done-selected.

@@ -400,6 +400,11 @@
      .content { grid-area:main; padding:20px 28px; overflow:auto; }
      .content.bleed { padding:0; overflow:hidden; display:grid; }
      .structure-frame { width:100%; height:100%; border:0; display:block; }
+     .structure-wrap { display:grid; grid-template-rows:auto 1fr; height:100%; min-height:0; }
+     .structure-tabs { display:flex; gap:18px; padding:10px 20px; border-bottom:1px solid var(--border); }
+     .content:not(.bleed) > .structure-tabs { padding:0 0 10px; margin:0 0 18px; }
+     .structure-tabs a { color:var(--text-muted); text-decoration:none; padding-bottom:4px; }
+     .structure-tabs a.active { color:var(--text-strong); border-bottom:2px solid var(--text-strong); }
      /* With the chat's side panel, a third column under the top bar: room for its toggle when
         closed, the panel when open — below 1000px it covers the page instead. */
      body:has(> .chat-side) { grid-template-columns:180px 1fr 58px; grid-template-areas:'top top top' 'side main chat';

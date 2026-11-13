@@ -952,16 +952,18 @@
 
 (defn- done-selected
   "Mark the highlighted workstream done via work/set-stage! :done. A bare
-   (workstream-less) row no-ops — surface that honestly rather than claiming
-   success."
+   (workstream-less) row no-ops, and a refused close (a slice, or a drain whose exit is not
+   observed) names why — surface both honestly rather than claiming success."
   [state]
   (if-let [ws (selected-workstream state)]
-    (let [decision (:decision (work/set-stage! (:project state) (:ws-id ws) :done))
+    (let [{:keys [decision message]} (work/set-stage! (:project state) (:ws-id ws) :done)
           label    (or (:br-id ws) (:ws-id ws))]
       [(-> state (refresh-list (current-rows state))
-           (assoc :status (if (= decision :no-workstream)
-                             (str "no workstream yet — " label)
-                             (str "marked " label " done"))))
+           (assoc :status (case decision
+                            :no-workstream (str "no workstream yet — " label)
+                            ;; A slice is done only by landing, a drain only on its observed exit.
+                            :refused       (str "not marked done — " label ": " message)
+                            (str "marked " label " done"))))
        nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
@@ -1077,10 +1079,12 @@
     (msg/key-match? msg "enter")
     (if-let [target (picker-selected state)]
       (let [{:keys [ws-id promote-id]} (:modal-target state)
-            decision (:decision (work/set-stage! (:project state) ws-id target))]
+            {:keys [decision message]} (work/set-stage! (:project state) ws-id target)]
         [(-> state close-modal
              (refresh-list (current-rows state))
-             (assoc :status (wsv/promote-result-message promote-id decision)))
+             (assoc :status (if (= :refused decision)
+                              (str "not moved — " message)
+                              (wsv/promote-result-message promote-id decision))))
          nil])
       [state nil])
     :else (picker-route state msg)))

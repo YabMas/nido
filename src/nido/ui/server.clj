@@ -700,6 +700,29 @@
         (sse-response (sse-fragment
                        (views/proposal-result-fragment result (all-proposals)))))
 
+      ;; POST /drains/start — the person starts a drain: the exit criterion and what established
+      ;; the pattern ride the JSON signal body; the project is the focused one, or the one the
+      ;; person picked when nothing is focused.
+      ;; Every drains POST carries ?scope= and answers the list under that scope.
+      (= ["drains" "start"] segs)
+      (let [scope (:scope (view-state/parse req))
+            b     (parse-json-body body)
+            {:keys [refused]} (work/start-drain!
+                               (or scope (not-empty (str (:drain_project b))))
+                               {:exit                  (:drain_exit b)
+                                :established-by-ws     (:drain_established_ws b)
+                                :established-by-commit (:drain_established_commit b)})]
+        (sse-response (sse-fragment (views/drains-fragment (work/drains scope) refused scope))))
+
+      ;; POST /drains/:project/:ws-id/:act[/:arg] — the person's acts on a drain: approve a
+      ;; recipe proposal, land a slice, close the drain. Answers the refreshed list under the
+      ;; scope the page was requested from, naming a refusal when the records did not support it.
+      (and (#{4 5} (count segs)) (= "drains" (first segs)))
+      (let [[_ project ws-id act arg] segs
+            scope (:scope (view-state/parse req))
+            {:keys [refused]} (work/drain-act! project ws-id (keyword act) arg)]
+        (sse-response (sse-fragment (views/drains-fragment (work/drains scope) refused scope))))
+
       ;; POST /ops/... — ambient ops levers (halt/resume, breaker clear, fire).
       ;; Every lever responds with the refreshed ops fragment + rail status.
       (= "ops" (first segs))
@@ -803,6 +826,23 @@
       (let [vs     (view-state req)
             screen (derive-screen vs)]
         (page-response (:scope vs) (views/workstreams-page (rail-ctx req :workstreams (:scope vs) screen) screen)))
+
+      ;; GET /structure/drains — the Structure slice's drains: each open drain of the focused
+      ;; project with its slices beneath it
+      ["structure" "drains"]
+      (let [vs (view-state req)]
+        (page-response (:scope vs) (views/drains-page
+                                    (rail-ctx req :structure (:scope vs) (needs-screen vs))
+                                    (work/drains (:scope vs)))))
+
+      ;; GET /drains — where the drains page lived before it joined the Structure slice
+      ["drains"]
+      {:status 302 :headers {"Location" (str "/structure/drains"
+                                             (when-let [q (:query-string req)] (str "?" q)))}}
+
+      ["_fragment" "drains"]
+      (let [scope (:scope (view-state/parse req))]
+        (sse-response (sse-fragment (views/drains-fragment (work/drains scope) nil scope))))
 
       ;; GET /_fragment/workstreams — SSE workstreams refresh
       ["_fragment" "workstreams"]

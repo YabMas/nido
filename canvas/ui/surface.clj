@@ -318,7 +318,17 @@
   (Operation development-page "Pages for working on the dashboard itself, one tile each."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [shell]})
   (Operation not-found-page "The 404."
-    {:signature [:=> [:catn] :any] :delegates [shell]}))
+    {:signature [:=> [:catn] :any] :delegates [shell]})
+  (Operation drains-fragment
+    "The drains list — each open drain with its slices beneath it, and what an act was refused for;
+     every act it renders posts under the scope the page was requested from."
+    {:signature [:=> [:catn [:drains [:vector :map]] [:notice [:? [:maybe :string]]]
+                 [:scope [:? [:maybe :string]]]] :string]})
+  (Operation drains-page
+    "Every open drain, with the person's acts on it: start a drain, approve a recipe, land a slice,
+     close the drain."
+    {:signature [:=> [:catn [:ctx :map] [:drains [:vector :map]]] :any]
+     :delegates [shell drains-fragment]}))
 
 (Module ui-server
   "The dashboard's HTTP surface.

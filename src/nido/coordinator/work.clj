@@ -29,6 +29,7 @@
    [nido.coordinator.report.ask :as ask]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.conductor :as conductor]
+   [nido.coordinator.lane.drain :as drain-lane]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.lane.ship :as ship]
@@ -47,7 +48,9 @@
    [nido.coordinator.record.triggers :as triggers]
    [nido.platform.io :as io]
    [nido.coordinator.record.standing :as standing]
+   [nido.coordinator.record.drain :as rdrain]
    [nido.coordinator.record.workstream :as cws]
+   [nido.coordinator.view.drains :as drains-view]
    [nido.coordinator.view.recoveries :as recoveries-view]
    [nido.coordinator.view.review-queue :as review-queue-view]
    [nido.coordinator.view.workstreams :as wsv]
@@ -1717,16 +1720,43 @@
      (:gates p)
      (gates* project live-names))))
 
+(defn- raised-by-slices
+  "Drain ws-id -> the ws-ids of its slices among `slice-gates` (slice rows that owe a person a
+   move), each slice's drain read off its own :slice birth entry."
+  [project slice-gates]
+  (reduce (fn [m {:keys [ws-id]}]
+            (if-let [d (some-> (cws/read-ws project ws-id) rdrain/drain-of)]
+              (update m d (fnil conj []) ws-id)
+              m))
+          {} slice-gates))
+
+(defn- inbox-gates
+  "The inbox's gates from `pairs` — each workstream's [row gate-or-nil], in listing order — and
+   the one derivation both the held model and an unheld read take them from. A drain is one row:
+   a slice is never a card of its own, and a slice that owes a person a move puts its drain on
+   the inbox, naming it in :raised-by, whether or not the drain owes one itself."
+  [project pairs]
+  (let [slice? #(= :slice (:origin %))
+        raised (raised-by-slices project (keep (fn [[r g]] (when (and g (slice? r)) r)) pairs))]
+    (into []
+          (keep (fn [[r g]]
+                  (when-not (slice? r)
+                    (if-let [by (get raised (:ws-id r))]
+                      (when (or g (not= :settled (:engagement r)))
+                        (assoc (or g (->gate project r)) :raised-by by))
+                      g))))
+          pairs)))
+
 (defn- gates*
   [project live-names]
-   (->> (list-workstreams project live-names)
-        (remove #(= :dismissed (:stage %)))
-        (filter :needs-you)
-        ;; Between phases is closed, so it reads :settled — and is still owed a
-        ;; person's :assert-gate, which only a gate carries.
-        (remove #(and (= :settled (:engagement %))
-                      (not= :awaiting-gate (:stage %))))
-        (mapv #(->gate project %))))
+  (let [owes? (fn [r] (and (:needs-you r)
+                           ;; Between phases is closed, so it reads :settled — and is still owed
+                           ;; a person's :assert-gate, which only a gate carries.
+                           (not (and (= :settled (:engagement r))
+                                     (not= :awaiting-gate (:stage r))))))]
+    (inbox-gates project
+                 (for [r (remove #(= :dismissed (:stage %)) (list-workstreams project live-names))]
+                   [r (when (owes? r) (->gate project r))]))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
   gate
@@ -1954,7 +1984,7 @@
            :rows     rows
            :by-stage (reduce (fn [m r] (if (= :done (:stage r)) m (update m (:stage r) (fnil conj []) r)))
                              {} rows)
-           :gates    (into [] (keep #(:gate (get entries %))) order)
+           :gates    (inbox-gates project (for [id order :let [e (get entries id)]] [(:row e) (:gate e)]))
            :covered-by (into {} (for [[id e] entries c (:covers e)] [c id]))
            :finished-by-session (into {} (for [[id e] entries :when (:wind e) s (:workers (:wind e))] [s id])))))
 
@@ -2282,9 +2312,11 @@
    new/promote/done surface verbs. A workstream-less ws-id (e.g. a bare
    watched-view row) is a no-op: {:decision :no-workstream}. Dispatch:
      :in-progress → the full promote gesture (gate + start the ticket, its session brought up)
-     :done        → close the workstream (:done outcome)
+     :done        → close the workstream (:done outcome); a drain through lane-drain's close,
+                    and a slice is refused, since it is done only by landing
      other        → advance the stored stage only (no autonomous leg)
-   Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced.
+   Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced, or
+   {:decision :refused :message …} for a slice or a drain whose exit is not observed.
 
    A person's choice is recorded even when it names the stage already stored — `advance-stage!`
    records every `:person` choice, validated like any other move — because status reads the
@@ -2294,7 +2326,18 @@
   (if-let [w (cws/read-ws project ws-id)]
     (case target
       :in-progress (promote/promote-workstream! project ws-id)
-      :done        (do (cws/close! project ws-id :done nil :person) {:decision :done})
+      ;; A slice is done only by landing, and a drain only by lane-drain's close on its observed
+      ;; exit — so neither is closed done here on the person's word alone.
+      :done        (cond
+                     (rdrain/slice? w)
+                     {:decision :refused
+                      :message  "A slice is done when it lands — land it from the drains page."}
+                     (rdrain/drain? w)
+                     (try (drain-lane/close! (keyword (name project)) ws-id) {:decision :done}
+                          (catch clojure.lang.ExceptionInfo e
+                            {:decision :refused :message (ex-message e)}))
+                     :else
+                     (do (cws/close! project ws-id :done nil :person) {:decision :done}))
       (do (cws/advance-stage! project ws-id target :person)
           {:decision :advanced}))
     {:decision :no-workstream}))
@@ -4415,3 +4458,54 @@
                                          :rev          rev}))
             (cws/close! pk claim-ws-id :done)
             {:discharged :recorded :addresses (vec addresses)}))))))
+
+;; ── drains ──────────────────────────────────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:vector :map]]}
+  drains
+  "Every open drain, as the drains page shows it (`view.drains`), across every project — or the one
+   `scope` names, when it names one other than \"all\". A project whose drains cannot be read
+   shows none."
+  [scope]
+  (vec (mapcat (fn [[pname _]]
+                 (when (or (nil? scope) (= "all" scope) (= scope pname))
+                   (try (drains-view/drains (keyword pname)) (catch Throwable _ []))))
+               (project/list-projects))))
+
+(defn ^{:malli/schema [:=> [:cat :string :map] :map]}
+  start-drain!
+  "The person starting a drain from the drains page in `project`: `:exit` the exit criterion, and
+   what established the pattern — `:established-by-ws` a workstream, else `:established-by-commit`
+   a landed commit. Answers {:ok ws-id} or {:refused message}, as `drain-act!` does."
+  [project {:keys [exit established-by-ws established-by-commit]}]
+  (let [blank? #(str/blank? (str %))]
+    (cond
+      (blank? project) {:refused "Name the project the drain belongs to."}
+      (blank? exit)    {:refused "Name the drain's exit criterion."}
+      (and (blank? established-by-ws) (blank? established-by-commit))
+      {:refused "Name the workstream or the landed commit that established the pattern."}
+      :else
+      (try
+        {:ok (drain-lane/start-drain!
+              (keyword (name project))
+              {:exit (str/trim (str exit))
+               :established-by (if-not (blank? established-by-ws)
+                                 {:ws-id (str/trim (str established-by-ws))}
+                                 {:commit (str/trim (str established-by-commit))})})}
+        (catch clojure.lang.ExceptionInfo e
+          {:refused (ex-message e)})))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword [:maybe :string]] :map]}
+  drain-act!
+  "Carry out one of the person's acts on drain `ws-id` from the drains page: :approve the recipe
+   proposal whose seq is `arg`, :land the slice `arg`, or :close the drain. Answers {:ok result}
+   or {:refused message}: a refusal names what the act's records did not support."
+  [project ws-id act arg]
+  (let [project (keyword (name project))]
+    (try
+      {:ok (case act
+             :approve (drain-lane/approve! project ws-id (parse-long (str arg)))
+             :land    (:id (drain-lane/land! project (str arg)))
+             :close   (drain-lane/close! project ws-id))}
+      (catch clojure.lang.ExceptionInfo e
+        {:refused (ex-message e)}))))

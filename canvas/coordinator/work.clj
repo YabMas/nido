@@ -409,4 +409,16 @@
      interruption between the push and the last append leaves the workstream open, and
      running it again appends only for the addresses that do not already carry a landing."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:claim :map]] :map]
-     :delegates [lifecycle/advance-remote!]}))
+     :delegates [lifecycle/advance-remote!]})
+  (Operation drains
+    "Every open drain, as the drains page shows it, across every project or the one a scope names."
+    {:signature [:=> [:catn [:scope [:maybe :string]]] [:vector :map]]})
+  (Operation start-drain!
+    "The person's start of a drain from the drains page — the exit criterion and the workstream or
+     landed commit that established the pattern — through lane-drain's start, answering the new
+     drain or what its records refused."
+    {:signature [:=> [:catn [:project :string] [:opts :map]] :map]})
+  (Operation drain-act!
+    "Carry out one of the person's acts on a drain from the drains page — approve a recipe
+     proposal, land a slice, close the drain — answering what it did or what its records refused."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:act :keyword] [:arg [:maybe :string]]] :map]}))
