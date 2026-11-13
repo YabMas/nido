@@ -468,7 +468,41 @@
             (is (not-any? #(= (:id b) (:hand-back %)) (ws/entries-of :brian id :conduct-decision))
                 "the hand-back whose turn has just begun stays owed")))))))
 
-(deftest every-worked-open-workstream-has-a-conductor
+(defn- conducting!
+  "Give workstream `id` a conductor whose session is running."
+  [id]
+  (let [c (str id "--conductor")]
+    (session/create! :brian id {:name c :weight :heavy :autonomy nil :conductor true})
+    (session/write! (assoc (session/read-session :brian id c) :dispatching {:token "t" :at "now"}))))
+
+(defn- retired-by-a-pass
+  "The workstreams whose conductor one conduct pass retires — a running conductor owed nothing is
+   kept exactly while its workstream is worked, so this is what a pass reads as unworked."
+  []
+  (let [retired (atom [])]
+    (with-redefs [seats/retire-conductor! (fn [_ id] (swap! retired conj id) {:session (str id "--conductor")})]
+      (conductor/conductors! :brian))
+    @retired))
+
+(deftest a-conductor-owed-nothing-is-not-started
+  ;; 2026-11-02 and 2026-11-10: a pass started the conductor of every worked open workstream whose
+  ;; conductor was not running. A conductor's turn ends once it has answered, so with nothing owed
+  ;; it read its brief, found no hand-back and ended — and the next pass, a minute later, started
+  ;; it again: 1355 conversations on one workstream in a day, each saying it had nothing to decide.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (typed! "fix-it")
+        (launching [launched]
+          (is (= [] (conductor/conductors! :brian)) "worked and open, but owed nothing")
+          (is (= [] @launched) "so nothing is launched")
+          (hand-back! id)
+          (is (= [{:ws-id id :act :started :session (str id "--conductor")}] (conductor/conductors! :brian))
+              "a hand-back starts it")
+          (is (str/includes? (second (first @launched)) "bb nido:seats:decide") "briefed with how to decide"))))))
+
+(deftest only-a-persons-recent-prompt-keeps-a-conductor
   (with-tmp
     (fn []
       (let [[worked]   (workstream)
@@ -483,12 +517,9 @@
         (session/create! :brian sent {:name "driven" :weight :heavy :autonomy nil})
         (typed! "driven" :prompt "do the thing\n\n[nido-send 304a711e]")
         (typed! "driven" :prompt "<cross-session-message from=\"parent\">carry on</cross-session-message>")
-        (launching [launched]
-          (is (= [{:ws-id worked :act :started :session (str worked "--conductor")}]
-                 (conductor/conductors! :brian)))
-          (is (str/includes? (second (first @launched)) "bb nido:seats:decide") "briefed with how to decide")
-          (is (not-any? #(#{unworked before sent} (:ws-id %)) (conductor/conductors! :brian))
-              "a session nobody typed in, a prompt older than the window, and a prompt nido sent or another agent delivered are no work"))))))
+        (run! conducting! [worked unworked before sent])
+        (is (= #{unworked before sent} (set (retired-by-a-pass)))
+            "a session nobody typed in, a prompt older than the window, and a prompt nido sent or another agent delivered are no work")))))
 
 (deftest a-workstream-only-runs-worked-has-no-conductor
   (with-tmp
@@ -500,14 +531,13 @@
                                                      :limits {} :priority 0 :uncapped? false
                                                      :on-promote nil :phase :running
                                                      :phase-history [] :error nil}})
-        (launching [launched]
-          (is (empty? (conductor/conductors! :brian))
-              "a Run answers for its own turns, so its session leaves nothing to conduct")
-          (session/create! :brian run-only {:name "take-over" :weight :heavy :autonomy nil})
-          (is (empty? (conductor/conductors! :brian)) "a session nobody typed in is no work either")
-          (typed! "take-over")
-          (is (= [run-only] (map :ws-id (conductor/conductors! :brian)))
-              "a person typing in a session on it makes it worked"))))))
+        (conducting! run-only)
+        (is (= [run-only] (retired-by-a-pass))
+            "a Run answers for its own turns, so its session leaves nothing to conduct")
+        (session/create! :brian run-only {:name "take-over" :weight :heavy :autonomy nil})
+        (is (= [run-only] (retired-by-a-pass)) "a session nobody typed in is no work either")
+        (typed! "take-over")
+        (is (= [] (retired-by-a-pass)) "a person typing in a session on it makes it worked")))))
 
 (deftest a-persons-recent-start-works-the-workstream
   ;; A start from the web UI types nothing: its conversation is briefed by nido. The grant to
@@ -515,13 +545,15 @@
   (with-tmp
     (fn []
       (let [[started] (workstream :plain)
-            [_long-ago] (workstream)
+            [long-ago] (workstream)
             [nidos] (workstream :plain)]
         (ws/activate! :brian started nil)
+        ;; Activated long ago, so only nido's stage choice is recent.
+        (with-redefs [clock/now-iso (constantly "2020-01-01T00:00:00Z")] (ws/activate! :brian nidos nil))
         (ws/advance-stage! :brian nidos :in-progress :nido)
-        (launching [_]
-          (is (= [started] (map :ws-id (conductor/conductors! :brian)))
-              "a start within the window is work; one long ago, or nido's own stage choice, is not"))))))
+        (run! conducting! [started long-ago nidos])
+        (is (= #{long-ago nidos} (set (retired-by-a-pass)))
+            "a start within the window is work; one long ago, or nido's own stage choice, is not")))))
 
 (defn- run-session!
   "Record a Run's session `n` on workstream `id`."
@@ -588,12 +620,13 @@
           (session/update-substrate! :brian id occupant #(assoc-in % [:claude :driver] :retired))
           (reset! launched [])
           (typed! occupant :prompt "the brief\n\n[nido-send tok]")
-          (is (empty? (conductor/conductors! :brian)) "but neither its record, its turn nor its brief is work")
+          (conducting! id)
+          (is (= [id] (retired-by-a-pass)) "but neither its record, its turn nor its brief is work")
           (is (= {} (conductor/reseat! :brian id)) "so the pass leaves the seat as it is")
           (is (= [] @launched) "and relaunches nothing")
           (testing "a person typing in that occupant is work"
             (typed! occupant)
-            (is (= [id] (mapv :ws-id (conductor/conductors! :brian))))))))))
+            (is (= [] (retired-by-a-pass)))))))))
 
 (deftest a-ticket-settled-in-notion-retires-its-conductor
   (with-tmp
@@ -601,14 +634,13 @@
       (let [[id add] (workstream)]
         (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
         (typed! "fix-it")
-        (launching [_]
-          (with-redefs [seats/retire-conductor! (fn [_ _] {:retired true})]
-            (is (= [:started] (mapv :act (conductor/conductors! :brian))))
-            (add :notion-status {:format :notion-status :page-id "p" :status "Review" :by :poller})
-            (is (= [:retired] (mapv :act (conductor/conductors! :brian))) "settled in Notion is closed")
-            (add :stage-set {:format :stage-set :stage :in-progress :by :person})
-            (is (= [] (conductor/conductors! :brian))
-                "a stage chosen since takes it back out, so its running conductor stays")))))))
+        (conducting! id)
+        (is (= [] (retired-by-a-pass)) "worked and open, its running conductor stays")
+        (add :notion-status {:format :notion-status :page-id "p" :status "Review" :by :poller})
+        (is (= [id] (retired-by-a-pass)) "settled in Notion is closed")
+        (add :stage-set {:format :stage-set :stage :in-progress :by :person})
+        (is (= [] (retired-by-a-pass))
+            "a stage chosen since takes it back out, so its running conductor stays")))))
 
 (deftest a-prompt-in-the-projects-own-checkout-is-no-sessions-work
   ;; A :lite session's worktree is the project's checkout itself, so a prompt there — a person
@@ -622,11 +654,11 @@
         (fs/create-dirs home)
         (fs/create-sym-link (fs/path home "worktree") checkout)
         (session-events/append! "conv-checkout" {:event :prompt :cwd (str (fs/real-path checkout)) :prompt "hi"})
-        (launching [_]
-          (with-redefs [project/list-projects (fn [] {"brian" {:directory checkout}})]
-            (is (= [] (conductor/conductors! :brian)) "the checkout belongs to no session")
-            (session-events/append! "conv-home" {:event :prompt :cwd home :prompt "hi"})
-            (is (= [id] (mapv :ws-id (conductor/conductors! :brian))) "its home does")))))))
+        (conducting! id)
+        (with-redefs [project/list-projects (fn [] {"brian" {:directory checkout}})]
+          (is (= [id] (retired-by-a-pass)) "the checkout belongs to no session")
+          (session-events/append! "conv-home" {:event :prompt :cwd home :prompt "hi"})
+          (is (= [] (retired-by-a-pass)) "its home does"))))))
 
 (deftest a-persons-act-is-refused-for-the-conductor-and-its-instructions
   (with-tmp
@@ -1051,8 +1083,11 @@
                    (select-keys (first (ws/entries-of :brian id :activated)) [:format :by :session]))))
           (ws/activate! :brian id nil)
           (is (= 1 (count (ws/entries-of :brian id :activated))) "activation is written once")
+          (is (= 1 (count (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
+                                                               :event {:last-message "done"} :instruction nil :run nil}]})))
+              "once activated, a person's turn is handed back")
           (is (= [{:ws-id id :act :started :session (str id "--conductor")}] (conductor/conductors! :brian))
-              "once activated, a worked workstream gets its conductor")
+              "and starts its conductor")
           (is (= {:carried {:seat 1 :session "fix-it"}} (conductor/carry! :brian id "fix-it" nil nil :start))
               "and a person's start is carried"))))))
 

@@ -18,9 +18,10 @@
    :in-progress choice), within the last day (`session/worked-window-ms`) —
    a prompt nido sent, or one the harness delivered from another agent, is no person's, so an
    occupant nido drives, a spawned child and a Run make nothing worked by their own turns — and
-   every activated workstream that is open and worked, or that owes its conductor a hand-back,
-   has one conductor, started by a conduct pass while its session is not running and retired
-   once the workstream owes it none and is closed or no longer worked. It is briefed from the
+   every activated workstream has one conductor, started by a conduct pass while the workstream
+   owes it a hand-back and its session is not running — a person's turn in a worked session is
+   itself one — and retired once the workstream owes it none and is closed or no longer
+   worked. It is briefed from the
    records and an escalation guidance document a person edits without changing code.
 
    And that a start carries its session: the first session a person's start or a Run's start
@@ -219,15 +220,15 @@
   conductors!
   "On every conduct pass: start, on its one conductor record and its brief, the conductor of each
    activated workstream (`standing/activated?`) of `project` whose conductor's session is not
-   running and that owes its conductor a hand-back (`owes-hand-back?`), open or closed, or that
-   is open and worked — a person typed into one of its sessions within the window `prompted` was
-   read over (default: read now); and retire the conductor, while it still has a process or an up
-   session, of each workstream that owes it no hand-back and is closed, unworked or not activated
-   — a ticket a person settled in Notion closes its workstream here as the pipeline places it
-   (`pipeline/settled-in-notion`), and one taken back out starts it again. A workstream not
-   activated gets none, and one that owes a hand-back keeps its own. Answers [{:ws-id
-   :started|:retired :session}] for what it did; a failure is logged and the rest carried on
-   with."
+   running and that owes its conductor a hand-back (`owes-hand-back?`), open or closed — and only
+   then, since a conductor's turn is one answer to a hand-back and ends with it; and retire the
+   conductor, while it still has a process or an up session, of each workstream that owes it no
+   hand-back and is closed, unworked — no person typed into one of its sessions within the window
+   `prompted` was read over (default: read now) — or not activated. A ticket a person settled in
+   Notion closes its workstream here as the pipeline places it (`pipeline/settled-in-notion`). A
+   workstream not activated gets none, and one that owes a hand-back keeps its own. Answers
+   [{:ws-id :started|:retired :session}] for what it did; a failure is logged and the rest
+   carried on with."
   [project & [prompted-sessions]]
   (let [live     (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {}))
         typed-in (or prompted-sessions (prompted))]
@@ -237,9 +238,8 @@
      ;; Sessions and the seat-message log are read first, and a ledger only where they leave a
      ;; conductor to start or retire: reading every ledger costs seconds a pass.
      (for [ws-id (ws/list-ids project)
-           :let  [c       (conductor-of project ws-id)
-                  worked  (worked? project ws-id typed-in)]
-           :when (or c worked (seq (seats/hand-backs project ws-id)))
+           :let  [c (conductor-of project ws-id)]
+           :when (or c (seq (seats/hand-backs project ws-id)))
            :let  [w    (ws/read-ws project ws-id)
                   on?  (and w (standing/activated? w) (not (standing/paused? w)))
                   owes (and on? (owes-hand-back? project ws-id w))
@@ -247,10 +247,12 @@
                          (nil? w) nil
                          owes
                          (when-not (and c (running? c @live)) :started)
-                         (or (ws/closure w) (pipeline/settled-in-notion project ws-id w) (not worked) (not on?))
-                         (when (and c (needs-retiring? project c @live)) :retired)
-                         (not (and c (running? c @live)))
-                         :started)]
+                         ;; Owed nothing, a conductor is never started: its turn would read the
+                         ;; brief, find no hand-back and end, and the next pass would start it
+                         ;; again — a conversation a minute while a person works the workstream.
+                         (or (ws/closure w) (pipeline/settled-in-notion project ws-id w)
+                             (not (worked? project ws-id typed-in)) (not on?))
+                         (when (and c (needs-retiring? project c @live)) :retired))]
            :when act
            :let  [r (try
                       (case act
