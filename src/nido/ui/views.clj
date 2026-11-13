@@ -1,7 +1,6 @@
 (ns nido.ui.views
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]
             [hiccup2.core :as h]
             [nido.coordinator.report :as report]
             [nido.coordinator.view.recoveries :as recoveries-view]
@@ -10,506 +9,14 @@
             [nido.coordinator.control :as control]
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
+            [nido.ui.stylesheet :as css]
+            [nido.ui.components.state :as state]
+            [nido.ui.components.row :as row]
+            [nido.ui.components.ask :as ask]
             [nido.coordinator.work :as work]))
 
 ;; ---------------------------------------------------------------------------
 ;; Layout
-
-(def ^:private shell-css
-  (str
-   ":root {
-          /* Type: five sizes, each with a role — never a size between them. */
-          --fs-xs: 12px;  /* labels, metadata, chips */
-          --fs-sm: 13px;  /* secondary text, dense rows */
-          --fs-md: 15px;  /* body prose */
-          --fs-lg: 18px;  /* page and pane titles, a question's line, the big number on a card */
-          --font-prose: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-          --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-          --measure: 72ch; /* the reading width of a prose block */
-          /* What a colour IS: surfaces, borders, controls, text. */
-          --bg: #1a1a2e;
-          --surface: #16213e;
-          --surface-raised: #13132a;
-          --surface-sunken: #0f0f1e;
-          --surface-hover: #1b1b33;
-          --surface-selected: #1a2238;
-          --surface-code: #1c1c33;
-          --border: #2a2a4a;
-          --border-subtle: #20203a;
-          --border-strong: #3a3a5a;
-          --control-bg: #2a2a4a;
-          --control-bg-hover: #3a3a5a;
-          --text-strong: #f0f0f8;
-          --text: #dcdce8;
-          --text-muted: #9a9ac0;
-          --text-faint: #75758f;
-          /* An action's emphasis: links, the primary button, the selected row. */
-          --accent: #7eb8da;
-          --accent-strong: #aee0ff;
-          --accent-bg: #2a4a6a;
-          --accent-border: #3a5a7a;
-          /* What a colour MARKS: one hue per state, as a foreground, a dimmer foreground, and a tint. */
-          --needs: #facc15;   --needs-dim: #c9a227;   --needs-bg: #2a2a1a;    /* a person owes a move */
-          --waiting: #d4b483; --waiting-dim: #8a7a50; --waiting-bg: #3a2e14;  /* nido waits, or a record went stale */
-          --working: #7dd3fc; --working-dim: #7a9ad0; --working-bg: #16304a;  /* nido is working */
-          --running: #bbf7d0; --running-dim: #6b8f78;                         /* something runs right now */
-          --ok: #4ade80;      --ok-dim: #6a9a6a;      --ok-bg: #1a3a2a;       /* done, healthy, approved */
-          --failed: #f87171;  --failed-dim: #d9776a;  --failed-bg: #3a1a1a;   /* failed, halted, refused */
-          --failed-border: #6a3a3a; --failed-strong: #ffaeae;
-          --warning: #fb923c; --warning-dim: #e0a34a; --warning-bg: #3a2a1a;  /* caution: a breaker, a finding */
-          --dormant: #c084fc; --dormant-bg: #2a1a2a;                          /* asleep, resumable */
-          --neutral: #9aa3ad; --neutral-bg: #22223a;                          /* finished, asks nothing */
-          --recommended: #7edaa8; --recommended-bg: #16352a;                  /* the answer nido recommends */
-          /* Where a workstream came from. */
-          --src-notion: #aee0ff;  --src-notion-bg: #2a3a4a;
-          --src-github: #facc15;  --src-github-bg: #2a2a1a;
-          --src-slack: #e0a0e0;   --src-slack-bg: #3a2a3a;
-          --src-scratch: #9a9ac0; --src-scratch-bg: #252540;
-        }
-        *, *::before, *::after { box-sizing: border-box; }
-        body { font-family: var(--font-prose);
-               font-size:var(--fs-md); line-height: 1.6; color: var(--text);
-               background: var(--bg); margin: 0; padding: 20px 40px; }
-        a { color: var(--accent); text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        h1 { font-size:var(--fs-lg); color: var(--text-strong); margin: 0 0 8px; }
-        h2 { font-size:var(--fs-md); color: var(--text); margin: 24px 0 8px; }
-        h3 { font-size:var(--fs-sm); color: var(--text-muted); margin: 16px 0 4px; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--border); }
-        th { color: var(--text-muted); font-weight: normal; font-size:var(--fs-xs); text-transform: uppercase; }
-        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-                padding: 16px; margin: 8px 0; }
-        .meta { color: var(--text-faint); font-size:var(--fs-xs); }
-        .empty { color: var(--text-faint); font-style: italic; }
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .pulse { animation: pulse 2s ease-in-out infinite; }
-        .actions { display: flex; gap: 6px; flex-wrap: wrap; }
-        .btn { background: var(--control-bg); color: var(--text); border: 1px solid var(--control-bg-hover);
-               padding: 4px 10px; border-radius: 3px; font-size:var(--fs-xs);
-               cursor: pointer; font-family: inherit; }
-        .btn:hover { background: var(--control-bg-hover); }
-        .btn-primary { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-strong); }
-        .btn-primary:hover { background: var(--accent-border); }
-        .btn-danger { background: var(--failed-bg); border-color: var(--failed-border); color: var(--failed-strong); }
-        .btn-danger:hover { background: var(--failed-border); }
-        .app-state { padding: 2px 8px; border-radius: 3px; font-size:var(--fs-xs);
-                     text-transform: uppercase; letter-spacing: 0.04em; }
-        .app-state-running { background: var(--ok-bg); color: var(--ok); }
-        .app-state-idle { background: var(--waiting-bg); color: var(--waiting); }
-        .app-state-starting, .app-state-stopping, .app-state-restarting
-          { background: var(--working-bg); color: var(--working);
-            animation: pulse 1.5s ease-in-out infinite; }
-        .app-state-failed { background: var(--failed-bg); color: var(--failed); }
-        .app-state-dormant { background: var(--dormant-bg); color: var(--dormant); }
-        .error-msg { color: var(--failed); font-size:var(--fs-xs); margin-top: 4px;
-                     max-width: 420px; overflow: hidden; text-overflow: ellipsis;
-                     white-space: nowrap; }
-        .action-err { color: var(--failed); background: var(--failed-bg); border: 1px solid var(--failed-border);
-                      border-radius: 4px; padding: 8px 10px; margin-top: 16px;
-                      font-size:var(--fs-xs); }
-        .mono, code, pre, kbd { font-family: var(--font-mono); }
-        td, .meta { font-variant-numeric: tabular-nums; }
-        .badge { display:inline-flex; align-items:center; justify-content:center;
-                 width:18px; height:18px; border-radius:4px; font-size:var(--fs-xs); font-weight:bold; }
-        .b-notion{ background:var(--src-notion-bg); color:var(--src-notion); } .b-github{ background:var(--src-github-bg); color:var(--src-github); }
-        .b-slack{ background:var(--src-slack-bg); color:var(--src-slack); } .b-scratch{ background:var(--src-scratch-bg); color:var(--src-scratch); }
-        .gate-wrap { display:grid; grid-template-columns: 38% 62%; min-height:80vh; }
-        .queue-col { border-right:1px solid var(--border); display:flex; flex-direction:column;
-                     min-width:0; min-height:0; }
-        .pickup { margin:12px 16px 10px; padding:12px 14px; border:1px solid var(--border);
-                  border-radius:6px; background:var(--surface); }
-        .pickup-label { color:var(--text-strong); font-size:var(--fs-xs); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:6px; }
-        .pickup-row { display:flex; gap:6px; }
-        .pickup input { flex:1; box-sizing:border-box; background:var(--surface-sunken); border:1px solid var(--border);
-                        border-radius:4px; color:var(--text-strong); font:inherit; font-size:var(--fs-xs); padding:6px 9px; }
-        .pickup input::placeholder { color:var(--text-muted); }
-        .pickup input:focus { outline:none; border-color:var(--accent-border); }
-        .pickup .btn { color:var(--text-strong); }
-        .pickup-result { margin-top:2px; }
-        .inbox { overflow:auto; flex:1; }
-        .gate-card { display:block; padding:10px 16px; border-bottom:1px solid var(--border-subtle); color:inherit; }
-        .gate-card:hover { background:var(--surface-hover); text-decoration:none; }
-        .gate-top { display:flex; align-items:center; gap:8px; }
-        .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-strong); }
-        .needs { width:7px; height:7px; border-radius:50%; background:var(--needs); box-shadow:0 0 6px var(--needs); }
-        .gate-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:2px 0 0 26px;
-                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .pane-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:-6px 0 8px; user-select:all; }
-        .gate-sub { display:flex; align-items:center; gap:8px; color:var(--text-faint); font-size:var(--fs-xs); margin:3px 0 0 26px; }
-        .gate-sub span:last-child { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .gate-prev { color:var(--text-faint); font-size:var(--fs-xs); margin:5px 0 0 26px;
-                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .gate-err { color:var(--failed); font-size:var(--fs-xs); margin:4px 0 0 26px; }
-        .qcard { border:1px solid var(--border); border-radius:6px; background:var(--surface-raised);
-                 padding:14px 16px; margin:0 0 20px; }
-        .qc-head { margin:0 0 10px; color:var(--text-muted); font-size:var(--fs-sm); max-width:var(--measure); }
-        .qc-nav { display:flex; align-items:center; gap:6px; margin:0 0 10px; font-size:var(--fs-xs);
-                  color:var(--text-faint); text-transform:uppercase; letter-spacing:0.04em; }
-        .qc-mark { background:none; border:0; padding:0 2px; cursor:pointer; color:var(--text-faint);
-                   font-size:var(--fs-sm); line-height:1; }
-        .qc-mark.answered { color:var(--ok); }
-        .qc-mark.current { color:var(--text-strong); text-decoration:underline; }
-        .qc-q { font-size:var(--fs-lg); font-weight:500; color:var(--text-strong); margin:0 0 10px;
-                line-height:1.4; max-width:var(--measure); }
-        .qc-ctx p, .qc-rec, .qc-after { font-size:var(--fs-md); color:var(--text); margin:0 0 8px;
-                                       max-width:var(--measure); }
-        .qc-k { font-weight:600; color:var(--text-muted); margin-right:6px; }
-        .qc-opts { display:grid; gap:8px; margin:12px 0 6px; }
-        .qc-opt { display:block; width:100%; max-width:var(--measure); text-align:left; font:inherit;
-                  color:var(--text); background:var(--surface); border:1px solid var(--border);
-                  border-radius:6px; padding:9px 12px; cursor:pointer; }
-        .qc-opt:hover { background:var(--surface-hover); }
-        .qc-opt.primary { background:var(--accent-bg); border-color:var(--accent-border); }
-        .qc-opt.chosen { background:var(--recommended-bg); border-color:var(--recommended); }
-        .qc-opt.static { cursor:default; }
-        .qc-opt-label { display:block; color:var(--text-strong); }
-        .qc-opt-sum { display:block; }
-        .qc-opt-cons { display:block; color:var(--text-muted); font-size:var(--fs-sm); }
-        .qc-chosen { color:var(--recommended); font-size:var(--fs-xs); margin-left:6px; }
-        .qc-step { display:flex; gap:8px; margin:10px 0 0; }
-        .ask-note { color:var(--text-muted); font-style:italic; max-width:var(--measure); }
-        .controls { display:grid; gap:8px; margin:6px 0 20px; }
-        .ans-row { display:grid; grid-template-columns:minmax(150px, max-content) 1fr; gap:12px;
-                   align-items:start; padding:10px 12px; border:1px solid var(--border-subtle);
-                   border-radius:6px; background:var(--surface-raised); }
-        .ans-row.rec { border-color:var(--recommended-bg); }
-        .ans-row .btn { font-size:var(--fs-sm); padding:6px 12px; text-align:left; }
-        .ans-body p { margin:0 0 4px; max-width:var(--measure); }
-        .ans-body .chip { margin-left:0; }
-        .ans-cons { color:var(--text-muted); font-size:var(--fs-sm); }
-        .ans-letter { font-weight:600; color:var(--text-muted); }
-        .ans-does { margin:0; color:var(--text-faint); font-size:var(--fs-sm); max-width:var(--measure); }
-        .controls .reply { margin-top:0; }
-        .md h1 { font-size:var(--fs-lg); } .md h2 { font-size:var(--fs-md); } .md h3, .md h4 { font-size:var(--fs-sm); }
-        .chip { padding:0 7px; border-radius:3px; font-size:var(--fs-xs); text-transform:uppercase; }
-        .c-triage{ background:var(--needs-bg); color:var(--needs); } .c-ready{ background:var(--ok-bg); color:var(--ok); }
-        .c-in-progress{ background:var(--working-bg); color:var(--working); }
-        .c-conf-high{ background:var(--ok-bg); color:var(--ok); } .c-conf-medium{ background:var(--warning-bg); color:var(--warning); }
-        .c-conf-low{ background:var(--failed-bg); color:var(--failed); }
-        .c-det-bug{ background:var(--warning-bg); color:var(--warning); } .c-det-not-a-bug{ background:var(--neutral-bg); color:var(--text-muted); }
-        .c-det-needs-info{ background:var(--working-bg); color:var(--working); }
-        .report-meta { margin:0 0 10px; display:flex; gap:6px; flex-wrap:wrap; }
-        details.trail { margin-top:14px; } details.trail summary { cursor:pointer; color:var(--text-muted); font-size:var(--fs-xs); }
-        .c-rv-ok{ background:var(--ok-bg); color:var(--ok); } .c-rv-warn{ background:var(--warning-bg); color:var(--warning); }
-        .c-rv-bad{ background:var(--failed-bg); color:var(--failed); } .c-rv-run{ background:var(--working-bg); color:var(--working); }
-        .c-rv-neutral{ background:var(--neutral-bg); color:var(--text-muted); }
-        .c-p0, .c-p1 { background:var(--failed-bg); color:var(--failed); } .c-p2 { background:var(--warning-bg); color:var(--warning); }
-        .c-p3 { background:var(--neutral-bg); color:var(--text-muted); }
-        .rv-rounds { margin-top:14px; }
-        .rv-round { border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-raised);
-                    padding:10px 12px; margin:8px 0; }
-        .rv-round-head { display:flex; gap:8px; align-items:baseline; margin-bottom:4px; }
-        .rv-round-head .meta { flex:1; min-width:0; white-space:nowrap; overflow:hidden;
-                               text-overflow:ellipsis; }
-        .rv-foldable { cursor:pointer; user-select:none; }
-        .rv-foldable:hover .rv-mark, .rv-foldable:hover strong { color:var(--text-strong); }
-        .rv-mark { display:inline-block; width:10px; color:var(--text-faint); font-size:var(--fs-xs); }
-        .rv-finding-line { padding:2px 0; }
-        .rv-phase { padding:3px 0; }
-        .rv-phase-head { display:flex; gap:8px; align-items:baseline; }
-        .rv-glyph { width:12px; color:var(--accent); text-align:center; }
-        .rv-label { color:var(--text); min-width:52px; font-size:var(--fs-sm); }
-        .rv-findings { margin:4px 0 6px 20px; padding-left:14px; }
-        .rv-finding { padding:3px 0; }
-        .rv-loc { color:var(--text-muted); font-size:var(--fs-xs); margin-left:26px; }
-        .rv-prose { margin:3px 0 6px 26px; }
-        .rv-prose .md { background:none; border:none; padding:0; color:var(--text-muted);
-                        font-size:var(--fs-sm); line-height:1.6; }
-        .rv-prose .md p { margin:3px 0; }
-        .pane { padding:18px 24px; overflow:auto; }
-        /* A rule per section, so the pane reads as areas rather than as one
-           scroll. The first carries none — there is nothing above it to be
-           separated from. */
-        .pane h2 { border-top:1px solid var(--border-subtle); padding-top:16px; }
-        .pane h2:first-of-type { border-top:none; padding-top:0; }
-        .pos { display:inline-flex; gap:6px; align-items:baseline; margin-left:8px; }
-        .pos .pos-at { font-size:var(--fs-xs); color:var(--text-muted); }
-        .pos.pos-you .pos-at { color:var(--needs-dim); }
-        .st-mark { flex:none; font-size:var(--fs-xs); line-height:1; }
-        .st-mark.live { color:var(--running); }
-        .st-mark.paused { color:var(--dormant); }
-        .st-mark.stalled { color:var(--failed); }
-        .pause-line { display:flex; align-items:center; gap:8px; margin:-4px 0 10px;
-                      font-size:var(--fs-xs); color:var(--dormant); }
-        .pause-ctl { margin-left:auto; }
-        .phase-chip { font-size:var(--fs-xs); color:var(--text-muted); border:1px solid var(--border); border-radius:4px; padding:0 5px; margin-left:6px; }
-        .gate-sub span.phase-chip { flex:none; }
-        .plan { margin:10px 0 14px; }
-        .plan h3 { font-size:var(--fs-sm); margin:0 0 8px; color:var(--text); }
-        .plan ol { list-style:none; margin:0; padding:0; border:1px solid var(--border); border-radius:6px; }
-        .plan li { padding:8px 12px; border-top:1px solid var(--border-subtle); }
-        .plan li:first-child { border-top:none; }
-        .plan .ph { display:flex; gap:10px; align-items:baseline; }
-        .plan .mk { width:14px; color:var(--text-faint); }
-        .plan li.landed .mk { color:var(--ok-dim); }
-        .plan li.current .mk { color:var(--working-dim); }
-        .plan li.current .cl { color:var(--text-strong); font-weight:600; }
-        .plan li.ahead .cl { color:var(--text-muted); }
-        .plan .pm { font-size:var(--fs-xs); color:var(--text-faint); margin:3px 0 0 24px; }
-        .plan .pm.owed { color:var(--needs-dim); }
-        .plan .pm.pnr { color:var(--failed-dim); }
-        .gate-criterion { font-size:var(--fs-xs); color:var(--needs-dim); margin-top:3px; }
-        /* One per row, full text. Three columns fitted the cards on screen and
-           made the RECORDS unreadable: a baseline's area or a design's summary is
-           several sentences, and a 220px column clamped at four lines showed
-           about a third of one. These are the three things the pane exists to
-           state, so they are stated. */
-        .holds { display:flex; flex-direction:column; gap:10px; margin:12px 0; }
-        .hold { border:1px solid var(--border); border-radius:6px; background:var(--surface);
-                padding:10px 12px; min-width:0; }
-        .hold .hh { display:flex; gap:8px; align-items:baseline; margin-bottom:5px; }
-        .hold .hk { font-size:var(--fs-xs); text-transform:uppercase; color:var(--text-muted); }
-        .hold .hs { font-size:var(--fs-xs); color:var(--text-faint); }
-        /* No clamp, and whitespace COLLAPSED rather than preserved. These
-           strings are soft-wrapped in the EDN a human typed, so the newlines and
-           the leading indentation are an artifact of the source file, not of the
-           prose; pre-wrap renders them as hard breaks with the indent showing. */
-        .hold .hb { font-size:var(--fs-sm); line-height:1.55; color:var(--text);
-                    overflow-wrap:anywhere; }
-        .hold .hf { margin-top:6px; font-size:var(--fs-xs); }
-        .hold .ok { color:var(--ok-dim); }
-        .hold .no { color:var(--waiting-dim); }
-        .hold.empty { border-style:dashed; background:none; }
-        .hold.empty .hb { color:var(--text-faint); }
-        /* The arc. A vertical list rather than a horizontal track, for the
-           reason the holds are: a stage carries several facts and a lane wide
-           enough for eight of them leaves room for none of them. It is also not
-           a progress bar — a bar draws a walk that only goes forward, and the
-           re-entry count is the one thing here a forward-only shape cannot
-           show. */
-        .arc { margin:12px 0 4px; border:1px solid var(--border-subtle); border-radius:6px; overflow:hidden; }
-        .arc-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
-                   border-bottom:1px solid var(--border-subtle); color:var(--text); }
-        .arc-row:last-child { border-bottom:none; }
-        .arc-row.live { cursor:pointer; }
-        .arc-row.live:hover { background:var(--surface-hover); }
-        .arc-row.open { background:var(--surface-hover); }
-        .arc-g { width:12px; text-align:center; color:var(--text-faint); font-size:var(--fs-xs); }
-        .arc-n { min-width:118px; font-size:var(--fs-sm); color:var(--text-muted); }
-        .arc-m { font-size:var(--fs-xs); color:var(--text-faint); }
-        .arc-d { font-size:var(--fs-xs); color:var(--running-dim); }
-        .arc-v { font-size:var(--fs-xs); color:var(--waiting); }
-        .arc-row.done .arc-g { color:var(--ok-dim); }
-        .arc-row.done .arc-n { color:var(--text); }
-        .arc-row.current .arc-g { color:var(--working-dim); }
-        .arc-row.current .arc-n { color:var(--text-strong); font-weight:600; }
-        .arc-row.stale .arc-g { color:var(--waiting); }
-        .arc-row.stale .arc-n { color:var(--waiting); }
-        .arc-row.stale .arc-m { color:var(--waiting-dim); }
-        .arc-row.skipped .arc-n { color:var(--waiting-dim); }
-        .arc-row.skipped .arc-m { color:var(--waiting-dim); }
-        .arc-row.ahead .arc-n { color:var(--text-faint); }
-        /* Something running in a stage: a spinner in place of its glyph. A stage
-           whose next move is a person's has a mark of its own in the needs
-           colour instead, which outranks the spinner. */
-        .arc-spin { display:inline-block; width:8px; height:8px; border:1.5px solid var(--running);
-                    border-right-color:transparent; border-radius:50%;
-                    animation:arc-spin .8s linear infinite; }
-        @keyframes arc-spin { to { transform:rotate(360deg); } }
-        .arc-wait { color:var(--needs); font-size:var(--fs-sm); line-height:1; }
-        .arc-row.awaiting .arc-n { color:var(--needs); }
-        .arc-sub { padding:2px 0 8px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); }
-        .hist-head { display:inline-flex; gap:7px; align-items:baseline; cursor:pointer;
-                     font-size:var(--fs-sm); color:var(--text-muted); padding:3px 0; }
-        .hist-head:hover { color:var(--text); }
-        .hist-head .hc { color:var(--text-faint); }
-        .ledger-index { margin:14px 0 8px; border:1px solid var(--border-subtle); border-radius:6px; overflow:hidden; }
-        .ledger-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
-                      border-bottom:1px solid var(--border-subtle); color:var(--text); cursor:pointer; }
-        .ledger-row:last-child { border-bottom:none; }
-        .ledger-row:hover { background:var(--surface-raised); }
-        .ledger-row.sel { background:var(--surface-selected); }
-        .ledger-row .lk { font-size:var(--fs-xs); text-transform:uppercase; color:var(--text-muted); min-width:54px; }
-        .ledger-row .meta { min-width:78px; }
-        .ledger-row .lt { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-strong); }
-        .ledger-row.superseded .lt { color:var(--text-faint); text-decoration:line-through; }
-        .ledger-row.superseded .lk { color:var(--text-faint); }
-        .ledger-row .lx { font-size:var(--fs-xs); color:var(--waiting-dim); border:1px solid var(--waiting-bg); border-radius:4px;
-                          padding:0 6px; white-space:nowrap; }
-        .viewer { margin:12px 0 8px; border:1px solid var(--border); border-radius:6px;
-                  background:var(--surface-sunken); overflow:hidden; }
-        .viewer-bar { display:flex; gap:10px; align-items:baseline; padding:8px 12px;
-                      background:var(--surface-raised); border-bottom:1px solid var(--border); }
-        .viewer-bar .lk { font-size:var(--fs-xs); text-transform:uppercase; color:var(--text-muted); }
-        .viewer-bar .lt { flex:1; min-width:0; white-space:nowrap; overflow:hidden;
-                          text-overflow:ellipsis; color:var(--text-strong); }
-        .viewer-close { background:none; border:none; color:var(--text-muted); cursor:pointer;
-                        font-size:var(--fs-sm); padding:0 2px; line-height:1; }
-        .viewer-close:hover { color:var(--text-strong); }
-        .viewer > .md { border:none; border-radius:0; background:none; }
-        .md { font-family:var(--font-prose);
-              font-size:var(--fs-sm); line-height:1.7; color:var(--text); background:var(--surface-sunken);
-              border:1px solid var(--border); border-radius:6px; padding:16px 18px; }
-        .md code { background:var(--surface-code); padding:1px 5px; border-radius:3px; color:var(--accent-strong); }
-        .options { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
-        .option { border:1px solid var(--border); border-radius:6px; background:var(--surface-raised);
-                  padding:10px 12px 11px; }
-        .option-head { display:flex; gap:9px; align-items:baseline; }
-        .option-letter { display:inline-block; min-width:20px; padding:1px 0; border-radius:4px;
-                         background:var(--surface-selected); color:var(--accent); font-size:var(--fs-xs); font-weight:600;
-                         text-align:center; }
-        .option p { margin:5px 0 0; }
-        .chip.c-opt-rec { background:var(--recommended-bg); color:var(--recommended); }
-        .reply { margin-top:16px; border:1px solid var(--border); border-radius:6px; background:var(--surface-raised); padding:12px 14px; }
-        .reply textarea { width:100%; min-height:62px; background:var(--surface-sunken); border:1px solid var(--border);
-                          border-radius:4px; color:var(--text); font:inherit; font-size:var(--fs-sm); padding:9px 11px; }
-        .links { margin:6px 0 14px; }
-        .link-row { display:flex; gap:10px; align-items:baseline; font-size:var(--fs-xs);
-                    line-height:1.9; }
-        .link-k { color:var(--text-faint); font-size:var(--fs-xs); text-transform:uppercase;
-                  letter-spacing:0.04em; min-width:82px; }"
-   ;; rail + content-area chrome
-   " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr; min-height:100vh; }
-     .content { padding:20px 28px; overflow:auto; }
-     .rail { background:var(--surface-raised); border-right:1px solid var(--border); padding:18px 14px;
-             display:flex; flex-direction:column; gap:3px; }
-     .rail-brand { display:block; margin-bottom:16px; line-height:0; }
-     .rail-brand:hover { text-decoration:none; }
-     .rail-logo { display:block; width:84px; height:84px; border-radius:50%;
-                  margin:0 auto; transition:filter .15s ease; }
-     .rail-brand:hover .rail-logo { filter:brightness(1.12); }
-     .rail-link { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:5px;
-                  color:var(--text-muted); border-left:3px solid transparent; }
-     .rail-link:hover { background:var(--surface-hover); text-decoration:none; }
-     .rail-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
-     .rail-badge { margin-left:auto; background:var(--accent-bg); color:var(--accent-strong); border-radius:9px;
-                   padding:0 7px; font-size:var(--fs-xs); min-width:18px; text-align:center; }
-     .rail-badge.zero { background:var(--neutral-bg); color:var(--text-faint); }
-     .rail-scope { margin-top:16px; padding-top:14px; border-top:1px solid var(--border); font-size:var(--fs-xs); }
-     .rail-scope a { display:block; padding:3px 6px; color:var(--text-muted); }
-     .rail-scope a.active { color:var(--text-strong); }
-     .rail-health { margin-top:auto; padding-top:14px; font-size:var(--fs-xs); color:var(--text-muted); }
-     .rail-health-btn { background:none; border:none; color:inherit; font:inherit;
-                        cursor:pointer; padding:0; display:flex; align-items:center; }
-     .ops-wrap { position:fixed; left:14px; bottom:14px; width:340px; max-width:360px;
-                 max-height:70vh; overflow-y:auto; z-index:50; }
-     .ops-panel .card { background:var(--surface); }
-     .ops-panel .fire-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
-                             margin:6px 0; }
-     .ops-panel .fire-row input { background:var(--surface-sunken); border:1px solid var(--border);
-                                   border-radius:4px; color:var(--text-strong); font:inherit;
-                                   font-size:var(--fs-xs); padding:4px 8px; width:100px; }
-     .ops-panel .fleet-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
-     .ops-panel .fleet-bar { height:4px; border-radius:2px; background:var(--border);
-                             margin:7px 0 6px; overflow:hidden; }
-     .ops-panel .fleet-bar span { display:block; height:100%; background:var(--ok); }
-     .ops-panel .fleet-over .fleet-bar span { background:var(--warning); }
-     .ops-panel .fleet-over .fleet-pct { color:var(--warning); }
-     .ops-panel .fleet-cand { display:flex; justify-content:space-between; gap:8px;
-                              font-size:var(--fs-xs); margin-top:3px; }
-     .ops-panel .fleet-cand .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-     .ops-panel .fleet-cand .sz { color:var(--text-muted); white-space:nowrap; }
-     .dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
-     .dot-up { background:var(--ok); box-shadow:0 0 6px var(--ok); }
-     .dot-halted { background:var(--failed); box-shadow:0 0 6px var(--failed); }
-     .dot-breaker { background:var(--warning); }
-     .dot-down { background:var(--text-faint); }
-     .doing-badge { color:var(--running-dim); }
-     .doing-badge::before { content:'● '; }
-     .badge-findings { color:var(--warning-dim); border:1px solid var(--warning-bg); border-radius:4px; padding:1px 6px; font-size:var(--fs-xs); margin-left:6px; }
-     .doing-badge.ship-blocked { color:var(--failed); font-weight:600; }
-     .doing-badge.ship-driving { color:var(--working-dim); }
-     .doing-badge.ship-awaiting-merge { color:var(--text-faint); }
-     .doing-badge.ship-queued { color:var(--text-faint); }
-     .ws-section { margin-top:2px; }
-     .ws-fold-header { cursor:pointer; user-select:none; display:flex; align-items:center;
-                       gap:6px; }
-     .ws-fold-header:hover { color:var(--text); }
-     .ws-fold-mark { display:inline-block; width:10px; color:var(--text-faint); font-size:var(--fs-xs); }
-     .ws-fold-count { color:var(--text-faint); font-size:var(--fs-xs); }
-     .ws-section-rows { overflow:hidden; max-height:0; opacity:0;
-                        transition:max-height .28s ease, opacity .2s ease; }
-     .ws-section-rows.ws-open { max-height:4000px; opacity:1; }
-     .winddown { opacity: 0.65; }
-        /* Operations — the proposal is the unit, so the row is the design.
-           Evidence is what a decision is actually about, so it is on the card
-           rather than behind a disclosure; the proposal is what you are being
-           asked to accept, so it is set apart from the observation. */
-        .prop { border:1px solid var(--border); border-radius:6px; padding:12px 14px; margin-bottom:10px;
-                background:var(--surface-sunken); }
-        /* Only a FINISHED proposal is dimmed. An approval nobody has carried
-           out is the most actionable row on the page — dimming it alongside the
-           landed ones is what made 'approved' and 'done' look like one state. */
-        .prop.settled { opacity:.55; }
-        .prop-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
-        .prop-where { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent-strong); }
-        .prop-sum { margin:0 0 8px; }
-        .prop-ev { font-size:var(--fs-xs); color:var(--text-muted); border-left:2px solid var(--border-strong); padding-left:10px;
-                   margin:0 0 8px; }
-        .prop-fix { font-size:var(--fs-sm); border-left:2px solid var(--accent-border); padding-left:10px; margin:0 0 10px; }
-        .prop-meta { font-size:var(--fs-xs); color:var(--text-faint); display:flex; gap:10px; flex-wrap:wrap; }
-        .prop-verdict { display:inline-block; padding:1px 6px; border-radius:3px; font-size:var(--fs-xs); }
-        .v-approved { background:var(--ok-bg); color:var(--ok); }
-        .v-declined { background:var(--failed-bg); color:var(--failed); }
-        .prop-landed { background:var(--working-bg); color:var(--working); }
-        /* The state the surface had no way to show. Amber rather than grey:
-           it is not a quiet footnote, it is the queue of things this board has
-           agreed to and not done. */
-        .prop-waiting { background:var(--waiting-bg); color:var(--waiting); }
-        /* Finished, but by a plan rather than by anything landing. Grey because
-           it asks nothing of anyone — unlike the amber above it. */
-        .prop-disposed { background:var(--neutral-bg); color:var(--neutral); }
-        .prop-note { font-size:var(--fs-xs); color:var(--text-muted); margin:8px 0 0; }
-        .prop-note b { color:var(--text); font-weight:600; }
-        .ops-empty { color:var(--text-faint); padding:20px 0; }
-        .ops-head { display:flex; gap:14px; align-items:baseline; margin-bottom:14px; flex-wrap:wrap; }
-        /* One reading column. Not .gate-wrap's queue+pane grid: nothing opens
-           beside a proposal, so its 38% column would leave the evidence — the
-           part you actually have to read — wrapped against two-thirds empty. */
-        .ops-col { max-width:900px; padding-top:4px; }
-        /* The Operations home: a card per concern. The number is the card —
-           coloured only when it asks something of someone. */
-        .ops-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
-                     gap:12px; margin-top:12px; }
-        .ops-card { display:block; background:var(--surface); border:1px solid var(--border);
-                    border-radius:6px; padding:14px 16px; color:var(--text); }
-        .ops-card:hover { border-color:var(--accent-border); text-decoration:none; }
-        .ops-card-title { font-size:var(--fs-xs); color:var(--text-muted); text-transform:uppercase;
-                          letter-spacing:.06em; }
-        .ops-card-num { font-size:var(--fs-lg); margin:6px 0 4px; color:var(--text); }
-        .ops-card-num.ops-you { color:var(--needs); }
-        .ops-card-num.ops-busy { color:var(--working); }
-        .ops-crumb { font-size:var(--fs-xs); color:var(--text-faint); margin-bottom:10px; }
-        /* Review queue — a ticket is a card, its proposed writes rows in it. */
-        .rq-item { border-top:1px solid var(--border-subtle); padding:8px 0; }
-        .rq-item.rq-skipped { opacity:.5; }
-        .rq-sum { font-size:var(--fs-sm); }
-        .rq-rank { color:var(--warning); min-width:28px; }
-        .rq-title { color:var(--text); }
-        .rq-why { font-size:var(--fs-xs); color:var(--text-muted); margin:0 0 6px; }
-        .rq-toggle { font-size:var(--fs-xs); color:var(--text-faint); cursor:pointer; }
-        .rq-pre { display:none; }
-        .rq-pre.rq-shown { display:block; }
-        .rq-pre { font-size:var(--fs-xs); color:var(--text); background:var(--surface-sunken);
-                  border-left:2px solid var(--accent-border); padding:8px 10px; margin:6px 0; }
-        .rq-order { margin:0 0 10px; padding-left:22px; font-size:var(--fs-sm); }
-        .rq-flags { font-size:var(--fs-xs); color:var(--warning); }
-        .rq-o-applied { background:var(--ok-bg); color:var(--ok); }
-        .rq-o-failed { background:var(--failed-bg); color:var(--failed); }
-        .rq-o-skipped { background:var(--neutral-bg); color:var(--neutral); }
-        .rq-qa-keep { background:var(--ok-bg); color:var(--ok); }
-        .rq-qa-write, .rq-qa-correct { background:var(--waiting-bg); color:var(--waiting); }
-        /* Session recovery — the state chip is the first thing read, so each
-           state has its own colour: red asks for a person, blue is nido working,
-           amber is nido waiting, green and grey are finished. */
-        .rec-title { font-size:var(--fs-sm); color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;
-                     margin:6px 0 10px; }
-        .rec-needs-you { background:var(--needs-bg); color:var(--needs); }
-        .rec-recovering { background:var(--working-bg); color:var(--working); }
-        .rec-waiting { background:var(--waiting-bg); color:var(--waiting); }
-        .rec-owed { background:var(--neutral-bg); color:var(--text); }
-        .rec-restored { background:var(--ok-bg); color:var(--ok); }
-        .rec-dismissed { background:var(--neutral-bg); color:var(--neutral); }
-        /* Red like needs-you: a stuck sweep is released only by a person. */
-        .sweep-stuck { background:var(--failed-bg); color:var(--failed); }
-        .rec-did { font-size:var(--fs-xs); color:var(--text-muted); margin:0 0 8px; }
-        .rec-feed { font-size:var(--fs-xs); margin-top:8px; }
-        .rec-evt { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid var(--border-subtle); }
-        .rec-evt-at { color:var(--text-faint); min-width:64px; }
-        .rec-evt-kind { color:var(--accent-strong); min-width:104px; }
-        .rec-evt-what { color:var(--text); overflow:hidden; text-overflow:ellipsis; }
-"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -726,7 +233,7 @@
         [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
         [:title (or title "nido") " — nido"]
         [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
-        [:style (h/raw shell-css)]]
+        [:style (h/raw (css/stylesheet))]]
        [:body {:data-signals__ifmissing "{opsOpen: false}"}
         (rail ctx)
         (into [:main.content] content)
@@ -743,45 +250,6 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Gate inbox (cross-project human-decision queue over nido.coordinator.work)
-
-(defn ^{:malli/schema [:=> [:cat :keyword] :any]}
-  origin-badge [origin]
-  (let [[ch cls] (case origin
-                   :notion ["N" "b-notion"] :github ["G" "b-github"]
-                   :slack ["S" "b-slack"]   ["·" "b-scratch"])]
-    [:span {:class (str "badge " cls)} ch]))
-
-(defn- chip [stage]
-  [:span {:class (str "chip c-" (name stage))} (name stage)])
-
-(declare state-mark)
-
-(defn- doing-badge
-  "What a workstream is doing right now — nothing when nothing is. The ONE
-   rendering of current activity, so a shipping row says `merging · driving`
-   once rather than in two vocabularies.
-
-   Muted text, not a filled badge: the row's emphasis belongs to the position
-   chip lighting when the next move is a human's, and a lit slab here outshouts
-   it on rows that need nobody. The exception is a merge phase's severity class,
-   so a stuck merge still reads red on a board that is scanned rather than read.
-
-   It is often the last span of a `.gate-sub`, which flexes to fill the line —
-   a background here would paint that whole stretch."
-  [doing]
-  (when-let [d (wsv/doing-label doing)]
-    [:span {:class (str "doing-badge"
-                        (when-let [phase (and (= :merge (:source doing)) (:phase doing))]
-                          (str " ship-" (name phase))))}
-     d]))
-
-(defn- round-label
-  "The words beside the running stage row: where a review round has got (`design round 3 ·
-   judging · 0 findings`), and nothing for any other activity. Which agent runs and on what is
-   detail the person does not scan a workstream for — the running mark already says something
-   runs — so it stays in the state mark's title."
-  [doing]
-  (when (= :claim (:source doing)) (wsv/doing-label doing)))
 
 (defn- pause-line
   "The pane's pause control under its Status heading: while a person's pause stands, that it does
@@ -808,13 +276,6 @@
         [:span.link-k label]
         [:a {:href url :target "_blank" :title title} (or id url) " ↗"]])]))
 
-(defn- tag-line
-  "The workstream's stable identifier (wsv/tag — ticket id, else worktree name) on
-   its own line under the generated title, which is what a person cannot search
-   for: it moves whenever its basis does."
-  [tag]
-  (when tag [:div.gate-tag tag]))
-
 (defn- pane-heading
   "A detail pane's <h1>: origin badge + label, with the label linking out to the
    primary (first) external ref when there is one, and the stable tag beneath it,
@@ -823,7 +284,7 @@
   [origin label links tag]
   (let [primary (:url (first links))]
     (list
-     [:h1 (origin-badge origin) " "
+     [:h1 (state/origin-badge origin) " "
       (if primary
         [:a {:href primary :target "_blank"} label " ↗"]
         label)]
@@ -901,39 +362,6 @@
   [:li [:span.meta at] " · " session " · " [:code (or tool-name "?")]
    (when tool-input [:span.meta " " tool-input])])
 
-(defn- gate-card
-  "One inbox row, linking to `href` — the workstream the gate is answered on. A
-   `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'.
-   `:error-msg` (a gate action that came back failed) renders on the row — the
-   resolve is async, so this is the only trace a failed Apply leaves.
-   `:doing` renders the same activity badge the workstream list shows: waiting on
-   a person and having something underway are separate facts, and a gate can hold
-   both at once."
-  [{:keys [project origin stage label tag report ask session resume-error pending? error-msg doing denials]} href]
-  [:a {:class "gate-card"
-       :href  href}
-   [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
-   (tag-line tag)
-   [:div.gate-sub [:span project] (chip stage)
-    [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]
-    ;; What a gate is PARKED on is the line above; this is what is running in it
-    ;; right now. A claim outranks session state, so the two coexist — and the
-    ;; queue would otherwise be the one surface silent about the round underway.
-    (state-mark nil doing)]
-   ;; The question the card asks, so a reader scanning the list sees what each one wants of them.
-   [:div.gate-prev (or (:question ask)
-                       (some-> report :markdown
-                               (str/replace #"^#.*\n+" "")
-                               str/split-lines first)
-                       "—")]
-   (when resume-error
-     [:div.gate-err "⚠ resume failed: " (or (:message resume-error)
-                                            (name (:reason resume-error)))])
-   (when error-msg [:div.gate-err "⚠ " error-msg])
-   (when (seq denials)
-     [:div.gate-err "⚠ " (count denials) " permission denial" (when (< 1 (count denials)) "s")
-      " — latest: " (or (:tool-name (peek denials)) "?")])])
-
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
   "The needs-you list — initial render + SSE refresh: one row per gate, each opening that
@@ -944,7 +372,7 @@
     (if (seq gates)
       [:div {:id "needs"}
        (for [g gates]
-         (gate-card g (str "/workstreams/" (:project g) "/" (:ws-id g))))]
+         (row/gate-row g (str "/workstreams/" (:project g) "/" (:ws-id g))))]
       [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
 
 (defn- gate-action-fragment
@@ -1016,70 +444,6 @@
    happened."
   ([msg project ws-id pane-id]
    (gate-action-fragment msg project ws-id pane-id)))
-
-(defn- style-class [style]
-  (case style :primary "btn btn-primary" :danger "btn btn-danger" "btn"))
-
-(defn- action-button
-  "One gate button. A descriptor carrying `:seq` (blocker-option buttons — see
-   work/option-actions) posts it as ?entry=, the same reading position every other
-   surface rides: the letter it sends means nothing except relative to the report
-   that drew it, so the resolver needs to know which report that was."
-  [project ws-id {:keys [id label style title] entry-seq :seq} route]
-  [:button (cond-> {:class (style-class style)
-                    "data-on:click" (str "@post('"
-                                         (cond-> (route project ws-id id)
-                                           entry-seq (str "?entry=" entry-seq))
-                                         "')")}
-             ;; Only the lettered option buttons carry one — their label is a
-             ;; single character, so what they answer lives in the tooltip.
-             title (assoc :title title))
-   label])
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any :any] :any]}
-  action-bar
-  "Render an action set: one-click buttons (mutations + preset-input resumes) in a row,
-   plus a free-text reply textarea when a resume action without :input is present.
-   `session` labels the resume target, or is nil. `route` builds each button's POST url from
-   (project ws-id action-id). The single renderer behind every gate."
-  ([project ws-id actions session route]
-   (let [buttons   (filter #(or (#{:mutation :link} (:kind %)) (:input %)) actions)
-         free-text (some #(when (and (= :resume (:kind %)) (not (:input %))) %) actions)
-         ;; "Answer" is the free text a gate offers when nobody is parked: it is recorded on the
-         ;; ledger as the blocker's answer and resumes nobody, so the copy must not promise a resume.
-         answer?   (= "Answer" (:label free-text))
-         evidence  (some #(when (= :evidence (:kind %)) %) actions)]
-     (list
-      (when evidence
-        [:div.reply
-         [:div.meta {:style "text-transform:uppercase;font-size:var(--fs-xs)"} "Assert the gate"]
-         (when-let [c (:criterion evidence)] [:p [:span.meta "Criterion: "] c])
-         [:textarea {"data-bind" "evidence"
-                     :placeholder "What you observed on the running system, and where…"}]
-         [:div {:style "margin-top:9px"}
-          [:button.btn.btn-primary
-           {"data-on:click" (str "@post('" (route project ws-id (:id evidence)) "')")}
-           (str (:label evidence) " ▸")]]])
-      (when (seq buttons)
-        (into [:div.actions {:style "margin-top:16px"}]
-              (for [a buttons]
-                (if (= :link (:kind a))
-                  [:a {:class (style-class (:style a)) :href (:href a) :title (:title a)} (:label a)]
-                  (action-button project ws-id a route)))))
-      (when free-text
-        [:div.reply
-         [:div.meta {:style "text-transform:uppercase;font-size:var(--fs-xs)"}
-          (if answer? "Answer the blocker" "Reply & resume")]
-         [:textarea {"data-bind" "reply"
-                     :placeholder (if answer?
-                                    "Your answer, in your words. It is recorded on the ledger for whoever picks this up next…"
-                                    "Tell the agent what to do next…")}]
-         [:div {:style "margin-top:9px"}
-          [:button.btn.btn-primary
-           {"data-on:click" (str "@post('" (route project ws-id :reply) "')")}
-           (if answer? "Record answer ▸" "Send & resume ▸")]
-          (when (and session (not answer?))
-            [:span.meta {:style "margin-left:10px"} "resumes " session])]])))))
 
 (defn- conf-chip [{:keys [level]}]
   [:span {:class (str "chip c-conf-" (name level))} (name level)])
@@ -1810,158 +1174,6 @@
 
 ;; The position and arc vocabulary the workstream pane defines below; the gate pane names a
 ;; position and marks a stage exactly as it does.
-(defn- does-of
-  "What giving action `id` does, as the Ask words it."
-  [ask id]
-  (some #(when (= id (:action %)) (:does %)) (:answer-does ask)))
-
-(defn ^{:malli/schema [:=> [:cat :WorkstreamId] :string]}
-  card-signal
-  "The key under `qcard` that holds workstream `ws-id`'s card state ({step, answers}): the id with
-   every character a signal name cannot carry replaced by `_`. Keyed per workstream so the state is
-   seeded only when missing — a pane poll re-renders the card without resetting the reader's step
-   or choices — and a card opened for another workstream starts fresh instead of inheriting them."
-  [ws-id]
-  (str/replace (str ws-id) #"[^A-Za-z0-9]" "_"))
-
-(defn- answer-signal
-  "The page signal holding question `i`'s choice on `ws-id`'s card: a letter, or '' while open."
-  [ws-id i]
-  (str "$qcard." (card-signal ws-id) ".answers.q" i))
-
-(defn- step-signal [ws-id] (str "$qcard." (card-signal ws-id) ".step"))
-
-(defn- post-expr
-  "The click expression posting action descriptor `d` through `route`, with the reading position
-   it was rendered at when it carries one."
-  [route project ws-id {:keys [id] entry-seq :seq}]
-  (str "@post('" (cond-> (route project ws-id id) entry-seq (str "?entry=" entry-seq)) "')"))
-
-(defn- option-choice
-  "One option of question `i`, as the button that answers it: its label in bold, then its summary,
-   then its consequence, and never its letter. An option tied to an offered action posts that
-   action; one that is not is a choice — clicking marks it chosen in the page, clicking it again
-   leaves the question open — that the Ask's submit sends. A pending card renders it with no
-   button at all."
-  [{:keys [project ws-id route by-id pending? primary-option?]} i
-   {:keys [letter label summary consequence recommended? action] :as opt}]
-  (let [chosen (str (answer-signal ws-id i) " === '" letter "'")
-        body   (list [:span.qc-opt-label [:strong label]
-                      (when recommended? [:span.chip.c-opt-rec "recommended"])
-                      (when-not action [:span.qc-chosen {"data-show" chosen} "✓ chosen"])]
-                     (when-not (str/blank? summary) [:span.qc-opt-sum summary])
-                     (when consequence [:span.qc-opt-cons consequence]))
-        d      (when action (by-id action))]
-    (cond
-      (or pending? (and action (nil? d))) [:div.qc-opt.static body]
-      d   [:button {:type "button"
-                    :class (str "qc-opt" (when (primary-option? opt) " primary"))
-                    "data-on:click" (post-expr route project ws-id d)}
-           body]
-      :else [:button {:type "button" :class "qc-opt"
-                      "data-class:chosen" chosen
-                      "data-attr:aria-pressed" chosen
-                      "data-on:click" (str (answer-signal ws-id i) " = (" chosen ") ? '' : '" letter "'")}
-             body])))
-
-(defn- question-section
-  "Question `i` of `n`: its line, then its context, recommendation and what follows the answer as
-   body text, then its options. Only the shown one is visible when there are several."
-  [ctx i n {:keys [question context recommendation after options]}]
-  [:section (cond-> {:class "qc-question"} (> n 1) (assoc "data-show" (str (step-signal (:ws-id ctx)) " === " i)))
-   [:p.qc-q question]
-   (when (seq context) (into [:div.qc-ctx] (map (fn [c] [:p c])) context))
-   (when recommendation [:p.qc-rec [:span.qc-k "Recommended"] recommendation])
-   (when after [:p.qc-after [:span.qc-k "Once answered"] after])
-   (when (seq options)
-     (into [:div.qc-opts] (map #(option-choice ctx i %)) options))])
-
-(defn- stepper-nav
-  "Where the reader is among `n` questions: which is shown, one marker per question saying whether
-   it is answered (● answered, ○ open — the glyph says it, not only the colour), and a jump to each."
-  [ws-id n]
-  (into [:div.qc-nav
-         [:span "Question " [:span {"data-text" (str (step-signal ws-id) " + 1")} "1"] " of " n]]
-        (for [i (range n)]
-          [:button {:type "button" :class "qc-mark"
-                    :aria-label (str "Question " (inc i))
-                    "data-class:answered" (str (answer-signal ws-id i) " !== ''")
-                    "data-class:current" (str (step-signal ws-id) " === " i)
-                    "data-text" (str (answer-signal ws-id i) " !== '' ? '●' : '○'")
-                    "data-on:click" (str (step-signal ws-id) " = " i)}
-           "○"])))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :any :map] :any]}
-  question-card
-  "One Ask, answered: its questions one at a time, their choices, and every action the gate offers
-   beside what it does. Reads nothing but its arguments, so any pane can drop it in: `ask` is a
-   report.ask Ask, `actions` the gate's action descriptors, and `opts` {:route :pending?
-   :error-msg :session} — `:route` (project ws-id action-id) -> the URL every POST it renders goes
-   to, `:pending?` a gate whose agent is running, which renders
-   its questions with no control for any action, `:error-msg` a failed action's message, set
-   above the first question, and `:session` the session a Reply resumes.
-
-   Several questions share one card with a stepper; choices made in it are page state
-   (`qcard.<card-signal>.answers`) until the Ask's `:submit` sends them all, so a question may be left open. The
-   submit, or with none the recommended option, is the one primary button."
-  [project ws-id {:keys [question questions submit note] :as ask} actions
-   {:keys [route pending? error-msg session]}]
-  (let [by-id     (into {} (map (juxt :id identity)) actions)
-        n         (count questions)
-        options   (mapcat :options questions)
-        opt-ids   (set (keep :action options))
-        ;; With a submit, it is the one primary; without, the recommended option that answers by
-        ;; itself is — and no other row may also be.
-        primary-option? (fn [o] (and (nil? submit) (:recommended? o) (:action o)))
-        primary-taken?  (or submit (some primary-option? options))
-        opt-does  (distinct (keep #(does-of ask %) opt-ids))
-        submit-d  (when submit (by-id submit))
-        others    (remove #(or (opt-ids (:id %)) (= submit (:id %))
-                               (not (or (= :mutation (:kind %)) (:input %))))
-                          actions)
-        boxes     (filter #(or (= :evidence (:kind %))
-                               (and (= :resume (:kind %)) (not (:input %))))
-                          actions)
-        ctx       {:project project :ws-id ws-id :route route :by-id by-id
-                   :pending? pending? :primary-option? primary-option?}
-        row       (fn [d style]
-                    [:div.ans-row
-                     (action-button project ws-id (assoc d :style style) route)
-                     [:div.ans-body [:p.ans-cons (does-of ask (:id d))]]])]
-    [:div (cond-> {:class "qcard"}
-            (or submit (> n 1))
-            (assoc "data-signals__ifmissing"
-                   (str "{qcard: {" (card-signal ws-id) ": {step: 0, answers: {"
-                        (str/join ", " (map #(str "q" % ": ''") (range n)))
-                        "}}}}")))
-     (when (and error-msg (not pending?)) [:div.action-err "⚠ " error-msg])
-     (when (and (> n 1) (not= question (:question (first questions))))
-       [:p.qc-head question])
-     (when (> n 1) (stepper-nav ws-id n))
-     (map-indexed #(question-section ctx %1 n %2) questions)
-     (when (> n 1)
-       [:div.qc-step
-        [:button {:type "button" :class "btn"
-                  "data-attr:disabled" (str (step-signal ws-id) " === 0")
-                  "data-on:click" (str (step-signal ws-id) " = Math.max(0, " (step-signal ws-id) " - 1)")} "◂ Previous"]
-        [:button {:type "button" :class "btn"
-                  "data-attr:disabled" (str (step-signal ws-id) " === " (dec n))
-                  "data-on:click" (str (step-signal ws-id) " = Math.min(" (dec n) ", " (step-signal ws-id) " + 1)")} "Next ▸"]])
-     (when (seq opt-does) (into [:div] (map (fn [d] [:p.ans-does d])) opt-does))
-     (when note [:p.ask-note note])
-     (if pending?
-       [:div.controls [:div.ans-row [:span.meta "working… the agent is running."]]]
-       [:div.controls
-        (when submit-d (row submit-d :primary))
-        (for [a others]
-          (row a (if (and primary-taken? (= :primary (:style a))) :default (:style a))))
-        (when (seq boxes)
-          (list (into [:div] (keep (fn [a] (when-let [d (does-of ask (:id a))] [:p.ans-does d]))) boxes)
-                ;; The reply's send button is drawn primary for a gate that has nothing else to
-                ;; press; beside a card's own primary it would be a second one on one decision.
-                (cond->> (action-bar project ws-id boxes session route)
-                  primary-taken? (walk/postwalk #(if (= :button.btn.btn-primary %) :button.btn %)))))])]))
-
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   needs-page
   "Home: the list of what waits on you, inside the shell, rendered from the screen. No pane of its
@@ -2026,154 +1238,6 @@
   (for [[stage rows] (work/board-bands grouped)]
     {:project project :stage stage :rows rows}))
 
-(def ^:private position-label
-  "What each position reads as to a person. The keyword is the value's, this is
-   the reader's — a pane that printed `:premise-retracted` would be leaking a
-   vocabulary at somebody who only wants to know what is going on."
-  {:intake            "Not started"
-   :intent-stated     "Intent stated"
-   :baselined          "Baseline written"
-   :baseline-verified "Baseline verified"
-   :designed          "Design written"
-   :design-decided    "Decision made"
-   :design-cleared    "Cleared"
-   :design-approved   "Approved"
-   :implemented       "Implemented"
-   :implementing      "Implementing"
-   :triage-awaiting   "Triage to accept"
-   :reviewed          "Reviewed"
-   :awaiting-gate     "Awaiting gate"
-   :published         "Draft PR open"
-   :shipped           "Merged"
-   :findings-open     "Findings open"
-   :blocked           "Blocked"
-   :premise-retracted "Premise retracted"
-   :design-retracted  "Design retracted"
-   :intent-retracted  "Intent retracted"
-   :design-invalidated "Design invalidated"
-   :goal-superseded   "Goal moved"
-   :unplaceable       "Cannot place"})
-
-(def ^:private stage-label
-  {:establish-intent      "establish intent"
-   :write-baseline        "write the baseline"
-   :verify-baseline       "verify the baseline"
-   :design                "write the design"
-   :decide-design         "decide on it"
-   :approve-design        "your approval"
-   :implement             "implement it"
-   :review-implementation "review the diff"
-   :publish-draft-pr      "open the draft PR"
-   :rebaseline            "re-do the baseline"
-   :address-findings      "address findings"
-   :answer-blocker        "your answer"
-   :assert-gate           "your gate"
-   :land                  "your landing"
-   :accept-triage         "your triage call"
-   :acknowledge-invalidation "your call on the verdict"})
-
-(defn- position-chip
-  "Where the pipeline says this row is, and what would move it — the one thing a
-   board row could not say before.
-
-   The band alone could not say it. Everything between authoring an intent and
-   opening a draft PR is :in-progress, so forty rows read identically while one
-   waited on a baseline, one on a decision and one on a person. The chip is muted
-   by default and lit only when the next move is a HUMAN's, because that is the
-   distinction a board is scanned for.
-
-   Renders nothing for a row with no position — a bare watched page, or a band
-   the projection is not computed for."
-  ([position] (position-chip position nil))
-  ([{:keys [at next] :as position} tip]
-   (when position
-     (let [human? (= :human (:mode next))]
-       [:span (cond-> {:class (str "pos" (when human? " pos-you"))}
-                (or next tip)
-                (assoc :title (str/join " · " (remove nil? [(when next (str "next: " (get stage-label (:stage next) (name (:stage next)))))
-                                                            tip]))))
-        [:span.pos-at (get position-label at (name at))
-         (when-let [{:keys [done of]} (:layers position)] (str " " done "/" of))]]))))
-
-(def ^:private owed-label
-  {:person "you" :agent "agent" :machine "nido" :nobody "nobody"})
-
-(defn- state-mark
-  "Whether anything is happening in a workstream, as one mark and no words: a dot in the running
-   colour while something is live; ‖ in the dormant colour while a person's pause stands; ⚠ in
-   the failed colour when it is stalled — an agent owes the move, nothing runs, no question was
-   recorded and nobody paused it, which is a fault and never a resting state; nothing otherwise
-   (a workstream waiting on a person says so by its lit position chip). What runs, and who owes
-   the next move, are the mark's title. A merge keeps its words (`doing-badge`), because a
-   blocked merge has to read red on a board that is scanned rather than read."
-  [{:keys [owed-by live stalled paused]} doing]
-  (let [what (wsv/doing-label doing)
-        tip  (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))]
-    (cond
-      (= :merge (:source doing)) (doing-badge doing)
-      paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
-      stalled                    [:span.st-mark.stalled {:title (str "stalled — nothing runs and nothing asks you"
-                                                                     (when (seq tip) (str " · " tip)))} "⚠"]
-      (or live what)             [:span.st-mark.live {:title (if (seq tip) tip "running")} "●"])))
-
-(defn- phase-chip
-  "Where a phased workstream is in its plan — `phase 2/3` — or nothing for an
-   unphased one. Beside the position chip rather than inside it: the position is
-   where this landing's work stands, the phase is which landing it is."
-  [{:keys [current of]}]
-  (when current
-    [:span.phase-chip {:title "phase of the design's plan"} (str "phase " current "/" of)]))
-
-(defn- ws-list-row
-  "One selectable list row. Its link carries the view-state (scope + selection),
-   so selecting a workstream lands on the SAME list. `sel-id` highlights the
-   open row (threaded from the screen so a poll preserves it)."
-  [screen sel-id project {:keys [ws-id origin label tag needs-you open-findings position phase stage]
-                          :as row}]
-  [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
-       :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
-   [:div.gate-top (origin-badge origin) [:span.lbl label]
-    (when needs-you [:span.needs {:title "needs you"}])
-    (when (pos? (or open-findings 0))
-      [:span.badge-findings (str "⚑ " open-findings " open findings")])]
-   (tag-line tag)
-   ;; Where the workstream stands, and one mark for whether anything is happening in it. The
-   ;; next move, who owes it and what is running are the marks' titles, not words on the row.
-   ;; A :shipping row's merge phase comes through state-mark, which the projection folds
-   ;; ship-substate into, so it is never said twice.
-   [:div.gate-sub [:span project] (position-chip position) (state-mark (:status row) (:doing row))
-    (phase-chip phase)]
-   ;; What the gate waits on, where the person owing it will look. The exit
-   ;; criterion is the current phase's: its exit is the gate that opens the next.
-   (when (= :awaiting-gate stage)
-     (when-let [c (get-in phase [:exit :criterion])]
-       [:div.gate-criterion [:span.meta "gate: "] c]))])
-
-(defn- winddown-row
-  "One winding-down row: closed workstream still holding live sessions. Muted;
-   one action. A :pending? row shows 'stopping…' (no re-clickable button); the
-   5s poll drops the row once its sessions are down. `q` is the current
-   screen's query string (screen-query) so the POST preserves scope
-   instead of the fragment's response resetting the view to defaults. An
-   :error-msg (from a failed bring-down!) renders inline AND keeps the button —
-   clicking retry sets :stopping, which overwrites the :failed entry, so retry
-   self-clears the error."
-  [{:keys [project ws-id origin label outcome sessions rss-str pending? error-msg]} q]
-  [:div.gate-card.winddown
-   [:div.gate-top (origin-badge origin) [:span.lbl label]]
-   [:div.gate-sub
-    [:span project]
-    [:span.meta (str "closed:" (name (or outcome :done)) " · "
-                     (count sessions) " live session(s)"
-                     (when rss-str (str " · " rss-str)))]
-    (if pending?
-      [:span.meta "stopping…"]
-      (list
-       (when error-msg [:div.error-msg error-msg])
-       [:button.btn.btn-danger
-        {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/winddown" q "')")}
-        "Bring down"]))]])
-
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   workstreams-fragment
   "The board's stage-grouped selectable list across projects, rendered from
@@ -2209,8 +1273,13 @@
             [:div.ws-section-rows {:data-class (str "{'ws-open': !$" sig "}")}
              (for [r rows]
                (case stage
-                 :winding-down (winddown-row (assoc r :project project) wd-q)
-                 (ws-list-row screen sel-id project r)))]]))]))))
+                 :winding-down (row/winddown-row
+                                (assoc r :project project)
+                                (str "/workstreams/" project "/" (:ws-id r) "/winddown" wd-q))
+                 (row/board-row project r
+                                {:href (str "/workstreams"
+                                            (screen-query screen {:sel (str project ":" (:ws-id r))}))
+                                 :selected? (= sel-id (:ws-id r))})))]]))]))))
 
 (defn- session-dev-cell
   "DEV ENVIRONMENT controls (start/stop/restart/Open-app) for the workstream's
@@ -2236,19 +1305,6 @@
       [:button.btn.btn-primary {"data-on:click" (act "start")} "start"])))
 
 (defn- day [at] (when at (let [s (str at)] (subs s 0 (min 10 (count s))))))
-
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
-  status-heading
-  "The Status section's heading, carrying the position itself.
-
-   The position was a bold word at the top of the section body, immediately under
-   a heading that said nothing. Two lines to say one thing, and the heading was
-   the emptier of them — so the position moved into it and the body kept only
-   what comes next."
-  [{:keys [at]}]
-  (if at
-    (str "Status — " (get position-label at (name at)))
-    "Status"))
 
 (defn- hold-card
   "One standing record: what it is, which entry it is, how many revisions it took,
@@ -2353,67 +1409,6 @@
                              :title "close"} "✕"]])
    (report-body report pos)])
 
-(def ^:private arc-label
-  "Arc stage -> its heading. A separate vocabulary from `stage-label`, which names
-   the NEXT ACTION (`:verify-baseline`, `:decide-design`) rather than the place a
-   record belongs to. They read alike and answer different questions, so they are
-   kept apart rather than merged into a table that would have to mean both."
-  {:intent         "Intent"
-   :baseline       "Baseline"
-   :design         "Design"
-   :implementation "Implementation"})
-
-(def ^:private arc-glyph
-  "Stage state -> its mark. Five marks because there are five states, and no two
-   of them mean the same thing: `⊘` is a stage the work went past without writing
-   one, `·` is one it has not reached, and `↺` is one it wrote records for that
-   the ledger no longer stands behind — owed again rather than behind you, which
-   is the distinction a ✓ there would destroy."
-  {:done "✓" :current "●" :stale "↺" :skipped "⊘" :ahead "·"})
-
-(defn- arc-meta
-  "The one line of detail a stage row carries, or nil when it holds nothing worth
-   a phrase. Never the stage's own name reworded — a row whose detail restates its
-   label is the arc line that was removed for exactly that."
-  [{:keys [entries state]}]
-  (cond
-    ;; The count is what a live stage says; a stale one has to say what
-    ;; happened to it instead, because the records are still there and counting
-    ;; them is exactly the reading that misleads.
-    (= :stale state) (str entries " record" (when (not= 1 entries) "s")
-                          " · no longer stands")
-    (pos? entries) (str entries " record" (when (not= 1 entries) "s"))
-    (= :skipped state) "no record"
-    :else nil))
-
-(defn- arc-row
-  "One stage of the arc. Clickable only when it holds records — an empty stage has
-   nothing to expand, and offering the click would promise a section that opens
-   empty.
-
-   The re-entry count renders only above one, and in the colour the pane already
-   uses for `needs you`. A stage entered once is the ordinary case and saying so
-   on every row would bury the case that matters: `2 visits` on a baseline means a
-   later stage sent the work back to it, which is the fact the ledger index cannot
-   show and a forward-only track cannot show either."
-  [pos {:keys [stage state visits now] :as facet} doing-label]
-  (let [live? (pos? (:entries facet))
-        open? (= stage (:stage pos))]
-    [:div (cond-> {:class (str "arc-row " (name state)
-                              (when (= :awaiting now) " awaiting")
-                              (when live? " live") (when open? " open"))}
-            live? (assoc "data-on:click" (pane-fragment (at-stage pos stage))))
-     [:span.arc-g (case now
-                    :awaiting [:span.arc-wait {:title "waiting on you"} "◆"]
-                    :running  [:span.arc-spin]
-                    (get arc-glyph state "·"))]
-     [:span.arc-n (get arc-label stage (name stage))]
-     (when-let [m (arc-meta facet)] [:span.arc-m m])
-     (when (and (= :running now) doing-label) [:span.arc-d (str "· " doing-label)])
-     (when (> visits 1)
-       [:span.arc-v {:title "the work left this stage and came back"}
-        (str "· " visits " visits")])]))
-
 (defn- arc-entry-rows
   "The entries of one stage, newest first, as rows that open into the viewer. The
    same affordance the ledger index offers, over a stage's slice of it — which is
@@ -2450,7 +1445,9 @@
   [:div
    (into [:div.arc]
          (mapcat (fn [{:keys [stage seqs] :as facet}]
-                   (cond-> [(arc-row pos facet doing-label)]
+                   (cond-> [(row/arc-row facet doing-label
+                                             {:open?    (= stage (:stage pos))
+                                              :on-click (pane-fragment (at-stage pos stage))})]
                      (= stage (:stage pos))
                      (conj [:div.arc-sub
                             (arc-entry-rows pos entries seqs)
@@ -2523,7 +1520,7 @@
   [project ws-id origin stage sessions report position plan replyable?]
   (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
-    (action-bar project ws-id
+    (ask/action-bar project ws-id
                 ;; Rendered only for a workstream that is no gate, which owes no Ask: an action that
                 ;; answers a verdict's questions, or Defer, which accepts with every one left open,
                 ;; would accept questions nobody was shown, so neither is offered here — a gate's
@@ -2586,7 +1583,7 @@
     [:div {:id "ws-pane"
            :data-on-interval__duration.3s
            (str "@get('/_fragment/workstream/" project "/" ws-id "')")}
-     [:h1 (origin-badge origin) " " label]
+     [:h1 (state/origin-badge origin) " " label]
      (when-let [t (or tag br-id)] [:p.pane-tag t])
      [:p.meta (str/join " · " (keep identity [(name stage)
                                               (when notion-status
@@ -2607,7 +1604,7 @@
         (empty? actions) [:p.meta "Nothing to do from here — the ticket is tracked in Notion, not nido."]
         :else            nil)]
      (when error-msg [:div.action-err "⚠ " error-msg])
-     (action-bar project ws-id actions nil pane-route)]))
+     (ask/action-bar project ws-id actions nil pane-route)]))
 
 (defn ^{:malli/schema [:=> [:cat :map [:? :any]] :any]}
   workstream-pane
@@ -2657,14 +1654,14 @@
             ;; stream, so the standing records and the log of every superseded
             ;; revision of them read as the same kind of thing — which is exactly
             ;; the confusion the standing records were added to end.
-            [:h2 (status-heading position) " " (state-mark status doing)]
+            [:h2 (state/status-heading position) " " (state/state-mark status doing)]
             (when-not (= :done stage) (pause-line project ws-id pause))
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
             ;; that can show the work having been sent back to an earlier stage.
             (when plan (plan-block plan))
             (when (seq (:stages arc))
-              (arc-block pos arc entries report in-stage? (round-label doing)))
+              (arc-block pos arc entries report in-stage? (state/round-label doing)))
             (when (seq holds) (holds-block holds))
             (when (seq denials)
               [:div.denials [:p.meta "Permission denials while nido drives it:"]
@@ -2673,7 +1670,7 @@
             ;; and above the log. The card owns the gate's error line and every
             ;; control, so the pane offers neither of its own beside it.
             (when gate
-              (question-card project ws-id (:ask gate) (:actions gate)
+              (ask/question-card project ws-id (:ask gate) (:actions gate)
                              {:route pane-route :pending? (boolean (or (:working? gate) pending?))
                               :error-msg error-msg :session (:session gate)}))
             ;; The actions belong HERE and not under the log, because they act on

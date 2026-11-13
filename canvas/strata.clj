@@ -20,7 +20,9 @@
                                           review-stages review-verdict]]
             [canvas.review.record :refer [review-record]]
             [canvas.review.settled :refer [review-settled]]
-            [canvas.review.tree :refer [review-tree]]))
+            [canvas.review.tree :refer [review-tree]]
+            [canvas.ui.surface :refer [ui-stylesheet ui-components-state ui-components-row
+                                       ui-components-ask]]))
 
 ;; ── the record machinery, floor first ────────────────────────────────────────
 
@@ -94,3 +96,40 @@
                  review-pass review-verdict review-record review-settled review-retreat
                  review-merge review-analysis review-reconcile review-tree]
    :rests-on    [review-language record-status ledger record-model record-vocabulary]})
+
+;; ── the dashboard's visual language, floor first ─────────────────────────────
+;;
+;; The pages above these levels — ui-views, and the component catalog — belong to none, because
+;; nobody has read the levels inside a page: the composition of a page and the reading of a
+;; ledger record are both still in ui-views, and until that is read apart a stratum over it
+;; would be a declaration nobody derived.
+;;
+;; ⚠ The floor's vocabulary is consumed by CLASS NAME, not by require: a block's markup writes
+;; `pos-you` and the stylesheet decides what that means, so the extracted call graph shows no
+;; edge from a block to ui-stylesheet. The level is real — the two levels above write no class
+;; rule, and every colour and font size they state is one of its custom properties; the inline
+;; layout attributes the markup already carries stay with it — and the law that checks
+;; edges has nothing here to check. Its :rests-on edges are a statement of what is written in
+;; what, not a constraint on anything the extractor can see.
+
+(Stratum ui-visual-language
+  "The dashboard's visual language: the custom properties every colour and font size is named by, and
+   the class rules the dashboard's pages and blocks name. One token block, one palette, and every
+   chrome that renders dashboard markup emits it."
+  {:provided-by [ui-stylesheet]})
+
+(Stratum ui-state-marks
+  "A workstream's state as a reader sees it — the words each facet is said in, and the mark that
+   says it: a glyph or a chip in its semantic colour, with its words in a title. The level the
+   rows and the pages say a position, a next stage, an owner, an arc stage and an arc stage's mark
+   in, and the reason no surface can word one twice."
+  {:provided-by [ui-components-state]
+   :rests-on    [ui-visual-language]})
+
+(Stratum ui-blocks
+  "The composable regions a page is built from: a scannable list row, and one Ask offered for
+   answer — each over a value plus how a click on it is routed, reading nothing. The level the
+   dashboard's pages and its component catalog are both written in, which is what lets the
+   catalog be a preview of the app rather than a second implementation of it."
+  {:provided-by [ui-components-row ui-components-ask]
+   :rests-on    [ui-state-marks ui-visual-language]})

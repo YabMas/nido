@@ -9,6 +9,7 @@
             [nido.session.fleet :as fleet]
             [nido.ui.dev :as dev]
             [nido.coordinator.control :as control]
+            [nido.ui.components.ask :as ask]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
             [nido.coordinator.work :as work]
@@ -491,7 +492,7 @@
   [{:keys [body] :as req} ws-id action-id]
   ;; Read once: the body is a stream, and a second slurp of it is empty.
   (let [signals (delay (parse-json-body body))
-        answers (delay (get-in @signals [:qcard (keyword (views/card-signal ws-id)) :answers]))]
+        answers (delay (get-in @signals [:qcard (keyword (ask/card-signal ws-id)) :answers]))]
     (cond
       (= :reply action-id)                     (:reply @signals)
       (= :assert-gate action-id)               (:evidence @signals)

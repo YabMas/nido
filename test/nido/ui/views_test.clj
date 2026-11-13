@@ -4,6 +4,9 @@
             [hiccup2.core :as h]
             [nido.coordinator.report.ask :as ask]
             [nido.coordinator.work :as work]
+            [nido.ui.components.ask :as ui-ask]
+            [nido.ui.components.row :as row]
+            [nido.ui.components.state :as state]
             [nido.ui.views :as views]))
 
 (def ^:private sample-gate
@@ -159,7 +162,7 @@
 
 (deftest the-question-card-reads-only-its-arguments
   (let [g    (two-question-gate)
-        html (str (h/html (views/question-card "brian" "ws-1" (:ask g) (:actions g)
+        html (str (h/html (ui-ask/question-card "brian" "ws-1" (:ask g) (:actions g)
                                                {:route (fn [p w a] (str "/x/" p "/" w "/" (name a)))})))]
     (is (str/includes? html "/x/brian/ws-1/apply?entry=4") "every POST is built by the route it is given")
     (is (not (str/includes? html "/gate/")))
@@ -1341,9 +1344,10 @@
 
 (defn- board-row
   [position]
-  (#'views/ws-list-row a-board-screen nil "nido"
+  (row/board-row "nido"
    (cond-> {:ws-id "ws-1" :origin :notion :label "the pipeline" :stage :in-progress}
-     position (assoc :position position))))
+     position (assoc :position position))
+   {:href (str "/workstreams" (#'views/screen-query a-board-screen {:sel "nido:ws-1"}))}))
 
 (deftest a-row-states-its-position-and-what-would-move-it
   ;; The band could not: everything from authoring an intent to opening a draft
@@ -1554,9 +1558,9 @@
 (deftest the-status-heading-carries-the-position
   ;; It was a bold word at the top of a section whose heading said nothing —
   ;; two lines to say one thing, and the heading was the emptier of them.
-  (is (= "Status — Draft PR open" (views/status-heading {:at :published})))
-  (is (= "Status — Baseline verified" (views/status-heading {:at :baseline-verified})))
-  (is (= "Status" (views/status-heading nil)) "no position, no dash"))
+  (is (= "Status — Draft PR open" (state/status-heading {:at :published})))
+  (is (= "Status — Baseline verified" (state/status-heading {:at :baseline-verified})))
+  (is (= "Status" (state/status-heading nil)) "no position, no dash"))
 
 (deftest no-pane-class-silently-inherits-a-bare-rule
   ;; The general form of the bug: a short class name that some other component
@@ -1592,8 +1596,9 @@
    :next {:claim "reads move" :exit {:kind :completion :criterion "nothing reads the old table"}}})
 
 (deftest a-phased-row-says-which-phase-and-an-awaiting-one-its-gate
-  (let [row  (fn [m] (str (h/html (#'views/ws-list-row a-board-screen nil "nido"
-                                   (merge {:ws-id "ws-1" :origin :notion :label "migration"} m)))))
+  (let [row  (fn [m] (str (h/html (row/board-row "nido"
+                                   (merge {:ws-id "ws-1" :origin :notion :label "migration"} m)
+                                   {:href "/workstreams"}))))
         live (row {:stage :in-progress :phase (assoc awaiting-phase :landed? false)})
         gate (row {:stage :awaiting-gate :phase awaiting-phase
                    :position {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}})]
@@ -1605,7 +1610,7 @@
     (is (not (str/includes? (row {:stage :in-progress}) "phase ")) "an unphased row carries no chip")))
 
 (deftest the-gate-is-asserted-from-an-evidence-field
-  (let [html (str (h/html (views/action-bar "nido" "ws-1"
+  (let [html (str (h/html (ui-ask/action-bar "nido" "ws-1"
                                             [{:id :assert-gate :label "Assert gate" :kind :evidence
                                               :style :primary :criterion "a quiet week"}]
                                             nil pane-route)))]
@@ -1666,10 +1671,10 @@
       (is (str/includes? pane "rm -rf build") "the pane lists each, with what was denied"))))
 
 (deftest an-answer-box-promises-no-resume
-  (let [answer (str (h/html (views/action-bar "brian" "ws-1"
+  (let [answer (str (h/html (ui-ask/action-bar "brian" "ws-1"
                                               [{:id :reply :label "Answer" :kind :resume :style :default}]
                                               "run-x" pane-route)))
-        reply  (str (h/html (views/action-bar "brian" "ws-1"
+        reply  (str (h/html (ui-ask/action-bar "brian" "ws-1"
                                               [{:id :reply :label "Reply" :kind :resume :style :default}]
                                               "run-x" pane-route)))]
     (is (str/includes? answer "Record answer"))
