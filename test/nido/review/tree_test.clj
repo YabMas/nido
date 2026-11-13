@@ -3,7 +3,10 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.state :as cstate]
    [nido.design.check :as design]
+   [nido.platform.core :as core]
    [nido.review.layers :as layers]
    [nido.review.settled :as settled]
    [nido.review.tree :as tree]
@@ -236,3 +239,94 @@
         (is (:healed (tree/heal-stale! work))))
       (is (not (layers/stale? work)) "the copy is no longer refused")
       (finally (fs/delete-tree root)))))
+
+(defn- run-with-tree!
+  "A run directory under `runs` named `run-id`, whose report says `status` (no report when nil),
+   holding a tree produced at `rev` and registered as `run-id`, as `with-reading!` leaves one
+   whose round never returned to remove it. The tree carries a file so its working-copy commit
+   is not empty."
+  [home runs run-id status rev]
+  (let [run (fs/path runs run-id)
+        dir (str (fs/path run "tree"))]
+    (fs/create-dirs run)
+    (jj/jj! home "workspace" "add" "--name" run-id "--revision" rev dir)
+    (spit (str (fs/path dir "overlay.txt")) "laid over the revision\n")
+    (jj/jj! dir "status")
+    (when status
+      (spit (str (fs/path run "report.json")) (str "{\"status\": \"" status "\"}")))
+    dir))
+
+(deftest an-ended-run-s-tree-is-reaped-and-a-live-one-is-left
+  ;; A stopped round seals its report from the shutdown hook while still inside with-reading!'s
+  ;; function, and the process exits before the removal runs: the tree stays, registered.
+  (let [{:keys [root home base]} (repo!)
+        runs (str (fs/path root "runs"))]
+    (try
+      (let [interrupted (run-with-tree! home runs "design-loop-stopped" "interrupted" base)
+            finished    (run-with-tree! home runs "baseline-loop-done" "converged" base)
+            running     (run-with-tree! home runs "design-loop-live" "running" base)
+            unreported  (run-with-tree! home runs "design-loop-new" nil base)
+            {:keys [reaped failed]} (tree/reap-ended! runs)]
+        (is (= ["baseline-loop-done" "design-loop-stopped"] reaped))
+        (is (empty? failed))
+        (is (not (fs/exists? interrupted)))
+        (is (not (fs/exists? finished)))
+        (is (fs/exists? running) "a running report may be a round still reading its tree")
+        (is (fs/exists? unreported) "with no report nothing says the run has ended")
+        (let [ws (workspaces home)]
+          (is (not (str/includes? ws "design-loop-stopped")))
+          (is (not (str/includes? ws "baseline-loop-done")))
+          (is (str/includes? ws "design-loop-live"))
+          (is (str/includes? ws "design-loop-new")))
+        (is (= "" (:out (jj/jj! home "log" "--no-graph" "-r"
+                                "heads(all()) ~ ::(main | work@ | default@ | design-loop-live@ | design-loop-new@)"
+                                "-T" "commit_id")))
+            "a reaped tree's working-copy commit is abandoned, not left as a head"))
+      (finally (fs/delete-tree root)))))
+
+(deftest an-ended-run-s-tree-jj-no-longer-lists-is-deleted
+  (let [{:keys [root home base]} (repo!)
+        runs (str (fs/path root "runs"))]
+    (try
+      (let [dir (run-with-tree! home runs "design-loop-forgotten" "interrupted" base)]
+        (jj/jj! home "workspace" "forget" "design-loop-forgotten")
+        (is (not= "" (:out (jj/jj! home "log" "--no-graph" "-r"
+                                   "heads(all()) ~ ::(main | work@ | default@)" "-T" "commit_id")))
+            "forgetting keeps the tree's non-empty working-copy commit as a head")
+        (is (= ["design-loop-forgotten"] (:reaped (tree/reap-ended! runs))))
+        (is (not (fs/exists? dir)))
+        (is (= "" (:out (jj/jj! home "log" "--no-graph" "-r"
+                                "heads(all()) ~ ::(main | work@ | default@)" "-T" "commit_id")))
+            "the forgotten tree's working-copy commit is abandoned, not left as a head"))
+      (finally (fs/delete-tree root)))))
+
+(deftest an-ended-run-still-holding-its-claim-keeps-its-tree
+  ;; The shutdown hook seals the report while the round may still be inside with-reading!'s
+  ;; function, and the round holds its workstream's claim until it returns. Stopping the session
+  ;; drops its registry entry and not the claim, so the claim is found with no session registered.
+  (let [{:keys [root home base work]} (repo!)
+        runs (str (fs/path root "runs"))]
+    (try
+      (with-redefs [core/nido-root (constantly (str (fs/path root "nido")))]
+        (let [held  (run-with-tree! home runs "design-loop-held" "interrupted" base)
+              other (run-with-tree! home runs "design-loop-other" "interrupted" base)]
+          (doseq [run ["design-loop-held" "design-loop-other"]]
+            (spit (str (fs/path runs run "report.json"))
+                  (str "{\"status\": \"interrupted\", \"target\": {\"cwd\": \"" work "\"}}")))
+          (fs/create-dirs (cstate/workstream-dir :p "ws-1"))
+          (activity/with-claim :p "ws-1" {:kind :design-round :run-id "design-loop-held"
+                                          :report-path nil}
+            (fn []
+              (let [{:keys [reaped failed]} (tree/reap-ended! runs)]
+                (is (= ["design-loop-other"] reaped)
+                    "a claim naming another run does not keep this one's tree")
+                (is (empty? failed) "a tree kept for its claim is not a failure")
+                (is (fs/exists? held))
+                (is (str/includes? (workspaces home) "design-loop-held"))
+                (is (not (fs/exists? other))))))
+          (is (= ["design-loop-held"] (:reaped (tree/reap-ended! runs)))
+              "once the claim is let go the tree is reaped")))
+      (finally (fs/delete-tree root)))))
+
+(deftest reaping-a-runs-dir-that-does-not-exist-reaps-nothing
+  (is (= {:reaped [] :failed []} (tree/reap-ended! "/nonexistent/nido/runs"))))

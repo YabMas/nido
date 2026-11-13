@@ -69,7 +69,13 @@
    PROCESS-GUARDED too, past the window: a directory whose recorded pid still runs is kept,
    whatever its age. A boot killed before it registered leaves exactly that — a detached JVM whose
    pid the directory alone holds — and deleting the directory would leave the JVM running with
-   nothing in nido able to see it. Kept directories are returned so the sweep can say so."
+   nothing in nido able to see it. Kept directories are returned so the sweep can say so.
+
+   It also forgets the jj registrations whose directories are gone. Deleting a directory is
+   every remover's business and forgetting its workspace is meant to go with it, but reclaim
+   deletes runtime checkouts with their state dirs and other paths delete theirs without the
+   forget — so the sweep asks the one question that covers all of them: does a registered
+   workspace still have a directory."
   (Operation reclaim-orphans!
     "Remove orphaned instance state older than the grace window, sparing any whose recorded
      worktree still exists or whose recorded process still runs — and return the latter, since
@@ -80,7 +86,17 @@
     "List orphaned state directories, or delete the ones no running process holds and whose
      recorded worktree is gone."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]
-     :delegates [sstate/read-instance-worktree]}))
+     :delegates [sstate/read-instance-worktree]})
+  (Operation forget-dangling-workspaces!
+    "Forget every non-default workspace a repo lists whose directory is gone, keeping its
+     working-copy commit, and prune the git worktrees behind them in a colocated repo. Nil when
+     jj will not list or forget them."
+    {:signature [:=> [:catn [:repo-dir Path]] [:maybe [:sequential :string]]]})
+  (Operation forget-dangling-everywhere!
+    "forget-dangling-workspaces! over every registered project whose directory is a jj repo, by
+     project name."
+    {:signature [:=> [:catn] [:map-of :string [:maybe [:sequential :string]]]]
+     :delegates [forget-dangling-workspaces!]}))
 
 (Module bench-memory
   "Measuring what a session actually costs in memory, lever by lever.

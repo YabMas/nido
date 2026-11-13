@@ -44,4 +44,12 @@
     "Call a function with the directory a reading names, producing it first when it names a
      revision and removing it when the function returns or throws."
     {:signature [:=> [:catn [:worktree Path] [:reading :map] [:ws-name :string] [:dir Path]
-                            [:f [:=> [:cat Path] :any]]] :any]}))
+                            [:f [:=> [:cat Path] :any]]] :any]})
+  (Operation reap-ended!
+    "Remove the produced tree of every run under a runs directory whose report says the run has
+     ended — the removal a round stopped from outside never reached. A running report, or none,
+     is left whatever its age; a tree jj no longer lists has its working-copy commit abandoned
+     before it is deleted."
+    {:signature [:=> [:catn [:runs-dir Path]]
+                 [:map [:reaped [:sequential :string]]
+                       [:failed [:sequential [:tuple :string :string]]]]]}))

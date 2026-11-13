@@ -53,6 +53,7 @@
    [nido.platform.desktop :as desktop]
    [nido.platform.project :as project]
    [nido.review.reconcile :as review-reconcile]
+   [nido.review.tree :as review-tree]
    [nido.session.casualties :as casualties]
    [nido.session.reclaim :as reclaim]
    [nido.session.state :as sstate]
@@ -213,10 +214,41 @@
   (format "Dashboard:   http://localhost:%s (%s)"
           port (if reachable? "reachable" "not reachable")))
 
+(defn- reap-workspaces!
+  "Remove the jj workspaces nothing will use again: the produced tree of every ended review
+   run, then every registration whose directory is gone, in every project. Trees first, so a
+   tree jj will not remove is not then forgotten without its commit abandoned. Each half
+   reports what it did and never throws into the tick loop."
+  []
+  (try
+    (let [{:keys [reaped failed]} (review-tree/reap-ended! (cstate/runs-dir))]
+      (when (seq reaped)
+        (println (str "nido coordinator: removed " (count reaped)
+                      " ended review run tree(s): " (str/join ", " reaped))))
+      (doseq [[run-id why] failed]
+        (println (str "nido coordinator: could not remove review run tree " run-id " — " why))))
+    (catch Throwable t
+      (.println ^java.io.PrintWriter *err*
+                (str "WARN: review tree reap threw — " (ex-message t)))))
+  (try
+    (doseq [[project forgotten] (reclaim/forget-dangling-everywhere!)]
+      (cond
+        (nil? forgotten)
+        (println (str "nido coordinator: could not read or forget " project
+                      "'s dangling jj workspaces"))
+        (seq forgotten)
+        (println (str "nido coordinator: forgot " (count forgotten) " jj workspace(s) in "
+                      project " whose directory is gone: " (str/join ", " forgotten)))))
+    (catch Throwable t
+      (.println ^java.io.PrintWriter *err*
+                (str "WARN: dangling workspace sweep threw — " (ex-message t))))))
+
 (defn- maybe-reclaim!
   "Throttled disk-hygiene sweep: at most once per :reclaim-interval-ms, delete
-   orphaned per-session state dirs older than :reclaim-min-age-ms. Never throws
-   into the tick loop — a reclaim failure must not stall the coordinator."
+   orphaned per-session state dirs older than :reclaim-min-age-ms, then remove
+   the jj workspaces nothing will use again (`reap-workspaces!`) — after, so a
+   checkout reclaimed with its state dir is forgotten in the same sweep. Never
+   throws into the tick loop — a reclaim failure must not stall the coordinator."
   [now-ms]
   (when (>= (- now-ms @!last-reclaim-ms) (:reclaim-interval-ms defaults))
     (reset! !last-reclaim-ms now-ms)
@@ -238,7 +270,8 @@
       (catch Throwable t
         (binding [*err* *err*]
           (.println ^java.io.PrintWriter *err*
-                    (str "WARN: auto-reclaim threw — " (ex-message t))))))))
+                    (str "WARN: auto-reclaim threw — " (ex-message t))))))
+    (reap-workspaces!)))
 
 (defn- maybe-settle-reviews!
   "Throttled: at most once per :review-settle-interval-ms, settle every review

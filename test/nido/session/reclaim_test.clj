@@ -1,6 +1,9 @@
 (ns nido.session.reclaim-test
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as p]
+   [clojure.string :as str]
+   [nido.platform.config :as config]
    [clojure.test :refer [deftest is]]
    [nido.platform.io :as io]
    [nido.platform.process :as proc]
@@ -124,3 +127,93 @@
           (is (fs/exists? down) "a worktree record naming an existing dir keeps it")
           (is (fs/exists? old) "a session.edn written before the record existed keeps it too")))
       (finally (fs/delete-tree tmp)))))
+
+(defn- sh! [dir & args]
+  (let [r (apply p/shell {:dir (str dir) :out :string :err :string :continue true} args)]
+    (when-not (zero? (:exit r))
+      (throw (ex-info (str (str/join " " args) ": " (:err r)) {})))
+    (:out r)))
+
+(defn- colocated-repo!
+  "A colocated jj repo at <root>/repo with one commit, and workspaces `kept` and `lost` beside
+   it, `lost` holding a file nobody committed. Answers {:root :repo :kept :lost}."
+  []
+  (let [root (str (fs/create-temp-dir {:prefix "nido-reclaim"}))
+        repo (str (fs/path root "repo"))
+        kept (str (fs/path root "kept"))
+        lost (str (fs/path root "lost"))]
+    (sh! root "jj" "git" "init" "--colocate" "repo")
+    (spit (str (fs/path repo "a.txt")) "a\n")
+    (sh! repo "jj" "commit" "-m" "base")
+    (sh! repo "jj" "workspace" "add" "--name" "kept" kept)
+    (sh! repo "jj" "workspace" "add" "--name" "lost" lost)
+    (spit (str (fs/path lost "written.txt")) "work nobody committed\n")
+    (sh! lost "jj" "status")
+    {:root root :repo repo :kept kept :lost lost}))
+
+(defn- workspace-names [repo]
+  (set (str/split-lines (sh! repo "jj" "workspace" "list" "-T" "name ++ \"\\n\""))))
+
+(deftest a-workspace-whose-directory-is-gone-is-forgotten
+  ;; Reclaim deletes a runtime checkout with its state dir, destroy skips the forget for a
+  ;; worktree already gone, and an agent's scratchpad workspace has no owner in nido: each
+  ;; leaves a registration every later jj operation carries.
+  (let [{:keys [root repo kept lost]} (colocated-repo!)]
+    (try
+      (fs/delete-tree lost)
+      (is (= ["lost"] (reclaim/forget-dangling-workspaces! repo)))
+      (is (= #{"default" "kept"} (workspace-names repo)))
+      (is (fs/exists? kept) "a workspace whose directory exists is left alone")
+      (is (= 1 (count (str/split-lines
+                       (sh! repo "jj" "log" "--no-graph" "-r"
+                            "heads(all()) ~ ::(default@ | kept@)" "-T" "commit_id ++ \"\\n\""))))
+          "the lost workspace's non-empty working-copy commit survives as a head")
+      (is (not (str/includes? (sh! repo "git" "worktree" "list" "--porcelain") "prunable"))
+          "the git worktree backing it is pruned too")
+      (is (= [] (reclaim/forget-dangling-workspaces! repo)) "a second sweep finds nothing")
+      (finally (fs/delete-tree root)))))
+
+(deftest a-git-worktree-is-pruned-from-a-workspace-without-a-git-dir-of-its-own
+  ;; A registered project can be a non-colocated workspace of a colocated repo: it has no .git,
+  ;; and the git worktree behind a lost workspace is the repo's to prune all the same.
+  (let [{:keys [root repo lost]} (colocated-repo!)
+        home (str (fs/path root "home"))]
+    (try
+      (sh! repo "jj" "workspace" "add" "--no-colocate" "--name" "home" home)
+      (is (not (fs/exists? (fs/path home ".git"))))
+      (fs/delete-tree lost)
+      (is (= ["lost"] (reclaim/forget-dangling-workspaces! home)))
+      (is (not (str/includes? (sh! repo "git" "worktree" "list" "--porcelain") "prunable"))
+          "the git worktree backing it is pruned")
+      (finally (fs/delete-tree root)))))
+
+(deftest a-git-worktree-left-by-a-forget-elsewhere-is-pruned
+  ;; A forget made outside the sweep leaves nothing for it to forget, and the git worktree behind
+  ;; the workspace is pruned all the same.
+  (let [{:keys [root repo lost]} (colocated-repo!)]
+    (try
+      (fs/delete-tree lost)
+      (sh! repo "jj" "workspace" "forget" "lost")
+      (is (str/includes? (sh! repo "git" "worktree" "list" "--porcelain") "prunable"))
+      (is (= [] (reclaim/forget-dangling-workspaces! repo)))
+      (is (not (str/includes? (sh! repo "git" "worktree" "list" "--porcelain") "prunable")))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-repo-jj-will-not-read-answers-nil
+  (let [root (str (fs/create-temp-dir {:prefix "nido-reclaim"}))]
+    (try
+      (is (nil? (reclaim/forget-dangling-workspaces! root)))
+      (finally (fs/delete-tree root)))))
+
+(deftest every-registered-jj-project-is-swept
+  (let [{:keys [root repo lost]} (colocated-repo!)
+        plain (str (fs/path root "plain"))]
+    (try
+      (fs/create-dirs plain)
+      (fs/delete-tree lost)
+      (with-redefs [config/read-projects (constantly {"jjproj"  {:directory repo}
+                                                      "plain"   {:directory plain}
+                                                      "nodir"   {}})]
+        (is (= {"jjproj" ["lost"]} (reclaim/forget-dangling-everywhere!))
+            "a project that is not a jj repo, or names no directory, is not swept"))
+      (finally (fs/delete-tree root)))))

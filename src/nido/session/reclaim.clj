@@ -8,6 +8,8 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [babashka.process :as p]
+   [nido.platform.config :as config]
    [nido.platform.core :as core]
    [nido.platform.io :as io]
    [nido.platform.process :as proc]
@@ -138,3 +140,63 @@
             (println (str (count orphans) " dir(s) listed. "
                           "Re-run with :force? true to delete."))
             :listed))))))
+
+(defn- jj-out
+  "jj's stdout in `dir` with the working copy left alone, or nil when jj refuses."
+  [dir & args]
+  (let [r (apply p/shell {:dir (str dir) :out :string :err :string :continue true}
+                 "jj" "--ignore-working-copy" args)]
+    (when (zero? (long (:exit r))) (:out r))))
+
+(defn- dangling-workspaces
+  "The workspaces `repo-dir`'s repo lists whose root directory does not exist, by name — never
+   `default`, and never one whose root jj does not report, since an absent root is not a gone
+   one. Nil when jj will not list them."
+  [repo-dir]
+  (when-let [out (jj-out repo-dir "workspace" "list" "-T" "name ++ \"\\t\" ++ self.root() ++ \"\\n\"")]
+    (vec (for [line (str/split-lines out)
+               :let [[ws-name root] (str/split line #"\t" 2)]
+               :when (and (not= "default" ws-name)
+                          (not (str/blank? root))
+                          (not (fs/exists? root)))]
+           ws-name))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe [:sequential :string]]]}
+  forget-dangling-workspaces!
+  "Forget every workspace `repo-dir`'s repo still lists whose directory is gone, and answer
+   their names — nil when jj will not list them or will not forget them.
+
+   Every path that deletes a workspace's directory is meant to forget it first, and several do
+   not: reclaim deletes a runtime checkout with the state directory it sits in, destroy skips the
+   forget for a worktree already gone, a run directory goes with its round's tree in it, and an
+   agent's scratchpad workspace has no owner in nido at all. Whatever deleted the directory, the
+   registration is then state nothing reads and every jj operation in the repo carries — jj
+   records each workspace's working copy in every operation it writes. A missing directory is
+   the whole test, because `jj workspace add` makes the directory before it registers the name
+   and every remover forgets before it deletes: no workspace in use is ever without one.
+
+   Forgetting keeps the working-copy commit: an empty one goes with the name, a non-empty one
+   stays as a visible head, so nothing written in a lost workspace is lost with it. A repo
+   colocated with git backs each workspace with a git worktree that jj removes only while its
+   directory exists, so every sweep prunes registrations whose directories are gone — whether or
+   not it forgot anything, so one a forget elsewhere left, or a prune that failed, goes at the
+   next — against the git directory jj reports, since `repo-dir` may be a workspace of that repo
+   with no `.git` of its own."
+  [repo-dir]
+  (when-let [names (dangling-workspaces repo-dir)]
+    (when (or (empty? names) (apply jj-out repo-dir "workspace" "forget" names))
+      (when-let [git-dir (some-> (jj-out repo-dir "git" "root") str/trim not-empty)]
+        (p/shell {:dir (str repo-dir) :out :string :err :string :continue true}
+                 "git" "--git-dir" git-dir "worktree" "prune"))
+      names)))
+
+(defn ^{:malli/schema [:=> [:cat] [:map-of :string [:maybe [:sequential :string]]]]}
+  forget-dangling-everywhere!
+  "`forget-dangling-workspaces!` over every registered project whose directory is a jj repo,
+   by project name — the coordinator's sweep, so a registration whose owner never forgot it
+   lasts at most one reclaim interval."
+  []
+  (into {}
+        (for [[project-name {:keys [directory]}] (config/read-projects)
+              :when (and directory (fs/directory? (fs/path directory ".jj")))]
+          [project-name (forget-dangling-workspaces! directory)])))

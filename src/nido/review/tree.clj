@@ -22,7 +22,10 @@
    [babashka.fs :as fs]
    [babashka.process :as p]
    [clojure.string :as str]
+   [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.state :as cstate]
    [nido.design.check :as design]
+   [nido.review.frontend :as frontend]
    [nido.review.layers :as layers]
    [nido.review.pass :as pass]
    [nido.session.lifecycle :as lifecycle]
@@ -218,6 +221,34 @@
                         {:ws-name ws-name :dir (str dir) :err err})))))
   (fs/delete-tree dir))
 
+(defn- abandon-forgotten!
+  "Abandon the working-copy commit of `ws-name`, a workspace the repo no longer lists, reading it
+   from the tree at `dir` itself: its working copy names the operation it was last at, and the
+   repo as that operation left it still lists the workspace. Forgetting kept a non-empty commit
+   as a visible head, and the tree is the last thing that can name it. Named by its change, so a
+   commit rewritten since is abandoned as it now stands; an empty one jj already dropped is
+   hidden, and abandoning it does nothing. Throws when jj will not name or abandon it, so the
+   tree that names it is not deleted."
+  [ws-name dir]
+  (let [{:keys [exit out err]} (jj/jj! (str dir) "--ignore-working-copy" "debug" "working-copy")
+        op     (when (zero? (long exit))
+                 (second (re-find #"Current operation: OperationId\(\"([0-9a-f]+)\"\)" out)))
+        _      (when-not op
+                 (throw (ex-info (str "could not read which operation workspace " ws-name
+                                      " was last at: " err)
+                                 {:ws-name ws-name :dir (str dir) :err err})))
+        {:keys [exit out err]} (jj/jj! (str dir) "--ignore-working-copy" "--at-op" op "log"
+                                       "-r" (str ws-name "@") "--no-graph" "-T" "change_id")
+        change (when (zero? (long exit)) (not-empty (str/trim out)))]
+    (when-not change
+      (throw (ex-info (str "could not read workspace " ws-name "'s working-copy commit: " err)
+                      {:ws-name ws-name :dir (str dir) :err err})))
+    (let [{:keys [exit err]} (jj/jj! (str dir) "--ignore-working-copy" "abandon" "-r"
+                                     (str "present(" change ")"))]
+      (when-not (zero? (long exit))
+        (throw (ex-info (str "could not abandon workspace " ws-name "'s working-copy commit: " err)
+                        {:ws-name ws-name :dir (str dir) :err err}))))))
+
 (defn- registered?
   "Whether the repo lists a workspace named `ws-name` — true, false, or nil when jj will not
    say. Run with --ignore-working-copy for the reason `remove-workspace!` gives."
@@ -277,3 +308,77 @@
                        (throw t)))]
         (remove-workspace! worktree ws-name dir)
         answer))))
+
+(defn- held-claims
+  "The run ids of every activity claim held now, in any project's workstreams, and whether one is
+   held by something whose payload cannot be read yet. Read from the claims themselves, so a run
+   whose session has left the registry — stopped while its round still holds the claim — is
+   still found holding it."
+  []
+  (let [projects (fs/path (cstate/nido-root) "projects")]
+    (reduce
+     (fn [acc lock]
+       (let [ws-dir  (fs/parent lock)
+             project (keyword (str (fs/file-name (fs/parent (fs/parent ws-dir)))))
+             ws-id   (str (fs/file-name ws-dir))]
+         (if-not (activity/held? project ws-id)
+           acc
+           (if-let [run-id (:run-id (activity/read-live project ws-id))]
+             (update acc :run-ids conj run-id)
+             (assoc acc :unread? true)))))
+     {:run-ids #{} :unread? false}
+     (when (fs/directory? projects)
+       (fs/glob projects "*/workstreams/*/activity.lock")))))
+
+(defn- claim-held?
+  "Whether a run still holds a workstream's activity claim: a held claim names `run-id`, or one is
+   held whose payload cannot be read yet, which fails safe as this run's. A record round holds the
+   claim around its `with-reading!`, so a run whose report is sealed can still be inside its
+   function while the claim stands."
+  [{:keys [run-ids unread?]} run-id]
+  (or unread? (contains? run-ids run-id)))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:map [:reaped [:sequential :string]]
+                                         [:failed [:sequential [:tuple :string :string]]]]]}
+  reap-ended!
+  "Remove the produced tree of every run under `runs-dir` whose report says the run has ended,
+   answering the run ids reaped and, for each one jj would not remove, why.
+
+   `with-reading!` removes a tree only from inside the round, so a round that never gets back
+   there leaves its tree behind: a stopped round ends through its shutdown hook, which seals the
+   report while the round is still inside `f`, and the process exits before the removal runs.
+   The tree stays on disk and stays registered, and every later jj operation in the repo carries
+   it. This is the removal such a round never reached.
+
+   A run has ended when its report holds a status other than `running`. A `running` report is
+   left whatever its age, as is a run with no readable report: nothing here can tell either
+   from a round still reading its tree. Nor is a tree whose run still holds its workstream's
+   activity claim, since the shutdown hook seals the report while the round may still be
+   reading. The workspace is named for the run, as `with-reading!` names it, and is removed
+   from inside the tree itself, since the worktree the round was produced for may be gone. A
+   tree jj no longer lists has its working-copy commit abandoned, read from the tree itself, and
+   is deleted."
+  [runs-dir]
+  (let [runs   (when (fs/directory? runs-dir) (fs/list-dir runs-dir))
+        claims (delay (held-claims))]
+    (reduce
+     (fn [acc run]
+       (let [run-id (str (fs/file-name run))
+             dir    (fs/path run "tree")
+             report (frontend/read-report (str (fs/path run "report.json")))
+             status (:status report)]
+         (if (or (not (fs/directory? dir)) (nil? status) (= "running" status))
+           acc
+           (try
+             (if (claim-held? @claims run-id)
+               acc
+               (do (case (registered? (str dir) run-id)
+                     true  (remove-workspace! (str dir) run-id dir)
+                     false (do (abandon-forgotten! run-id dir)
+                               (fs/delete-tree dir))
+                     nil   (throw (ex-info "jj would not list the repo's workspaces" {})))
+                   (update acc :reaped conj run-id)))
+             (catch Exception e
+               (update acc :failed conj [run-id (ex-message e)]))))))
+     {:reaped [] :failed []}
+     (sort runs))))
