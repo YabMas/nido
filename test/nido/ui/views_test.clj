@@ -1448,12 +1448,13 @@
     (is (str/includes? html "no record"))
     (is (str/includes? html "arc-row ahead"))))
 
-(deftest a-stage-says-whether-it-runs-or-waits-on-you-by-its-mark-alone
+(deftest a-stage-says-whether-it-runs-or-waits-on-you-by-its-mark
   (let [html (views/workstream-pane
               (assoc a-pane :doing {:source :claim :kind :diff-review}
                      :arc (assoc-in an-arc [:stages 3 :now] :running)) {})]
     (is (str/includes? html "arc-spin"))
-    (is (not (str/includes? html "reviewing the diff")) "no words restate the mark"))
+    (is (re-find #"class=\"arc-d\">· reviewing the diff<" html)
+        "the running stage says what runs in it, once, on its own row"))
   (let [html (views/workstream-pane
               (assoc a-pane :arc (assoc-in an-arc [:stages 3 :now] :awaiting)) {})]
     (is (re-find #"arc-row \w+ awaiting" html))
@@ -1725,6 +1726,29 @@
         at   #(or (str/index-of html %) (throw (ex-info (str "missing " %) {})))]
     (is (< (at "<h2>Status") (at "class=\"arc\"") (at "class=\"holds\"")
            (at "class=\"qcard\"") (at "<h2>History")))))
+
+(deftest a-board-row-is-its-stage-and-one-mark
+  (let [row  {:ws-id "ws-r" :origin :notion :label "BR-1 · x" :stage :in-progress
+              :position {:at :design-drafted :next {:stage :decide-design :mode :mechanical}}
+              :status {:owed-by :machine :live true}
+              :doing {:source :claim :kind :design-round :round 3 :phase :judging :findings 0}}
+        html (views/workstreams-fragment
+              {:groups [{:project "nido"
+                         :grouped {:in-progress [row] :triage {:in-flight [] :queued []}
+                                   :incoming [] :ready []}}]
+               :selection nil :scope "all"})
+        sub  (second (re-find #"(?s)class=\"gate-sub\">(.*?)</div>" html))]
+    (is (str/includes? sub "st-mark live") "a live workstream carries the running mark")
+    (is (not (re-find #">[^<]*owed:" sub)) "who owes the move is the mark's title, not text")
+    (is (not (re-find #">→ " sub)) "nor is the next move")
+    (is (not (str/includes? sub "doing-badge")) "nor what runs, outside a merge"))
+  (let [html (views/workstreams-fragment
+              {:groups [{:project "nido"
+                         :grouped {:in-progress [{:ws-id "ws-s" :origin :notion :label "s" :stage :in-progress
+                                                  :status {:owed-by :agent :stalled true}}]
+                                   :triage {:in-flight [] :queued []} :incoming [] :ready []}}]
+               :selection nil :scope "all"})]
+    (is (str/includes? html "st-mark halted") "a stalled workstream reads halted")))
 
 (deftest the-card-asks-then-offers
   (let [pane (gate-in-pane oriented-gate)

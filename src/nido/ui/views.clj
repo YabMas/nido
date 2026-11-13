@@ -225,11 +225,10 @@
         .pane h2:first-of-type { border-top:none; padding-top:0; }
         .pos { display:inline-flex; gap:6px; align-items:baseline; margin-left:8px; }
         .pos .pos-at { font-size:var(--fs-xs); color:var(--text-muted); }
-        .pos .pos-nx { font-size:var(--fs-xs); color:var(--text-faint); }
         .pos.pos-you .pos-at { color:var(--needs-dim); }
-        .pos.pos-you .pos-nx { color:var(--needs-dim); }
-        .st { font-size:var(--fs-xs); color:var(--text-faint); margin-left:6px; }
-        .st.st-stalled { color:var(--failed-dim); }
+        .st-mark { flex:none; font-size:var(--fs-xs); line-height:1; }
+        .st-mark.live { color:var(--running); }
+        .st-mark.halted { color:var(--failed-dim); }
         .phase-chip { font-size:var(--fs-xs); color:var(--text-muted); border:1px solid var(--border); border-radius:4px; padding:0 5px; margin-left:6px; }
         .gate-sub span.phase-chip { flex:none; }
         .plan { margin:10px 0 14px; }
@@ -285,6 +284,7 @@
         .arc-g { width:12px; text-align:center; color:var(--text-faint); font-size:var(--fs-xs); }
         .arc-n { min-width:118px; font-size:var(--fs-sm); color:var(--text-muted); }
         .arc-m { font-size:var(--fs-xs); color:var(--text-faint); }
+        .arc-d { font-size:var(--fs-xs); color:var(--running-dim); }
         .arc-v { font-size:var(--fs-xs); color:var(--waiting); }
         .arc-row.done .arc-g { color:var(--ok-dim); }
         .arc-row.done .arc-n { color:var(--text); }
@@ -750,6 +750,8 @@
 (defn- chip [stage]
   [:span {:class (str "chip c-" (name stage))} (name stage)])
 
+(declare state-mark)
+
 (defn- doing-badge
   "What a workstream is doing right now — nothing when nothing is. The ONE
    rendering of current activity, so a shipping row says `merging · driving`
@@ -892,7 +894,7 @@
     ;; What a gate is PARKED on is the line above; this is what is running in it
     ;; right now. A claim outranks session state, so the two coexist — and the
     ;; queue would otherwise be the one surface silent about the round underway.
-    (doing-badge doing)]
+    (state-mark nil doing)]
    ;; The question the card asks, so a reader scanning the list sees what each one wants of them.
    [:div.gate-prev (or (:question ask)
                        (some-> report :markdown
@@ -2057,28 +2059,33 @@
 
    Renders nothing for a row with no position — a bare watched page, or a band
    the projection is not computed for."
-  [{:keys [at next] :as position}]
-  (when position
-    (let [human? (= :human (:mode next))]
-      [:span {:class (str "pos" (when human? " pos-you"))}
-       [:span.pos-at (get position-label at (name at))
-        (when-let [{:keys [done of]} (:layers position)] (str " " done "/" of))]
-       (when next
-         [:span.pos-nx (str "→ " (get stage-label (:stage next) (name (:stage next))))])])))
+  ([position] (position-chip position nil))
+  ([{:keys [at next] :as position} tip]
+   (when position
+     (let [human? (= :human (:mode next))]
+       [:span (cond-> {:class (str "pos" (when human? " pos-you"))}
+                (or next tip)
+                (assoc :title (str/join " · " (remove nil? [(when next (str "next: " (get stage-label (:stage next) (name (:stage next)))))
+                                                            tip]))))
+        [:span.pos-at (get position-label at (name at))
+         (when-let [{:keys [done of]} (:layers position)] (str " " done "/" of))]]))))
 
 (def ^:private owed-label
   {:person "you" :agent "agent" :machine "nido" :nobody "nobody"})
 
-(defn- status-chip
-  "Who owes the next move, and whether anything is working on it now — the two facets of status
-   the position chip does not carry. Stalled is lit: an agent owes the move, nothing is running,
-   and no question was recorded to say why, which is the row a person has to look at."
-  [{:keys [owed-by live stalled] :as st}]
-  (when st
-    [:span {:class (str "st" (when stalled " st-stalled"))
-            :title "who owes the next move · whether anything is live"}
-     (str "owed: " (owed-label owed-by (some-> owed-by name))
-          (cond live " · live" stalled " · stalled" :else ""))]))
+(defn- state-mark
+  "Whether anything is happening in a workstream, as one mark and no words: a dot in the running
+   colour while something is live, ‖ when it is stalled (an agent owes the move, nothing runs and
+   no question was recorded), nothing otherwise. What runs, and who owes the next move, are the
+   mark's title. A merge is the exception and keeps its words (`doing-badge`), because a blocked
+   merge has to read red on a board that is scanned rather than read."
+  [{:keys [owed-by live stalled]} doing]
+  (let [what (wsv/doing-label doing)
+        tip  (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))]
+    (cond
+      (= :merge (:source doing)) (doing-badge doing)
+      stalled                    [:span.st-mark.halted {:title (str "halted" (when (seq tip) (str " · " tip)))} "‖"]
+      (or live what)             [:span.st-mark.live {:title (if (seq tip) tip "running")} "●"])))
 
 (defn- phase-chip
   "Where a phased workstream is in its plan — `phase 2/3` — or nothing for an
@@ -2101,14 +2108,11 @@
     (when (pos? (or open-findings 0))
       [:span.badge-findings (str "⚑ " open-findings " open findings")])]
    (tag-line tag)
-   [:div.gate-sub [:span project] (position-chip position) (status-chip (:status row))
-    ;; Where a workstream STANDS is the position chip; this is what is happening
-    ;; in it right now, which is a different question and often has no answer.
-    ;; A :shipping row reads its merge phase from HERE — the projection folds
-    ;; ship-substate in, so a second merge-lane badge beside this one would be
-    ;; the same fact in two vocabularies. It reads `queued` while the lane has
-    ;; not reached it, which the projection answers rather than the badge.
-    (doing-badge (:doing row))
+   ;; Where the workstream stands, and one mark for whether anything is happening in it. The
+   ;; next move, who owes it and what is running are the marks' titles, not words on the row.
+   ;; A :shipping row's merge phase comes through state-mark, which the projection folds
+   ;; ship-substate into, so it is never said twice.
+   [:div.gate-sub [:span project] (position-chip position) (state-mark (:status row) (:doing row))
     (phase-chip phase)]
    ;; What the gate waits on, where the person owing it will look. The exit
    ;; criterion is the current phase's: its exit is the gate that opens the next.
@@ -2363,7 +2367,7 @@
    on every row would bury the case that matters: `2 visits` on a baseline means a
    later stage sent the work back to it, which is the fact the ledger index cannot
    show and a forward-only track cannot show either."
-  [pos {:keys [stage state visits now] :as facet}]
+  [pos {:keys [stage state visits now] :as facet} doing-label]
   (let [live? (pos? (:entries facet))
         open? (= stage (:stage pos))]
     [:div (cond-> {:class (str "arc-row " (name state)
@@ -2376,6 +2380,7 @@
                     (get arc-glyph state "·"))]
      [:span.arc-n (get arc-label stage (name stage))]
      (when-let [m (arc-meta facet)] [:span.arc-m m])
+     (when (and (= :running now) doing-label) [:span.arc-d (str "· " doing-label)])
      (when (> visits 1)
        [:span.arc-v {:title "the work left this stage and came back"}
         (str "· " visits " visits")])]))
@@ -2412,11 +2417,11 @@
    it; when it does not, the entry was reached from the raw index and the viewer
    renders down there instead. One viewer either way — reading an entry twice on
    one page is worse than reaching it from two places."
-  [pos {:keys [stages excursions]} entries report report-here?]
+  [pos {:keys [stages excursions]} entries report report-here? doing-label]
   [:div
    (into [:div.arc]
          (mapcat (fn [{:keys [stage seqs] :as facet}]
-                   (cond-> [(arc-row pos facet)]
+                   (cond-> [(arc-row pos facet doing-label)]
                      (= stage (:stage pos))
                      (conj [:div.arc-sub
                             (arc-entry-rows pos entries seqs)
@@ -2594,7 +2599,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc plan status replyable? denials gate pending?]
+  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? denials gate pending?]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2616,7 +2621,7 @@
                             :error-msg error-msg})
            [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)}
             (pane-heading origin label links tag)
-            [:p.meta (name stage) " " (status-chip status)]
+            [:p.meta (name stage) " " (state-mark status doing)]
             (links-row links)
 
             ;; Two sections, and the split is the pane's whole claim: what is
@@ -2630,7 +2635,7 @@
             ;; that can show the work having been sent back to an earlier stage.
             (when plan (plan-block plan))
             (when (seq (:stages arc))
-              (arc-block pos arc entries report in-stage?))
+              (arc-block pos arc entries report in-stage? (wsv/doing-label doing)))
             (when (seq holds) (holds-block holds))
             (when (seq denials)
               [:div.denials [:p.meta "Permission denials while nido drives it:"]

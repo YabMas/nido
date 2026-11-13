@@ -7,7 +7,7 @@
             [canvas.coordinator.lane.drive :refer [arc stage-active]]
             [canvas.coordinator.report.ask :refer [report-ask Ask]]
             [canvas.coordinator.work :refer [gates workstream]]
-            [canvas.ui.surface :refer [ui-views shell needs-page needs-fragment ui-server workstream-pane]]))
+            [canvas.ui.surface :refer [ui-views shell needs-page needs-fragment ui-server workstream-pane workstreams-fragment]]))
 
 (Claim principles-stated
   "docs/reference/ui-principles.md states the web dashboard's principles of hierarchy, type, colour, actions, disclosure and orientation, each as a rule a reader can check a page against and each naming the established pattern it is drawn from; it governs the web dashboard and says it does not govern the TUI."
@@ -34,8 +34,8 @@
   {:about [arc stage-active workstream workstream-pane] :evidence "test"})
 
 (Claim no-restated-lines
-  "workstream-pane renders no position line ('next · … — waiting on …') and no activity label: no text wsv/doing-label produces appears anywhere in the pane, the stage list's rows and their marks' titles included."
-  {:about [workstream-pane] :evidence "test"})
+  "workstream-pane renders no position line (next · … — waiting on …), and the one place text wsv/doing-label produces appears in it is beside the stage-list row whose :now is :running. A Workstreams board row renders its position and at most one state mark — running or halted — with the next move, who owes it and what runs only in titles; a merge phase alone keeps its words."
+  {:about [workstream-pane workstreams-fragment] :evidence "test"})
 
 (Claim ask-carries-no-holding
   "The Ask schema has no :holding key, and no registry entry of report.ask builds one."
