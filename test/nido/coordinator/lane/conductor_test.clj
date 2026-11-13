@@ -1073,6 +1073,23 @@
           (is (standing/activated? w) "activating again turns the recipe back on")
           (is (not (standing/deactivated? w))))))))
 
+(deftest a-pause-stands-until-the-person-resumes
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (is (nil? (ws/pause (ws/read-ws :brian id))))
+        (ws/resume! :brian id)
+        (is (empty? (ws/entries-of :brian id :resumed)) "nothing to resume")
+        (ws/pause! :brian id "waiting on pricing")
+        (ws/pause! :brian id nil)
+        (is (= 1 (count (ws/entries-of :brian id :paused))) "pausing twice writes once")
+        (is (standing/paused? (ws/read-ws :brian id)))
+        (is (= "waiting on pricing" (:note (first (ws/entries-of :brian id :paused)))))
+        (ws/resume! :brian id)
+        (is (not (standing/paused? (ws/read-ws :brian id))))
+        (ws/close! :brian id :done)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"closed" (ws/pause! :brian id nil)))))))
+
 (deftest a-runs-start-is-carried-whether-or-not-activated
   (with-tmp
     (fn []

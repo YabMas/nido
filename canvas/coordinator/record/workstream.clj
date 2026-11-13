@@ -109,6 +109,19 @@
      only while the recipe does not run and never on a closed workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] Workstream]
      :delegates [read-ws closure activation append-lock-path]})
+  (Operation pause
+    "A person's standing pause on a workstream: its newest :paused index row with no :resumed
+     after it, or nil."
+    {:signature [:=> [:catn [:w :any]] [:maybe :map]]})
+  (Operation pause!
+    "Record a person's choice not to push a workstream forward for now: a :paused entry with
+     their note, written only while no pause stands and never on a closed workstream."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:note [:maybe :string]]] Workstream]
+     :delegates [read-ws closure pause append-lock-path]})
+  (Operation resume!
+    "Lift a person's pause: a :resumed entry, written only while a pause stands."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Workstream]
+     :delegates [read-ws pause append-lock-path]})
   (Operation deactivate!
     "Record a person taking nido's recipe off a workstream: a :deactivated entry, written only
      while the recipe runs."

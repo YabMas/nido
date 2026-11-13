@@ -241,7 +241,7 @@
                   worked  (worked? project ws-id typed-in)]
            :when (or c worked (seq (seats/hand-backs project ws-id)))
            :let  [w    (ws/read-ws project ws-id)
-                  on?  (and w (standing/activated? w))
+                  on?  (and w (standing/activated? w) (not (standing/paused? w)))
                   owes (and on? (owes-hand-back? project ws-id w))
                   act  (cond
                          (nil? w) nil

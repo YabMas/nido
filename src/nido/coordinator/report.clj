@@ -3823,6 +3823,20 @@
    [:format  [:= :scratch]]
    [:session {:optional true} string?]])
 
+(def Paused
+  "A person's deliberate choice not to push this workstream forward for now: while it stands no
+   conductor drives it and it reads paused, not stalled. A :resumed entry lifts it."
+  [:map {:closed true}
+   [:format [:= :paused]]
+   [:by     [:= :person]]
+   [:note   {:optional true} string?]])
+
+(def Resumed
+  "A person lifted the standing pause on this workstream."
+  [:map {:closed true}
+   [:format [:= :resumed]]
+   [:by     [:= :person]]])
+
 (def Deactivated
   "A person took nido's recipe off this workstream: no conductor drives it, nothing is owed on it,
    and the designs it holds no longer gate its landing. An :activated entry after it turns the
@@ -4063,6 +4077,8 @@
    :scratch                  Scratch
    :activated                Activated
    :deactivated              Deactivated
+   :paused                   Paused
+   :resumed                  Resumed
    :notion-status            NotionStatus
    :layer-completed          LayerCompleted
    :issue                    Issue
@@ -5569,6 +5585,8 @@
     :scratch                  (scratch->markdown report)
     :activated                (activated->markdown report)
     :deactivated              (deactivated->markdown report)
+    :paused                   (str "# Paused by a person" (when-let [n (:note report)] (str "\n" n)))
+    :resumed                  "# Resumed by a person"
     :notion-status            (notion-status->markdown report)
     :layer-completed          (layer-completed->markdown report)
     :generation               (generation->markdown report)
@@ -5626,6 +5644,8 @@
     :scratch                  "One-off"
     :activated                "Pipeline activated"
     :deactivated              "Pipeline deactivated"
+    :paused                   "Paused"
+    :resumed                  "Resumed"
     :notion-status            (str "Notion status: " (:status report))
     :layer-completed          (str "Layer " (:layer report) "/" (:of report)
                                    (some->> (:seat report) (str " of "))  " done")

@@ -349,7 +349,7 @@
             "a dismissal is the close's outcome, and its band is :dismissed, not :done")
         (let [row (first (work/list-workstreams :brian))]
           (is (= :shipped (get-in row [:position :at])) "a dismissed row is drawn, so it reads status")
-          (is (= {:owed-by :nobody :live false :stalled false} (:status row))))))))
+          (is (= {:owed-by :nobody :live false :stalled false :paused false} (:status row))))))))
 
 (deftest undismissed-rows-are-unaffected
   (with-tmp

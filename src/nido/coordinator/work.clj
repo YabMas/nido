@@ -636,7 +636,7 @@
                                ;; Settled is over: nothing is underway in it.
                                :doing nil)
             st (assoc :position (:position st)
-                      :status   (select-keys st [:owed-by :live :stalled]))))
+                      :status   (select-keys st [:owed-by :live :stalled :paused]))))
         (let [st   (pipeline/status project ws-id live-names)
               pos  (:position st)
               band (if closed :awaiting-gate (band-of project ws-id origin pos))]
@@ -644,7 +644,7 @@
                          :stage      band
                          :dismissed? false
                          :position   pos
-                         :status     (select-keys st [:owed-by :live :stalled])
+                         :status     (select-keys st [:owed-by :live :stalled :paused])
                          :needs-you  (= :person (:owed-by st))
                          :engagement (engagement-of st)
                          ;; What is underway, at status's band, so a row cannot say :done and
@@ -1388,7 +1388,7 @@
                  (and (< (:seq %) g) (phase-trail-kinds (:kind %))))
             entries)))
 
-(declare driven-denials gate)
+(declare driven-denials gate pause-of)
 
 (defn- arc-at
   "The arc of stages `entries` travelled, read at `position`: the stage a person owes marked
@@ -1457,6 +1457,9 @@
         ;; Who owes the next move and whether anything is live — status's, as the board row
         ;; carries it, so the pane and the row cannot say different things.
         :status       (:status row)
+        ;; The person's standing pause, with the note they gave — what the pane says beside
+        ;; its Resume.
+        :pause        (pause-of project ws-id w)
         :project      project
         :origin       (classify-origin w)
         :stage        (:stage row)
@@ -3421,6 +3424,29 @@
     {:ws-id       ws-id
      :already?    already?
      :instruction (str activation-preamble (:practice (seats/default-embodiment)))}))
+
+(defn- pause-of
+  "The standing pause on workstream `w` as {:at :note}, or nil when none stands."
+  [project ws-id w]
+  (when-let [p (cws/pause w)]
+    {:at (:at p) :note (:note (cws/entry-at-seq project ws-id (:seq p)))}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
+  pause!
+  "Pause `ws-id` for a person — their choice not to push it forward for now — with `note` saying
+   why. While it stands no conductor drives it and every surface reads it paused, never stalled.
+   Answers {:ws-id}."
+  [project ws-id note]
+  (cws/pause! (keyword (name project)) ws-id note)
+  {:ws-id ws-id})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  resume!
+  "Lift the person's pause on `ws-id`; its conductor starts again on the next conduct pass.
+   Answers {:ws-id}."
+  [project ws-id]
+  (cws/resume! (keyword (name project)) ws-id)
+  {:ws-id ws-id})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   deactivate!

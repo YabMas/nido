@@ -84,7 +84,7 @@
    Kept apart because the work's own records are what everything asking `what happened last`
    means: a close appended after a completed implementation must not become the answer to
    `how did the merge run end`."
-  #{:closed :reopened :stage-set :findings-resolved :scratch :activated :deactivated :notion-status
+  #{:closed :reopened :stage-set :findings-resolved :scratch :activated :deactivated :paused :resumed :notion-status
     :conduct-decision})
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
@@ -292,6 +292,40 @@
   (record-status! project ws-id
                   (fn [w] (when-not (= :activated (activation w))
                             (cond-> {:format :activated :by :person} session (assoc :session session))))))
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  pause
+  "The person's standing pause on `w`: its newest :paused entry's index row when no :resumed came
+   after it, else nil. A pause is a person's deliberate choice not to push the workstream forward
+   for now — never something nido infers."
+  [w]
+  (let [p (->> (:entries w) (filter #(#{:paused :resumed} (:kind %))) last)]
+    (when (= :paused (:kind p)) p)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :Workstream]}
+  pause!
+  "Append the person's :paused entry, with `note` saying why when given. Appends nothing while a
+   pause already stands. Throws if the workstream is absent or closed. Returns the record."
+  [project ws-id note]
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+    (when (closure w)
+      (throw (ex-info (str "Workstream " ws-id " is closed: there is nothing to pause")
+                      {:reason :closed :ws-id ws-id}))))
+  (record-status! project ws-id
+                  (fn [w] (when-not (pause w)
+                            (cond-> {:format :paused :by :person}
+                              (not (str/blank? note)) (assoc :note note))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Workstream]}
+  resume!
+  "Append the person's :resumed entry, lifting the standing pause. Appends nothing when none
+   stands. Throws if the workstream is absent. Returns the record."
+  [project ws-id]
+  (when-not (read-ws project ws-id)
+    (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+  (record-status! project ws-id
+                  (fn [w] (when (pause w) {:format :resumed :by :person}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :Workstream]}
   deactivate!

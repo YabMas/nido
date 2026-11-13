@@ -692,6 +692,12 @@
   (= :activated (ws/activation w)))
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  paused?
+  "Whether a person's pause stands on the workstream: a :paused entry with no :resumed after it."
+  [w]
+  (some? (ws/pause w)))
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   deactivated?
   "Whether a person took nido's recipe off the workstream: the newer of its :activated and
    :deactivated entries is a :deactivated one. Distinct from never activated — a deactivated

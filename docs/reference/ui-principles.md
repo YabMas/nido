@@ -161,3 +161,19 @@ delete it.
 "Blocked / next · your answer / agent · answering" position lines, and every
 "agent doing X" label. Tufte's data-ink ratio: ink that restates is ink to
 erase.
+
+## 8. States — working, needs you, paused, and nothing else at rest
+
+An open workstream is in exactly one of three resting states, and the overview says which with one mark and no words:
+
+| state | mark | means |
+|---|---|---|
+| working | ● running colour | one or more agents are doing something on it |
+| needs you | lit position chip | it is blocked on a question it has stated to you |
+| paused | ‖ dormant colour | you chose not to push it forward for now, with a note saying why |
+
+Paused is only ever the person's choice (the pane's Pause, a `:paused` ledger entry). nido never infers it.
+
+Everything else is a fault. A workstream where an agent owes the move but nothing runs, nothing asks you, and nobody paused it is **stalled**: it shows ⚠ in the failed colour, never ‖. A stall is something nido has to recover from, by restarting the owed work or turning it into a stated question. It is not a state to display and leave.
+
+Who runs and on what, which round, who owes the move: these are detail. They go in the mark's title and in the pane, never on the overview row. The person's words: "All I care about is if its in progress … or if it needs my input on something. The rest i see as irrelvant details at this level and can be opaque."

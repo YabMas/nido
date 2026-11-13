@@ -228,7 +228,11 @@
         .pos.pos-you .pos-at { color:var(--needs-dim); }
         .st-mark { flex:none; font-size:var(--fs-xs); line-height:1; }
         .st-mark.live { color:var(--running); }
-        .st-mark.halted { color:var(--failed-dim); }
+        .st-mark.paused { color:var(--dormant); }
+        .st-mark.stalled { color:var(--failed); }
+        .pause-line { display:flex; align-items:center; gap:8px; margin:-4px 0 10px;
+                      font-size:var(--fs-xs); color:var(--dormant); }
+        .pause-ctl { margin-left:auto; }
         .phase-chip { font-size:var(--fs-xs); color:var(--text-muted); border:1px solid var(--border); border-radius:4px; padding:0 5px; margin-left:6px; }
         .gate-sub span.phase-chip { flex:none; }
         .plan { margin:10px 0 14px; }
@@ -778,6 +782,19 @@
    runs — so it stays in the state mark's title."
   [doing]
   (when (= :claim (:source doing)) (wsv/doing-label doing)))
+
+(defn- pause-line
+  "The pane's pause control under its Status heading: while a person's pause stands, that it does
+   and why, with Resume; otherwise a quiet Pause. Pausing is the person's choice not to push the
+   workstream forward for now, so it is offered on every open workstream and asks nothing."
+  [project ws-id pause]
+  (let [post (fn [verb] (str "@post('/workstreams/" project "/" ws-id "/" verb "')"))]
+    (if pause
+      [:div.pause-line
+       [:span (str "Paused" (when-let [n (:note pause)] (str " — " n)))]
+       [:button.btn.pause-ctl {"data-on:click" (post "resume")} "Resume"]]
+      [:div.pause-line
+       [:button.btn.pause-ctl {"data-on:click" (post "pause") :title "stop pushing this forward for now"} "Pause"]])))
 
 (defn- links-row
   "The workstream's followable external refs under a pane heading — one anchor per
@@ -2083,16 +2100,20 @@
 
 (defn- state-mark
   "Whether anything is happening in a workstream, as one mark and no words: a dot in the running
-   colour while something is live, ‖ when it is stalled (an agent owes the move, nothing runs and
-   no question was recorded), nothing otherwise. What runs, and who owes the next move, are the
-   mark's title. A merge is the exception and keeps its words (`doing-badge`), because a blocked
-   merge has to read red on a board that is scanned rather than read."
-  [{:keys [owed-by live stalled]} doing]
+   colour while something is live; ‖ in the dormant colour while a person's pause stands; ⚠ in
+   the failed colour when it is stalled — an agent owes the move, nothing runs, no question was
+   recorded and nobody paused it, which is a fault and never a resting state; nothing otherwise
+   (a workstream waiting on a person says so by its lit position chip). What runs, and who owes
+   the next move, are the mark's title. A merge keeps its words (`doing-badge`), because a
+   blocked merge has to read red on a board that is scanned rather than read."
+  [{:keys [owed-by live stalled paused]} doing]
   (let [what (wsv/doing-label doing)
         tip  (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))]
     (cond
       (= :merge (:source doing)) (doing-badge doing)
-      stalled                    [:span.st-mark.halted {:title (str "halted" (when (seq tip) (str " · " tip)))} "‖"]
+      paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
+      stalled                    [:span.st-mark.stalled {:title (str "stalled — nothing runs and nothing asks you"
+                                                                     (when (seq tip) (str " · " tip)))} "⚠"]
       (or live what)             [:span.st-mark.live {:title (if (seq tip) tip "running")} "●"])))
 
 (defn- phase-chip
@@ -2607,7 +2628,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? denials gate pending?]
+  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? denials gate pending? pause]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2637,6 +2658,7 @@
             ;; revision of them read as the same kind of thing — which is exactly
             ;; the confusion the standing records were added to end.
             [:h2 (status-heading position) " " (state-mark status doing)]
+            (when-not (= :done stage) (pause-line project ws-id pause))
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
             ;; that can show the work having been sent back to an earlier stage.

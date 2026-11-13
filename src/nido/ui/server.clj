@@ -566,6 +566,14 @@
         (dev/stop-session! project session)
         (ops-fragment-response))
 
+      ;; POST /workstreams/:project/:ws-id/pause|resume — the person's pause, from the pane.
+      (and (= 4 (count segs)) (= "workstreams" (first segs)) (#{"pause" "resume"} (nth segs 3)))
+      (let [project (nth segs 1) ws-id (nth segs 2)]
+        (if (= "pause" (nth segs 3))
+          (work/pause! project ws-id nil)
+          (work/resume! project ws-id))
+        (ws-pane-fragment-response project ws-id))
+
       ;; POST /workstreams/:project/:ws-id/winddown — bring a closed workstream's
       ;; leftover sessions down. Optimistic :stopping keyed "project/ws-id" (same
       ;; key-space as gate-resolve!) marks the row pending until down! settles.

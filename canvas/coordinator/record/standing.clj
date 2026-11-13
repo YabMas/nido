@@ -98,6 +98,10 @@
      entries is an :activated one. Nothing drives, and nothing is owed on, one where it does not."
     {:signature [:=> [:catn [:w :any]] :boolean]
      :delegates [workstream/activation]})
+  (Operation paused?
+    "Whether a person's pause stands on the workstream."
+    {:signature [:=> [:catn [:w :any]] :boolean]
+     :delegates [workstream/pause]})
   (Operation deactivated?
     "Whether a person took nido's recipe off the workstream: the newer of its :activated and
      :deactivated entries is a :deactivated one. Its designs then no longer gate its landing."

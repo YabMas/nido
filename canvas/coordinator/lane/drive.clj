@@ -28,6 +28,7 @@
   [:map [:position :map]
         [:owed-by [:enum :person :agent :machine :nobody]]
         [:stalled :boolean]
+        [:paused :boolean]
         [:live :boolean]])
 
 (Module lane-pipeline
@@ -93,8 +94,9 @@
      :delegates [workstream/read-ws intake-kind next-action baseline-verified? settled-in-notion]})
   (Operation status
     "A workstream's position, who owes its next move, and whether anything is live — the one
-     answer every surface renders. Stalled when an agent owes the move, nothing is live, and no
-     question is open; its conductor's session is not what makes it live."
+     answer every surface renders. Paused while a person's pause stands. Stalled — a fault —
+     when an agent owes the move, nothing is live, no question is open and no pause stands; its
+     conductor's session is not what makes it live."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
                       [:live-names [:? [:maybe [:set :string]]]]] WorkstreamStatus]
      :delegates [of activity/read-live runs/live-runs]}))

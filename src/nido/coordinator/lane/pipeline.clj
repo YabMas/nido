@@ -1295,8 +1295,10 @@
    nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
    whose agent holds its lock, a background session the substrate lists with a live process,
    or a person's session that is up (`sstate/session-live?`) — `live-names` when the
-   caller observed them, else observed here. :stalled is an agent owing the move with nothing live: the work
-   stopped, and no question was recorded to say why."
+   caller observed them, else observed here. :paused is a person's standing pause — their choice
+   not to push the workstream forward. :stalled is an agent owing the move with nothing live and
+   no pause standing: the work stopped, and no question was recorded to say why. That is a
+   fault, never a resting state."
   ([project ws-id] (status project ws-id nil))
   ([project ws-id live-names]
    (let [position (of project ws-id)
@@ -1322,7 +1324,9 @@
                                (some (fn [f] (listed? #(= (:session-id f) (:sessionId %)))) facets)
                                (some (fn [n] (and (:bg-id n) (listed? #(= (:bg-id n) (:id %))))) notes)
                                (some #(contains? up (:name %)) humans)))]
-     {:position position
-      :owed-by  owed-by
-      :live     live
-      :stalled  (and (= :agent owed-by) (not live))})))
+     (let [paused (boolean (some-> (ws/read-ws project ws-id) standing/paused?))]
+       {:position position
+        :owed-by  owed-by
+        :live     live
+        :paused   paused
+        :stalled  (and (= :agent owed-by) (not live) (not paused))}))))

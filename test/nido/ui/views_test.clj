@@ -1748,7 +1748,26 @@
                                                   :status {:owed-by :agent :stalled true}}]
                                    :triage {:in-flight [] :queued []} :incoming [] :ready []}}]
                :selection nil :scope "all"})]
-    (is (str/includes? html "st-mark halted") "a stalled workstream reads halted")))
+    (is (str/includes? html "st-mark stalled") "a stalled workstream reads as a fault")
+    (is (str/includes? html "⚠"))
+    (is (not (str/includes? html "‖")) "never as paused"))
+  (let [html (views/workstreams-fragment
+              {:groups [{:project "nido"
+                         :grouped {:in-progress [{:ws-id "ws-p" :origin :notion :label "p" :stage :in-progress
+                                                  :status {:owed-by :agent :stalled false :paused true}}]
+                                   :triage {:in-flight [] :queued []} :incoming [] :ready []}}]
+               :selection nil :scope "all"})]
+    (is (str/includes? html "st-mark paused") "a paused workstream reads paused")
+    (is (str/includes? html "‖"))))
+
+(deftest a-pane-pauses-and-resumes
+  (let [open   (views/workstream-pane (assoc a-pane :stage :in-progress) {})
+        paused (views/workstream-pane (assoc a-pane :stage :in-progress :pause {:note "waiting on pricing"}) {})]
+    (is (str/includes? open "/pause&apos;)") "an open workstream offers Pause")
+    (is (str/includes? paused "Paused — waiting on pricing"))
+    (is (str/includes? paused "/resume&apos;)") "a paused one offers Resume")
+    (is (not (str/includes? (views/workstream-pane (assoc a-pane :stage :done) {}) "/pause&apos;)"))
+        "a closed one offers neither")))
 
 (deftest the-card-asks-then-offers
   (let [pane (gate-in-pane oriented-gate)

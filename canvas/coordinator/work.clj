@@ -231,6 +231,15 @@
      session already understands, then work the recipe as the whole seat's occupant would."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] :map]
      :delegates [workstream/activate! standing/activated? seats/default-embodiment]})
+  (Operation pause!
+    "Pause a workstream for a person, with their note: no conductor drives it while the pause
+     stands, and every surface reads it paused rather than stalled."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:note [:maybe :string]]] :map]
+     :delegates [workstream/pause!]})
+  (Operation resume!
+    "Lift a person's pause on a workstream."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
+     :delegates [workstream/resume!]})
   (Operation deactivate!
     "Take nido's recipe off a workstream for a person — its :deactivated entry — and answer whether
      the recipe was running."
