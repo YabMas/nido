@@ -1840,3 +1840,12 @@
     (is (str/includes? h2 "st-mark live") "the heading carries the board row's mark")
     (is (not (re-find #">in-progress\b" pane)) "the board's band word is not a second status")
     (is (not (str/includes? pane "class=\"no\">not verified")) "a baseline awaiting its round is not an error")))
+
+(deftest a-running-stage-names-a-round-and-nothing-else
+  (let [pane (fn [doing]
+               (views/workstream-pane
+                (assoc a-pane :doing doing :arc (assoc-in an-arc [:stages 3 :now] :running)) {}))]
+    (is (not (str/includes? (pane {:source :session :phase :answering :session "s"}) "class=\"arc-d\""))
+        "which agent runs, on what, is not overview")
+    (is (str/includes? (pane {:source :claim :kind :diff-review}) "class=\"arc-d\"")
+        "what a review round is doing is")))

@@ -771,6 +771,14 @@
                           (str " ship-" (name phase))))}
      d]))
 
+(defn- round-label
+  "The words beside the running stage row: where a review round has got (`design round 3 ·
+   judging · 0 findings`), and nothing for any other activity. Which agent runs and on what is
+   detail the person does not scan a workstream for — the running mark already says something
+   runs — so it stays in the state mark's title."
+  [doing]
+  (when (= :claim (:source doing)) (wsv/doing-label doing)))
+
 (defn- links-row
   "The workstream's followable external refs under a pane heading — one anchor per
    ref, keyed by its adapter label. Renders nothing when there are none, so a
@@ -2634,7 +2642,7 @@
             ;; that can show the work having been sent back to an earlier stage.
             (when plan (plan-block plan))
             (when (seq (:stages arc))
-              (arc-block pos arc entries report in-stage? (wsv/doing-label doing)))
+              (arc-block pos arc entries report in-stage? (round-label doing)))
             (when (seq holds) (holds-block holds))
             (when (seq denials)
               [:div.denials [:p.meta "Permission denials while nido drives it:"]
