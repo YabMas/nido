@@ -228,3 +228,9 @@
                      "href=\"/x\""))
   (is (= "Status — Approved" (state/status-heading {:at :design-approved})))
   (is (= "ws_1" (ask/card-signal "ws-1"))))
+
+(deftest the-catalog-spans-the-shell-grid
+  ;; The stylesheet makes body the dashboard shell's two-column grid (rail, content). The catalog
+  ;; has no rail, so unless its root spans both columns its whole layout sits in the 180px rail
+  ;; cell and its main column renders a word wide.
+  (is (re-find #"\.cat \{[^}]*grid-column:1 / -1" (catalog/catalog-page nil))))

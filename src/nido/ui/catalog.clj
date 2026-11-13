@@ -39,8 +39,12 @@
    It declares no custom property and writes no colour or size of its own: every value is a token
    `nido.ui.stylesheet` declares, which is what keeps `one-token-block` true of this file too.
    The scene frame's three backgrounds ARE the three the blocks sit on in the app, which is what
-   makes the surface selector a reading of the app rather than a palette of its own."
-  "        .cat { display:grid; grid-template-columns: 220px 1fr; min-height:100vh; }
+   makes the surface selector a reading of the app rather than a palette of its own.
+
+   The stylesheet makes `body` the dashboard shell's grid — a 180px rail, then the content — and
+   the catalog has no rail, so `.cat` spans the whole of it; in the rail's cell alone its main
+   column was left a word wide."
+  "        .cat { grid-column:1 / -1; display:grid; grid-template-columns: 220px 1fr; min-height:100vh; }
         .cat-side { border-right:1px solid var(--border); padding:16px 0; min-width:0; }
         .cat-side h1 { margin:0 16px 4px; }
         .cat-side .cat-sub { margin:0 16px 14px; color:var(--text-faint); font-size:var(--fs-xs); }
