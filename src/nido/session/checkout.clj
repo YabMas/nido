@@ -215,7 +215,10 @@
                            (generated-paths instance-id))]
            (jj! dir true "edit" copy)
            (doseq [[path content] held] (fs/write-bytes path content))
-           (when (not= prior copy) (jj! dir false "abandon" prior)))
+           ;; `edit` has already abandoned `prior` when it was empty and undescribed — the commit
+           ;; `workspace add` leaves when a creation stops before its own `edit`, or a hand `jj
+           ;; new` here — and abandoning a change that is gone throws, so it goes as `present`.
+           (when (not= prior copy) (jj! dir false "abandon" (str "present(" prior ")"))))
          (do (fs/create-dirs (fs/parent dir))
              (forget-workspace! instance-id from)
              ;; A creation that throws part-way — a full disk kills `workspace add` mid-checkout,

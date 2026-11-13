@@ -73,6 +73,18 @@
         (is (= 1 (count (re-seq #"nido-runtime" (:out (sh a "jj" "workspace" "list")))))
             "under the one workspace")))))
 
+(deftest a-checkout-sitting-on-an-empty-undescribed-commit-is-refreshed
+  ;; A creation stopped between `workspace add` and its `edit` leaves the checkout on the empty
+  ;; commit `workspace add` puts on top, as does a hand `jj new` there. jj abandons such a commit
+  ;; itself when the refresh edits the new copy, and a start then failed abandoning it again.
+  (with-two-workspaces
+    (fn [a _]
+      (let [dir (checkout/refresh! "p--ws" {a "a"})]
+        (sh dir "jj" "new")
+        (spit (str (fs/path a "a.clj")) "(ns a)\n")
+        (is (= dir (checkout/refresh! "p--ws" {a "a"})))
+        (is (fs/exists? (fs/path dir "a.clj")) "the members' change arrives")))))
+
 (deftest a-creation-that-throws-leaves-nothing-the-next-start-mistakes-for-a-checkout
   ;; A full disk killed `workspace add` part-way and left a `.jj` behind; the next start read it
   ;; as a checkout already made, snapshotted the partial files and never ran the setup steps.
