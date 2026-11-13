@@ -1321,6 +1321,21 @@
             "and the citation is mirrored onto the index, so the re-entry clamp
              reads it without parsing every trail entry")))))
 
+(deftest a-trail-record-after-deactivation-cites-nothing
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (ws/activate! :brian id nil)
+        (ws/deactivate! :brian id nil)
+        (ws/append-entry! :brian id {:kind :implementation-completed} (pr-str an-implementation))
+        (is (= :implementation-completed (:kind (last (:entries (ws/read-ws :brian id)))))
+            "work done after the recipe was taken off was made under no design")))))
+
 (deftest a-trail-record-on-a-workstream-with-no-design-cites-nothing
   ;; The refusal `reentry/generation` already makes, at the boundary: work done
   ;; before any design exists cannot be attributed to one, and demanding a

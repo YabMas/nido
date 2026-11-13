@@ -894,12 +894,16 @@
    evidence. That is a fact about how the ledger was written rather than about
    what the records say, and it cannot survive a workstream holding more than one
    unit — `:merged` least of all, since `reopen!` clears `:closed` for the next
-   landing and every earlier one stays in the ledger for ever."
+   landing and every earlier one stays in the ledger for ever.
+
+   Except on a workstream a person deactivated: work done after the recipe was taken off was
+   made under no design, so it cites none — a citation it does supply must still resolve."
   [w kind payload]
   (when (contains? trail-kinds kind)
     (let [designs (span-of w :design)
           r       (edn/read-string payload)]
-      (when (and (seq designs) (nil? (get-in r [:design :seq])))
+      (when (and (seq designs) (nil? (get-in r [:design :seq]))
+                 (not= :deactivated (activation w)))
         (throw (ex-info (str "A " (name kind) " must name the design it was made"
                              " under — this workstream holds " (count designs)
                              ", so append order is not evidence")
