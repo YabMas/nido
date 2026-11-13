@@ -73,6 +73,26 @@
         (is (= 1 (count (re-seq #"nido-runtime" (:out (sh a "jj" "workspace" "list")))))
             "under the one workspace")))))
 
+(deftest a-creation-that-throws-leaves-nothing-the-next-start-mistakes-for-a-checkout
+  ;; A full disk killed `workspace add` part-way and left a `.jj` behind; the next start read it
+  ;; as a checkout already made, snapshotted the partial files and never ran the setup steps.
+  (with-two-workspaces
+    (fn [a _]
+      (let [dir (checkout/checkout-dir "p--ws")
+            e   (try (checkout/refresh! "p--ws" {a "a"} (fn [_] (throw (ex-info "disk full" {}))))
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+        (is (= "disk full" (ex-message e)) "the failure still reaches the caller")
+        (is (not (fs/exists? dir)) "no directory")
+        (is (not (re-find #"nido-runtime" (:out (sh a "jj" "workspace" "list")))) "no workspace")
+        (is (str/blank? (:out (sh a "jj" "log" "--no-graph" "-r" "description(substring:\"nido runtime\")"
+                                  "-T" "change_id")))
+            "no copy left among the project's commits")
+        (let [setups (atom [])]
+          (is (= dir (checkout/refresh! "p--ws" {a "a"} #(swap! setups conj %))))
+          (is (= [dir] @setups) "the next start creates it again, setup included")
+          (is (fs/exists? (fs/path dir "f.txt"))))))))
+
 (deftest two-runtimes-whose-ids-fold-alike-get-two-checkouts
   ;; `feat/x` is kept as `feat~x`, beside a runtime keyed `feat-x`: two state directories, so two
   ;; jj workspaces, though jj's spelling of either id folds `~` to `-`.

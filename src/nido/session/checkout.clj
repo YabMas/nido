@@ -172,6 +172,8 @@
         (throw (ex-info (str "git worktree prune failed for " at ": " (str/trim (:err r)))
                         {:reason :git :dir (str at) :err (:err r)}))))))
 
+(declare remove!)
+
 (defn ^{:malli/schema [:function
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]]] :Path]
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :Path]]}
@@ -180,7 +182,8 @@
    every one a jj workspace — creating it on first use, or when its directory is gone though jj
    still holds its workspace, and return its directory. `setup!` is
    called with the directory once, when it is created, so the steps that prepare a working copy
-   for a JVM prepare this one too. The files the runtime's services rendered into the checkout
+   for a JVM prepare this one too; a creation that throws, `setup!` included, leaves no checkout,
+   workspace or copy behind, so the next refresh creates it again. The files the runtime's services rendered into the checkout
    (`generated-paths`) hold across the refresh what they held before it, since the members' copies
    of them carry none of the runtime's ports or database.
 
@@ -215,10 +218,20 @@
            (when (not= prior copy) (jj! dir false "abandon" prior)))
          (do (fs/create-dirs (fs/parent dir))
              (forget-workspace! instance-id from)
-             (jj! from true "workspace" "add" "--name" (workspace-name instance-id) "-r" copy dir)
-             ;; `workspace add` puts an empty commit on top; edit the copy itself, which abandons it.
-             (jj! dir true "edit" copy)
-             (setup! dir))))
+             ;; A creation that throws part-way — a full disk kills `workspace add` mid-checkout,
+             ;; a setup step fails — leaves a `.jj` the branch above reads as a checkout already
+             ;; made, and the next start would serve its partial files with `setup!` never run.
+             ;; So it is undone whole, the copy with it, before the error goes on.
+             (try
+               (jj! from true "workspace" "add" "--name" (workspace-name instance-id) "-r" copy dir)
+               ;; `workspace add` puts an empty commit on top; edit the copy itself, which abandons it.
+               (jj! dir true "edit" copy)
+               (setup! dir)
+               (catch Throwable e
+                 (remove! instance-id from)
+                 (try (jj! from false "abandon" (str "present(" copy ")"))
+                      (catch Exception _ nil))
+                 (throw e))))))
      dir)))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId [:maybe :Path]] :nil]}
