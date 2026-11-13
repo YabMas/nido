@@ -1756,6 +1756,85 @@
         :recut (doseq [i (range (count (:tensions r)))]
                  (cites! w r [:tensions i :seq] #{:tension} "Re-cut"))))))
 
+(defn- check-drain-closed-done!
+  "A drain is closed done only on its observed exit: a :closed :done joins a drain's ledger only
+   when an :exit-observed stands newer than every :closed and :reopened on it — which lane-drain's
+   close appends just before it. Any other close of a drain to :done, a generic close among them,
+   is refused (:exit-not-observed)."
+  [w kind payload]
+  (when (and (= :closed kind)
+             (some #(= :drain (:kind %)) (:entries w))
+             (= :done (:outcome (edn/read-string payload))))
+    (let [newest (fn [ks] (or (:seq (last (filter #(ks (:kind %)) (:entries w)))) 0))]
+      (when-not (> (newest #{:exit-observed}) (newest #{:closed :reopened}))
+        (throw (ex-info (str (:id w) " is a drain: it is closed done only by its close, on its observed exit")
+                        {:reason :exit-not-observed :ws-id (:id w)}))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
+  stands-landed?
+  "Whether workstream `ws-id` of `project` stands landed: its ledger holds a :merged, or it is
+   closed done. The one landed reading of a slice — the append's check, source-drain's `landed?`
+   and how a slice's landing Run settles all read it."
+  [project ws-id]
+  (when-let [w (read-ws project ws-id)]
+    (boolean (or (some #(= :merged (:kind %)) (:entries w))
+                 (= :done (:outcome (closure w)))))))
+
+(defn- slice-version-here
+  "The recipe version slice `w` runs under: its newest :slice-rebased's, else its birth's."
+  [w birth]
+  (or (:recipe (some->> (last (filter #(= :slice-rebased (:kind %)) (:entries w))) :seq (read-entry-at w)))
+      (:recipe birth)))
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  slice-review-passed?
+  "Whether slice `w`'s NEWEST :review citing the recipe version it runs under (`{:recipe {:seq v}}`)
+   passed — its status :clean or :converged. A newer review that ended unresolved withdraws an
+   older pass; one that cites no version, a designless one included, judged it against nothing.
+   The one reading of a slice's readiness: the pipeline's position, lane-drain's landing and every
+   landing's record read it."
+  [w]
+  (when-let [birth (some->> (first (filter #(= :slice (:kind %)) (:entries w))) :seq (read-entry-at w))]
+    (let [v (slice-version-here w birth)]
+      (boolean (#{:clean :converged}
+                (:status (last (filter #(= v (get-in % [:recipe :seq]))
+                                       (keep #(read-entry-at w (:seq %))
+                                             (filter #(= :review (:kind %)) (:entries w)))))))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
+  slice-unlandable
+  "Why slice `w` of `project` may not land yet, or nil when it may (nil for a workstream that is no
+   slice): {:reason :rests-unlanded :rests-on [plan …]} while a plan its plan rests on (`:rests-on`,
+   on its drain) was not started as a slice that stands landed, else {:reason :not-ready} until
+   `slice-review-passed?` — each with :message. The one predicate of a slice being landable: the
+   append of its landing, lane-drain's ask for one and the pre-push landing gate all read it."
+  [project w]
+  (when-let [birth (some->> (first (filter #(= :slice (:kind %)) (:entries w))) :seq (read-entry-at w))]
+    (let [d        (some->> (:drain birth) (read-ws project))
+          plan     (some->> (:plan birth) (read-entry-at d))
+          started  (into {} (keep #(when (= :slice-started (:kind %))
+                                     (let [e (read-entry-at d (:seq %))] [(:plan e) (:ws-id e)])))
+                         (:entries d))
+          unlanded (vec (remove #(some->> (started %) (stands-landed? project)) (:rests-on plan)))]
+      (cond
+        (seq unlanded)
+        {:reason :rests-unlanded :rests-on unlanded
+         :message (str (:id w) " rests on plans not yet landed: " (str/join ", " unlanded))}
+        (not (slice-review-passed? w))
+        {:reason :not-ready
+         :message (str (:id w) " has not passed its newest review under recipe version "
+                       (slice-version-here w birth) ", the version it runs under")}))))
+
+(defn- check-slice-landing!
+  "A drain's slice is landed only when `slice-unlandable` answers nil: a :merged, or a :closed
+   :done, joins a slice's ledger only then — whichever path records the landing, `nido:land:record`
+   and a generic close among them."
+  [project w kind payload]
+  (when (or (= :merged kind)
+            (and (= :closed kind) (= :done (:outcome (edn/read-string payload)))))
+    (when-let [why (slice-unlandable project w)]
+      (throw (ex-info (:message why) (-> why (dissoc :message) (assoc :ws-id (:id w))))))))
+
 (defn- check-append!
   "Every refusal an append makes of `payload` joining `w`, in the order `append-entry!` asks them.
    Shared by the two writes that give an entry its index row — a new entry, and one an interrupted
@@ -1776,7 +1855,9 @@
   (check-generation-citations! w kind payload)
   (check-generation-ids! w kind payload)
   (check-first-design-supersedes! w kind payload)
-  (check-stamped-citations! w kind payload))
+  (check-stamped-citations! w kind payload)
+  (check-drain-closed-done! w kind payload)
+  (check-slice-landing! project w kind payload))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :nil]}
   check-entry

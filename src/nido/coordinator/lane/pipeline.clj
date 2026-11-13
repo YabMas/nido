@@ -801,10 +801,10 @@
    ;; A slice's recipe: implemented and reviewed against its recipe version, cleared by its drain's
    ;; coordinator, landed by the person (or under the person's grant).
    :slice-started     {:stage :implement             :mode :working-copy}
-   ;; Its own stage, never :review-implementation: that runner reads only a governing design, so a
-   ;; slice reviewed by it is judged against nothing. No runner reviews against a recipe version
-   ;; yet, so the stage waits on a person rather than being run blind.
-   :slice-implemented {:stage :review-slice          :mode :human}
+   ;; Its own stage: the diff loop run against the slice's recipe version and plan, which
+   ;; `stages/discover-design-record` gives a slice as its yardstick, and its :review cites as
+   ;; `{:recipe {:seq v}}` — what `reviewed-under-version?` reads.
+   :slice-implemented {:stage :review-slice          :mode :mechanical}
    :slice-reviewed    {:stage :clear-slice           :mode :authoring}
    :slice-cleared     {:stage :land                  :mode :human}
    :shipped           nil
@@ -1159,14 +1159,12 @@
       (zero? (:remaining census))       :drain-exhausted
       :else                             :draining)))
 
-(defn- reviewed-under-version?
-  "Whether a :review on slice `w` was judged against the recipe version the slice runs under — it
-   cites that :recipe entry's seq as `{:recipe {:seq v}}`. A review that cites none, a designless
-   one included, judged the slice against no yardstick and does not count."
-  [project w]
-  (when-let [v (drain/slice-version w)]
-    (some #(= v (get-in (ws/entry-at-seq project (:id w) (:seq %)) [:recipe :seq]))
-          (filter #(= :review (:kind %)) (:entries w)))))
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
+  reviewed-under-version?
+  "Whether slice `w`'s newest review judged against the recipe version it runs under passed —
+   `ws/slice-review-passed?`, the one reading of a slice's readiness its landing reads too."
+  [_project w]
+  (ws/slice-review-passed? w))
 
 (defn- slice-position
   "Where slice `w` is on the slice recipe. A slice owes no intent, baseline or design: its plan on

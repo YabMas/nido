@@ -8,6 +8,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.session :as csession]
@@ -2251,11 +2252,41 @@
   [project ws-id]
   (or (try (:entries (ws/read-ws project ws-id)) (catch Exception _ nil)) []))
 
+(defn- slice-yardstick
+  "A drain slice's yardstick: the recipe version it runs under and the plan it was started from,
+   in the shape a design record is rendered from — the recipe's steps, ready gates and standing
+   orders as its invariants, verbatim, and the plan's sites as its shape — carrying
+   `{:recipe {:seq v}}` and no `:seq`, since it is no design record. nil for a workstream that is
+   no slice, or a slice whose recipe version or plan cannot be read. A slice writes no design of
+   its own (its recipe is its drain's), so this is the only yardstick a review of one has."
+  [project ws-id]
+  ;; An unreadable ledger reads as no slice, as `ledger-rows` reads it as no landing: the design
+  ;; it may hold is still offered.
+  (let [w (try (ws/read-ws project ws-id) (catch Exception _ nil))]
+    (when (and w (drain/slice? w))
+      (let [d    (drain/drain-of w)
+            v    (drain/slice-version w)
+            r    (some->> v (ws/entry-at-seq project d) :recipe)
+            n    (:plan (drain/slice-birth w))
+            plan (some->> n (ws/entry-at-seq project d))]
+        (when (and r plan)
+          {:shape      (str "Slice " ws-id " of drain " d " applies recipe version " v
+                            " to the sites of its plan (entry " n " on the drain): "
+                            (str/join ", " (:sites plan))
+                            ". It applies the recipe to those sites and no others, and writes no"
+                            " design of its own: a site the recipe does not cover is a misfit for"
+                            " the drain's coordinator, not something to resolve here.")
+           :invariants (vec (concat (map #(str "Step: " %) (:steps r))
+                                    (map #(str "Ready gate: " %) (:ready-gates r))
+                                    (map #(str "Standing order: " %) (:standing-orders r))))
+           :recipe     {:seq v}})))))
+
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
   discover-design-record
   "The :design record that governs this workstream (`standing/governing-design`), or nil — nil
    too when that record is DELIVERED (`delivered-design`), and in a generation that holds no
-   design yet.
+   design yet. A drain slice's is its recipe version and plan (`slice-yardstick`), which cites
+   `:recipe` and no `:seq`.
 
    Replaces a glob for the newest `docs/superpowers/specs/*-design.md`, which
    picked a file by filename order — in a project with a specs directory that is
@@ -2269,9 +2300,10 @@
    verdict comes back :sound for a change nobody designed."
   [cwd]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (when-let [d (standing/governing-design project ws-id)]
-      (when-not (phase/delivered? d (ledger-rows project ws-id))
-        d))))
+    (or (slice-yardstick project ws-id)
+        (when-let [d (standing/governing-design project ws-id)]
+          (when-not (phase/delivered? d (ledger-rows project ws-id))
+            d)))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
   delivered-design

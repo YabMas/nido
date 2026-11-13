@@ -78,6 +78,12 @@
   (Operation record-census!
     "nido's census reading under the recipe it cites, which must be the current one. Answers its seq."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:arg2 :any]] :any]})
+  (Operation refuse-start!
+    "lane-drain's :start-refused of a plan whose rested-on work cannot be read or merged, once per plan. Answers its seq, or nil when it was refused already."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:arg2 :any] [:arg3 :any] [:arg4 :any]] :any]})
+  (Operation refused-plans
+    "The seqs of the plans whose start lane-drain refused; a replacing plan is a new seq."
+    {:signature [:=> [:catn [:w :any]] :any]})
   (Operation record-misfit!
     "A slice's :misfit on its drain. Answers its seq."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:arg2 :any]] :any]})
@@ -111,6 +117,9 @@
   (Operation version
     "The drain's recipe version: the seq of its newest :recipe entry, or nil while it has none."
     {:signature [:=> [:catn [:w :any]] :any]})
+  (Operation landing-outcome
+    "How a slice landing Run ended, read from its slice's own records — never the merge lane's ticket ledger: :done once the slice stands landed, or once /drive-home reported its phase :complete; :awaiting-review, a failed landing, otherwise and for a turn that could not start or ran past its budget. The one reading of a landing Run's outcome."
+    {:signature [:=> [:catn [:run :any] [:result :any]] :keyword]})
   (Operation withdraw-plan!
     "The coordinator withdrawing an open plan. Answers the entry's seq."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:plan-seq :any] [:why :any]] :any]}))

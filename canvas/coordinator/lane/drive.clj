@@ -107,6 +107,10 @@
      position halts on, not whatever record was appended on top of it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :int]]
      :delegates [workstream/read-ws]})
+  (Operation reviewed-under-version?
+    "Whether a drain slice passed a review judged against the recipe version it runs under — a
+     :review citing that version whose status advances the work. What a slice's landing waits on."
+    {:signature [:=> [:catn [:project ProjectName] [:w :any]] :any]})
   (Operation of "Where a workstream stands and what should happen to it next."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws intake-kind next-action baseline-verified? settled-in-notion]})
@@ -253,8 +257,9 @@
      :delegates [runs/read-run classify-outcome]})
   (Operation drive-home!
     "The executor body for a merge run: give /drive-home to the run's background session, recorded
-     as given for the run, and return; the run settles when the session's Stop ends that turn."
-    {:signature [:=> [:catn [:run-id RunId]] :any]
+     as given for the run, and return; the run settles, by `settle` (default settle-drive-home!), when
+     the turn cannot be given or the session's Stop ends it."
+    {:signature [:function [:=> [:catn [:run-id RunId]] :any] [:=> [:catn [:run-id RunId] [:settle :any]] :any]]
      :delegates [runs/read-run conduct/start! conduct/adopt! conduct/instruct! settle-drive-home!]}))
 
 (Module lane-review

@@ -305,7 +305,14 @@
       ;; never inferred, so a run no round of which captured a design on a
       ;; workstream holding one has a judgement nobody can attribute, and it
       ;; is reported rather than filed under whichever design is newest.
-      (let [d (or (get-in final [:design :seq]) (report/judged-design-seq report))]
+      (let [d (or (get-in final [:design :seq]) (report/judged-design-seq report))
+            ;; A drain slice is judged against its recipe version (`stages/slice-yardstick`),
+            ;; which the entry cites as the version it was reviewed under.
+            r (get-in final [:design :recipe])]
+        (if r
+          (do (ws/append-entry! project ws-id {:kind :review}
+                                (pr-str (assoc (review-event final report report-path) :recipe r)))
+              {:ledger :appended :ws-id ws-id})
         (if (and (nil? d) (ws/holds-design? (ws/read-ws project ws-id)))
           {:ledger  :no-design :ws-id ws-id
            :because (str "no round of the run captured a design, and the workstream holds one,"
@@ -316,7 +323,7 @@
                                                  :design {:seq d})
                                           (assoc (review-event final report report-path)
                                                  :yardstick :none))))
-              {:ledger :appended :ws-id ws-id})))
+              {:ledger :appended :ws-id ws-id}))))
       (catch Exception e
         {:ledger :refused :ws-id ws-id :because (refusal-reason e)}))
     {:ledger :no-workstream}))
@@ -869,6 +876,9 @@
     (let [design (stages/discover-design-record cwd)]
       (cond
         (not design) nil
+        ;; A slice's recipe version is its yardstick, not a design this pass could find standing
+        ;; or invalidated: whether the recipe holds is its drain's coordinator's and person's.
+        (:recipe design) nil
 
         ;; The account that refused the run's own agent refuses this one too.
         (= :usage-limited (:status final))

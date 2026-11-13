@@ -190,6 +190,21 @@
      appends refuse. Every other check an append makes holds."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:f [:=> [:cat :map] :any]]] :any]
      :delegates [append-lock-path read-ws]})
+  (Operation stands-landed?
+    "Whether a workstream stands landed: its ledger holds a :merged, or it is closed done. The one landed reading of a slice."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id :any]] :any]
+     :delegates [read-ws]})
+  (Operation slice-review-passed?
+    "Whether a slice's newest review citing the recipe version it runs under passed — :clean or
+     :converged. A newer unresolved review withdraws an older pass. The one reading of a slice's
+     readiness."
+    {:signature [:=> [:catn [:w :any]] :any]})
+  (Operation slice-unlandable
+    "Why a slice may not land yet — a plan its plan rests on not started as a landed slice
+     (:rests-unlanded), else its review not passed (:not-ready) — or nil. The one predicate of a
+     slice being landable: its landing's append, lane-drain's ask and the pre-push gate read it."
+    {:signature [:=> [:catn [:project ProjectName] [:w :any]] :any]
+     :delegates [read-ws slice-review-passed?]})
   (Operation holding-ledger
     "Answer a function of the workstream read under its append lock — the lock every append and a
      generation's opening hold — so what it decides from that read stays true while it runs."

@@ -6,6 +6,8 @@
    docs/superpowers/specs/2026-06-30-local-merge-queue-design.md."
   (:require
    [nido.coordinator.daemon.pid :as pid]
+   [nido.coordinator.record.drain :as drain]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.record.session :as session]
    [nido.session.lifecycle :as lifecycle]
@@ -46,6 +48,12 @@
                       (session/workstream-id-for project session-name))]
       (when-not ws-id
         (println (str "nido ship: no workstream found for " project-name "/" session-name "."))
+        (System/exit 1))
+      ;; A drain's slice never takes the serial merge lane, and is landed only by the person's
+      ;; `nido:drain:land` — the one entry to its landing the commit gate refuses from a turn.
+      (when (some-> (ws/read-ws project ws-id) drain/slice?)
+        (println (str "nido ship: " ws-id " is a drain's slice — it lands by its own landing Run, not"
+                      " the merge lane. Ask for it with `bb nido:drain:land :slice " ws-id "`."))
         (System/exit 1))
       (enqueue-ship! {:project project :session session-name :ws-id ws-id})
       (println (str "Queued for shipping: " project-name "/" session-name))

@@ -71,8 +71,9 @@
    with :summary \"the context\" and :after \"what happens once it is answered\", an optional
    :recommendation \"…\" only when the conductor genuinely holds a view, and :options
    '[{:label … :summary …} …]' when it names the branches;
-   :seat <id> :text \"…\" for one instruction, or :instruct '[{:seat … :text …} …]' for several.
-   Refused from any session but the conductor's."
+   :seat <id> :text \"…\" for one instruction, or :instruct '[{:seat … :text …} …]' for several —
+   a drain's coordinator naming {:slice <ws-id> :text …} for a slice's whole seat. Refused from any
+   session but the conductor's."
   [{:keys [hand-back escalate summary after recommendation options seat text instruct] :as opts}]
   (let [[p id] (here opts)
         decision (cond
@@ -82,7 +83,17 @@
                                          recommendation (assoc :recommendation (str recommendation))
                                          options (assoc :options (edn/read-string (str options))))]
                    seat     [:instruct [{:seat (seat-id p id seat) :text (str text)}]]
-                   instruct [:instruct (mapv #(update % :seat (partial seat-id p id)) (edn/read-string (str instruct)))]
+                   ;; An instruction naming a :slice is a drain's coordinator's, to that slice's seat —
+                   ;; its whole seat when no :seat is named.
+                   instruct [:instruct (mapv (fn [{:keys [slice] :as i}]
+                                               (if slice
+                                                 (let [slice (str slice)]
+                                                   (assoc i :slice slice
+                                                          :seat (if (contains? i :seat)
+                                                                  (seat-id p slice (:seat i))
+                                                                  (:id (first (filter :whole (rseats/seats p slice)))))))
+                                                 (update i :seat (partial seat-id p id))))
+                                             (edn/read-string (str instruct)))]
                    :else    (throw (ex-info "Pass :escalate \"…\", :seat <id> :text \"…\", or :instruct [{:seat :text} …]"
                                             {:opts opts})))]
     (conductor/decide! p id {:hand-back (str hand-back) :decision decision})))

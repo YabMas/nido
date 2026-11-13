@@ -414,3 +414,13 @@
                                  :base {:status :undecidable :error "main names no revision"}})]
     (is (= 2 code) "a base nobody could read cannot say which declared claims are this branch's")
     (is (str/includes? out "main names no revision"))))
+
+(deftest a-slice-that-may-not-land-is-refused-before-the-push
+  (with-redefs [cws/read-ws (fn [_ id] {:id id :entries []})
+                cws/slice-unlandable (fn [_ w] {:reason :rests-unlanded :message (str (:id w) " rests on plans not yet landed: 3")})]
+    (let [[code out] (run {:session? true})]
+      (is (= 1 code))
+      (is (str/includes? out "land:check REFUSED · rests-unlanded"))))
+  (with-redefs [cws/read-ws (fn [_ id] {:id id :entries []})
+                cws/slice-unlandable (constantly nil)]
+    (is (= 0 (first (run {:session? true}))) "a landable slice, or no slice, passes")))

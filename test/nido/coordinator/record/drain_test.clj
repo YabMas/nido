@@ -235,3 +235,20 @@
             (is (= ["a2"] (map :site (drain/uncovered-residue (ws/read-ws p d) #{s bs})))
                 "a landed slice planned for 'b' covers nothing at 'a2'")
             (is (refused? #(drain/observe-exit! p d #{s bs})))))))))
+
+(deftest a-closing-residue-a-started-plan-covers-is-not-disposed-again
+  (with-tmp
+    (fn [_]
+      (let [d (chartered)
+            {:keys [census]} (with-recipe-and-census d)
+            a (drain/plan-slice! p d {:sites ["a"] :rests-on [] :census census})
+            s (drain/start-slice! p d a :nido)]
+        (drain/clear-slice! p d s [{:site "a2" :disposition {:to :closing}}])
+        (let [item (first (drain/residue (ws/read-ws p d)))
+              r    (drain/plan-slice! p d {:sites ["a2"] :rests-on [] :census census})
+              b    (drain/plan-slice! p d {:sites ["a2"] :rests-on [] :census census})]
+          (is (not (refused? #(drain/dispose-residue! p d (:seq item) {:to :closing})))
+              "a plan covering it that has not started leaves it open to a new disposition")
+          (drain/start-slice! p d r :nido)
+          (is (refused? #(drain/dispose-residue! p d (:seq item) {:to :follow-up :plan b}))
+              "a closing plan made after it and started covers it, as the closure reads it"))))))

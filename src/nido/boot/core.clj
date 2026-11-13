@@ -26,6 +26,7 @@
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.record.drain :as drain-record]
    [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.source.registry :as sources]
    [nido.coordinator.record.tickets :as tickets]
@@ -40,6 +41,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.status-file :as status-file]
    [nido.coordinator.lane.drive :as drive]
+   [nido.coordinator.lane.drain :as drain-lane]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.lane.github-merge :as github-merge]
    [nido.coordinator.lane.github-issue-intake :as github-issue-intake]
@@ -326,6 +328,14 @@
       (println (str "nido tick: slow step " label " took " ms " ms")))
     r))
 
+(defn- settle-drive-home!
+  "Settle a :merge-mode Run's /drive-home turn: a slice's landing Run (:drain-land) from its slice's
+   own records (`drain-lane/settle-landing!`), every other by the merge lane's."
+  [run result]
+  (if (= :drain-land (:trigger run))
+    (drain-lane/settle-landing! (:id run) result)
+    (ship/settle-drive-home! (:id run) result)))
+
 (defn- settle-turn-ends!
   "Settle the Run each ended turn's instruction was recorded as given for: a Run still :running
    moves to the state its turn's outcome calls for; a parked Run whose reply turn ended is parked
@@ -339,7 +349,7 @@
         (case (:state run)
           :running
           (if (= :merge (:mode run))
-            (ship/settle-drive-home! (:id run) {})
+            (settle-drive-home! run {})
             (settle-run! (:id run) run
                          {:exit-code 0 :result-text (:last-message event)}))
           ;; A reply turn on a run parked for review ended cleanly: the run stays parked for the
@@ -383,7 +393,7 @@
               (when (> (- now-ms (.toEpochMilli (java.time.Instant/parse (:at pending)))) budget-ms)
                 (conduct/retire! project ws-id session-name {})
                 (if (= :merge (:mode run))
-                  (ship/settle-drive-home! (:id run) {:timed-out? true})
+                  (settle-drive-home! run {:timed-out? true})
                   (settle-run! (:id run) run
                                (overrun-result (:id run)))))))))
       (catch Throwable _ nil))))
@@ -484,12 +494,15 @@
         ;; conductor that answers for it is retired.
         (timed (str "conductor answers " (name p))
                #(logged (str "reading " (name p) "'s acts") (fn [] (conductor/answers! p))))
-        (when-not (= :unread typed-in)
-          (timed (str "conductor conductors " (name p))
-                 #(logged (str "starting " (name p) "'s conductors") (fn [] (conductor/conductors! p typed-in))))
-          (timed (str "conductor reseat " (name p))
-                 #(doseq [ws-id (ws/list-ids p)]
-                    (logged (str "re-seating " ws-id) (fn [] (conductor/reseat! p ws-id typed-in))))))))))
+        ;; A drain's coordinator is kept whatever the prompt log says; conductors! decides the rest
+        ;; only on a log it could read. So does reseat!, save for a slice of an open drain.
+        (timed (str "conductor conductors " (name p))
+               #(logged (str "starting " (name p) "'s conductors") (fn [] (conductor/conductors! p typed-in))))
+        (timed (str "drain wakes " (name p))
+               #(logged (str "waking " (name p) "'s drain coordinators") (fn [] (drain-lane/wakes! p))))
+        (timed (str "conductor reseat " (name p))
+               #(doseq [ws-id (ws/list-ids p)]
+                  (logged (str "re-seating " ws-id) (fn [] (conductor/reseat! p ws-id typed-in)))))))))
 
 (defn- capped-working
   "How many of the `working` sessions ({:project :ws-id :session} each) hold a global slot, given
@@ -784,12 +797,22 @@
 (defn- drain-source-configs
   "One :drain source-config per project in the daemon's project universe: nido polls its own
    drains, whether or not any trigger names them. A project with no drain costs a ledger listing
-   per poll. Its fires match no trigger's source, so they spawn nothing through trigger routing.
+   per poll. Its fires match no trigger's source; `dispatch-envelope!` hands them to lane-drain.
    None while the :drain plugin is unregistered, as for every other source type."
   [triggers-by-project]
   (when (sources/lookup :drain)
     (for [project (keys triggers-by-project)]
       {:type :drain :project project :poll "2m"})))
+
+(defn- one-drain-source-per-project
+  "`configs` keeping one :drain source per project — the first, so a trigger's explicit one, which
+   `discover-source-configs` lists before the default, wins. A drain's in-flight cap bounds its
+   starts only while one source polls it: a second, with its own cap, would start beside the first."
+  [configs]
+  (let [firsts (into {} (comp (filter #(= :drain (:type %)))
+                              (map (juxt :project identity)))
+                     (reverse configs))]
+    (remove #(and (= :drain (:type %)) (not (identical? % (firsts (:project %))))) configs)))
 
 (defn- discover-source-configs
   "Walk loaded triggers and return distinct source-configs whose type is
@@ -810,10 +833,19 @@
            src)
          (board-source-configs triggers-by-project)
          (drain-source-configs triggers-by-project))
-       distinct))
+       distinct
+       one-drain-source-per-project))
+
+(defn- instance-key
+  "The key a source instance is held under: its type and its config-hash. `config-hash` strips
+   :type, so two configs of different types and otherwise equal keys — an automatic
+   `{:type :drain :project p :poll \"2m\"}` beside a trigger's `{:type :improvement :poll \"2m\"}`
+   for the same project — share a hash, and keyed by the hash alone one would shadow the other."
+  [source-config]
+  (str (name (:type source-config)) ":" (sources/config-hash source-config)))
 
 (defn- start-source! [source-config]
-  (let [hash    (sources/config-hash source-config)
+  (let [hash    (instance-key source-config)
         plugin  (sources/lookup (:type source-config))
         handle  ((:start! plugin) source-config sources/emit-broadcast!)
         poll-ms (or (parse-duration-ms (str (:poll source-config))) 300000)]
@@ -833,12 +865,12 @@
    a referencing trigger."
   [triggers-by-project]
   (let [desired-configs (discover-source-configs triggers-by-project)
-        desired         (set (map sources/config-hash desired-configs))
+        desired         (set (map instance-key desired-configs))
         current         (set (keys @!source-instances))]
     (doseq [hash (set/difference current desired)]
       (stop-source! hash))
     (doseq [sc desired-configs
-            :when (not (contains? current (sources/config-hash sc)))]
+            :when (not (contains? current (instance-key sc)))]
       (start-source! sc))))
 
 (defn- agent-no-op?
@@ -1270,15 +1302,47 @@
                   (str "WARN: continuing a restore failed — " (pr-str (dissoc env :input))
                        " — " (ex-message t)))))))
 
+(defn- submit-run!
+  "Put a Run another process minted :queued on the executor — `{:type :submit-run :run-id …}`, as
+   lane-drain's landing of a slice sends it. A process that is not the daemon cannot submit to the
+   daemon's in-memory queue itself. A Run that is gone, or no longer :queued, is dropped."
+  [env triggers-by-project]
+  (let [r (runs/read-run (:run-id env))]
+    (if (= :queued (:state r))
+      (executor/submit! (:id r) (or (:priority r) 0) (boolean (:uncapped? r)) (:trigger r)
+                        (some #(when (= (:trigger r) (:name %)) (:max-in-flight %))
+                              (get triggers-by-project (:project r))))
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: run " (:run-id env) " to submit is not queued — dropping"))))))
+
+(defn- ship!
+  "A :ship envelope (from `nido ship`) goes to the merge lane — unless it names a drain's slice,
+   which is dropped and logged: a slice never takes the serial merge lane, and its landing is asked
+   for only by the person's `nido:drain:land`, never by an envelope a turn could have queued."
+  [env]
+  (let [project (keyword (name (:project env)))
+        w       (ws/read-ws project (:ws-id env))]
+    (if (and w (drain-record/slice? w))
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: a :ship of slice " (:ws-id env) " dropped — a slice lands only by"
+                       " `nido:drain:land`")))
+      (ship/handle-ship! env))))
+
 (defn- dispatch-envelope!
   "Route one drained envelope. A :ship envelope (from `nido ship`) goes to the
-   merge-lane handler, a restore's continuation to continue-restored!, and
-   everything else is a source event for trigger-matching."
+   merge-lane handler — a slice's dropped (`ship!`) — a :submit-run to the executor, a restore's continuation to continue-restored!, a :drain
+   source's fire to lane-drain — no trigger names it — and everything else is a
+   source event for trigger-matching."
   [env triggers-by-project]
   (case (:type env)
-    :ship                       (ship/handle-ship! env)
+    :ship                       (ship! env)
+    :submit-run                 (submit-run! env triggers-by-project)
     (:execute-run :resume-turn) (continue-restored! env triggers-by-project)
-    (process-envelope! env triggers-by-project)))
+    (if (= :drain (get-in env [:broadcast :type]))
+      (drain-lane/handle-fire! (get-in env [:broadcast :payload]))
+      (process-envelope! env triggers-by-project))))
 
 (def execution-bodies
   "Execution mode → the body that runs a Run of that mode.
@@ -1296,7 +1360,7 @@
    Deliberately an EXECUTION selector and not a position. Where a workstream
    stands is nido.coordinator.lane.pipeline's question, derived on read; this is a fact about one
    Run, written when it is minted."
-  {:merge (fn [rid] (ship/drive-home! rid))
+  {:merge (fn [rid] (ship/drive-home! rid #(settle-drive-home! (runs/read-run %1) %2)))
    ;; The driven stage. Its body runs the stage in-process inside the slot the
    ;; executor gave it, submits nothing and waits on nothing — which is what
    ;; keeps a driven chain from wedging against another at a cap of two.

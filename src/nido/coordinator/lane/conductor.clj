@@ -39,11 +39,13 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.agent.substrate :as substrate]
+   [nido.coordinator.lane.drain :as drain-lane]
    [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.embodied-strata :as embodied]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.report.ask :as ask]
+   [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.seats :as rseats]
    [nido.coordinator.record.session :as session]
@@ -51,6 +53,7 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.source.drain :as source-drain]
    [nido.platform.core :as core]
    [nido.platform.io :as io]
    [nido.platform.task-args :as task-args]
@@ -170,8 +173,12 @@
 (defn- brief
   "The conductor's brief at a start: the seats, the governing design and the position as the
    records give them at that start, the escalation guidance (when to escalate), and the asking
-   guidance for an escalation (how to word one)."
+   guidance for an escalation (how to word one). A drain's conductor — its coordinator — is
+   briefed instead with lane-drain's coordinator brief, composed from the drain's records alone,
+   and the same two guidances."
   [project ws-id]
+  (if (some-> (ws/read-ws project ws-id) drain/drain?)
+    (str (drain-lane/coordinator-brief project ws-id) "\n\n" (guidance project) "\n\n" (ask/guidance :escalation))
   (let [design (standing/governing-design project ws-id)
         {:keys [position next]} (position project ws-id)]
     (str "You conduct workstream " ws-id " of " (name project) ". You occupy no seat and write no code. "
@@ -196,7 +203,7 @@
          "Decide on the position, governing design and seats each hand-back carries, read from the "
          "records at that hand-back, not on this brief or what you remember of this conversation.\n\n"
          (guidance project) "\n\n"
-         (ask/guidance :escalation))))
+         (ask/guidance :escalation)))))
 
 (defn- running?
   "Whether the conductor record `c` has a conversation running or a start in flight."
@@ -229,43 +236,72 @@
                (let [answered (into #{} (map :hand-back) (ws/entries-of project ws-id :conduct-decision))]
                  (some #(not (answered (:id %))) posted))))))
 
+(defn- drain-owed?
+  "Whether open drain `w`'s coordinator is owed a turn: a hand-back no decision answers, a wake not
+   yet delivered (`drain-lane/wake-pending?`), or — chartered and holding no recipe nor a pending
+   proposal — its first proposal."
+  [project ws-id w]
+  (or (owes-hand-back? project ws-id w)
+      (drain-lane/wake-pending? project ws-id)
+      (and (nil? (drain/version w)) (empty? (drain/pending-proposals w)))))
+
+(defn- class-act
+  "What a conduct pass does with the conductor of drain or slice `w` — :started, :retired or nil —
+   or ::standard for a workstream that is neither. A drain's coordinator is started while the
+   drain is open and owes it a turn (`drain-owed?`), worked or not, and retired once it closes; a
+   slice never has one."
+  [project ws-id c w live]
+  (cond
+    (drain/drain? w) (cond
+                       (ws/closure w) (when (and c (needs-retiring? project c live)) :retired)
+                       (and (not (and c (running? c live))) (drain-owed? project ws-id w)) :started)
+    (drain/slice? w) (when (and c (needs-retiring? project c live)) :retired)
+    :else ::standard))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]] [:sequential :map]]}
   conductors!
-  "On every conduct pass: start, on its one conductor record and its brief, the conductor of each
-   activated workstream (`standing/activated?`) of `project` whose conductor's session is not
-   running and that owes its conductor a hand-back (`owes-hand-back?`), open or closed — and only
-   then, since a conductor's turn is one answer to a hand-back and ends with it; and retire the
-   conductor, while it still has a process or an up session, of each workstream that owes it no
-   hand-back and is closed, unworked — no person typed into one of its sessions within the window
-   `prompted` was read over (default: read now) — or not activated. A ticket a person settled in
-   Notion closes its workstream here as the pipeline places it (`pipeline/settled-in-notion`). A
-   workstream not activated gets none, and one that owes a hand-back keeps its own. Answers
-   [{:ws-id :started|:retired :session}] for what it did; a failure is logged and the rest
-   carried on with."
+  "On every conduct pass: start, on its one conductor record and its brief, the coordinator of
+   each open drain of `project` whose session is not running and that is owed something
+   (`drain-owed?`), worked or not, and retire that of a closed one — and never start one on a
+   slice. For every other workstream: start the conductor of each activated workstream
+   (`standing/activated?`) whose conductor's session is not running and that owes its conductor a
+   hand-back (`owes-hand-back?`), open or closed — and only then, since a conductor's turn is one
+   answer to a hand-back and ends with it; and retire the conductor, while it still has a process
+   or an up session, of each workstream that owes it no hand-back and is closed, unworked — no
+   person typed into one of its sessions within the window `prompted` was read over (default: read
+   now) — or not activated. A ticket a person settled in Notion closes its workstream here as the
+   pipeline places it (`pipeline/settled-in-notion`). A workstream not activated gets none, and one
+   that owes a hand-back keeps its own. A pass whose prompt log is :unread starts and retires none
+   of these, though it still keeps every drain's coordinator. Answers [{:ws-id :started|:retired
+   :session}] for what it did; a failure is logged and the rest carried on with."
   [project & [prompted-sessions]]
   (let [live     (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {}))
-        typed-in (or prompted-sessions (prompted))]
-    (if (= :unread typed-in)
-      []
+        typed-in (or prompted-sessions (prompted))
+        unread?  (= :unread typed-in)
+        drains   (set (source-drain/open-drains project))]
      (vec
      ;; Sessions and the seat-message log are read first, and a ledger only where they leave a
-     ;; conductor to start or retire: reading every ledger costs seconds a pass.
+     ;; conductor to start or retire or the workstream is an open drain: reading every ledger
+     ;; costs seconds a pass.
      (for [ws-id (ws/list-ids project)
            :let  [c (conductor-of project ws-id)]
-           :when (or c (seq (seats/hand-backs project ws-id)))
-           :let  [w    (ws/read-ws project ws-id)
-                  on?  (and w (standing/activated? w) (not (standing/paused? w)))
-                  owes (and on? (owes-hand-back? project ws-id w))
-                  act  (cond
-                         (nil? w) nil
-                         owes
-                         (when-not (and c (running? c @live)) :started)
-                         ;; Owed nothing, a conductor is never started: its turn would read the
-                         ;; brief, find no hand-back and end, and the next pass would start it
-                         ;; again — a conversation a minute while a person works the workstream.
-                         (or (ws/closure w) (pipeline/settled-in-notion project ws-id w)
-                             (not (worked? project ws-id typed-in)) (not on?))
-                         (when (and c (needs-retiring? project c @live)) :retired))]
+           :when (or c (drains ws-id) (seq (seats/hand-backs project ws-id)))
+           :let  [w        (ws/read-ws project ws-id)
+                  by-class (when w (class-act project ws-id c w @live))
+                  on?      (and w (standing/activated? w) (not (standing/paused? w)))
+                  owes     (and on? (owes-hand-back? project ws-id w))
+                  act      (cond
+                             (nil? w) nil
+                             (not= ::standard by-class) by-class
+                             unread? nil
+                             owes
+                             (when-not (and c (running? c @live)) :started)
+                             ;; Owed nothing, a conductor is never started: its turn would read the
+                             ;; brief, find no hand-back and end, and the next pass would start it
+                             ;; again — a conversation a minute while a person works the workstream.
+                             (or (ws/closure w) (pipeline/settled-in-notion project ws-id w)
+                                 (not (worked? project ws-id typed-in)) (not on?))
+                             (when (and c (needs-retiring? project c @live)) :retired))]
            :when act
            :let  [r (try
                       (case act
@@ -276,7 +312,7 @@
                           (println (str "nido conductor: " (name act) " on " ws-id " failed — " (ex-message t))))
                         nil))]
            :when r]
-       (assoc r :ws-id ws-id :act act))))))
+       (assoc r :ws-id ws-id :act act)))))
 
 (declare deciding open-blockers)
 
@@ -309,13 +345,20 @@
    default embodiment while the generation fixes no ids, the strata embodiment while it fixes
    strata — escalating, by name, seats no embodiment carries and a seat whose start failed in this
    pass, and answering that escalation as nido once every seat is held. A closed workstream, and
-   one not activated, is left as it is. Answers {:retired :occupied :escalated}."
+   one not activated, is left as it is. A slice is reseated while its drain is open, worked or
+   not and carried or not — a start whose seat failed after the slice was made has never been
+   carried — its whole seat carried by a session briefed from its drain's recipe. Answers {:retired
+   :occupied :escalated}."
   [project ws-id & [prompted-sessions]]
-  (if-not (and (carried? project ws-id)
-               (let [typed-in (or prompted-sessions (prompted))]
-                 (and (not= :unread typed-in) (worked? project ws-id typed-in)))
-               (let [w (ws/read-ws project ws-id)]
-                 (and w (standing/activated? w) (not (ws/closure w)))))
+  (let [w      (delay (ws/read-ws project ws-id))
+        slice? (delay (and @w (drain/slice? @w) (not (ws/closure @w))
+                           (when-let [dw (some->> (drain/drain-of @w) (ws/read-ws project))]
+                             (nil? (ws/closure dw)))))]
+  (if-not (or @slice?
+              (and (carried? project ws-id)
+                   (let [typed-in (or prompted-sessions (prompted))]
+                     (and (not= :unread typed-in) (worked? project ws-id typed-in)))
+                   (and @w (standing/activated? @w) (not (ws/closure @w)))))
     {}
     (let [{:keys [retired]} (seats/reseat! project ws-id)
           current  (rseats/seats project ws-id)
@@ -344,7 +387,9 @@
         ;; on the next; once one succeeds, that escalation is answered.
         (:whole (first current))
         (try
-          (let [occupied (seats/occupy! project ws-id (seats/default-embodiment) (:id (first current)))]
+          (let [occupied (if @slice?
+                           (drain-lane/occupy-slice! project ws-id)
+                           (seats/occupy! project ws-id (seats/default-embodiment) (:id (first current))))]
             (answer-filled! project ws-id)
             {:retired retired :occupied [occupied]})
           (catch Exception e
@@ -361,7 +406,7 @@
             (escalate (if (embodied/refused? e)
                         (str "Which embodiment should carry seats " (str/join ", " ids) ", which none carries now?")
                         (str "How should seats " (str/join ", " ids) " be carried, now that they could not be started?"))
-                      e)))))))
+                      e))))))))
 
 ;; ── hand-backs ──────────────────────────────────────────────────────────────
 
@@ -376,22 +421,41 @@
        "Seats: " (seats-line seats) "\n"
        (when said (str "\nIts last message:\n\n" said "\n"))))
 
+(defn- conducted-by
+  "The workstream whose conductor answers `ws-id`'s hand-backs: a slice's drain, whose coordinator
+   reaches a slice only by deciding them; otherwise `ws-id` itself. Answers [ws-id slice-or-nil]."
+  [project ws-id]
+  (let [w (ws/read-ws project ws-id)]
+    (if-let [d (and w (drain/slice? w) (drain/drain-of w))]
+      [d ws-id]
+      [ws-id nil])))
+
 (defn- post-hand-back!
-  "Post one hand-back to the workstream's conductor under `key`, carrying the position the
-   pipeline derives now and the governing design and seats as the records give them now — so a
-   conductor started under an earlier design decides on this one. A person's turn (`:turn
-   :person`) is marked so on the message, with the conversation it ran in. A key already logged
-   answers that message without deriving anything: `answers!` offers every act the person ever
-   recorded on every pass, and deriving the position for each costs the coordinator's loop
-   minutes."
+  "Post one hand-back to the conductor that answers the workstream's hand-backs (`conducted-by`)
+   under `key`, carrying the position the pipeline derives now and the governing design and seats
+   as the records give them now — so a conductor started under an earlier design decides on this
+   one. A person's turn (`:turn :person`) is marked so on the message, with the conversation it ran
+   in; a slice's names the slice, so its coordinator can tell which slice it answers. A key
+   already logged answers that message without deriving anything: `answers!` offers every act the
+   person ever recorded on every pass, and deriving the position for each costs the coordinator's
+   loop minutes."
   [project ws-id key fields]
-  (or (seats/posted project ws-id key)
-      (let [pos (position project ws-id)
-            msg (merge fields pos {:design (standing/governing-design project ws-id)
-                                   :seats  (rseats/seats project ws-id)})]
-        (seats/post! project ws-id (merge {:key key :kind :hand-back :to :conductor :text (hand-back-text msg)
-                                           :session (:session fields) :position (:position pos)}
-                                          (select-keys fields [:turn :conversation]))))))
+  (let [[to slice] (conducted-by project ws-id)]
+    (or (seats/posted project to key)
+        (let [pos (position project ws-id)
+              msg (merge fields pos {:design (standing/governing-design project ws-id)
+                                     :seats  (rseats/seats project ws-id)})]
+          (seats/post! project to (cond-> (merge {:key key :kind :hand-back :to :conductor
+                                                  :text (str (when slice (str "Slice: " slice "\n")) (hand-back-text msg))
+                                                  :session (:session fields) :position (:position pos)}
+                                                 (select-keys fields [:turn :conversation]))
+                                    slice (assoc :slice slice)))))))
+
+(defn- conducted?
+  "Whether `w` has a conductor to read its hand-backs: activated, or a slice, whose drain's
+   coordinator reads them."
+  [w]
+  (boolean (and w (or (standing/activated? w) (drain/slice? w)))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]}
   hand-backs!
@@ -404,12 +468,12 @@
    conversation and the Stop's time. A workstream not activated has no conductor to read it, and
    is logged nothing. Answers the hand-backs posted."
   [{:keys [turn-ends]}]
-  (let [activated? (memoize (fn [project ws-id] (some-> (ws/read-ws project ws-id) standing/activated?)))]
+  (let [conducted? (memoize (fn [project ws-id] (conducted? (ws/read-ws project ws-id))))]
     (vec
      (for [{:keys [project ws-id session event instruction run conversation]} turn-ends
            :when (nil? run)
            :let  [s (session/read-session project ws-id session)]
-           :when (and s (not (:conductor s)) (activated? project ws-id))]
+           :when (and s (not (:conductor s)) (conducted? project ws-id))]
        (if instruction
          (post-hand-back! project ws-id (str "turn:" session ":" (:token instruction))
                           {:what "a turn nido gave ended" :session session :seat (get-in s [:seat :id])
@@ -463,6 +527,25 @@
   [next]
   (not= :human (:mode next)))
 
+(defn- slice-instruction
+  "The text an instruction to `slice` carries: `text`, and — when the slice runs an older recipe
+   version than its drain's current one — the slice's brief under the current version first, the
+   slice moved to it with a :slice-rebased."
+  [project slice text]
+  (let [before (drain/slice-version (ws/read-ws project slice))
+        brief  (drain-lane/slice-brief! project slice)
+        now    (drain/slice-version (ws/read-ws project slice))]
+    (if (< before now)
+      (str "Your drain's recipe moved to version " now ". Work under it from here:\n\n"
+           brief "\n\n" text)
+      text)))
+
+(defn- open-misfit?
+  "Whether hand-back `m`, posted for a slice of drain `ws-id`, is from a slice with an open misfit."
+  [project ws-id m]
+  (boolean (when-let [slice (:slice m)]
+             (some #(= slice (:slice %)) (some-> (ws/read-ws project ws-id) drain/open-misfits)))))
+
 (defn- record-decision!
   "Append the :conduct-decision `entry` and carry it out, as one step under the ledger's append lock
    (`ws/appending!`), so no opening or design approval falls between: everything is checked before
@@ -490,8 +573,13 @@
      project ws-id
      (fn [{:keys [check! append!]}]
        (when (= :instruct verb)
-         (let [seat-ids (set (map :id (rseats/seats project ws-id)))]
-           (when-not (every? (comp seat-ids :seat) body)
+         (let [seat-ids (set (map :id (rseats/seats project ws-id)))
+               slices   (set (map :ws-id (some-> (ws/read-ws project ws-id) drain/slices)))]
+           (when-not (every? (fn [{:keys [seat slice]}]
+                               (if slice
+                                 (and (slices slice) (some #(= seat (:id %)) (rseats/seats project slice)))
+                                 (seat-ids seat)))
+                             body)
              (throw (ex-info "An instruction names no current seat" {:reason :not-a-seat})))))
        ;; Stamped: decide! and close-unanswered! are its only writers, and the generic appends
        ;; refuse it. Checked whole before the blocker joins; the :parked it then gains cites that
@@ -505,9 +593,12 @@
          (append! {:kind :conduct-decision} (pr-str entry))
          (when (= :instruct verb)
            (let [w (ws/read-ws project ws-id)]
-             (doseq [[i {:keys [seat text]}] (map-indexed vector body)]
-               (seats/post-held! project ws-id w {:key (str "decision:" hand-back ":" i) :kind :instruction
-                                                  :to seat :text text}))))
+             (doseq [[i {:keys [seat slice text]}] (map-indexed vector body)
+                     :let [k (str "decision:" hand-back ":" i)]]
+               (if slice
+                 (seats/post! project slice {:key k :kind :instruction :to seat
+                                             :text (slice-instruction project slice text)})
+                 (seats/post-held! project ws-id w {:key k :kind :instruction :to seat :text text})))))
          entry)))))
 
 (declare person-kinds persons-act?)
@@ -540,8 +631,10 @@
    [{:seat :text} …]] | [:escalate {:needs (:summary) (:options)}]} — with the position the pipeline derives now, and
    carry it out. Refused, by name, from any session but the conductor's (:not-the-conductor), for
    an id that is no hand-back (:not-a-hand-back) or one already answered (:already-answered), and
-   for an instruction to anything that is not a current seat (:not-a-seat). Answers [:accepted
-   entry] or [:refused reason].
+   for an instruction to anything that is not a current seat (:not-a-seat) — a drain's coordinator
+   instructs a slice's seat by naming the slice too — and, for a drain's coordinator, for a
+   hand-back from a slice whose misfit is open (:open-misfit), which it answers through lane-drain
+   first. Answers [:accepted entry] or [:refused reason].
 
    An escalation on a hand-back the person has acted since (`overtaking-act`) is refused
    (:overtaken): it asks about a position that no longer holds, and parked as a blocker it
@@ -559,6 +652,7 @@
       (not (conducting? project ws-id))           [:refused :not-the-conductor]
       (nil? (hand-back-message project ws-id hand-back)) [:refused :not-a-hand-back]
       (answered? project ws-id hand-back)         [:refused :already-answered]
+      (open-misfit? project ws-id (hand-back-message project ws-id hand-back)) [:refused :open-misfit]
 
       (and (= :escalate (first decision)) (answered-ask project ws-id (:needs (second decision))))
       [:refused :already-asked]
@@ -852,7 +946,9 @@
 
 (def ^:private person-kinds
   "The ledger kinds only a person's act writes."
-  #{:intent :design-approved :triage-accepted :phase-gate :blocker-answered :merged :closed})
+  #{:intent :design-approved :triage-accepted :phase-gate :blocker-answered :merged :closed
+    ;; a drain's: approving a recipe, and observing its exit
+    :recipe :exit-observed})
 
 (defn- persons-act?
   "Whether ledger entry `e` of a person kind is an act of the person's — not a blocker's answer
@@ -946,7 +1042,10 @@
    :acknowledge-invalidation {:kinds #{:design-approved}  :target :design}
    :assert-gate              {:kinds #{:phase-gate}       :target :design}
    :land                     {:kinds #{:merged :closed}   :target :design}
-   :answer-blocker           {:kinds #{:blocker-answered} :target :blocker}})
+   :answer-blocker           {:kinds #{:blocker-answered} :target :blocker}
+   ;; a drain's: approving the recipe proposal it was escalated over, and observing its exit
+   :approve-recipe           {:kinds #{:recipe}           :target :proposal}
+   :close-drain              {:kinds #{:exit-observed}}})
 
 (def ^:private act-cites
   "Where each kind of the person's act cites the record it acts on. An :intent and a :closed cite
@@ -955,7 +1054,8 @@
    :triage-accepted  [:triage-seq]
    :design-approved  [:design :seq]
    :phase-gate       [:design :seq]
-   :merged           [:design :seq]})
+   :merged           [:design :seq]
+   :recipe           [:proposal]})
 
 (def ^:private target-readings
   "How the pipeline reads, off a ledger, the record each kind of step acts on — each given the
@@ -973,7 +1073,9 @@
                      last
                      :seq)))
    :verdict (fn [project ws-id w] (:seq (standing/verdict project ws-id w)))
-   :design  (fn [_ _ w] (generation/current-design w))})
+   :design  (fn [_ _ w] (generation/current-design w))
+   ;; the newest recipe proposal awaiting the person — the one the drain is placed at
+   :proposal (fn [_ _ w] (:seq (last (drain/pending-proposals w))))})
 
 (defn- found-before
   "The record of `kind` a step escalated over: `target-readings`' reading of the ledger as it
@@ -1060,7 +1162,9 @@
     ;; a close, after the push it lands
     "nido:improvement:discharge"
     ;; a child workstream's :intent
-    "nido:workstream:fork"})
+    "nido:workstream:fork"
+    ;; a drain's: starting one, approving its recipe, landing a slice, closing it
+    "nido:drain:start" "nido:drain:approve" "nido:drain:land" "nido:drain:close"})
 
 (def ^:private generic-appends
   "The nido tasks that append an entry of whatever :kind their arguments name."
@@ -1138,14 +1242,19 @@
    conductor answers for: the latest prompt that conversation recorded since its previous Stop
    carries the token of an instruction nido gave the record's session and recorded for no Run,
    not given by the start that brought the session (:given-by :start: a person's start, or a
-   spawn's brief, whose turn may write the intent the brief states). A turn whose latest prompt
-   carries no such token — a person's — is the person's, whatever is outstanding on the session.
-   A conversation unknown here is taken to be the one the record's facet drives."
+   spawn's brief, whose turn may write the intent the brief states). A slice's session is never
+   given a turn by a start: its :given-by is read from its workstream's class, not from the marker
+   whoever gave the instruction wrote, so every instruction nido gave a slice for no Run is one the
+   conductor answers for. A turn whose latest prompt carries no such token — a person's — is the
+   person's, whatever is outstanding on the session. A conversation unknown here is taken to be
+   the one the record's facet drives."
   [s conversation]
   (or (:conductor s)
       (let [{:keys [pending lapsed session-id]} (:claude s)
             conversation (or conversation session-id)
-            conductors   (filter #(and % (nil? (:for %)) (not= :start (:given-by %))) (cons pending lapsed))]
+            slice?       (some-> (ws/read-ws (:project s) (:workstream-id s)) drain/slice?)
+            conductors   (filter #(and % (nil? (:for %)) (or slice? (not= :start (:given-by %))))
+                                 (cons pending lapsed))]
         (boolean
          (when (and conversation (seq conductors))
            (when-let [p (turn-prompt conversation)]

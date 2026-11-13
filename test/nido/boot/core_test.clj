@@ -1399,3 +1399,47 @@
              "plain finished its turn — done"}
            (set (map :message @posted))))))
 
+
+(deftest a-submit-run-envelope-puts-a-queued-run-on-the-executor
+  ;; lane-drain's landing of a slice is asked for from a CLI process, whose own executor nobody
+  ;; ticks; the daemon is handed the Run on its durable queue.
+  (gate-with-tmp
+    (fn [_]
+      (let [submitted (atom [])]
+        (queued-run! "rsub")
+        (with-redefs [executor/submit! (fn [& args] (swap! submitted conj args))]
+          (#'core/dispatch-envelope! {:type :submit-run :run-id "rsub"} {})
+          (runs/write-run! (assoc (runs/read-run "rsub") :state :done))
+          (#'core/dispatch-envelope! {:type :submit-run :run-id "rsub"} {})
+          (#'core/dispatch-envelope! {:type :submit-run :run-id "gone"} {}))
+        (is (= [["rsub" 0 false :triage-teacher-bugs nil]] @submitted)
+            "submitted while queued; a Run no longer queued, or gone, is dropped")))))
+
+(deftest sources-of-different-types-and-equal-configs-are-distinct-instances
+  ;; config-hash strips :type: the automatic drain source and a trigger's improvement source of
+  ;; one project and one poll hashed alike, and one shadowed the other.
+  (let [drain {:type :drain :project :nido :poll "2m"}
+        impr  {:type :improvement :project :nido :poll "2m"}]
+    (is (= (nido.coordinator.source.registry/config-hash drain)
+           (nido.coordinator.source.registry/config-hash impr)))
+    (is (not= (#'core/instance-key drain) (#'core/instance-key impr)))))
+
+(deftest a-slices-ship-envelope-neither-lands-it-nor-takes-the-merge-lane
+  (let [shipped (atom []) landed (atom [])]
+    (with-redefs [nido.coordinator.lane.ship/handle-ship! (fn [env] (swap! shipped conj (:ws-id env)))
+                  nido.coordinator.lane.drain/land!       (fn [_ id] (swap! landed conj id) {:id "r"})
+                  nido.coordinator.record.workstream/read-ws (fn [_ id] {:id id})
+                  nido.coordinator.record.drain/slice?    (fn [w] (= "slice-1" (:id w)))]
+      (#'core/dispatch-envelope! {:type :ship :project :brian :session "s" :ws-id "slice-1"} {})
+      (#'core/dispatch-envelope! {:type :ship :project :brian :session "s" :ws-id "plain-1"} {}))
+    (is (= [] @landed) "a slice's landing is asked for only by nido:drain:land")
+    (is (= ["plain-1"] @shipped) "and never takes the merge lane")))
+
+(deftest a-project-polls-one-drain-source-the-triggers-own-winning
+  (with-redefs [nido.coordinator.source.registry/lookup (fn [t] (#{:drain} t))]
+    (let [configs (#'core/discover-source-configs
+                   {:brian [{:name :drain :source {:type :drain :poll "30s"}}]
+                    :nido  [{:name :manual :source {:type :manual}}]})]
+      (is (= [{:type :drain :poll "30s" :project :brian}
+              {:type :drain :project :nido :poll "2m"}]
+             (filterv #(= :drain (:type %)) configs))))))

@@ -50,6 +50,9 @@
   (Operation land!
     "The person asking for slice `slice-id` to land: refused while a slice it rests on has not landed (:rests-unlanded), while a landing of it is in flight (:landing-in-flight), or when it has no session (:no-session). A slice the coordinator has not cleared is landed as the person's override, recorded on its Run. The landing Run gives /drive-home to the slice's own session and runs beside its siblings' — never on the serial merge lane. Answers the Run."
     {:signature [:=> [:catn [:project ProjectName] [:slice-id WorkstreamId]] :any]})
+  (Operation settle-landing!
+    "Settle a slice landing Run from how its /drive-home turn ended by record-drain's landing-outcome: a failed landing parks the Run for review, with the cause on the slice session's record. Answers the state."
+    {:signature [:=> [:catn [:run-id :any] [:result :map]] :keyword]})
   (Operation misfit!
     "A slice's session recording a site its recipe version does not cover, on its drain. Refused from any session but one of a slice of the drain it names — or, given none, of the drain its session's slice belongs to. Answers {:drain :misfit}."
     {:signature [:function [:=> [:catn [:project ProjectName] [:arg1 :any]] :any] [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:arg2 :any]] :any]]})
@@ -62,8 +65,8 @@
   (Operation propose!
     "The coordinator proposing a recipe, or a change to it. Answers the proposal's seq."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:proposal :any]] :any]})
-  (Operation slice-brief
-    "Slice `slice-id`'s brief, composed from its drain's current recipe — steps, ready gates and standing orders verbatim — and the plan it was started from."
+  (Operation slice-brief!
+    "Slice `slice-id`'s brief, composed from its drain's current recipe — steps, ready gates and standing orders verbatim — and the plan it was started from, the slice first moved to that recipe with a :slice-rebased when it ran an older version, so every brief a slice session is given is of the version its ledger records."
     {:signature [:=> [:catn [:project ProjectName] [:slice-id WorkstreamId]] :any]})
   (Operation start-drain!
     "The person starting a drain from a pattern established elsewhere. Answers its ws-id."

@@ -233,6 +233,22 @@
                          2)))
     0))
 
+(defn- slice-check
+  "Refuse a drain's slice that may not land yet — a slice it rests on has not landed, or its newest
+   review under its recipe version did not pass (`cws/slice-unlandable`) — before the push, where
+   `nido:land:record`'s append would refuse it only once main held it. Any other workstream passes."
+  [cwd]
+  (let [[project ws-id] (stages/project+ws-from-cwd cwd)
+        why (some->> ws-id (cws/read-ws project) (cws/slice-unlandable project))]
+    (if why
+      (do (println (str "land:check REFUSED · " (name (:reason why))))
+          (println (str "  " (:message why)))
+          (println "\nHow to clear it:")
+          (println (str "  A slice lands from its own session by `bb nido:drain:land :slice " ws-id "`,\n"
+                        "  once every slice it rests on has landed and its newest review passed."))
+          1)
+      0)))
+
 (defn- judged-claims
   "The claims `design` states, in the shape `design/declared-claims` reads them. Empty for a design
    from before the shared model, which states none."
@@ -386,7 +402,7 @@
   (let [[_ opts] (task-args/split-args args)
         given (or (:cwd opts) (System/getProperty "user.dir"))
         cwd   (or (lifecycle/worktree-from-cwd given) given)]
-    (apply max (mapv #(% cwd) [standing-check structure-check claims-check]))))
+    (apply max (mapv #(% cwd) [standing-check structure-check claims-check slice-check]))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   cmd

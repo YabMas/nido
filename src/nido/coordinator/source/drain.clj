@@ -81,10 +81,28 @@
     (catch Exception e
       {:failed :counter-failed :detail (ex-message e)})))
 
+(defn- landed-at
+  "When slice workstream `slice-ws-id` landed — its first :merged, else its close done — or nil."
+  [project slice-ws-id]
+  (let [w (ws/read-ws project slice-ws-id)
+        c (ws/closure w)]
+    (some-> (or (:at (first (filter #(= :merged (:kind %)) (:entries w))))
+                (when (= :done (:outcome c)) (:at c)))
+            java.time.Instant/parse)))
+
+(defn- landed-since?
+  "Whether a slice of drain `w` landed at or after `census` was taken: the reading after it is a
+   new observation, even one that reads the same."
+  [project w census]
+  (let [taken (java.time.Instant/parse (:at census))]
+    (boolean (some #(when-let [at (landed-at project (:ws-id %))] (not (.isBefore at taken)))
+                   (drain/slices w)))))
+
 (defn ^{:malli/schema [:function [:=> [:cat :ProjectName :WorkstreamId] :any] [:=> [:cat :ProjectName :WorkstreamId :any] :any]]}
   take-census!
   "Run drain `ws-id`'s current recipe's counter against the project's main checkout and append the
-   reading, citing the recipe — unless it reads the same as the newest under that recipe. `run`
+   reading, citing the recipe — unless it reads the same as the newest under that recipe and no
+   slice of the drain has landed since that one was taken (`landed-since?`). `run`
    (default `run-counter`) is the injection seam a test substitutes. Answers {:census seq} for an
    appended reading, {:unchanged seq} for a repeated one, {:failed cause} for a failed one, and
    {:failed :no-recipe} for a drain with none."
@@ -98,7 +116,9 @@
              newest  (drain/newest-census w)]
          (cond
            (:failed reading) reading
-           (and newest (= (select-keys newest [:remaining :groups]) reading)) {:unchanged (:seq newest)}
+           (and newest (= (select-keys newest [:remaining :groups]) reading)
+                (not (landed-since? project w newest)))
+           {:unchanged (:seq newest)}
            :else {:census (drain/record-census! project ws-id (assoc reading :recipe v))}))))))
 
 ;; ── what a poll fires ───────────────────────────────────────────────────────
@@ -106,12 +126,10 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
   landed?
   "Whether slice workstream `slice-ws-id` has landed: its ledger records a :merged, or it was
-   closed done. What the source's scheduling, lane-drain's closing and the drains page read as
-   landed."
+   closed done (`ws/stands-landed?`). What the source's scheduling, lane-drain's closing and the
+   drains page read as landed."
   [project slice-ws-id]
-  (let [w (ws/read-ws project slice-ws-id)]
-    (boolean (or (seq (ws/entries-of project slice-ws-id :merged))
-                 (= :done (:outcome (ws/closure w)))))))
+  (boolean (ws/stands-landed? project slice-ws-id)))
 
 (defn- in-flight
   "The drain's slices started and not landed, nor closed some other way."
@@ -131,12 +149,15 @@
 
 (defn- next-start
   "The open plan of drain `w` a slice should start from now, or nil: the oldest whose rested-on
-   plans stand as it asks, while fewer than `cap` of the drain's slices are in flight and the drain
-   could start one at all (`drain/startable`)."
+   plans stand as it asks and whose start lane-drain has not refused (`drain/refused-plans` — a
+   replacing plan is a new one), while fewer than `cap` of the drain's slices are in flight and the
+   drain could start one at all (`drain/startable`)."
   [project w cap]
-  (let [by-seq (into {} (map (juxt :seq identity)) (drain/plans w))]
+  (let [by-seq  (into {} (map (juxt :seq identity)) (drain/plans w))
+        refused (drain/refused-plans w)]
     (when (< (count (in-flight project w)) cap)
       (first (filter #(and (nil? (drain/startable w (:seq %)))
+                           (not (refused (:seq %)))
                            (rests-satisfied? project by-seq %))
                      (drain/open-plans w))))))
 

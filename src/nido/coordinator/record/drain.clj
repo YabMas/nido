@@ -14,6 +14,7 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.report :as report]
+   [nido.coordinator.record.status-file :as status-file]
    [nido.coordinator.record.workstream :as ws]))
 
 ;; ── reading ─────────────────────────────────────────────────────────────────
@@ -125,6 +126,13 @@
                 (contains? replaced n) (assoc p :state :replaced)
                 :else (assoc p :state :open))))
           all)))
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  refused-plans
+  "The seqs of the plans whose start lane-drain refused (:start-refused): what a start of them would
+   rest on cannot be read or merged. A newer plan replacing one is a new seq, and starts afresh."
+  [w]
+  (into #{} (map :plan) (entries-in w :start-refused)))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   open-plans
@@ -333,6 +341,17 @@
                              (append! {:format :slice-rebased :recipe v :by :nido}))
                            v))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any :any] :any]}
+  refuse-start!
+  "lane-drain's :start-refused of plan `plan-seq`, refused for `cause` (:base-failed), once per
+   plan. Answers its seq, or nil when the plan's start was refused already."
+  [project ws-id plan-seq cause detail]
+  (in-drain! project ws-id
+             (fn [{:keys [w append!]}]
+               (must-cite! w plan-seq :slice-planned "Plan")
+               (when-not (contains? (refused-plans w) plan-seq)
+                 (append! {:format :start-refused :plan plan-seq :cause cause :detail (str detail) :by :nido})))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :any]}
   record-misfit!
   "A slice's :misfit on its drain. Answers its seq."
@@ -430,13 +449,23 @@
                      (append-residue! append! site n disposition))
                    n)))))
 
-(defn- plan-covering
-  "The started plan covering a residue item through its disposition, or nil."
+(defn- covering-plans
+  "The plans that cover residue item `item`: those whose plan covers its site (`covers?`: names it,
+   and is not the plan of the slice that left it) — the follow-up plan its newest disposition cites,
+   or, disposed :closing, any plan made after the item was left, so none planned without knowing of
+   it covers it. The one reading of which plans cover an item: what a redisposition is refused over
+   and what the drain's closure reads as covered both derive from it."
   [w item]
-  (let [p (get-in item [:disposition :plan])]
-    (when p (first (filter #(and (= p (:seq %)) (= :started (:state %))
-                                 (covers? % (:site item) (residue-source w (:from item))))
-                           (plans w))))))
+  (let [source (residue-source w (:from item))
+        p      (get-in item [:disposition :plan])]
+    (filter #(and (covers? % (:site item) source)
+                  (if p (= p (:seq %)) (> (:seq %) (:from item))))
+            (plans w))))
+
+(defn- plan-covering
+  "The started plan covering a residue item (`covering-plans`), or nil."
+  [w item]
+  (first (filter #(= :started (:state %)) (covering-plans w item))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any] :any]}
   dispose-residue!
@@ -458,19 +487,11 @@
   uncovered-residue
   "The residue items no landed slice covers. `landed?` answers whether a slice workstream has
    landed — the lane's reading, not this namespace's. A landed slice covers an item only when its
-   plan covers the item's site (`covers?`: names it, and is not the plan of the slice that left
-   it) — the follow-up plan its disposition cites, or, disposed :closing, any plan made after the
-   item was left, so none planned without knowing of it covers it."
+   plan is one of `covering-plans`."
   [w landed?]
-  (let [ps (plans w)]
-    (filterv (fn [item]
-               (let [source   (residue-source w (:from item))
-                     covering (if-let [p (get-in item [:disposition :plan])]
-                                (filter #(= p (:seq %)) ps)
-                                (filter #(> (:seq %) (:from item)) ps))]
-                 (not (some #(and (:slice %) (covers? % (:site item) source) (landed? (:slice %)))
-                            covering))))
-             (residue w))))
+  (filterv (fn [item]
+             (not (some #(and (:slice %) (landed? (:slice %))) (covering-plans w item))))
+           (residue w)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :any]}
   observe-exit!
@@ -488,3 +509,18 @@
                                  (str/join ", " (map :site left)))
                             {:ws-id ws-id}))
                  (append! {:format :exit-observed :exit (:exit (charter w)) :census (:seq c) :by :person})))))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :keyword]}
+  landing-outcome
+  "How slice landing Run `run` ended, read from its slice's own records — never from the merge
+   lane's ticket ledger, which a slice has none of: :done once the slice stands landed
+   (`ws/stands-landed?`), whatever else the turn reported, or once /drive-home reported its phase
+   :complete; :awaiting-review — a failed landing — otherwise, and for a turn that could not start
+   or ran past its budget (`result`'s :spawn-error, :timed-out?). The one reading of a landing
+   Run's outcome: its settling, a restart's reconciling of it, and the failed-landing wake read it."
+  [run result]
+  (cond
+    (ws/stands-landed? (:project run) (:workstream-id run))     :done
+    (or (:spawn-error result) (:timed-out? result))             :awaiting-review
+    (= :complete (:phase (status-file/read-status (:id run))))  :done
+    :else                                                       :awaiting-review))

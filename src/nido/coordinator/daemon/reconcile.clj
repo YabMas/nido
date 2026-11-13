@@ -9,6 +9,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.drain :as drain-record]
    [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
@@ -209,6 +210,12 @@
                 {:state :awaiting-review :error nil}            ; already parked
                 {:state :awaiting-review
                  :error {:reason :orphaned-from-restart}})
+
+              ;; A slice's landing: read from its slice's own records, as its settling reads it —
+              ;; a landing that reached main before the restart is done, not orphaned.
+              (= :drain-land (:trigger run))
+              (let [state (drain-record/landing-outcome run {})]
+                {:state state :error (when (= :awaiting-review state) {:reason :orphaned-from-restart})})
 
               (= :triage-bug (:skill run)) (triage-reconciled-state run)
 

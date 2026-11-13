@@ -850,6 +850,61 @@
    :doc "What this worktree's workstream owes, and whether a person owes it. A reading: exits 0 whatever it finds. [:cwd <dir>]"
    :task (apply nido-owed/owed-cmd *command-line-args*)}
 
+  nido:drain:start
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The person starts a drain rolling an established pattern out in slices. :project <p> :exit \"…\" and :established-by-ws <ws-id> or :established-by-commit <rev>"
+   :task (apply nido-drain/start-cmd *command-line-args*)}
+
+  nido:drain:approve
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The person approves a recipe proposal; its seq becomes the recipe version. :proposal <seq> [:project <p> :drain <ws-id>]"
+   :task (apply nido-drain/approve-cmd *command-line-args*)}
+
+  nido:drain:land
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The person lands a slice: a landing Run gives /drive-home to the slice's own session, beside its siblings'. :slice <ws-id> [:project <p> :drain <ws-id>]"
+   :task (apply nido-drain/land-cmd *command-line-args*)}
+
+  nido:drain:close
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The person closes a drain once its census reads zero and its residue is covered by landed slices. [:project <p> :drain <ws-id>]"
+   :task (apply nido-drain/close-cmd *command-line-args*)}
+
+  nido:drain:propose
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The coordinator proposes a recipe or a change to it. :reason \"…\" :recipe '{…}'"
+   :task (apply nido-drain/propose-cmd *command-line-args*)}
+
+  nido:drain:plan
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The coordinator plans a slice from the newest census. :sites '[…]' :census <seq> [:rests-on '[…]' :start on-top|after-landing :replaces <seq> :note \"…\"]"
+   :task (apply nido-drain/plan-cmd *command-line-args*)}
+
+  nido:drain:withdraw
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The coordinator withdraws an open plan. :plan <seq> :why \"…\""
+   :task (apply nido-drain/withdraw-cmd *command-line-args*)}
+
+  nido:drain:clear
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The coordinator clears a ready slice with the residue it leaves. :slice <ws-id> :residue '[{:site … :disposition {:to :closing}} …]'"
+   :task (apply nido-drain/clear-cmd *command-line-args*)}
+
+  nido:drain:dispose
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The coordinator disposes of a residue item again. :residue <seq> :disposition '{:to :follow-up :plan <seq>}'"
+   :task (apply nido-drain/dispose-cmd *command-line-args*)}
+
+  nido:drain:answer
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "The coordinator answers an open misfit. :misfit <seq> :answer '{:as :carved|:proposed|:escalated …}'"
+   :task (apply nido-drain/answer-cmd *command-line-args*)}
+
+  nido:drain:misfit
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "A slice's session records a site its recipe version does not cover, then ends its turn. :site \"…\" :note \"…\""
+   :task (apply nido-drain/misfit-cmd *command-line-args*)}
+
   nido:drain:census
   {:requires ([tasks.nido-drain :as nido-drain])
    :doc "Take a drain's census now: run its current recipe's counter against the project's main checkout and append the reading when it moved. Exits 1 on a failed reading. [:cwd <dir>] or :project <p> :drain <ws-id>"

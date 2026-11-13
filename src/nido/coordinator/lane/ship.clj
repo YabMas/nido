@@ -241,22 +241,25 @@
                              :session-id (:session-id facet)}))
           (conduct/instruct! project ws-id session-name "/drive-home" (:id run))))))
 
-(defn ^{:malli/schema [:=> [:cat :RunId] :any]}
+(defn ^{:malli/schema [:function [:=> [:cat :RunId] :any] [:=> [:cat :RunId :any] :any]]}
   drive-home!
   "Executor on-spawn body for a :merge Run: give `/drive-home` to the run's background session
    in the EXISTING session home (where bb nido:run and the composed .claude/skills resolve). It
-   returns as soon as the instruction is on its way; the Run settles in settle-drive-home! when
-   the session's own Stop ends the turn. Never tears down the session — the person owns it."
-  [run-id]
-  (runs/transition! run-id :running)                     ; mirrors session phase → :running
-  (let [run  (runs/read-run run-id)
-        home (session-state/session-home-dir (name (:project run)) (:session-name run))]
-    (if-not (fs/exists? home)
-      (settle-drive-home! run-id {:spawn-error true :detail (str "session-home absent: " home)})
-      (try
-        (give-drive-home! run home (runs/launch-context run))
-        :started
-        (catch Throwable t
-          (settle-drive-home! run-id {:spawn-error true :detail (.getMessage t)}))))))
+   returns as soon as the instruction is on its way; the Run settles in `settle` (default
+   settle-drive-home!, the daemon's choice of how a Run of its kind settles) — here when the
+   turn cannot be given, else when the session's own Stop ends the turn. Never tears down the
+   session — the person owns it."
+  ([run-id] (drive-home! run-id settle-drive-home!))
+  ([run-id settle]
+   (runs/transition! run-id :running)                    ; mirrors session phase → :running
+   (let [run  (runs/read-run run-id)
+         home (session-state/session-home-dir (name (:project run)) (:session-name run))]
+     (if-not (fs/exists? home)
+       (settle run-id {:spawn-error true :detail (str "session-home absent: " home)})
+       (try
+         (give-drive-home! run home (runs/launch-context run))
+         :started
+         (catch Throwable t
+           (settle run-id {:spawn-error true :detail (.getMessage t)})))))))
 
 

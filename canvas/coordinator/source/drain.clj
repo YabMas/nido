@@ -32,5 +32,5 @@
     "Run `command` in `dir` under bash and read what it printed: a reading, or {:failed cause} with :counter-failed when it could not run, exited non-zero or ran past the timeout."
     {:signature [:=> [:catn [:dir :any] [:command :any]] :any]})
   (Operation take-census!
-    "Run drain `ws-id`'s current recipe's counter against the project's main checkout and append the reading, citing the recipe — unless it reads the same as the newest under that recipe. `run` (default `run-counter`) is the injection seam a test substitutes. Answers {:census seq} for an appended reading, {:unchanged seq} for a repeated one, {:failed cause} for a failed one, and {:failed :no-recipe} for a drain with none."
+    "Run drain `ws-id`'s current recipe's counter against the project's main checkout and append the reading, citing the recipe — unless it reads the same as the newest under that recipe and no slice of the drain has landed since that one was taken. `run` (default `run-counter`) is the injection seam a test substitutes. Answers {:census seq} for an appended reading, {:unchanged seq} for a repeated one, {:failed cause} for a failed one, and {:failed :no-recipe} for a drain with none."
     {:signature [:function [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any] [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:run :any]] :any]]}))

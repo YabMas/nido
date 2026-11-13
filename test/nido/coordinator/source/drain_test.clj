@@ -10,7 +10,9 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.drain :as sd]
    [nido.coordinator.source.registry :as sources]
-   [nido.coordinator.source.state :as sst]))
+   [nido.coordinator.source.state :as sst]
+   [nido.review.stages :as stages]
+   [tasks.nido-review :as review]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -30,6 +32,17 @@
   (let [d (drain/start-drain! p {:established-by {:commit "abcdef1"} :exit "x"})]
     (drain/approve-recipe! p d (drain/propose-recipe! p d {:reason "r" :recipe a-recipe}))
     d))
+
+(defn- landed!
+  "Slice `s` passing its review under its recipe version, then recorded landed — the record refuses
+   a slice's landing before its review passed."
+  [s]
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [p s])]
+    (review/append-review-entry! "/wt" {:status :converged :findings []
+                                        :design (stages/discover-design-record "/wt")}
+                                 {:summary {:rounds 1 :fix-attempts 0} :target {:base "main" :base-rev "abc"}}
+                                 "/runs/r/report.json"))
+  (ws/append-entry! p s {:kind :closed} (pr-str {:format :closed :outcome :done :note "landed"})))
 
 (deftest a-counter-is-read-once-and-strictly
   (is (= {:remaining 3 :groups [{:group "quiz" :n 3}]}
@@ -64,6 +77,22 @@
           (is (= :invalid (:failed (sd/take-census! p d (fn [_ _] {:failed :invalid})))))
           (is (= 2 (count (drain/censuses (ws/read-ws p d))))))))))
 
+(deftest the-first-reading-after-a-landing-is-kept-though-it-reads-the-same
+  (with-tmp
+    (fn [_]
+      (let [d (with-recipe)
+            _ (sd/take-census! p d (counting 4))
+            c (:seq (drain/newest-census (ws/read-ws p d)))
+            s (drain/start-slice! p d (drain/plan-slice! p d {:sites ["a"] :rests-on [] :census c}) :nido)]
+        (Thread/sleep 5)
+        (landed! s)
+        (Thread/sleep 5)
+        (is (contains? (sd/take-census! p d (counting 4)) :census)
+            "measured after the landing, with no progress: an observation the brake reads")
+        (Thread/sleep 5)
+        (is (contains? (sd/take-census! p d (counting 4)) :unchanged) "and only the first")
+        (is (= [4 4] (map :remaining (drain/censuses (ws/read-ws p d)))))))))
+
 (deftest a-poll-fires-one-start-within-the-cap
   (with-tmp
     (fn [_]
@@ -80,9 +109,25 @@
           (reset! fired [])
           (poll!)
           (is (empty? @fired) "b rests on a, which has not landed — and the cap is full")
-          (ws/append-entry! p s {:kind :closed} (pr-str {:format :closed :outcome :done :note "landed"}))
+          (landed! s)
           (poll!)
           (is (= [b] (map :plan @fired)) "a landed: b may start"))))))
+
+(deftest a-plan-whose-start-was-refused-is-not-fired-again
+  (with-tmp
+    (fn [_]
+      (let [d  (with-recipe)
+            _  (sd/take-census! p d (counting 4))
+            c  (:seq (drain/newest-census (ws/read-ws p d)))
+            a  (drain/plan-slice! p d {:sites ["a"] :rests-on [] :census c})
+            fired (atom [])
+            poll! #(sd/poll-once! {:type :drain :project p} (partial swap! fired conj) (counting 4))]
+        (drain/refuse-start! p d a :base-failed "conflict")
+        (poll!)
+        (is (empty? @fired) "refused, it waits for the coordinator to replace or withdraw it")
+        (let [a2 (drain/plan-slice! p d {:sites ["a"] :rests-on [] :census c :replaces a})]
+          (poll!)
+          (is (= [a2] (map :plan @fired)) "the replacing plan is a new one"))))))
 
 (deftest a-failed-census-is-fired-not-recorded
   (with-tmp

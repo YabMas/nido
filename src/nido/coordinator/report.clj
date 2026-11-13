@@ -2496,6 +2496,10 @@
    ;; record written before the citation existed, which is what keeps those
    ;; readable; `reentry/generation` is their attribution and only theirs.
    [:design {:optional true} [:map {:closed true} [:seq int?]]]
+   ;; The drain recipe version a slice's review was judged against — its :recipe
+   ;; entry's seq on the drain. What `pipeline/reviewed-under-version?` reads: a
+   ;; slice's review that cites none judged it against no yardstick and does not count.
+   [:recipe {:optional true} [:map {:closed true} [:seq int?]]]
    ;; `:none` on a run judged against no design — a plain workstream's, which owes
    ;; none (`tasks.nido-review/no-yardstick`). Said rather than left to the absence
    ;; of `:design`, which every record written before the citation also shows:
@@ -4061,7 +4065,9 @@
    [:owes      {:optional true} [:map {:closed true} [:stage :keyword] [:seq int?]]]
    [:by        [:enum :conductor :nido]]
    [:decision  [:or [:tuple [:= :instruct]
-                     [:vector {:min 1} [:map {:closed true} [:seat SeatId] [:text [:string {:min 1}]]]]]
+                     ;; :slice names the slice whose seat a drain's coordinator instructs.
+                     [:vector {:min 1} [:map {:closed true} [:seat SeatId] [:slice {:optional true} [:string {:min 1}]]
+                                        [:text [:string {:min 1}]]]]]
                     ;; :summary and :options are the blocker's own, for an escalation that
                     ;; becomes the question (`ask/guidance :escalation`); one riding on a move
                     ;; already owed is a note, and only its :needs is read.
@@ -4248,12 +4254,22 @@
    [:census pos-int?]
    [:by     [:= :person]]])
 
+(def StartRefused
+  "lane-drain refusing a planned slice's start because the work its plan rests on cannot be read or
+   merged. Until a newer plan replaces it, source-drain fires no start of that plan again."
+  [:map {:closed true}
+   [:format [:= :start-refused]]
+   [:plan   pos-int?]
+   [:cause  [:enum :base-failed]]
+   [:detail string?]
+   [:by     [:= :nido]]])
+
 (def drain-kinds
   "Every kind a drain's records are written in. The ledger's generic appends refuse each: they are
    appended only through `nido.coordinator.record.drain`."
   #{:drain :slice :recipe-proposed :recipe :census :slice-planned :slice-withdrawn :slice-started
     :slice-rebased :misfit :misfit-answered :slice-cleared :residue :residue-disposed
-    :exit-observed})
+    :exit-observed :start-refused})
 
 
 (def Generation
@@ -4345,7 +4361,8 @@
    :slice-cleared            SliceCleared
    :residue                  Residue
    :residue-disposed         ResidueDisposed
-   :exit-observed            ExitObserved})
+   :exit-observed            ExitObserved
+   :start-refused            StartRefused})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records
@@ -5987,5 +6004,6 @@
      :residue                  (str "Residue: " (first-line (:site report)))
      :residue-disposed         (str "Residue " (:residue report) " → " (name (get-in report [:disposition :to])))
      :exit-observed            (str "Exit observed at census " (:census report))
+     :start-refused            (str "Start of plan " (:plan report) " refused: " (first-line (:detail report)))
      :phase-gate               (str "Phase gate met — opens " (first-line (:opens report)))
      nil)))
