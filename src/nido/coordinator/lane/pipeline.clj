@@ -1285,6 +1285,27 @@
   "Who owes a move, by the mode it runs in."
   {:human :person :mechanical :machine :authoring :agent :working-copy :agent})
 
+(defn- latest-stop
+  "The session among `sessions` whose driven conversation recorded the newest Stop, with that Stop
+   as its facet keeps it, as {:session <name> :stop <last-stop>}, or nil when none recorded one."
+  [sessions]
+  (->> sessions
+       (keep (fn [s] (when-let [st (get-in s [:claude :last-stop])] {:session (:name s) :stop st})))
+       (sort-by (comp :at :stop))
+       last))
+
+(defn- stall-why
+  "Why a stalled workstream stopped: the session whose turn ended last, when, the move owed, and
+   what the turn last said — or, when no session recorded a turn end, that none did. :turn-end,
+   :recorded or :none, says which."
+  [position latest]
+  (let [owes (get-in position [:next :stage])]
+    (if latest
+      (cond-> {:turn-end :recorded :session (:session latest) :ended-at (get-in latest [:stop :at])
+               :owes owes}
+        (get-in latest [:stop :message]) (assoc :said (get-in latest [:stop :message])))
+      {:turn-end :none :owes owes})))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:maybe [:set :string]]]] :WorkstreamStatus]}
   status
   "A workstream's position, who owes its next move, whether anything is working on it now, and
@@ -1293,12 +1314,18 @@
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
-   whose agent holds its lock, a background session the substrate lists with a live process,
-   or a person's session that is up (`sstate/session-live?`) — `live-names` when the
-   caller observed them, else observed here. :paused is a person's standing pause — their choice
-   not to push the workstream forward. :stalled is an agent owing the move with nothing live and
-   no pause standing: the work stopped, and no question was recorded to say why. That is a
-   fault, never a resting state."
+   whose agent holds its lock, a session nido drives that the substrate lists with a live process
+   mid-turn (state working) — a process waiting on a dialog or idle after its Stop is not working
+   — or a person's own session, one without a :claude facet, that is up (`sstate/session-live?`)
+   — `live-names` when the caller observed them, else observed here. :paused is a person's
+   standing pause — their choice not to push the workstream forward.
+
+   :stalled is an agent owing the move with nothing live and no pause standing: the work stopped,
+   and no question was recorded to say why. That is a fault, never a resting state, and it comes
+   with :why (`stall-why`). One stop is not a stall: on a workstream not activated — a scratch
+   session a person started by hand, since a session nido starts on a brief is activated at birth
+   — a turn that ended answering only that person's own prompt leaves the conversation theirs,
+   resting."
   ([project ws-id] (status project ws-id nil))
   ([project ws-id live-names]
    (let [position (of project ws-id)
@@ -1308,25 +1335,33 @@
          ;; Past the conductor's record: it runs for as long as the workstream is open, so counting
          ;; it would read every worked workstream live and none stalled.
          sessions (remove :conductor (csession/list-sessions project ws-id))
-         ;; A person's session is live while it is up — observed, never a stored phase.
-         ;; Absent the caller's observation, make one, and only when there is a person's session
-         ;; to ask about: a board passes the set it read once for every row.
-         humans   (filter #(nil? (:autonomy %)) sessions)
+         ;; A person's own session is live while it is up — observed, never a stored phase. One nido
+         ;; drives through a facet is read off the listing instead, whatever its :autonomy: its
+         ;; services stay up between turns. Absent the caller's observation, make one, and only when
+         ;; there is a person's session to ask about: a board passes the set it read once for every
+         ;; row.
+         humans   (filter #(and (nil? (:autonomy %)) (nil? (:claude %))) sessions)
          up       (when (seq humans) (or live-names (observed-live-names project)))
-         ;; A background session is live while the substrate lists it with a process: a facet's
-         ;; by its full id, and a start still in flight by the :bg-id its note keeps.
+         ;; A background session is live while the substrate lists it with a process mid-turn: a
+         ;; facet's by its full id, and a start still in flight by the :bg-id its note keeps.
          facets   (keep :claude sessions)
          notes    (keep :dispatching sessions)
          states   (when (or (seq facets) (seq notes)) (vals (conduct/live-states {})))
-         listed?  (fn [matches?] (some #(and (:pid %) (matches? %)) states))
+         working? (fn [matches?] (some #(and (:pid %) (= "working" (:state %)) (matches? %)) states))
          live     (boolean (or (activity/held? project ws-id)
                                (seq (runs/live-runs project ws-id))
-                               (some (fn [f] (listed? #(= (:session-id f) (:sessionId %)))) facets)
-                               (some (fn [n] (and (:bg-id n) (listed? #(= (:bg-id n) (:id %))))) notes)
-                               (some #(contains? up (:name %)) humans)))]
-     (let [paused (boolean (some-> (ws/read-ws project ws-id) standing/paused?))]
-       {:position position
-        :owed-by  owed-by
-        :live     live
-        :paused   paused
-        :stalled  (and (= :agent owed-by) (not live) (not paused))}))))
+                               (some (fn [f] (working? #(= (:session-id f) (:sessionId %)))) facets)
+                               (some (fn [n] (and (:bg-id n) (working? #(= (:bg-id n) (:id %))))) notes)
+                               (some #(contains? up (:name %)) humans)))
+         w        (ws/read-ws project ws-id)
+         paused   (boolean (some-> w standing/paused?))
+         latest   (latest-stop sessions)
+         persons? (and latest (false? (get-in latest [:stop :nido?]))
+                       (not (some-> w standing/activated?)))
+         stalled  (and (= :agent owed-by) (not live) (not paused) (not persons?))]
+     (cond-> {:position position
+              :owed-by  owed-by
+              :live     live
+              :paused   paused
+              :stalled  (boolean stalled)}
+       stalled (assoc :why (stall-why position latest))))))

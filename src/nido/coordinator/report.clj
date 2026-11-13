@@ -1827,7 +1827,15 @@
    ;; The ids of the parked findings a review run's halt asks about, under the
    ;; identity a park keeps across runs. Absent on every other halt. It is how
    ;; the next run tells a question already standing unanswered from a new one.
-   [:parks   {:optional true} [:vector string?]]])
+   [:parks   {:optional true} [:vector string?]]
+   ;; The dialog nido observed a driven session stopped on, which this blocker asks a person
+   ;; about: the session and the instant the listing first showed it waiting. Absent on every
+   ;; other blocker. It ties one question to one dialog, so a dialog is asked about once whatever
+   ;; became of the question, and its closing answers it.
+   [:stop    {:optional true} [:map {:closed true}
+                               [:kind    [:enum :dialog]]
+                               [:session string?]
+                               [:since   string?]]]])
 
 (def BlockerAnswered
   "The human's answer to a blocker that named its branches — written by nido at

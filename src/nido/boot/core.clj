@@ -440,7 +440,8 @@
   "What the conductor lane does with one conduct pass: answer in place an escalation on a
    person's turn the person has prompted that session after, post a hand-back for each turn end
    on an activated workstream that ended no Run's instruction, escalate what a conductor turn
-   that ended left unanswered, and — at most every :conductor-interval-ms — start and retire
+   that ended left unanswered, ask a person about a dialog a driven session stands on and hand a
+   stall back to its conductor (`conductor/stops!`), and — at most every :conductor-interval-ms — start and retire
    conductors, record and post the person's acts, and re-seat every carried workstream."
   [r now-ms]
   (logged "answering escalations in place" #(conductor/answers-in-place! r))
@@ -448,6 +449,10 @@
   (doseq [{:keys [project ws-id session instruction]} (:turn-ends r)
           :when (:conductor (session/read-session project ws-id session))]
     (logged (str "closing " session "'s turn") #(conductor/close-unanswered! project ws-id session instruction)))
+  ;; After this pass's turn ends had their hand-backs: what is still stopped — a dialog, a stall —
+  ;; goes to whoever can answer it.
+  (doseq [p (registered-projects)]
+    (logged (str "reading " (name p) "'s stops") #(conductor/stops! p now-ms)))
   (when (>= (- now-ms @!last-conductor-sweep-ms) (:conductor-interval-ms defaults))
     (reset! !last-conductor-sweep-ms now-ms)
     ;; Who a person typed into is read once a sweep: every workstream's worked? reads it.

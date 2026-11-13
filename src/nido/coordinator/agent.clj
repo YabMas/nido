@@ -102,8 +102,9 @@
 (def ^:private headless-disallowed-tools
   "Tools removed from every headless agent that the settings above leave in
    place. ScheduleWakeup survives CLAUDE_CODE_DISABLE_CRON (claude 2.1.278 still
-   offers it) and would schedule a wakeup nothing can deliver."
-  ["ScheduleWakeup"])
+   offers it) and would schedule a wakeup nothing can deliver. AskUserQuestion
+   would open a dialog no person is at the terminal to answer."
+  ["ScheduleWakeup" "AskUserQuestion"])
 
 (def ^:private hold-run-lock
   "A wrapper that takes the run's lock and then becomes the agent: python3 exec's the command, so

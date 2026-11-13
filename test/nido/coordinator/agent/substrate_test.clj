@@ -41,7 +41,7 @@
       (is (= {:bg-id "a56cda8b" :session-id "a56cda8b-3390"}
              (sub/dispatch! {:cwd "/wt" :prompt "--looks like a flag" :name "kid"})))
       (let [[cmd opts] (first (filter #(= "--bg" (second (first %))) @calls))]
-        (is (= ["claude" "--bg" "--dangerously-skip-permissions" "--name" "kid" "--" "--looks like a flag"] cmd)
+        (is (= ["claude" "--bg" "--dangerously-skip-permissions" "--name" "kid" "--disallowedTools" "AskUserQuestion" "--" "--looks like a flag"] cmd)
             "the prompt after --, so nothing reads it as an option")
         (is (= "/wt" (:dir opts)))
         (is (not-any? #{"--permission-mode" "--settings"} cmd)
@@ -130,7 +130,7 @@
       (sub/wake! "a56cda8b-3390" "go" {:cwd "/wt"}))
     (is (= {:dir "/wt"} (second (first @calls)))
         "where Claude Code finds the conversation and the directory's settings")
-    (is (= ["claude" "--resume" "a56cda8b-3390" "--bg" "--dangerously-skip-permissions" "--" "go"] (ffirst @calls))
+    (is (= ["claude" "--resume" "a56cda8b-3390" "--bg" "--dangerously-skip-permissions" "--disallowedTools" "AskUserQuestion" "--" "go"] (ffirst @calls))
         "with permissions skipped, which a resume takes from its command line alone")))
 
 (deftest trust-is-read-for-exactly-the-directory
@@ -156,7 +156,7 @@
       (sub/dispatch! {:cwd "/wt" :prompt "p" :system-prompt "S" :mcp-config "/m.json" :add-dirs ["/a" "/b"]})
       (let [cmd (ffirst (filter #(= "--bg" (second (first %))) @calls))]
         (is (= ["claude" "--bg" "--dangerously-skip-permissions" "--append-system-prompt" "S" "--mcp-config" "/m.json"
-                "--add-dir" "/a" "--add-dir" "/b" "--" "p"] cmd))))))
+                "--add-dir" "/a" "--add-dir" "/b" "--disallowedTools" "AskUserQuestion" "--" "p"] cmd))))))
 
 (deftest dispatch-answers-only-the-id-the-listing-reports
   (testing "a session the listing shows only on a later read"
@@ -219,3 +219,33 @@
                                                                              [{:sessionId "s-1" :kind "interactive" :id "x"}])}})]
     (is (= :not-listed (:reason (ex-data (try (sub/attach! "s-1" {}) (catch Exception e e)))))
         "an interactive session is not one to attach to")))
+
+(defn- transcript! [home cwd id entries]
+  (let [dir (fs/path home ".claude" "projects" (clojure.string/replace cwd #"[/.]" "-"))]
+    (fs/create-dirs dir)
+    (spit (str (fs/path dir (str id ".jsonl")))
+          (apply str (map #(str (json/generate-string %) "\n") entries)))))
+
+(defn- call [id tool input]
+  {:type "assistant" :message {:content [{:type "tool_use" :id id :name tool :input input}]}})
+
+(defn- result [id] {:type "user" :message {:content [{:type "tool_result" :tool_use_id id}]}})
+
+(deftest an-open-dialog-is-read-from-the-newest-unanswered-call
+  (let [home (str (fs/create-temp-dir))]
+    (try
+      (with-redefs [fs/home (constantly home)]
+        (testing "a question, with its options"
+          (transcript! home "/w/x.y" "q" [(call "1" "Bash" {:command "ls"}) (result "1")
+                                         (call "2" "AskUserQuestion"
+                                               {:questions [{:question "Which agent?" :options [{:label "Claude"} {:label "Codex"}]}]})])
+          (is (= {:tool "AskUserQuestion" :questions [{:question "Which agent?" :options ["Claude" "Codex"]}]}
+                 (sub/pending-dialog "q" "/w/x.y"))))
+        (testing "a permission prompt, by the call it holds"
+          (transcript! home "/w" "p" [(call "1" "Bash" {:command "rm -rf   build"})])
+          (is (= {:tool "Bash" :input "rm -rf build"} (sub/pending-dialog "p" "/w"))))
+        (testing "nothing unanswered, or no transcript, reads nil"
+          (transcript! home "/w" "a" [(call "1" "Bash" {:command "ls"}) (result "1")])
+          (is (nil? (sub/pending-dialog "a" "/w")))
+          (is (nil? (sub/pending-dialog "missing" "/w")))))
+      (finally (fs/delete-tree home)))))

@@ -87,6 +87,18 @@
    [:ended-unrun? {:optional true} boolean?]
    ;; The current entry into blocked has been announced; cleared when the session leaves it.
    [:announced-blocked? boolean?]
+   ;; The driven conversation's latest Stop: when, what the turn last said, and whether the turn
+   ;; ended an instruction nido gave (false when only a person's prompts were in it). Absent until
+   ;; conduct folds a Stop. What status's :why and a stall's escalation are read from.
+   [:last-stop {:optional true} [:maybe [:map {:closed true}
+                                         [:at string?]
+                                         [:message {:optional true} [:maybe string?]]
+                                         [:nido? boolean?]]]]
+   ;; Since when the listing has shown the session stopped on a dialog (blocked, status waiting),
+   ;; and what it said it waits for; nil once it is not. The first pass to see it sets the instant.
+   [:waiting {:optional true} [:maybe [:map {:closed true}
+                                       [:since string?]
+                                       [:for {:optional true} [:maybe string?]]]]]
    [:idle-seen {:optional true} [:maybe [:enum :stopped :listed]]]
    ;; The host boot recover! last restarted this session in, so it restarts it at most once.
    [:recovered-boot [:maybe string?]]])

@@ -101,6 +101,13 @@
   "How many listings `dispatch!` reads for a session it just started before giving up on it."
   5)
 
+(def ^:private driven-disallowed-tools
+  "Tools a session nido starts or wakes runs without. AskUserQuestion opens a dialog only someone
+   at that session's terminal can answer, and nobody is: what the agent wants to ask has to end
+   its turn instead, where whoever answers for the session reads it. Claude Code keeps the list a
+   session was launched with across a respawn, not across a resume, so a wake passes it again."
+  ["AskUserQuestion"])
+
 (defn- pause! [ms] (Thread/sleep (long ms)))
 
 (defn- listed-session-id
@@ -129,7 +136,8 @@
   dispatch!
   "Start a background session in `:cwd` on `:prompt`, as {:bg-id :session-id}. `:name`, `:model`,
    `:system-prompt` (appended to Claude Code's own), `:mcp-config` and `:add-dirs` are the run's
-   context and are passed through. Of the launch baseline only the permission skip is passed —
+   context and are passed through. The session runs without the tools in
+   `driven-disallowed-tools`. Of the launch baseline only the permission skip is passed —
    Claude Code takes it from no settings file, so without the flag the session would run in the
    baseline's auto — and the directory's settings carry the rest. The system prompt is recorded
    with the conversation on its first request, so a wake keeps it.
@@ -154,6 +162,8 @@
               system-prompt (into ["--append-system-prompt" system-prompt])
               mcp-config (into ["--mcp-config" mcp-config])
               (seq add-dirs) (into (mapcat (fn [d] ["--add-dir" d]) add-dirs))
+              ;; Variadic: the `--` terminator below keeps the list off the prompt.
+              :always (into (cons "--disallowedTools" driven-disallowed-tools))
               :always (into ["--" prompt]))
         {:keys [exit out err]} (claude! cmd {:dir cwd})]
     (cond
@@ -171,6 +181,78 @@
             {:bg-id id :session-id sid}
             (throw (ex-info (str "claude --bg started " id " but the listing never named its session")
                             {:reason :session-unlisted :bg-id id}))))))))
+
+(def ^:private transcript-tail-bytes
+  "How much of a transcript's end `pending-dialog` reads: an open dialog is the last tool call, and
+   a turn's tail is far smaller than this, so reading the whole file buys nothing."
+  (* 512 1024))
+
+(defn- transcript-path
+  "Where Claude Code keeps conversation `session-id` begun in `cwd`: one JSONL per conversation,
+   under a directory named after the cwd with `/` and `.` flattened to `-`."
+  [session-id cwd]
+  (fs/path (fs/home) ".claude" "projects" (str/replace (str cwd) #"[/.]" "-") (str session-id ".jsonl")))
+
+(defn- tail-lines
+  "The whole lines of `path`'s last `n` bytes — the first, cut mid-line, dropped unless the read
+   began at the start."
+  [path n]
+  (with-open [f (java.io.RandomAccessFile. (str path) "r")]
+    (let [len   (.length f)
+          start (max 0 (- len n))
+          buf   (byte-array (- len start))]
+      (.seek f start)
+      (.readFully f buf)
+      (cond-> (str/split-lines (String. buf "UTF-8")) (pos? start) rest))))
+
+(defn- tool-calls
+  "Each tool call the transcript's `entries` record, oldest first, as [id name input], and the ids
+   of the calls a result answered."
+  [entries]
+  (reduce (fn [acc e]
+            (let [content (get-in e [:message :content])]
+              (if (sequential? content)
+                (reduce (fn [acc b]
+                          (case (:type b)
+                            "tool_use"    (update acc :calls conj [(:id b) (:name b) (:input b)])
+                            "tool_result" (update acc :answered conj (:tool_use_id b))
+                            acc))
+                        acc content)
+                acc)))
+          {:calls [] :answered #{}}
+          entries))
+
+(defn- excerpt [s n]
+  (let [s (str/trim (str/replace (str s) #"\s+" " "))]
+    (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
+
+(defn ^{:malli/schema [:=> [:cat :string :string] [:maybe :map]]}
+  pending-dialog
+  "What the open dialog of conversation `session-id`, begun in `cwd`, asks, read from its
+   transcript's newest tool call that no result has answered: {:tool \"AskUserQuestion\"
+   :questions [{:question <s> :options [<label> …]} …]} for a question, else {:tool <name>
+   :input <a one-line excerpt of what it would run>} for the call a permission prompt holds. Nil
+   when the newest unanswered call cannot be found, or the transcript cannot be read — a reading
+   for words to show a person, so it never throws."
+  [session-id cwd]
+  (try
+    (let [path (transcript-path session-id cwd)]
+      (when (fs/exists? path)
+        (let [entries (keep #(try (json/parse-string % true) (catch Exception _ nil))
+                            (tail-lines path transcript-tail-bytes))
+              {:keys [calls answered]} (tool-calls entries)
+              [_ tool input] (last (remove (comp answered first) calls))]
+          (when tool
+            (if (= "AskUserQuestion" tool)
+              {:tool      tool
+               :questions (mapv (fn [q] {:question (str (:question q))
+                                         :options  (mapv (comp str :label) (:options q))})
+                                (:questions input))}
+              {:tool  tool
+               :input (excerpt (or (:command input) (:description input) (:file_path input)
+                                   (:url input) (json/generate-string input))
+                               200)})))))
+    (catch Exception _ nil)))
 
 (defn- socket-path
   "Where a live session's inbox is: Claude Code binds `<pid>.sock` in its per-user socket
@@ -227,15 +309,19 @@
   "Continue the session `session-id`, which has no live process, in the background under its own
    id with `text` as its next prompt, run from `opts`'s :cwd — the directory the listing shows it
    in, where Claude Code finds its conversation and the session loads that directory's settings —
-   with permissions skipped, as dispatch! starts it, since a resume takes its mode from its own
-   command line and not from the conversation.
+   with permissions skipped and without `driven-disallowed-tools`, as dispatch! starts it, since a
+   resume takes both from its own command line and not from the conversation.
    Answers {:woke? true} or, when Claude Code started a copy
    instead — it does when the session turned out to be running — {:woke? false :copy <id>}, the
    copy stopped and removed again so nothing runs beside the session. Throws :reason
    :copy-cleanup-failed, naming the copy and the command Claude Code refused, when it was not —
    with the copy as :left-running only while its stop is unconfirmed."
   [session-id text {:keys [claude-bin cwd] :or {claude-bin "claude"}}]
-  (let [{:keys [exit out err]} (claude! [claude-bin "--resume" session-id "--bg" "--dangerously-skip-permissions" "--" text] {:dir cwd})]
+  (let [{:keys [exit out err]} (claude! (-> [claude-bin "--resume" session-id "--bg" "--dangerously-skip-permissions"
+                                              "--disallowedTools"]
+                                             (into driven-disallowed-tools)
+                                             (into ["--" text]))
+                                         {:dir cwd})]
     (if-let [copy (copy-note (str out err))]
       (let [cleanup! (fn [verb]
                        (let [r (claude! [claude-bin verb copy])]

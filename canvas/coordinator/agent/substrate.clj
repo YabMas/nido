@@ -5,11 +5,13 @@
             [fukan.common.typing.malli]))
 
 (Module agent-substrate
-  "The one door between nido and a Claude Code session: start one, see them all, message one,
-   wake one, stop one, restart one, and make a directory one may run in.
+  "The one door between nido and a Claude Code session: start one, see them all, read the
+   question an open dialog in one asks, message one, wake one, stop one, restart one, and make a
+   directory one may run in.
 
    What it HIDES is everything Claude Code calls a research preview: the `--bg` and `agents
-   --json` command lines and the listing's shape, where a session's inbox socket is and what a
+   --json` command lines and the listing's shape, where a session's transcript is and how an open
+   dialog's question is read from it, where a session's inbox socket is and what a
    message on it looks like, which resume continues a session in place rather than copying it,
    the workspace-trust dialog, and the minimum version all of that was observed on — the
    supervisor restarting a background session whose process dies among it. A caller
@@ -30,13 +32,19 @@
      state, status, what it waits for, pid while alive. Starts the supervisor if it is not
      running; throws rather than answering empty when the listing cannot be read."
     {:signature [:=> [:catn [:opts :map]] [:sequential :map]]})
+  (Operation pending-dialog
+    "The question an open dialog in a session asks, read from its transcript: an AskUserQuestion's
+     questions, or the tool a permission prompt is for. Nil when the transcript shows none or
+     cannot be read."
+    {:signature [:=> [:catn [:session-id :string] [:cwd :string]] [:maybe :map]]})
   (Operation listing-cached
     "The listing, served from a read under two seconds old — for display, never for a decision."
     {:signature [:=> [:catn [:opts :map]] [:sequential :map]]
      :delegates [listing]})
   (Operation dispatch!
     "Start a background session in a directory on a first prompt, under the directory's launch
-     baseline. Returns its short id and full session id. Refuses below the minimum Claude Code
+     baseline and without AskUserQuestion — no person is at its terminal to answer a dialog.
+     Returns its short id and full session id. Refuses below the minimum Claude Code
      version and in a directory not trusted."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [version-check listing]})
@@ -46,7 +54,8 @@
     {:signature [:=> [:catn [:session :map] [:text :string]] :map]})
   (Operation wake!
     "Continue a session that has no live process, in the background under its own id, with an
-     instruction as its next prompt; a copy Claude Code starts instead is stopped and removed."
+     instruction as its next prompt, and without AskUserQuestion again — a resume does not keep the
+     launch's list; a copy Claude Code starts instead is stopped and removed."
     {:signature [:=> [:catn [:session-id :string] [:text :string] [:opts :map]] :map]})
   (Operation stop!
     "Stop a session's process. Its conversation is kept."

@@ -23,13 +23,31 @@
    anything is working on it now.
 
    THREE FACETS, ONE DERIVATION. Position is the fold over the ledger; owed-by is read off the
-   mode the position's next stage runs in; live is observed from locks the working process holds.
-   None is stored, so no surface can show a combination the records do not support."
-  [:map [:position :map]
-        [:owed-by [:enum :person :agent :machine :nobody]]
-        [:stalled :boolean]
-        [:paused :boolean]
-        [:live :boolean]])
+   mode the position's next stage runs in; live is observed from the locks a working process holds
+   and from the substrate showing a session mid-turn. None is stored, so no surface can show a
+   combination the records do not support. A stalled status also says why: which session stopped,
+   when, owing what, and what it last said."
+  [:map {:closed true}
+   [:position :map]
+   [:owed-by [:enum :person :agent :machine :nobody]]
+   [:stalled :boolean]
+   [:paused :boolean]
+   [:live :boolean]
+   ;; Present exactly when :stalled is true — held by the claim stall-carries-why, not by this
+   ;; schema. Tying the two here needs a boolean literal ([:= true], [:enum true]), and fukan's
+   ;; malli subset reads none: either one makes this namespace, and every canvas namespace that
+   ;; requires it, fail to load, so the whole declaration goes unreadable.
+   [:why {:optional true}
+    [:or
+     [:map {:closed true}
+      [:turn-end [:enum :recorded]]
+      [:session :string]
+      [:ended-at :string]
+      [:owes [:maybe :keyword]]
+      [:said {:optional true} :string]]
+     [:map {:closed true}
+      [:turn-end [:enum :none]]
+      [:owes [:maybe :keyword]]]]]])
 
 (Module lane-pipeline
   "Where a workstream is in its life, read from its own ledger.
@@ -95,8 +113,9 @@
   (Operation status
     "A workstream's position, who owes its next move, and whether anything is live — the one
      answer every surface renders. Paused while a person's pause stands. Stalled — a fault —
-     when an agent owes the move, nothing is live, no question is open and no pause stands; its
-     conductor's session is not what makes it live."
+     when an agent owes the move, nothing is live, no question is open and no pause stands, and
+     then with the reason; its conductor's session is not what makes it live. A turn that answered
+     only a person's own prompt, on a workstream not activated, is theirs and not a stall."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
                       [:live-names [:? [:maybe [:set :string]]]]] WorkstreamStatus]
      :delegates [of activity/read-live runs/live-runs]}))

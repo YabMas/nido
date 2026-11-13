@@ -179,6 +179,7 @@
                     (and ended (not= ended pending)) (update-in [:facet :lapsed] #(vec (remove #{ended} %))))
             ;; Whether its end goes to whoever answers for the workstream — no Run's.
             (assoc-in [:facet :ended-unrun?] (nil? (:for ended)))
+            (assoc-in [:facet :last-stop] {:at (:at ev) :message (:last-message ev) :nido? (some? ended)})
             (assoc-in [:facet :own-work?]
                       (pos? (+ (or (:background-tasks ev) 0) (or (:crons ev) 0))))))
 
@@ -252,7 +253,11 @@
         announce? (and blocked? (not (:announced-blocked? f)))
         lapsed    (lapsed? (:pending f) latest row)
         free?     (or (nil? (:pending f)) lapsed)
-        f         (assoc f :announced-blocked? blocked?)
+        f         (assoc f :announced-blocked? blocked?
+                           ;; Blocked with its process waiting is a dialog mid-turn; its instant is
+                           ;; the first pass's that saw it, kept while it stands.
+                           :waiting (when (and blocked? (= "waiting" (:status row)))
+                                      (or (:waiting f) {:since now :for (:waitingFor row)})))
         via       (when row (if (:pid row) :send :wake))
         stopped?  (= :stop (:event latest))
         ;; Blocked after its Stop, a session is waiting on the answer a person queued for it;

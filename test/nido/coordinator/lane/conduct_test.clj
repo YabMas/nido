@@ -899,3 +899,25 @@
             (is (= #{["s" false "old one's last"] ["n" true "new one's first"]}
                    (set (map (juxt :conversation (comp some? :instruction) (comp :last-message :event)) (:turn-ends r))))
                 "the old conversation's unread Stop is still read, and the new one's first instruction ends")))))))
+
+(deftest a-stop-is-kept-with-its-words-and-whose-turn-it-ended
+  (let [stop {:event :stop :at "t9" :last-message "Intent recorded." :background-tasks 0 :crons 0}]
+    (is (= {:at "t9" :message "Intent recorded." :nido? true}
+           (get-in (conduct/decide (assoc driving :pending {:token "T" :at "t" :via :send :seen? true})
+                                   done-row [stop] ctx)
+                   [:facet :last-stop]))
+        "a turn that ended nido's instruction")
+    (is (= {:at "t9" :message "Intent recorded." :nido? false}
+           (get-in (conduct/decide driving done-row [stop] ctx) [:facet :last-stop]))
+        "a turn only a person prompted")))
+
+(deftest a-dialog-is-timed-from-the-first-pass-that-sees-it
+  (let [dialog (assoc done-row :state "blocked" :status "waiting" :waitingFor "input needed")
+        d1     (conduct/decide driving dialog [] ctx)]
+    (is (= {:since "t1" :for "input needed"} (get-in d1 [:facet :waiting])))
+    (is (= {:since "t1" :for "input needed"}
+           (get-in (conduct/decide (:facet d1) dialog [] (assoc ctx :now "t2")) [:facet :waiting]))
+        "kept while it stands")
+    (is (nil? (get-in (conduct/decide (:facet d1) (assoc dialog :status "idle") [] ctx) [:facet :waiting]))
+        "blocked after its turn ended is not a dialog")
+    (is (nil? (get-in (conduct/decide (:facet d1) done-row [] ctx) [:facet :waiting])))))

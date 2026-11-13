@@ -24,6 +24,12 @@
    worked. It is briefed from the
    records and an escalation guidance document a person edits without changing code.
 
+   And what a stop becomes. Work that stalled on an activated workstream — its agent owing the move,
+   nothing working — is one more hand-back, posted once per turn end after a grace, for the
+   conductor to decide like any other. A dialog a driven session stands on is the one stop nido
+   states as a question itself: only someone at that session can answer it, so it goes to the
+   person as a :blocker carrying :stop, which nido answers once the dialog closes (`stops!`).
+
    And that a start carries its session: the first session a person's start or a Run's start
    brings up on a workstream whose generation fixes no ids becomes its whole seat's occupant.
 
@@ -32,6 +38,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [nido.coordinator.agent.substrate :as substrate]
    [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.embodied-strata :as embodied]
    [nido.coordinator.lane.pipeline :as pipeline]
@@ -551,6 +558,138 @@
                                                next (assoc :next next)
                                                owes (assoc :owes owes)))])))
       [])))
+
+;; ── stops: a dialog nobody can answer, and work that stalled ────────────────
+
+(def dialog-grace-ms
+  "How long a driven session may stand on a dialog before a person is asked about it: long enough
+   that one a person is answering at the session's terminal has closed, short enough that one
+   nobody is watching is not lost."
+  (* 2 60 1000))
+
+(def stall-grace-ms
+  "How long an activated workstream may read stalled after its last turn end before the stall is
+   handed back: the turn end's own hand-back and its decision get that long to move it first."
+  (* 10 60 1000))
+
+(defn- ms [iso] (try (.toEpochMilli (java.time.Instant/parse (str iso))) (catch Exception _ nil)))
+
+(defn- excerpt [s n]
+  (let [s (str/trim (str/replace (str s) #"\s+" " "))]
+    (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
+
+(defn- question
+  "`s`'s first sentence as a question that fits a blocker's :needs — 240 characters, which the
+   ledger refuses past — or nil."
+  [s]
+  (let [s (str/trim (str/replace (str s) #"\s+" " "))
+        q (if-let [i (str/index-of s "?")] (subs s 0 (inc i)) (str s "?"))]
+    (when (and (< 1 (count q)) (<= (count q) 240)) q)))
+
+(defn- dialog-blocker
+  "The blocker asking a person about the dialog `session` stands on, given its facet's :waiting
+   {:since :for} and what `substrate/pending-dialog` read of it (nil when nothing could be). Every
+   question it asks is in :summary whole, with its options, which are not offered as branches: a
+   branch answers the ledger, and only the session can answer its dialog."
+  [session {:keys [since] waits :for} dialog]
+  (let [qs (:questions dialog)]
+    {:format  :blocker
+     :summary (str session " stopped mid-turn on a dialog" (when waits (str " (" waits ")"))
+                   " at " since ", and nothing proceeds until it is answered."
+                   (str/join "" (for [{:keys [question options]} qs]
+                                  (str " It asks: “" (excerpt question 800) "”"
+                                       (when (seq options) (str " — options: " (str/join "; " options)))
+                                       ".")))
+                   (when (and dialog (empty? qs))
+                     (str " It waits to run " (:tool dialog)
+                          (when (seq (:input dialog)) (str ": " (:input dialog))) ".")))
+     :needs   (or (cond
+                    (seq qs) (question (:question (first qs)))
+                    dialog   (question (str "Allow " session " to use " (:tool dialog)
+                                            (when (seq (:input dialog)) (str ": " (excerpt (:input dialog) 160))))))
+                  (str "Can you answer the dialog " session " is waiting on?"))
+     :after   (str "Answer it in the session itself — open " session " from the board. nido marks "
+                   "this answered when the dialog closes. A reply here is recorded, but it cannot "
+                   "reach the dialog.")
+     :stop    {:kind :dialog :session session :since since}}))
+
+(defn- dialog-blockers
+  "nido's dialog blockers on a workstream, each {:seq :stop :answer <its answer entry, or nil>}."
+  [project ws-id]
+  (let [answers (group-by :blocker-seq (ws/entries-of project ws-id :blocker-answered))]
+    (for [b (ws/entries-of project ws-id :blocker) :when (:stop b)]
+      {:seq (:seq b) :stop (:stop b) :answer (first (get answers (:seq b)))})))
+
+(defn- dialogs!
+  "Ask a person about each dialog a driven session of the workstream has stood on past
+   `dialog-grace-ms`, once per dialog, and answer {:by :nido} each one asked about that has closed.
+   Answers [{:ws-id :session :wrote <:blocker | :blocker-answered>} …]."
+  [project ws-id records now-ms rows]
+  (let [asked (dialog-blockers project ws-id)
+        waits (into {} (keep (fn [s] (when-let [w (get-in s [:claude :waiting])] [(:name s) w])) records))]
+    (concat
+     (for [{:keys [seq stop answer]} asked
+           :when (and (nil? answer) (not= (:since stop) (get-in waits [(:session stop) :since])))]
+       (do (ws/append-entry! project ws-id {:kind :blocker-answered}
+                             (pr-str {:format :blocker-answered :blocker-seq seq :by :nido :resumed nil
+                                      :summary (str (:session stop) "'s dialog closed: it was answered "
+                                                    "in the session, or the session stopped.")}))
+           {:ws-id ws-id :session (:session stop) :wrote :blocker-answered}))
+     (for [s records
+           :let [w (get-in s [:claude :waiting]) since (ms (:since w))]
+           :when (and w since (= :nido (get-in s [:claude :driver]))
+                      (>= (- now-ms since) dialog-grace-ms)
+                      (not-any? #(= {:kind :dialog :session (:name s) :since (:since w)} (:stop %)) asked))]
+       (let [id  (get-in s [:claude :session-id])
+             cwd (:cwd (get rows id))]
+         (ws/append-entry! project ws-id {:kind :blocker}
+                           (pr-str (dialog-blocker (:name s) w (when cwd (substrate/pending-dialog id cwd)))))
+         {:ws-id ws-id :session (:name s) :wrote :blocker})))))
+
+(defn- stall!
+  "Hand the workstream's stall back to its conductor — once per turn end — when it is activated,
+   reads stalled since a recorded turn end at least `stall-grace-ms` old, owes its conductor no
+   hand-back already, and no session of it stands on a dialog. The hand-back carries status's :why."
+  [project ws-id w records now-ms]
+  (let [{:keys [stalled why]} (pipeline/status project ws-id)
+        ended (ms (:ended-at why))]
+    (when (and stalled ended (= :recorded (:turn-end why))
+               (>= (- now-ms ended) stall-grace-ms)
+               (not-any? #(get-in % [:claude :waiting]) records)
+               (not (owes-hand-back? project ws-id w)))
+      (let [s (some #(when (= (:session why) (:name %)) %) records)]
+        (post-hand-back! project ws-id (str "stall:" (:session why) ":" (:ended-at why))
+                         {:what (str "work stalled — " (:session why) "'s turn ended at " (:ended-at why)
+                                     " owing " (if (:owes why) (name (:owes why)) "the next move")
+                                     ", and nothing has worked on it since")
+                          :session (:session why) :seat (get-in s [:seat :id]) :said (:said why)})
+        [{:ws-id ws-id :session (:session why) :wrote :hand-back}]))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :int] [:sequential :map]]}
+  stops!
+  "One pass over `project`'s open workstreams with a session nido drives, at `now-ms`: ask a
+   person about each dialog a driven session has stood on past `dialog-grace-ms` — a :blocker nido
+   writes, worded with what the dialog asks, answered {:by :nido} once it closes — and hand an
+   activated workstream's stall back to its conductor (`stall!`), which decides it like any
+   hand-back. Nothing is sent to a session. Answers [{:ws-id :session :wrote} …]; a workstream
+   that throws is logged and skipped."
+  [project now-ms]
+  (let [faceted ((requiring-resolve 'nido.coordinator.lane.conduct/faceted-sessions) {:projects [project]})
+        rows    (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {:projects [project]}))]
+    (vec
+     (mapcat (fn [ws-id]
+               (try
+                 (let [w (ws/read-ws project ws-id)]
+                   (when (and w (nil? (ws/closure w)))
+                     (let [records (filter :claude (session/list-sessions project ws-id))]
+                       (doall (concat (dialogs! project ws-id records now-ms @rows)
+                                      (when (and (standing/activated? w) (not (standing/paused? w)))
+                                        (stall! project ws-id w (remove :conductor records) now-ms)))))))
+                 (catch Throwable t
+                   (binding [*out* *err*]
+                     (println (str "nido conductor: stops on " ws-id " skipped — " (ex-message t))))
+                   nil)))
+             (distinct (map :ws-id faceted))))))
 
 ;; ── the person's acts ───────────────────────────────────────────────────────
 

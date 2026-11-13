@@ -37,7 +37,7 @@
 (deftest build-cmd-resume-uses-resume-flag
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
           "--setting-sources" "user,project"
-          "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup"
+          "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup" "AskUserQuestion"
           "--resume" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
                              :claude-session-id "sid-1" :resume? true}))
@@ -46,7 +46,7 @@
 (deftest build-cmd-without-resume-uses-session-id
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
           "--setting-sources" "user,project"
-          "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup"
+          "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup" "AskUserQuestion"
           "--session-id" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
                              :claude-session-id "sid-1"}))
@@ -340,12 +340,12 @@
 
 ;; ── nothing a headless agent starts may outlive its turn ────────────────────
 
-(deftest a-headless-agent-is-offered-no-way-to-schedule-itself
+(deftest a-headless-agent-is-offered-no-way-to-schedule-itself-or-ask-a-dialog
   ;; CLAUDE_CODE_DISABLE_CRON removes the Cron tools but not ScheduleWakeup, and
   ;; a wakeup scheduled by a headless agent has no session left to wake.
   (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :tools ""})]
-    (is (= ["--disallowedTools" "ScheduleWakeup"]
-           (take 2 (drop-while #(not= "--disallowedTools" %) cmd))))
+    (is (= ["--disallowedTools" "ScheduleWakeup" "AskUserQuestion"]
+           (take 3 (drop-while #(not= "--disallowedTools" %) cmd))))
     (is (= ["--" "hi"] (take-last 2 cmd))
         "and the variadic flag cannot swallow the prompt")))
 

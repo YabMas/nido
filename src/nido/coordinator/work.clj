@@ -636,7 +636,7 @@
                                ;; Settled is over: nothing is underway in it.
                                :doing nil)
             st (assoc :position (:position st)
-                      :status   (select-keys st [:owed-by :live :stalled :paused]))))
+                      :status   (select-keys st [:owed-by :live :stalled :paused :why]))))
         (let [st   (pipeline/status project ws-id live-names)
               pos  (:position st)
               band (if closed :awaiting-gate (band-of project ws-id origin pos))]
@@ -644,7 +644,7 @@
                          :stage      band
                          :dismissed? false
                          :position   pos
-                         :status     (select-keys st [:owed-by :live :stalled :paused])
+                         :status     (select-keys st [:owed-by :live :stalled :paused :why])
                          :needs-you  (= :person (:owed-by st))
                          :engagement (engagement-of st)
                          ;; What is underway, at status's band, so a row cannot say :done and
@@ -1842,11 +1842,13 @@
 (defn- liveness-probe
   "A row's liveness as status observes it, read without reading the workstream's records: a
    claim held under it, a run whose agent holds its lock, and which of its background sessions
-   the agent listing shows a process for — read, as status reads it, only for a row that has
-   one. The registry's half is in the row's stamp."
+   the agent listing shows a process mid-turn for — read, as status reads it, only for a row
+   that has one. The registry's half is in the row's stamp."
   [project ws-id {:keys [listed]}]
   (let [with-pid (when (seq listed)
-                   (into #{} (comp (filter :pid) (mapcat (juxt :sessionId :id))) (agent-states)))]
+                   (into #{} (comp (filter #(and (:pid %) (= "working" (:state %))))
+                                   (mapcat (juxt :sessionId :id)))
+                         (agent-states)))]
     [(boolean (activity/held? project ws-id))
      (resuming? project ws-id)
      (into #{} (filter #(contains? with-pid %)) listed)]))

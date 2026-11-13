@@ -430,6 +430,23 @@
                                                         (fn [os] (mapv #(dissoc % :recommended?) os))))))
                          (mapv (fn [a] (dissoc a :style)) one-question-actions)
                          {:route nowhere}))}
+             {:title "a dialog a driven session stands on"
+              :note "A session nido drives stopped mid-turn on a permission prompt nobody was looking
+                     at. After two minutes nido states it here as a blocker it wrote: what the prompt
+                     would run, and where to answer it — a button here could not answer the prompt.
+                     nido marks it answered when the prompt closes."
+              :render #(ask/question-card
+                        "nido" "ws-1"
+                        {:kind :answer-blocker
+                         :question "Allow catalog-chat to use Bash: npm install --save-dev playwright?"
+                         :questions [{:question "Allow catalog-chat to use Bash: npm install --save-dev playwright?"
+                                      :context ["catalog-chat stopped mid-turn on a dialog (permission prompt) at 2026-11-13T14:43:19Z, and nothing proceeds until it is answered. It waits to run Bash: npm install --save-dev playwright."]
+                                      :after "Answer it in the session itself — open catalog-chat from the board. nido marks this answered when the dialog closes. A reply here is recorded, but it cannot reach the dialog."
+                                      :options []}]
+                         :answer-does [{:action :reply :label "Answer"
+                                        :does "Records your words on the ledger as the blocker's answer. Nobody is resumed: whoever takes the workstream up next reads it there."}]}
+                        [{:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}]
+                        {:route nowhere :session "catalog-chat"})}
              {:title "an evidence box"
               :note "A phase gate is asserted with what you observed on the running system. The
                      box is a row beside what it does, like every other control."

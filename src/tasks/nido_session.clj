@@ -199,8 +199,8 @@
 (defn- up*
   "Bring `session` up on `ws-id` (nil: the name's holder, else a minted
    one-off) and print where it lives. A session this start first recorded is
-   carried, `first-instruction` ({:brief :model}, either may be nil) what it is
-   first given. Returns {:home
+   carried, `first-instruction` ({:brief :model :activate?}, any may be nil) what it is
+   first given; with :activate? its workstream is activated before it is carried. Returns {:home
    :carried}, or nil when the person declined at the budget question. Exits 1
    — before anything is provisioned — when the session cannot join `ws-id`."
   [project session ws-id opts first-instruction]
@@ -224,6 +224,9 @@
               held-by (scratch/birth! p session nil ws-id)
               _       (lifecycle/up! session (assoc opts :runtime-key held-by))
               held-by (scratch/birth! p session (lifecycle/session-weight session opts) held-by)
+              ;; Before it is carried, so the first turn end of a session started on a brief is
+              ;; already the recipe's to read, never a plain conversation's.
+              _       (when (:activate? first-instruction) (work/activate! p held-by session))
               carried (when first? (:carried (carry p held-by session first-instruction)))
               home    (state/session-home-dir project session)]
           (println)
@@ -496,6 +499,10 @@
    `:model` is the child's claude model; given none, claude's default — it
    need not match the parent's.
 
+   The child's workstream is activated before its agent starts: a session nido
+   starts to work a brief is the recipe's from birth. Only a session a person
+   starts by hand stays plain until they activate it.
+
    The child is a driven background session on the kickoff, and the tab
    attaches to it rather than starting a conversation of its own. It is carried
    as `up` carries a session — occupying its workstream's whole seat when that
@@ -524,7 +531,8 @@
                         (assoc :yes true))
                     {:brief (kickoff-prompt {:parent-agent parent-agent :parent-project pp
                                              :parent-session ps :child child :brief brief})
-                     :model (:model opts)})]
+                     :model (:model opts)
+                     :activate? true})]
       (lifecycle/link-add! ps {:project pp :type :session :url (session-uri project child)
                                :title (str "child · agent " child)})
       (lifecycle/link-add! child {:project project :type :session :url (session-uri pp ps)

@@ -1511,7 +1511,7 @@
           (sess/create! :brian id {:name "human-1" :weight :light :autonomy nil})
           (is (false? (:live (p/status :brian id))))
           (is (true? (:live (p/status :brian id #{"human-1"})))))
-        (testing "a background session is live while listed with a process, named by Claude Code yet or not"
+        (testing "a background session is live while listed working with a process, named by Claude Code yet or not"
           (sess/create! :brian id {:name "bg-1" :weight :light :autonomy {:skill :x :first-message "x" :agent :claude
                                                                          :claude-session-id nil :trigger :t
                                                                          :limits {} :priority 0 :uncapped? false
@@ -1519,8 +1519,61 @@
                                                                          :phase-history [] :error nil}})
           (sess/update-substrate! :brian id "bg-1"
                                   (constantly {:claude nil :dispatching {:token "T" :at "t" :bg-id "b1"}}))
-          (with-redefs [conduct/live-states (constantly {"s-b1" {:sessionId "s-b1" :id "b1" :pid 9}})]
-            (is (true? (:live (p/status :brian id))) "a start in flight, by the :bg-id its note keeps")))))))
+          (with-redefs [conduct/live-states (constantly {"s-b1" {:sessionId "s-b1" :id "b1" :pid 9 :state "working"}})]
+            (is (true? (:live (p/status :brian id))) "a start in flight, by the :bg-id its note keeps"))
+          (with-redefs [conduct/live-states (constantly {"s-b1" {:sessionId "s-b1" :id "b1" :pid 9 :state "blocked"
+                                                                 :status "waiting" :waitingFor "input needed"}})]
+            (is (false? (:live (p/status :brian id))) "a process waiting on a dialog is not working")))))))
+
+(defn- faceted!
+  "A session on `id` driven through a facet, as a spawn leaves it: no :autonomy, a :claude facet."
+  [id n facet]
+  (sess/create! :brian id {:name n :weight :light :autonomy nil})
+  (sess/update-claude! :brian id n (constantly (merge {:session-id (str "s-" n) :bg-id n :origin :nido
+                                                       :driver :nido :pending nil :queued nil :own-work? false
+                                                       :policy {:auto-respawn? false} :driving-since "t"
+                                                       :announced-blocked? false :recovered-boot nil}
+                                                      facet))))
+
+(deftest a-driven-session-is-live-only-mid-turn
+  (with-tmp
+    (fn [_]
+      (let [[id _] (ledger)]
+        (faceted! id "spawned" {})
+        (testing "its services being up does not make a session nido drives live"
+          (with-redefs [conduct/live-states (constantly {})]
+            (is (false? (:live (p/status :brian id #{"spawned"}))))))
+        (doseq [[row live?] [[{:pid 1 :state "working" :status "busy"} true]
+                             [{:pid 1 :state "working" :status "idle"} true]
+                             [{:pid 1 :state "blocked" :status "idle"} false]
+                             [{:pid 1 :state "blocked" :status "waiting" :waitingFor "input needed"} false]
+                             [{:state "done"} false]]]
+          (with-redefs [conduct/live-states (constantly {"s-spawned" (assoc row :sessionId "s-spawned")})]
+            (is (= live? (:live (p/status :brian id))) (pr-str row))))))))
+
+(deftest a-stall-says-why
+  (with-tmp
+    (fn [_]
+      (let [[id _] (ledger)]
+        (with-redefs [conduct/live-states (constantly {})]
+          (testing "with no turn end recorded, it says so"
+            (faceted! id "worker" {})
+            (let [s (p/status :brian id)]
+              (is (true? (:stalled s)))
+              (is (= {:turn-end :none :owes :establish-intent} (:why s)))))
+          (testing "a turn end that ended nido's instruction names the session, when, the move and the words"
+            (sess/update-claude! :brian id "worker"
+                                 #(assoc % :last-stop {:at "2026-11-13T14:43:20Z" :message "Intent recorded." :nido? true}))
+            (let [s (p/status :brian id)]
+              (is (true? (:stalled s)))
+              (is (= {:turn-end :recorded :session "worker" :ended-at "2026-11-13T14:43:20Z" :owes :establish-intent :said "Intent recorded."}
+                     (:why s)))))
+          (testing "on a workstream not activated, a turn that answered a person's own prompt is theirs, not a stall"
+            (sess/update-claude! :brian id "worker" #(assoc-in % [:last-stop :nido?] false))
+            (let [s (p/status :brian id)]
+              (is (= :agent (:owed-by s)) "who owes is read off the mode alone")
+              (is (false? (:stalled s)))
+              (is (nil? (:why s))))))))))
 
 (deftest an-unanswered-blocker-outranks-open-findings
   (is (= :blocked (#'p/place {:ks #{:intent} :findings-open? true :blocker-seq 7})))

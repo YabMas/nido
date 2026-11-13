@@ -5,6 +5,7 @@
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.agent.substrate :refer [listing]]
+            [canvas.coordinator.lane.conduct :refer [live-states]]
             [canvas.coordinator.lane.drive :refer [ensure-workstream! intake-kind lane-pipeline of status]]
             [canvas.coordinator.lane.github-issue-intake :refer [poll-and-reconcile!]]
             [canvas.coordinator.lane.notion-sync :refer [lane-notion-sync]]
@@ -32,8 +33,8 @@
   {:about [lane-pipeline] :evidence "round"})
 
 (Claim live-is-a-held-lock
-  "Live is true only while something that ends with the working process says so: a lock held for the life of that process — the activity claim, or a run's lock taken by a wrapper that starts the agent and exits with it — the substrate's listing showing a session with a :claude facet with a live process, or, for a human session, its ports answering; no stored phase decides it, and the launcher's death does not release a run lock while its agent runs."
-  {:about [status live? read-live listing] :evidence "round"})
+  "Live is true only while something that ends with the working process says so: a lock held for the life of that process (the activity claim, or a run's lock taken by a wrapper that starts the agent and exits with it), the substrate's listing showing a session with a :claude facet, or one with a start in flight, with a live process mid-turn (state 'working'), or, for a human session without a :claude facet, its ports answering. No stored phase decides it, and the launcher's death does not release a run lock while its agent runs."
+  {:about [status live-states] :evidence "round"})
 
 (Claim index-is-rebuildable
   "The index splits at this change. Rows for entries written before it are frozen as part of the ledger, because their :at and :amended-by exist nowhere else; every entry written after it carries those facts in its own file. The index is a cache rebuilt from the directory plus the frozen rows: a record that lost it reads the rebuilt one, and deleting it changes no answer."

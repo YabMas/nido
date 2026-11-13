@@ -8,6 +8,7 @@
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.lane.scratch :as scratch]
+   [nido.coordinator.work :as work]
    [nido.coordinator.record.session-events :as session-events]
    [nido.session.casualties :as casualties]
    [nido.session.fleet :as fleet]
@@ -171,6 +172,7 @@
                                                           (swap! calls conj [:carry s b m])
                                                           {:carried carried})
                   seats/drive!                          (fn [_p _w s b & [m]] (swap! calls conj [:drive s b m]))
+                  work/activate!                        (fn [p w s] (swap! calls conj [:activate p w s]) {})
                   csession/workstream-id-for            (fn [_ _] (when (some #(= :birth (first %)) @calls) "ws-child"))
                   csession/read-session                 (fn [_ _ _] {:claude {:session-id "sid-1"}})
                   lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o) (:command o)]))
@@ -190,6 +192,14 @@
     (is (= [[:birth :nido "kid" "ws-child"] [:up "kid"] [:birth :nido "kid" "ws-child"]]
            (filterv #(#{:birth :up} (first %)) calls))
         ":ws-id reaches the workstream claim exactly as up passes it, and nowhere else")))
+
+(deftest spawn-activates-the-child-before-it-is-carried
+  ;; A session nido starts to work a brief is the recipe's from birth: its first turn end is the
+  ;; conductor's to read, never a plain conversation's.
+  (let [[calls _] (spawn-calls {} ":ws-id" "ws-child")]
+    (is (= [[:activate :nido "ws-child" "kid"] [:carry "kid"]]
+           (mapv #(vec (take (if (= :carry (first %)) 2 4) %))
+                 (filterv #(#{:activate :carry} (first %)) calls))))))
 
 (deftest spawn-refused-by-up-links-and-stages-nothing
   (let [[calls out] (spawn-calls {:joinable (fn [& _] {:reason :closed})} ":ws-id" "ws-child")]
