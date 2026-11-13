@@ -1701,8 +1701,8 @@
                  "Records A as your answer." "The conductor adds" "Web only — no mobile work."
                  "The ticket is built for the surface you choose."]]
         (is (str/includes? pane s)))
-      (is (< (at "Where should students") (at "Status"))
-          "the question leads the pane, above everything the pane says about the workstream"))))
+      (is (< (at "<h2>Status") (at "Where should students") (at "<h2>History"))
+          "the question follows the context the pane orients with, above the log"))))
 
 (def ^:private oriented-gate
   (assoc sample-gate
@@ -1717,11 +1717,20 @@
                                    {:action :reply :label "Reply" :does "Sends your words to the parked session."}])
 ))
 
+(deftest the-card-follows-the-whole-status-section
+  ;; The context overview — status heading, stage list, standing records — is read first,
+  ;; and the question is asked below it, above History.
+  (let [html (views/workstream-pane
+              (assoc a-pane :arc an-arc :gate (assoc oriented-gate :project "nido" :ws-id "ws-1")) {})
+        at   #(or (str/index-of html %) (throw (ex-info (str "missing " %) {})))]
+    (is (< (at "<h2>Status") (at "class=\"arc\"") (at "class=\"holds\"")
+           (at "class=\"qcard\"") (at "<h2>History")))))
+
 (deftest the-card-asks-then-offers
   (let [pane (gate-in-pane oriented-gate)
         at   #(or (str/index-of pane %) (throw (ex-info (str "missing " %) {})))]
-    (testing "the question comes first; nothing restates what the pane already says"
-      (is (< (at "Where should students") (at "Status")))
+    (testing "the context comes first, then the question; nothing restates what the pane already says"
+      (is (< (at "<h2>Status") (at "Where should students")))
       (is (not (str/includes? pane "What this workstream is for")))
       (is (not (str/includes? pane "What this decision holds up")))
       (is (not (str/includes? pane "class=\"orient")))

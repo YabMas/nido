@@ -108,38 +108,40 @@ options an interrupt allows are the actions it renders. GOV.UK question pages:
 the answers sit directly under the question. Microsoft human-AI guidelines G16
 (convey the consequences of user actions) and G17 (provide global controls).
 
-## 5. Disclosure — ask, then support, then evidence
+## 5. Disclosure — overview, then the ask, then evidence
 
-**Rule.** A pane reads in this order: what the reader must decide, what they
-need to decide it, and then the evidence, folded. The record a question was
-read from is one click away — an entry in the pane's own stage list — never
-above the answers.
-Nothing a decision needs is folded.
+**Rule.** A pane that asks reads in this order: the overview that orients the
+reader, then what they must decide with what they need to decide it, then the
+evidence. The card itself reads question first, then its support, then its
+controls. The records a question was read from stay in the pane's own stage
+list and History, a click away; nothing a decision needs is folded.
 
-**Check.** Evidence above the decision; something the answer depends on hidden
-behind a fold.
+**Check.** Evidence between the question and its answers; something the answer
+depends on hidden behind a fold.
 
 **From.** Nielsen Norman Group, *Progressive disclosure*: show what most
 readers need, defer the rest behind one obvious control. Shneiderman: overview
 first, details on demand.
 
-## 6. Orientation — the question leads, the context sits below it
+## 6. Orientation — the context first, the question below it
 
-**Rule.** A pane that asks for a decision leads with the question: it is the
-first thing under the pane's heading. What re-orients a cold reader — what the
-work is for, where it stands, what it has been through — sits below the
-question, and is the workstream's own pane: its status, its standing records,
-its stage list. A gate is answered on its workstream's pane, never on a second
-page that re-tells that context in a band of its own.
+**Rule.** A pane that asks for a decision first orients a cold reader — what
+the work is for, where it stands, what it has been through — and then asks. That
+context is the workstream's own pane: its status heading, its plan, its stage
+list and its standing records. The question card sits below them and above the
+History. A gate is answered on its workstream's pane, never on a second page that
+re-tells that context in a band of its own.
 
-**Check.** Open a workstream that waits on you: is the question the first thing
-you read, and is everything you need to answer it either on the card or in the
-pane below it, without a second page?
+**Check.** Open a workstream that waits on you: does the pane tell you where the
+work stands before it asks, is the question the next thing you reach, and is
+everything you need to answer it either on the card or above it, without a
+second page?
 
-**From.** The person this dashboard serves, reviewing the shipped gate pane:
-the question first, the context block below; and the Needs-you page dissolved
-into the workstream pane, because a card inside the pane "saves reinventing the
-context question". GOV.UK's one-thing-per-page question pattern.
+**From.** The person this dashboard serves. Reviewing the shipped gate pane,
+they dissolved the Needs-you page into the workstream pane, because a card
+inside the pane "saves reinventing the context question". Reviewing the merged
+pane, they set the order: "Start with the context overview and put the question
+below." Shneiderman: overview first.
 
 ## 7. Placement — never state what the placement already says
 

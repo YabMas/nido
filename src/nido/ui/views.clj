@@ -2585,8 +2585,8 @@
    is a map of session-name → {:state … :url :error-msg} (the view does no IO).
    `machine-facts` is a map of session-name → {:pg-port :nrepl-port :app-port
    :repl-rss :pg-rss :heap-max} (also no IO — a projection the caller injects).
-   A ws carrying `:gate` (it waits on the person) renders its question card under the
-   heading, and the card is then the pane's only control; `:pending?` marks an action
+   A ws carrying `:gate` (it waits on the person) renders its question card after the
+   status section and before History, and the card is then the pane's only control; `:pending?` marks an action
    on it still resolving. `:error-msg` (a gate action that came back failed) renders
    at the top of the card, or above the action bar when there is no gate — the
    buttons stay clickable to retry either way.
@@ -2618,13 +2618,6 @@
             (pane-heading origin label links tag)
             [:p.meta (name stage) " " (status-chip status)]
             (links-row links)
-            ;; What waits on the person leads the pane: the question is the first
-            ;; thing under the heading, and the card owns the gate's error line and
-            ;; every control, so the pane offers neither of its own beside it.
-            (when gate
-              (question-card project ws-id (:ask gate) (:actions gate)
-                             {:route pane-route :pending? (boolean (or (:working? gate) pending?))
-                              :error-msg error-msg :session (:session gate)}))
 
             ;; Two sections, and the split is the pane's whole claim: what is
             ;; TRUE of this workstream, and what HAPPENED to it. They were one
@@ -2642,6 +2635,13 @@
             (when (seq denials)
               [:div.denials [:p.meta "Permission denials while nido drives it:"]
                (into [:ul] (map denial-line) denials)])
+            ;; What waits on the person comes after the context that orients them,
+            ;; and above the log. The card owns the gate's error line and every
+            ;; control, so the pane offers neither of its own beside it.
+            (when gate
+              (question-card project ws-id (:ask gate) (:actions gate)
+                             {:route pane-route :pending? (boolean (or (:working? gate) pending?))
+                              :error-msg error-msg :session (:session gate)}))
             ;; The actions belong HERE and not under the log, because they act on
             ;; the workstream as it stands — pane-action-bar reads :action-report,
             ;; the CURRENT report, never the entry a reader happens to have open.

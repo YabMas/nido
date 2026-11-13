@@ -41,6 +41,6 @@
   "The Ask schema has no :holding key, and no registry entry of report.ask builds one."
   {:about [Ask report-ask] :evidence "test"})
 
-(Claim principles-say-ask-leads
-  "docs/reference/ui-principles.md's orientation rule says a pane that asks leads with the question and sets the context that re-orients a reader below it, and a rule of its own says a pane never states what its placement already says; both name the person's review of the shipped gate pane as their source."
+(Claim principles-say-context-first
+  "docs/reference/ui-principles.md orientation rule says a pane that asks first sets out the context that orients a cold reader — the workstream pane's own status heading, plan, stage list and standing records — and then asks, the question card below that context and above History; its disclosure rule orders overview, then the ask, then evidence; and a rule of its own says a pane never states what its placement already says. The orientation rule names the person's two reviews as its source."
   {:about [ui-views] :evidence "round"})
