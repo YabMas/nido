@@ -89,7 +89,7 @@
   (stubbing [#'sub/socket-path (constantly nil)]
     (is (= {:delivered? false :because :no-inbox} (sub/send! {:pid 1} "hi")))))
 
-(deftest send-writes-one-user-message-line-to-the-inbox
+(deftest send-writes-one-attested-user-message-line-to-the-inbox
   ;; A Unix socket's path is capped near 104 bytes; `bb nido:test` keeps its temp dir short
   ;; enough for one (tasks.nido-test).
   (let [dir  (fs/create-temp-dir)
@@ -105,7 +105,12 @@
     (try
       (stubbing [#'sub/socket-path (constantly path)]
         (is (= {:delivered? true} (sub/send! {:pid 42} "next task [nido-send t1]"))))
-      (is (= {:type "user" :message {:role "user" :content "next task [nido-send t1]"}}
+      ;; Unattested, a session that bypasses prompts holds the message for a person's review
+      ;; instead of delivering it (Claude Code 2.1.325's mode parity).
+      (is (= {:type "user" :message {:role "user"
+                                     :content (str "<cross-session-message from-name=\"nido\" from-mode=\"bypass\">\n"
+                                                   "next task [nido-send t1]\n"
+                                                   "</cross-session-message>")}}
              (json/parse-string (deref got 5000 nil) true)))
       (finally (.close srv) (fs/delete-tree dir)))))
 
