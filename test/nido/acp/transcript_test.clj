@@ -7,7 +7,7 @@
 (defn- run [& events] (reduce t/fold (t/empty-transcript) events))
 
 (deftest a-turn-reads-as-items
-  (let [tr (run {:local :user :text "make it blue" :context "block row"}
+  (let [tr (run {:local :user :text "make it blue" :refs [{:label "row · ordinary" :detail "html"}] :at 1000}
                 (upd {:sessionUpdate "agent_thought_chunk" :content {:type "text" :text "think"}})
                 (upd {:sessionUpdate "agent_message_chunk" :content {:type "text" :text "On "}})
                 (upd {:sessionUpdate "agent_message_chunk" :content {:type "text" :text "it."}})
@@ -24,8 +24,9 @@
     (testing "a tool-call update merges into its call"
       (is (= {:status :completed :tool-kind :edit :diffs [{:path "row.clj" :old "a" :new "b"}]}
              (select-keys (nth (:items tr) 3) [:status :tool-kind :diffs]))))
-    (testing "the person's message keeps what it came with"
-      (is (= "block row" (:context (first (:items tr))))))))
+    (testing "the person's message keeps the labels of what it came with, and the turn when it started"
+      (is (= [{:label "row · ordinary"}] (:refs (first (:items tr)))))
+      (is (= 1000 (:started-at tr))))))
 
 (deftest a-streaming-reply-settles-when-the-turn-ends
   (let [tr (run {:local :user :text "hi"}
@@ -33,7 +34,8 @@
     (is (:streaming? (peek (:items tr))))
     (let [done (t/fold tr {:local :turn-ended})]
       (is (not (:streaming? (peek (:items done)))))
-      (is (false? (:busy? done))))))
+      (is (false? (:busy? done)))
+      (is (not (contains? done :started-at)) "a finished turn has no start time"))))
 
 (deftest a-permission-request-is-an-item-until-answered
   (let [tr (run {:method "session/request_permission" :id 9
@@ -65,11 +67,15 @@
     (is (= :error (:kind (peek (:items tr)))))
     (is (false? (:busy? tr)))))
 
-(deftest a-replayed-prompt-reads-back-as-words-and-context
-  (let [sent (t/prompt-text "make it blue" "block: row")
+(deftest a-replayed-prompt-reads-back-as-words-and-references
+  (let [sent (t/prompt-text "make it blue" [{:label "row · ordinary · div:0" :detail "[2] is not a label here"}
+                                            {:label "ask · open"}])
         tr   (run (upd {:sessionUpdate "user_message_chunk" :messageId "u1"
                         :content {:type "text" :text (subs sent 0 5)}})
                   (upd {:sessionUpdate "user_message_chunk" :messageId "u1"
                         :content {:type "text" :text (subs sent 5)}}))]
-    (is (= ["make it blue" "block: row"] ((juxt :text :context) (first (:items tr)))))
-    (is (= "plain" (t/prompt-text "plain" nil)))))
+    (is (= ["make it blue" [{:label "row · ordinary · div:0"} {:label "ask · open"}]]
+           ((juxt :text :refs) (first (:items tr)))))
+    (is (= "plain" (t/prompt-text "plain" [])))
+    (is (= [] (:refs (first (:items (run (upd {:sessionUpdate "user_message_chunk" :messageId "u1"
+                                                :content {:type "text" :text "plain"}})))))))))

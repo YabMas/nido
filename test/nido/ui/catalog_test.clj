@@ -176,7 +176,7 @@
         "Datastar from the one place a dashboard page loads it from, not a URL of its own")
     (is (str/includes? html ".cat-frame") "its own chrome rules")
     (is (str/includes? html "Components"))
-    (is (str/includes? html "Ask for a change…") "the first group, the chat panel, renders when nothing is selected")))
+    (is (str/includes? html "Message the agent") "the first group, the chat panel, renders when nothing is selected")))
 
 (deftest the-chat-panel-leads-the-catalog
   (is (= "chat" (:id (first (scenes/groups))))))

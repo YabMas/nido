@@ -166,24 +166,32 @@
 (Module ui-components-chat
   "A conversation with an agent, as a panel.
 
-   HIDES how a transcript reads — item order, a tool call collapsed and expanded, the permission
-   prompt's buttons, the composer and the element attached to it. Takes a transcript value plus
-   where its controls post, so the catalog, a workstream pane or a question card can each host
-   one without the panel knowing which."
+   HIDES how a transcript reads — item order, what opens and what folds, the turn's status row
+   and the phase it names, the permission prompt's buttons, the composer and the pick chips on
+   it. Takes a transcript value plus where its controls post, so the catalog, a workstream pane
+   or a question card can each host one without the panel knowing which."
   (Operation signals
-    "The names of a panel's page-state signals — its draft, the attached reference and its label —
+    "The names of a panel's page-state signals — its draft, its picks and whether a turn runs —
      which a server reading a send reads back by the same names."
     {:signature [:=> [:catn [:id :string]] :map]})
   (Operation chat-item "One transcript item, under the DOM id the panel gives it."
     {:signature [:=> [:catn [:item :map] [:routes :map]] :any]})
-  (Operation composer "The composer: the attached element, the text box, and Send or Stop."
-    {:signature [:=> [:catn [:id :string] [:busy? :boolean] [:routes :map]] :any]
-     :delegates [signals]})
+  (Operation turn-status
+    "The status row: while a turn runs, the phase it is in — waiting, thinking, running a named
+     tool, writing, or waiting for an answer — and the seconds since it started; empty otherwise."
+    {:signature [:=> [:catn [:id :string] [:transcript acp/Conversation]] :any]})
+  (Operation picks
+    "The pick chips, numbered as the page marks them, each with a control that removes it."
+    {:signature [:=> [:catn [:id :string] [:picks [:sequential :map]] [:routes :map]] :any]})
+  (Operation composer "The composer: the pick chips, the text box, and Send or Stop."
+    {:signature [:=> [:catn [:id :string] [:routes :map]] :any]
+     :delegates [signals picks]})
   (Operation chat-panel
-    "The whole panel: its transcript, then the composer. `opts` carries the panel's id, where
-     sending, cancelling and answering a permission post, and the stream URL that keeps it live."
+    "The whole panel: its transcript, the status row, then the composer. `opts` carries the
+     panel's id, where sending, cancelling, answering and removing a pick post, and the stream
+     URL that keeps it live."
     {:signature [:=> [:catn [:transcript acp/Conversation] [:opts :map]] :any]
-     :delegates [chat-item composer signals]}))
+     :delegates [chat-item turn-status composer signals]}))
 
 (Module ui-views
   "The dashboard's pages and fragments, and the twenty per-kind cards a ledger record reads as.
@@ -383,31 +391,34 @@
      stylesheet with Datastar live, and the two axes these blocks vary over in the app — which
      surface a block sits on, and how wide its column is. Embedded, it also carries the element
      picker, which names a picked element by block, scene and path and hands it to the page
-     around it."
+     around it, and marks the elements the page around it says are picked."
     {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
      :delegates [stylesheet datastar-script groups]})
   (Operation chat-page
-    "The catalog with a chat sidebar: the scene page in a frame, the chat panel over a transcript
-     beside it, and Select, which puts the frame into select mode. Reads nothing: the conversation
-     and where the frame points are its caller's."
-    {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:panel :map]] :string]
+    "The catalog with its chat: the scene page in a frame and, closed, one launcher; open, the
+     chat panel slid in beside the frame with Select, which puts the frame into select mode, and
+     the picks marked on the scenes. Reads nothing: the conversation, where the frame points and
+     whether it starts open are its caller's."
+    {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:panel :map]
+                            [:open? :boolean]] :string]
      :delegates [stylesheet datastar-script chat-panel signals]}))
 
 (Module ui-catalog-chat
   "The catalog's chat: the page around the scene frame, and the routes its panel posts to.
 
    HIDES which conversation the catalog talks to (one design session, made on the first send),
-   how a picked element is worded for the agent, which frame source the page shows, and that a
+   how a picked element is worded for the agent and labelled for the person, which frame source the page shows, and that a
    finished turn refreshes the preview. The panel's markup is the chat block's; the conversation
    and the preview are the Session band's."
   (Operation page
-    "/_catalog: the scene page alone when it is the frame, else the catalog with its chat."
+    "/_catalog: the scene page alone when it is the frame, else the catalog with its chat —
+     closed unless the query string opens it."
     {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
      :delegates [catalog-page chat-page chat/transcript chat/started? chat/preview-url]})
   (Operation handle!
-    "One request under /_catalog/chat: the stream, a send, a cancel or a permission answer; nil
-     for any other path."
+    "One request under /_catalog/chat: the stream, a send, a cancel, a permission answer, the
+     picks posted for their chips or one removed; nil for any other path."
     {:signature [:=> [:catn [:req :map]] [:maybe :map]]
-     :delegates [chat-item composer signals patch-elements-event patch-signals-event
+     :delegates [chat-item turn-status picks signals patch-elements-event patch-signals-event
                  chat/transcript chat/send! chat/cancel! chat/answer-permission! chat/subscribe!
                  chat/refresh! chat/note-error!]}))

@@ -3,14 +3,17 @@
 
    HIDES ACP's update vocabulary — the `sessionUpdate` kinds, the chunk, tool-call and
    permission-request shapes, and which of them nido ignores (plans, usage, the command list,
-   titles, mode changes). This is the one place an agent's message shape becomes trusted; nothing
-   above it names an ACP field.
+   titles, mode changes) — and the form a message's references take in the prompt the agent
+   receives. This is the one place an agent's message shape becomes trusted; nothing above it
+   names an ACP field.
 
-   A transcript is `{:items [...] :busy? bool}`. Items are only ever appended, and an item's `:id`
+   A transcript is `{:items [...] :busy? bool}`, plus `:started-at` (epoch milliseconds) while a
+   turn the person started here is running. Items are only ever appended, and an item's `:id`
    is its position (\"i0\", \"i1\", …), so an id names the same item for the life of the
    transcript and a renderer can patch one item in place. Each item has a `:kind`:
 
-     :user        `:text`, and `:context` — what the person's words came with, or nil
+     :user        `:text`, and `:refs` — the references the words came with, each `{:label}`,
+                  in the order they were numbered
      :agent       `:text`, growing while `:streaming?`
      :thought     `:text`, growing while `:streaming?`
      :tool        `:title` `:status` (:pending :in-progress :completed :failed) `:tool-kind`
@@ -20,29 +23,45 @@
      :error       `:text`
 
    `fold` takes either an agent message exactly as `nido.acp.client` delivers it, or a local event
-   — `{:local :user :text … :context …}`, `{:local :turn-ended}`, `{:local :error :text …}`,
-   `{:local :answered :item-id … :option-id …}`. A message it does not read returns the
-   transcript unchanged."
+   — `{:local :user :text … :refs [{:label :detail}] :at ms}`, `{:local :turn-ended}`,
+   `{:local :error :text …}`, `{:local :answered :item-id … :option-id …}`. A message it does not
+   read returns the transcript unchanged."
   (:require [clojure.string :as str]))
 
 (def ^:private context-open "\n\n<nido-context>\n")
 (def ^:private context-close "\n</nido-context>")
 
-(defn ^{:malli/schema [:=> [:cat :string [:maybe :string]] :string]}
+(defn ^{:malli/schema [:=> [:cat :string [:sequential [:map [:label :string] [:detail {:optional true} :string]]]]
+                       :string]}
   prompt-text
-  "The prompt the agent is sent for the person's `text` and the `context` it came with. The
-   context follows the words in a marked block, so a replayed history reads back as the same
-   words and the same context."
-  [text context]
-  (if (seq context) (str text context-open context context-close) text))
+  "The prompt the agent is sent for the person's `text` and the references it came with, each
+   `{:label :detail}`. The references follow the words in a marked block, one numbered from 1 per
+   reference — its label on the `[n]` line, its detail on the lines after — so a replayed history
+   reads back as the same words and the same labels, in the same order."
+  [text refs]
+  (if (seq refs)
+    (str text context-open
+         (str/join "\n\n" (map-indexed (fn [i {:keys [label detail]}]
+                                          (str "[" (inc i) "] " label (when (seq detail) (str "\n" detail))))
+                                        refs))
+         context-close)
+    text))
 
 (defn- split-prompt
-  "`prompt-text` read back: the words, and the context or nil."
+  "`prompt-text` read back: the words, and the references' labels in order."
   [s]
   (let [i (.lastIndexOf ^String s ^String context-open)]
     (if (and (>= i 0) (.endsWith ^String s ^String context-close))
-      [(subs s 0 i) (subs s (+ i (count context-open)) (- (count s) (count context-close)))]
-      [s nil])))
+      [(subs s 0 i)
+       ;; A label is the first line of a paragraph and carries the number that comes next, so a
+       ;; detail line that happens to start with a bracketed number stays detail.
+       (reduce (fn [refs para]
+                 (let [[_ n label] (re-matches #"\[(\d+)\] (.*)" (or (first (str/split-lines para)) ""))]
+                   (if (and n (= (parse-long n) (inc (count refs)))) (conj refs {:label label}) refs)))
+               []
+               (str/split (subs s (+ i (count context-open)) (- (count s) (count context-close)))
+                          #"\n\n"))]
+      [s []])))
 
 (defn ^{:malli/schema [:=> [:cat] :Conversation]}
   empty-transcript
@@ -106,8 +125,8 @@
                                   same?     (and (= :user (:kind last-item)) (:msg-id last-item)
                                                  (= (:messageId u) (:msg-id last-item)))
                                   raw       (str (when same? (:raw last-item)) s)
-                                  [words context] (split-prompt raw)
-                                  item      {:kind :user :text words :context context :raw raw
+                                  [words refs] (split-prompt raw)
+                                  item      {:kind :user :text words :refs refs :raw raw
                                              :msg-id (:messageId u)}]
                               (if same?
                                 (update-in t [:items (dec (count (:items t)))] merge item)
@@ -136,12 +155,15 @@
 (defn- fold-local [t {:keys [local] :as e}]
   (case local
     :user       (-> (settle-streams t)
-                    (append {:kind :user :text (:text e) :context (:context e)})
-                    (assoc :busy? true))
-    :turn-ended (-> (settle-streams t) (assoc :busy? false))
+                    (append {:kind :user :text (:text e)
+                             :refs (mapv #(select-keys % [:label]) (:refs e))})
+                    (assoc :busy? true)
+                    (cond-> (:at e) (assoc :started-at (:at e))))
+    :turn-ended (-> (settle-streams t) (assoc :busy? false) (dissoc :started-at))
     :error      (-> (settle-streams t)
                     (append {:kind :error :text (:text e)})
-                    (assoc :busy? false))
+                    (assoc :busy? false)
+                    (dissoc :started-at))
     :answered   (if-let [i (index-where t #(= (:item-id e) (:id %)))]
                   (assoc-in t [:items i :answer] (:option-id e))
                   t)

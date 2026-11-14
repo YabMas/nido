@@ -558,12 +558,35 @@
                     border:1px solid var(--border); border-radius:4px; padding:6px 8px; font:inherit; }
         .chat-compose textarea:focus { outline:none; border-color:var(--accent-border); }
         .chat-actions { display:flex; justify-content:flex-end; gap:8px; }
-        .chat-ref { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent-strong);
-                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:4px; }
-        .chat-ref.attached { display:flex; gap:6px; align-items:center; border:1px solid var(--accent-border);
-                    border-radius:3px; padding:2px 6px; margin:0; }
-        .chat-ref.attached span { overflow:hidden; text-overflow:ellipsis; flex:1; }
-        .chat-ref-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-xs); }
+        /* The turn's status row: a moving mark, the phase in words, the seconds so far. Each phase
+           has its own mark colour so a glance tells thinking from running from writing. */
+        .chat-status { display:flex; gap:8px; align-items:center; min-height:20px; font-size:var(--fs-xs);
+                       color:var(--text-muted); }
+        .chat-status:empty { display:none; }
+        .chat-status-l { color:var(--text); }
+        .chat-elapsed { color:var(--text-faint); font-variant-numeric:tabular-nums; }
+        .chat-spin { width:8px; height:8px; border-radius:50%; background:var(--running);
+                     animation:pulse 1.2s ease-in-out infinite; flex:none; }
+        .chat-spin-waiting { background:var(--waiting); }
+        .chat-spin-thinking { background:var(--accent); }
+        .chat-spin-running { background:var(--running); }
+        .chat-spin-writing { background:var(--ok); }
+        .chat-spin-asking { background:var(--needs); animation:none; }
+        @media (prefers-reduced-motion: reduce) { .chat-spin { animation:none; } }
+        .chat-thought[open] summary { margin-bottom:2px; }
+        /* Picks: numbered chips, the number the page marks the same element with. */
+        .chat-picks { display:flex; flex-wrap:wrap; gap:4px; }
+        .chat-picks:empty { display:none; }
+        .chat-picks.sent { list-style:none; margin:0 0 6px; padding:0; }
+        .chat-pick { display:inline-flex; gap:5px; align-items:center; max-width:100%; font-family:var(--font-mono);
+                     font-size:var(--fs-xs); color:var(--accent-strong); border:1px solid var(--accent-border);
+                     border-radius:3px; padding:1px 4px 1px 2px; background:var(--surface-sunken); }
+        .chat-pick-n { min-width:16px; text-align:center; border-radius:2px; background:var(--accent-bg);
+                       color:var(--accent-strong); font-variant-numeric:tabular-nums; }
+        .chat-pick-l { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chat-pick-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-xs);
+                       padding:0 2px; }
+        .chat-pick-x:hover { color:var(--text-strong); }
 "))
 ;; ---------------------------------------------------------------------------
 ;; What a chrome asks for

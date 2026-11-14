@@ -21,12 +21,12 @@
   (Operation started? "Whether the conversation has been started, here or by an earlier process."
     {:signature [:=> [:catn [:chat :map]] :boolean]})
   (Operation send!
-    "Send the person's words, with the context they came with, starting or resuming the agent
+    "Send the person's words, with the references they came with, starting or resuming the agent
      first when needed. Answers true when accepted, or nil, changing nothing, when refused
      because a turn is running. Every later failure — the agent not starting, a request
      refused, the process exiting — ends the turn as an error item in the transcript, never as
      a throw to the caller."
-    {:signature [:=> [:catn [:chat :map] [:text :string] [:context [:maybe :string]]] :any]
+    {:signature [:=> [:catn [:chat :map] [:text :string] [:refs [:sequential :map]]] :any]
      :delegates [acp/connect! acp/new-session! acp/load-session! acp/set-mode! acp/prompt!
                  acp/fold acp/prompt-text]})
   (Operation cancel! "Cancel the running turn."

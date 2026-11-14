@@ -52,7 +52,9 @@ deliberate act in this session's terminal, never a consequence of a chat message
    :send-url   "/_catalog/chat/send"
    :cancel-url "/_catalog/chat/cancel"
    :stream-url "/_catalog/chat/stream"
-   :answer-url (fn [item option] (str "/_catalog/chat/permission/" item "/" option))})
+   :answer-url (fn [item option] (str "/_catalog/chat/permission/" item "/" option))
+   :unpick-url (fn [i] (str "/_catalog/chat/unpick/" i))
+   :picks-url  "/_catalog/chat/picks"})
 
 (defn- html [hiccup] (str (h/html hiccup)))
 
@@ -88,22 +90,31 @@ deliberate act in this session's terminal, never a consequence of a chat message
   {:project project :session design-session :name "catalog"
    :instructions instructions :on-turn-end refresh-frame!})
 
-(defn- context-text
-  "The picked element as the agent reads it. The first line is the label the panel shows above
-   the person's words."
-  [{:keys [block scene path text html]}]
-  (str block " · " scene " · " path "\n"
-       "Selected in nido's component catalog.\n"
-       "block: " block " (a function in nido.ui.components.*)\n"
-       "scene: " scene " (in nido.ui.catalog.scenes)\n"
-       "element path from the scene's frame: " path "\n"
-       (when (seq text) (str "its text: " text "\n"))
-       "it rendered as: " html))
+(defn- pick-ref
+  "A pick as the agent reads it: its label, which the person reads on its chip — block · scene ·
+   the element as tag.class — and the detail that lets the agent find the element in the code,
+   where the full path is."
+  [{:strs [block scene path text html]}]
+  {:label  (str block " · " scene " · "
+                (-> (str path) (str/split #" > ") last (str/replace #":\d+$" "")))
+   :detail (str "Selected in nido's component catalog.\n"
+                "block: " block " (a function in nido.ui.components.*)\n"
+                "scene: " scene " (in nido.ui.catalog.scenes)\n"
+                "element path from the scene's frame: " path "\n"
+                (when (seq text) (str "its text: " text "\n"))
+                "it rendered as: " html)})
+
+(defn- status-event [t]
+  (datastar/patch-elements-event (html (panel/turn-status panel-id t))))
+
+(defn- busy-event [t]
+  (datastar/patch-signals-event (json/generate-string {(:busy (panel/signals panel-id)) (boolean (:busy? t))})))
 
 (defn- changed-events
   "The patches that take a page from transcript `old` to `new`: an item that is new is appended to
-   the log, one that changed is morphed in place by its id, and the composer is re-rendered when a
-   turn starts or ends. Items are only ever appended, so position is identity."
+   the log, one that changed is morphed in place by its id, the status row is re-rendered when
+   what it says changes, and the busy signal is set when a turn starts or ends. Items are only
+   ever appended, so position is identity."
   [old new]
   (let [old-items (:items old)]
     (concat
@@ -114,11 +125,14 @@ deliberate act in this session's terminal, never a consequence of a chat message
          (if before
            (datastar/patch-elements-event markup)
            (datastar/patch-elements-event markup {:selector (str "#" panel-id "-log") :mode "append"}))))
+     (when (not= (panel/turn-status panel-id old) (panel/turn-status panel-id new))
+       [(status-event new)])
      (when (not= (:busy? old) (:busy? new))
-       [(datastar/patch-elements-event (html (panel/composer panel-id (:busy? new) routes)))]))))
+       [(busy-event new)]))))
 
 (defn- stream
-  "A panel's stream: the whole log once, then each change as it happens, until the browser goes."
+  "A panel's stream: the whole log, the status row and the busy signal once, then each change as
+   it happens, until the browser goes."
   [req]
   (http/as-channel
    req
@@ -129,8 +143,8 @@ deliberate act in this session's terminal, never a consequence of a chat message
                   (http/send! ch (str (datastar/patch-elements-event
                                        (html (into [:div.chat-log {:id (str panel-id "-log")}]
                                                    (map #(panel/chat-item % routes) (:items t)))))
-                                      (datastar/patch-elements-event
-                                       (html (panel/composer panel-id (:busy? t) routes))))
+                                      (status-event t)
+                                      (busy-event t))
                               false)
                   (swap! streams assoc ch {:sent t})
                   (let [unsub (chat/subscribe!
@@ -148,34 +162,56 @@ deliberate act in this session's terminal, never a consequence of a chat message
 (defn- body-json [req]
   (try (json/parse-string (slurp (:body req))) (catch Exception _ {})))
 
+(defn- posted-picks
+  "The picks signal a request posted, as a vector of string-keyed maps; empty when absent or not
+   an array of objects."
+  [body]
+  (let [v (try (some-> (get body (:picks (panel/signals panel-id))) not-empty json/parse-string)
+               (catch Exception _ nil))]
+    (if (and (sequential? v) (every? map? v)) (vec v) [])))
+
+(defn- sse [& events]
+  {:status 200
+   :headers {"Content-Type" "text/event-stream" "Cache-Control" "no-cache"}
+   :body (apply str events)})
+
+(defn- picks-event [ps]
+  (datastar/patch-elements-event
+   (html (panel/picks panel-id (mapv (fn [p] {:label (:label (pick-ref p))}) ps) routes))))
+
 (defn- send-message [req]
-  (let [{:keys [text ref]} (panel/signals panel-id)
+  (let [{:keys [text picks]} (panel/signals panel-id)
         body  (body-json req)
         words (str/trim (str (get body text)))
-        picked (try (some-> (get body ref) not-empty json/parse-string) (catch Exception _ nil))]
-    (when (seq words)
-      (chat/send! design-chat words
-                  (when picked (context-text {:block (get picked "block") :scene (get picked "scene")
-                                              :path (get picked "path") :text (get picked "text")
-                                              :html (get picked "html")}))))
-    {:status 200
-     :headers {"Content-Type" "text/event-stream" "Cache-Control" "no-cache"}
-     :body (datastar/patch-signals-event
-            (json/generate-string (zipmap (vals (panel/signals panel-id)) (repeat ""))))}))
+        ps    (posted-picks body)]
+    ;; A refused message (a turn is running) keeps the draft and its picks, so nothing is lost.
+    (if (and (seq words) (chat/send! design-chat words (mapv pick-ref ps)))
+      (sse (datastar/patch-signals-event (json/generate-string {text "" picks "[]"}))
+           (picks-event []))
+      (sse))))
+
+(defn- unpick [req i]
+  (let [ps   (posted-picks (body-json req))
+        kept (vec (keep-indexed (fn [j p] (when (not= j i) p)) ps))]
+    (sse (datastar/patch-signals-event
+          (json/generate-string {(:picks (panel/signals panel-id)) (json/generate-string kept)}))
+         (picks-event kept))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :string]] :string]}
   page
   "/_catalog: the scene page alone when it is the frame (`embed=1`), else the catalog with its
-   chat."
+   chat — closed, unless the query string says `chat=1`."
   [query-string]
-  (if (str/includes? (str query-string) "embed=1")
-    (catalog/catalog-page query-string)
-    (catalog/chat-page (chat/transcript design-chat) (frame-src design-chat) routes)))
+  (let [params (set (str/split (str query-string) #"&"))]
+    (if (params "embed=1")
+      (catalog/catalog-page query-string)
+      (catalog/chat-page (chat/transcript design-chat) (frame-src design-chat) routes
+                         (boolean (params "chat=1"))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   handle!
-  "One request under /_catalog/chat — the stream, a send, a cancel or a permission answer — or nil
-   for any other path."
+  "One request under /_catalog/chat — the stream, a send, a cancel, a permission answer, the chips
+   for the posted picks, or removing one pick — or nil for any other path."
   [{:keys [uri request-method] :as req}]
   (let [segs (vec (remove str/blank? (str/split (str uri) #"/")))]
     (when (= ["_catalog" "chat"] (take 2 segs))
@@ -186,4 +222,8 @@ deliberate act in this session's terminal, never a consequence of a chat message
         [:post "permission"] (do (when (= 5 (count segs))
                                    (chat/answer-permission! design-chat (get segs 3) (get segs 4)))
                                  {:status 204})
+        [:post "picks"]      (sse (picks-event (posted-picks (body-json req))))
+        [:post "unpick"]     (if-let [i (some-> (get segs 3) parse-long)]
+                               (unpick req i)
+                               {:status 404 :body ""})
         {:status 404 :body ""}))))

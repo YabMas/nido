@@ -58,7 +58,7 @@
         turn-ends (atom 0)]
     (with-redefs-fn redefs
       (fn []
-        (chat/send! (assoc c :on-turn-end (fn [_] (swap! turn-ends inc))) "hi" "block: row")
+        (chat/send! (assoc c :on-turn-end (fn [_] (swap! turn-ends inc))) "hi" [{:label "row" :detail "block: row"}])
         (await-idle c)
         (Thread/sleep 50)
         (is (= [[:user "hi"] [:agent "done"]] (map (juxt :kind :text) (:items (chat/transcript c)))))
@@ -68,7 +68,7 @@
           (let [meta (some #(when (= :new (first %)) (second %)) @calls)]
             (is (some #{"Bash(jj git push:*)"} (get-in meta [:claudeCode :options :disallowedTools])))
             (is (= {:append "be brief"} (:systemPrompt meta)))))
-        (is (some #(= [:prompt "hi\n\n<nido-context>\nblock: row\n</nido-context>"] %) @calls)
+        (is (some #(= [:prompt "hi\n\n<nido-context>\n[1] row\nblock: row\n</nido-context>"] %) @calls)
             "the context goes with the words")
         (is (chat/started? c))
         (is (= "{:acp-session-id \"acp-1\"}"
@@ -79,9 +79,9 @@
   (let [{:keys [redefs]} (fake-acp "x")]
     (with-redefs-fn (assoc redefs #'acp/prompt! (fn [& _] (future (Thread/sleep 300) {:stopReason "end_turn"})))
       (fn []
-        (is (true? (chat/send! c "one" nil)))
+        (is (true? (chat/send! c "one" [])))
         (Thread/sleep 50)
-        (is (nil? (chat/send! c "two" nil)))
+        (is (nil? (chat/send! c "two" [])))
         (is (= ["one"] (map :text (filter #(= :user (:kind %)) (:items (chat/transcript c))))))))))
 
 (deftest a-conversation-from-an-earlier-process-is-loaded-not-restarted
@@ -92,7 +92,7 @@
     (with-redefs-fn redefs
       (fn []
         (is (chat/started? c))
-        (chat/send! c "and now" nil)
+        (chat/send! c "and now" [])
         (await-idle c)
         (Thread/sleep 50)
         (is (some #(= [:load "acp-old"] %) @calls))
@@ -105,7 +105,7 @@
   (let [{:keys [calls redefs]} (fake-acp "x")]
     (with-redefs-fn redefs
       (fn []
-        (chat/send! c "go" nil)
+        (chat/send! c "go" [])
         (await-idle c)
         ;; The agent raises a request through the handler the chat gave it.
         (#'chat/on-message (#'chat/chat-key c)
@@ -124,13 +124,13 @@
     (with-redefs-fn redefs
       (fn []
         (let [unsub (chat/subscribe! c (fn [_] (swap! heard inc)))]
-          (chat/send! c "go" nil)
+          (chat/send! c "go" [])
           (await-idle c)
           (Thread/sleep 50)
           (is (pos? @heard))
           (unsub)
           (let [n @heard]
-            (chat/send! c "more" nil)
+            (chat/send! c "more" [])
             (await-idle c)
             (Thread/sleep 50)
             (is (= n @heard))))))))
@@ -139,7 +139,7 @@
   (let [{:keys [redefs]} (fake-acp "x")]
     (with-redefs-fn (assoc redefs #'acp/prompt! (fn [& _] (future (Thread/sleep 200) (throw (ex-info "the agent process exited" {})))))
       (fn []
-        (chat/send! c "go" nil)
+        (chat/send! c "go" [])
         (Thread/sleep 50)
         (#'chat/on-message (#'chat/chat-key c) {:method "_nido/exited"})
         (Thread/sleep 300)

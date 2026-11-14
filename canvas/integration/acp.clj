@@ -11,8 +11,10 @@
 (Kind Item
   "One item of a conversation, tagged by `:kind`. Every item carries its `:id`, its position in
    the conversation (\"i0\", \"i1\", …), which names it for the conversation's life. Text items
-   carry `:streaming?` while they grow."
-  [:or [:map [:id :string] [:kind [:enum :user]] [:text :string] [:context [:maybe :string]]]
+   carry `:streaming?` while they grow. A person's message carries the references it was sent
+   with, by label, in the order the person numbered them."
+  [:or [:map [:id :string] [:kind [:enum :user]] [:text :string]
+             [:refs [:vector [:map [:label :string]]]]]
        [:map [:id :string] [:kind [:enum :agent :thought]] [:text :string]]
        [:map [:id :string] [:kind [:enum :tool]] [:title :string]
              [:status [:enum :pending :in-progress :completed :failed]]
@@ -26,15 +28,18 @@
    ACP notification or request, which the fold alone reads — or a local event, tagged by `:local`.
    An agent message the fold does not read leaves the conversation as it was."
   [:or [:map [:method :string]]
-       [:map [:local [:enum :user]] [:text :string] [:context [:maybe :string]]]
+       [:map [:local [:enum :user]] [:text :string]
+             [:refs [:vector [:map [:label :string] [:detail {:optional true} :string]]]]
+             [:at {:optional true} :int]]
        [:map [:local [:enum :turn-ended]]]
        [:map [:local [:enum :error]] [:text :string]]
        [:map [:local [:enum :answered]] [:item-id :string] [:option-id :string]]])
 
 (Kind Conversation
-  "A conversation as a reader sees it: its items in order, and whether a turn is running.
+  "A conversation as a reader sees it: its items in order, whether a turn is running, and —
+   while one runs and its start was seen here — when it started, in epoch milliseconds.
    Agent-neutral: nothing in it is ACP's shape."
-  [:map [:items [:vector Item]] [:busy? :boolean]])
+  [:map [:items [:vector Item]] [:busy? :boolean] [:started-at {:optional true} :int]])
 
 (Module acp-client
   "One ACP connection: the agent adapter's process and JSON-RPC 2.0 over its stdio.
@@ -72,12 +77,16 @@
    which of them nido ignores. The one place an agent's message shape becomes trusted."
   {:child [Item Event Conversation]}
   (Operation prompt-text
-    "The prompt the agent is sent for the person's words and the context they came with, in the
-     form a replayed history is read back from."
-    {:signature [:=> [:catn [:text :string] [:context [:maybe :string]]] :string]})
+    "The prompt the agent is sent for the person's words and the references they came with —
+     numbered, each a label and its detail — in the form a replayed history is read back from:
+     the words and the labels survive a replay, the details only the agent reads."
+    {:signature [:=> [:catn [:text :string]
+                            [:refs [:sequential [:map [:label :string] [:detail {:optional true} :string]]]]]
+                     :string]})
   (Operation empty-transcript "A conversation with nothing in it."
     {:signature [:=> [:catn] Conversation]})
   (Operation fold
     "One event folded in: an agent message (an ACP notification or request), or a local one —
-     the person's message, a turn ending, an error, a permission answered."
+     the person's message (which starts a turn, at `:at` when given), a turn ending, an error, a
+     permission answered."
     {:signature [:=> [:catn [:transcript Conversation] [:event Event]] Conversation]}))

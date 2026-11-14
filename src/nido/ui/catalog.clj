@@ -85,15 +85,38 @@
         .cat-pair { display:flex; gap:14px; align-items:baseline; }
         .cat-pair .cat-scene-fn { min-width:190px; }
         .cat-picking .cat-frame * { cursor:crosshair; }
-        .cat-pick-hover { outline:2px solid var(--accent); outline-offset:1px; }
-        .catc { grid-column:1 / -1; display:grid; grid-template-columns: 1fr 400px; height:100vh; }
+        .cat-pick-hover { outline:2px dashed var(--accent); outline-offset:1px; }
+        .cat-pick-mark { outline:2px solid var(--accent); outline-offset:1px; position:relative; }
+        .cat-pick-mark::after { content:attr(data-pick-n); position:absolute; top:-9px; left:-9px; z-index:1;
+                                min-width:16px; height:16px; border-radius:8px; padding:0 3px;
+                                background:var(--accent-bg); color:var(--accent-strong);
+                                border:1px solid var(--accent-border); font:var(--fs-xs)/14px var(--font-mono);
+                                text-align:center; pointer-events:none; }
+        /* The page around the frame. Closed, the frame is the whole page and the launcher the one
+           chat control; open, the panel pushes the frame narrower, and below 1000px covers it. */
+        .catc { grid-column:1 / -1; display:grid; grid-template-columns:1fr 0px; height:100vh;
+                transition:grid-template-columns 0.18s ease-out; }
+        .catc.open { grid-template-columns:1fr 420px; }
         .catc-frame { border:0; width:100%; height:100vh; background:var(--bg); }
-        .catc-side { border-left:1px solid var(--border); display:flex; flex-direction:column;
-                     padding:12px 14px; gap:10px; min-height:0; height:100vh; }
-        .catc-bar { display:flex; gap:8px; align-items:baseline; }
+        .catc-side { border-left:1px solid var(--border); display:flex; flex-direction:column; background:var(--bg);
+                     padding:12px 14px; gap:10px; min-height:0; height:100vh; overflow:hidden; min-width:0; }
+        .catc:not(.open) .catc-side { visibility:hidden; padding:0; border:0; }
+        .catc-bar { display:flex; gap:8px; align-items:center; }
         .catc-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
         .catc-pick.on { background:var(--accent-bg); border-color:var(--accent-border); color:var(--accent-strong); }
+        .catc-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-md); }
+        .catc-x:hover { color:var(--text-strong); }
         .catc-side .chat { flex:1; }
+        .catc-launch { position:fixed; top:10px; right:14px; z-index:2; display:flex; gap:6px; align-items:center; }
+        .catc-launch kbd { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--text-faint); }
+        .catc-launch .chat-spin { display:none; }
+        .catc-launch.busy .chat-spin { display:block; }
+        @media (max-width: 999px) {
+          .catc.open { grid-template-columns:1fr 0px; }
+          .catc.open .catc-side { position:fixed; top:0; right:0; bottom:0; width:min(420px, 100vw); z-index:3;
+                                  box-shadow:-8px 0 24px var(--surface-sunken); }
+        }
+        @media (prefers-reduced-motion: reduce) { .catc { transition:none; } }
 ")
 
 (def ^:private params
@@ -187,18 +210,24 @@
 ;; The element picker
 
 (def ^:private picker-js
-  "Select mode, inside the embedded scene page. The page around it turns it on with a
-   `nido-pick` message; hovering then outlines an element of a scene, and a click names it to the
-   page around it in a `nido-picked` message — block, scene, a path, and what it renders as —
-   and turns select mode off. A click in select mode does nothing else, so a scene's own controls
-   are not pressed by picking them.
+  "Select mode and the marks, inside the embedded scene page; it does nothing in a page that is
+   not framed. The page around it drives it by message:
+
+     nido-pick  {on}     select mode on or off. On, hovering outlines an element of a scene and a
+                         click names it in a `nido-picked` message — block, scene, path, and what it
+                         renders as. A click in select mode does nothing else, so a scene's own
+                         controls are not pressed by picking them; Esc ends select mode and says so
+                         (`nido-pick-off`). Select mode stays on across picks.
+     nido-marks {marks}  the picked elements, each {n block scene path}: each is outlined with its
+                         number, and every element not in the list is unmarked.
 
    The path is one step per element from the scene's frame down: its tag, its first class, and
    its position among its element siblings. A scene is a literal value rendered by a function
-   that reads nothing, so the same element gets the same path on every render of the same code.
+   that reads nothing, so the same element gets the same path on every render of the same code —
+   which is what lets a mark find its element again after the frame reloads.
 
-   It also tells the page around it where it is (`nido-location`), so a reload can return to the
-   same block."
+   It also tells the page around it where it is (`nido-location`), and passes ⌘I/Ctrl+I up
+   (`nido-key`), so the chat opens from inside the frame as from outside it."
   "(function(){
   if (window.parent === window) return;
   var on = false, hovered = null;
@@ -213,6 +242,27 @@
     var steps = [];
     for (var n = el; n && n !== frame; n = n.parentElement) steps.unshift(step(n));
     return steps.join(' > ');
+  }
+  function resolve(m){
+    var frames = document.querySelectorAll('.cat-frame'), f = null;
+    for (var k = 0; k < frames.length; k++)
+      if (frames[k].dataset.block === m.block && frames[k].dataset.scene === m.scene) { f = frames[k]; break; }
+    if (!f || !m.path) return null;
+    var node = f, steps = m.path.split(' > ');
+    for (var s = 0; s < steps.length && node; s++) {
+      var at = steps[s].lastIndexOf(':'), tag = steps[s].slice(0, at).split('.')[0];
+      node = node.children[Number(steps[s].slice(at + 1))];
+      if (node && node.tagName.toLowerCase() !== tag) node = null;
+    }
+    return node;
+  }
+  function mark(marks){
+    var old = document.querySelectorAll('.cat-pick-mark');
+    for (var k = 0; k < old.length; k++) { old[k].classList.remove('cat-pick-mark'); old[k].removeAttribute('data-pick-n'); }
+    (marks || []).forEach(function(m){
+      var el = resolve(m);
+      if (el) { el.classList.add('cat-pick-mark'); el.setAttribute('data-pick-n', m.n); }
+    });
   }
   function unhover(){ if (hovered) hovered.classList.remove('cat-pick-hover'); hovered = null; }
   function setOn(v){ on = v; document.body.classList.toggle('cat-picking', v); if (!v) unhover(); }
@@ -231,11 +281,18 @@
     el.classList.remove('cat-pick-hover');
     window.parent.postMessage({type: 'nido-picked', block: f.dataset.block, scene: f.dataset.scene,
       path: path(el, f), text: (el.textContent || '').trim().slice(0, 160),
-      html: el.outerHTML.slice(0, 600)}, '*');
-    setOn(false);
+      html: el.outerHTML.replace(/ (class=\"[^\"]*)cat-pick-(mark|hover)/g, ' $1').slice(0, 600)}, '*');
   }, true);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && on) { setOn(false); window.parent.postMessage({type: 'nido-pick-off'}, '*'); }
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'i' || e.key === 'I')) {
+      e.preventDefault(); window.parent.postMessage({type: 'nido-key', key: 'i'}, '*');
+    }
+  });
   window.addEventListener('message', function(e){
-    if (e.data && e.data.type === 'nido-pick') setOn(!!e.data.on);
+    var d = e.data || {};
+    if (d.type === 'nido-pick') setOn(!!d.on);
+    if (d.type === 'nido-marks') mark(d.marks);
   });
   window.parent.postMessage({type: 'nido-location', href: location.pathname + location.search}, '*');
 })();")
@@ -284,31 +341,62 @@
 ;; The catalog with its chat
 
 (def ^:private host-js
-  "The page around the scene frame. Select toggles the frame's select mode; a picked element
-   arrives as a `nido-picked` message and is attached to the composer by writing the panel's two
-   reference signals through hidden bound inputs — the one way plain script can set Datastar page
-   state. The server reloads the frame by setting the `catcFrame` signal to the origin the frame
-   should load from, with a fragment that makes every reload a change; `nidoReloadFrame` then
-   loads the frame where it last said it was, keeping its block."
+  "The page around the scene frame. It owns the chat's open state, select mode and the marks:
+
+   - Open and closed: the launcher, the panel's ✕ and ⌘I/Ctrl+I (here or in the frame) flip the
+     `catcOpen` signal; `nidoChat.open` follows it into the URL (`chat=1`), and closing ends select
+     mode and clears the frame's marks, so a closed chat leaves nothing on the scenes.
+   - Picks: a `nido-picked` message toggles that element in the panel's picks signal, written
+     through its hidden bound input — the one way plain script sets Datastar page state — and the
+     hidden sync button posts the picks so the server renders their chips. `nidoChat.marks`
+     follows the picks signal into the frame as numbered marks, and again after every frame load.
+   - Reload: the server reloads the frame by setting `catcFrame` to the origin it should load
+     from; `nidoReloadFrame` loads it where it last said it was, keeping its block."
   "(function(){
+  var root = document.querySelector('.catc');
   var frame = document.getElementById('catc-frame');
   var btn = document.getElementById('catc-pick');
-  var at = null, picking = false;
-  function setPicking(v){ picking = v; btn.classList.toggle('on', v);
-    frame.contentWindow.postMessage({type: 'nido-pick', on: v}, '*'); }
+  var input = document.getElementById('catc-picks');
+  var at = null, picking = false, marks = [];
+  function post(m){ frame.contentWindow && frame.contentWindow.postMessage(m, '*'); }
+  function isOpen(){ return root.classList.contains('open'); }
+  function setPicking(v){ picking = v; btn.classList.toggle('on', v); post({type: 'nido-pick', on: v}); }
+  function sendMarks(){ post({type: 'nido-marks', marks: isOpen() ? marks : []}); }
+  function picks(){ try { var v = JSON.parse(input.value || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+  function toggleOpen(){ document.getElementById(isOpen() ? 'catc-close' : 'catc-launch').click(); }
   btn.addEventListener('click', function(){ setPicking(!picking); });
-  function put(id, v){ var el = document.getElementById(id); el.value = v;
-    el.dispatchEvent(new Event('input', {bubbles: true})); }
+  window.addEventListener('keydown', function(e){
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'i' || e.key === 'I')) { e.preventDefault(); toggleOpen(); }
+    if (e.key === 'Escape' && picking) setPicking(false);
+  });
   window.addEventListener('message', function(e){
     var d = e.data || {};
-    if (d.type === 'nido-location') at = d.href;
+    if (d.type === 'nido-location') { at = d.href; sendMarks(); if (picking) post({type: 'nido-pick', on: true}); }
+    if (d.type === 'nido-pick-off') setPicking(false);
+    if (d.type === 'nido-key') toggleOpen();
     if (d.type === 'nido-picked') {
-      setPicking(false);
-      put('catc-ref', JSON.stringify({block: d.block, scene: d.scene, path: d.path,
-                                      text: d.text, html: d.html}));
-      put('catc-ref-label', d.block + ' · ' + d.scene + ' · ' + d.path);
+      var ps = picks(), key = d.block + '|' + d.scene + '|' + d.path;
+      var kept = ps.filter(function(p){ return p.block + '|' + p.scene + '|' + p.path !== key; });
+      if (kept.length === ps.length) kept.push({block: d.block, scene: d.scene, path: d.path, text: d.text, html: d.html});
+      input.value = JSON.stringify(kept);
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      document.getElementById('catc-picks-sync').click();
     }
   });
+  window.nidoChat = {
+    open: function(v){
+      var u = new URL(location.href);
+      if (v) u.searchParams.set('chat', '1'); else u.searchParams.delete('chat');
+      history.replaceState(null, '', u.toString());
+      if (!v && picking) setPicking(false);
+      sendMarks();
+    },
+    marks: function(json){
+      var ps; try { ps = JSON.parse(json || '[]'); } catch (e) { ps = []; }
+      marks = (Array.isArray(ps) ? ps : []).map(function(p, i){ return {n: i + 1, block: p.block, scene: p.scene, path: p.path}; });
+      sendMarks();
+    }
+  };
   window.nidoReloadFrame = function(base){
     base = (base || '').split('#')[0];
     var u = new URL(base + (at || '/_catalog?embed=1'), location.href);
@@ -317,14 +405,16 @@
   };
 })();")
 
-(defn ^{:malli/schema [:=> [:cat :Conversation :string :map] :string]}
+(defn ^{:malli/schema [:=> [:cat :Conversation :string :map :boolean] :string]}
   chat-page
-  "The catalog with a chat sidebar: the scene page in a frame at `frame-src`, and beside it the
-   chat panel over `transcript`, with `panel` its id and routes (see `nido.ui.components.chat`).
-   Select puts the frame into select mode, and the element picked there is attached to the next
-   message. Reads nothing: the conversation and where the frame points are its caller's."
-  [transcript frame-src panel]
-  (let [{:keys [ref ref-label]} (chat/signals (:id panel))]
+  "The catalog with its chat: the scene page in a frame at `frame-src`, and the chat panel over
+   `transcript`, with `panel` its id and routes (see `nido.ui.components.chat`; `:picks-url` is
+   where the picks are posted for their chips). Closed — `open?` false — the frame is the whole
+   page and a launcher is the only chat control; open, the panel slides in beside the frame with
+   Select, which puts the frame into select mode. Reads nothing: the conversation, where the frame
+   points and whether the chat starts open are its caller's."
+  [transcript frame-src panel open?]
+  (let [{:keys [picks busy]} (chat/signals (:id panel))]
     (str
      (h/html
       [:html {:lang "en"}
@@ -337,15 +427,28 @@
         [:style (h/raw (css/stylesheet))]
         [:style (h/raw chrome-css)]]
        [:body
-        [:div.catc {"data-signals" "{catcFrame: ''}"
+        [:div.catc {:class (when open? "open")
+                    "data-signals" (str "{catcFrame: '', catcOpen: " (boolean open?) "}")
+                    "data-class:open" "$catcOpen"
                     "data-effect" "$catcFrame && window.nidoReloadFrame($catcFrame)"}
          [:iframe#catc-frame.catc-frame {:src frame-src :title "Components"}]
-         [:aside.catc-side
+         [:aside.catc-side {:aria-label "Chat with the agent"}
           [:div.catc-bar
            [:h1 "Chat"]
-           [:button#catc-pick.btn.catc-pick {:title "Pick an element of a scene to talk about"}
-            "Select"]]
+           [:button#catc-pick.btn.catc-pick {:type "button"
+                                             :title "Pick elements of a scene to talk about (Esc to stop)"}
+            "Select"]
+           [:button#catc-close.catc-x {:type "button" :title "Close the chat (⌘I)"
+                                       "data-on:click" "$catcOpen = false"} "✕"]]
           (-> (chat/chat-panel transcript panel)
-              (conj [:input#catc-ref {:type "hidden" "data-bind" ref}]
-                    [:input#catc-ref-label {:type "hidden" "data-bind" ref-label}]))]]
+              (conj [:input#catc-picks {:type "hidden" "data-bind" picks}]
+                    [:button#catc-picks-sync {:type "button" :hidden true
+                                              "data-on:click" (str "@post('" (:picks-url panel) "')")}]))]
+         [:button#catc-launch.btn.catc-launch {:type "button" :title "Chat with the agent (⌘I)"
+                                               "data-show" "!$catcOpen"
+                                               "data-on:click" "$catcOpen = true"
+                                               "data-class:busy" (str "$" busy)}
+          [:span.chat-spin {:aria-hidden "true"}] "Chat" [:kbd "⌘I"]]
+         [:span {:hidden true "data-effect" "window.nidoChat && window.nidoChat.open($catcOpen)"}]
+         [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.marks($" picks ")")}]]
         [:script (h/raw host-js)]]]))))

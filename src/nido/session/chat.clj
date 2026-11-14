@@ -149,24 +149,26 @@
   [chat]
   (boolean (or (:conn (state (chat-key chat))) (read-acp-id (chat-key chat)))))
 
-(defn ^{:malli/schema [:=> [:cat :map :string [:maybe :string]] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :string [:sequential :map]] :any]}
   send!
-  "Send the person's `text`, with the `context` it came with (or nil), and return at once. The
-   message, the agent's reply and the turn's end each reach subscribers as they happen. Refused —
-   nil, and nothing changes — while a turn is running."
-  [chat text context]
+  "Send the person's `text`, with the references it came with — each `{:label :detail}`, in the
+   order the person numbered them, possibly none — and return at once. The message, the agent's
+   reply and the turn's end each reach subscribers as they happen. Refused — nil, and nothing
+   changes — while a turn is running."
+  [chat text refs]
   (let [k (chat-key chat)]
     (when-not (:busy? (transcript chat))
       @reaper
       (swap! chats update k assoc :last-used (System/currentTimeMillis))
       ;; A load replays history into a fresh transcript, so the message goes in after it.
-      (let [replays? (and (not (:conn (state k))) (read-acp-id k))]
-        (when-not replays? (fold! k {:local :user :text text :context context}))
+      (let [replays? (and (not (:conn (state k))) (read-acp-id k))
+            message  {:local :user :text text :refs (vec refs) :at (System/currentTimeMillis)}]
+        (when-not replays? (fold! k message))
         (future
           (try
             (let [[conn acp-id] (ensure-agent! chat)]
-              (when replays? (fold! k {:local :user :text text :context context}))
-              @(acp/prompt! conn acp-id (transcript/prompt-text text context))
+              (when replays? (fold! k message))
+              @(acp/prompt! conn acp-id (transcript/prompt-text text refs))
               (fold! k {:local :turn-ended}))
             (catch Throwable e
               (fold! k {:local :error :text (or (ex-message e) (str e))})))
