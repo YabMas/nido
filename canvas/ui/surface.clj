@@ -418,8 +418,8 @@
      the conversation's change bar, and the picks marked on the scenes. Reads nothing: the
      conversation, its change, where the frame points and whether it starts open are its caller's."
     {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:panel :map]
-                            [:open? :boolean] [:change-bar :any]] :string]
-     :delegates [stylesheet datastar-script chat-panel signals]}))
+                            [:open? :boolean] [:change-bar :any]] :any]
+     :delegates [chat-panel signals]}))
 
 (Module ui-catalog-chat
   "The catalog's chat: the page around the scene frame, and the routes its panel posts to.
@@ -430,9 +430,9 @@
    and the preview are the Session band's."
   (Operation page
     "/_catalog: the scene page alone when it is the frame, else the catalog with its chat —
-     closed unless the query string opens it."
-    {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
-     :delegates [catalog-page chat-page change-bar chat/transcript chat/started?]})
+     closed unless the query string opens it — inside the dashboard's page chrome."
+    {:signature [:=> [:catn [:query-string [:maybe :string]] [:chrome [:=> [:catn] :map]]] :string]
+     :delegates [catalog-page chat-page shell change-bar chat/transcript chat/started?]})
   (Operation handle!
     "One request under /_catalog/chat: the stream, a send, a cancel, a permission answer, the
      picks posted for their chips or one removed, a publish or a revert; or the frame's own

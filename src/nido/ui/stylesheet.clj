@@ -367,7 +367,7 @@
                   letter-spacing:0.04em; min-width:82px; }"
    ;; top bar + sidebar + content-area chrome
    " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr;
-            grid-template-rows:auto 1fr; grid-template-areas:'top top' 'side main'; min-height:100vh; }
+            grid-template-rows:auto minmax(0, 1fr); grid-template-areas:'top top' 'side main'; height:100vh; }
      .topbar { grid-area:top; display:flex; align-items:center; gap:16px; padding:12px 22px;
                background:var(--surface-raised); border-bottom:1px solid var(--border); }
      .topbar-brand { line-height:0; }
@@ -400,6 +400,7 @@
      .side-divider { border:none; border-top:1px solid var(--border); margin:8px 0; width:100%; }
      .side-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
      .content { grid-area:main; padding:20px 28px; overflow:auto; }
+     .content.bleed { padding:0; overflow:hidden; display:grid; }
      .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:9px;
                    padding:0 7px; font-size:var(--fs-xs); min-width:18px; text-align:center; }
      .rail-badge.zero { background:var(--neutral-bg); color:var(--text-faint); }

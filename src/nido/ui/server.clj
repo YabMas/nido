@@ -755,7 +755,9 @@
       ;; would make two dashboards differ. Its scene page reads nothing but its query string; the
       ;; chat beside it is nido.ui.catalog.chat's.
       ["_catalog"]
-      (html-response 200 (catalog-chat/page (:query-string req)))
+      (html-response 200 (catalog-chat/page (:query-string req)
+                                            #(let [vs (view-state req)]
+                                               (rail-ctx :development (:scope vs) (needs-screen vs)))))
 
       ;; GET /development — pages for working on the dashboard itself, one tile each
       ["development"]

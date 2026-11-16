@@ -42,9 +42,10 @@
    The scene frame's three backgrounds ARE the three the blocks sit on in the app, which is what
    makes the surface selector a reading of the app rather than a palette of its own.
 
-   The stylesheet makes `body` the dashboard shell's grid — a 180px rail, then the content — and
-   the catalog has no rail, so `.cat` spans the whole of it; in the rail's cell alone its main
-   column was left a word wide."
+   The stylesheet makes `body` the dashboard shell's grid — top bar, sidebar, content. The scene
+   page in the frame has none of that chrome, so `.cat` spans the whole grid; in one cell alone
+   its main column was left a word wide. The page around the frame sits in the chrome's content
+   area, edge to edge, and fills it rather than the window."
   "        .cat { grid-column:1 / -1; display:grid; grid-template-columns: 220px 1fr; min-height:100vh; }
         .cat-side { border-right:1px solid var(--border); padding:16px 0; min-width:0; }
         .cat-side h1 { margin:0 16px 4px; }
@@ -93,14 +94,15 @@
                                 background:var(--accent-bg); color:var(--accent-strong);
                                 border:1px solid var(--accent-border); font:var(--fs-xs)/14px var(--font-mono);
                                 text-align:center; pointer-events:none; }
-        /* The page around the frame. Closed, the frame is the whole page and the launcher the one
-           chat control; open, the panel pushes the frame narrower, and below 1000px covers it. */
-        .catc { grid-column:1 / -1; display:grid; grid-template-columns:1fr 0px; height:100vh;
+        /* The page around the frame, filling the chrome's content area. Closed, the frame is all of
+           it and the launcher the one chat control; open, the panel pushes the frame narrower, and
+           below 1000px covers it. */
+        .catc { position:relative; display:grid; grid-template-columns:1fr 0px; height:100%; min-height:0;
                 transition:grid-template-columns 0.18s ease-out; }
         .catc.open { grid-template-columns:1fr 420px; }
-        .catc-frame { border:0; width:100%; height:100vh; background:var(--bg); }
+        .catc-frame { border:0; width:100%; height:100%; background:var(--bg); }
         .catc-side { border-left:1px solid var(--border); display:flex; flex-direction:column; background:var(--bg);
-                     padding:12px 14px; gap:10px; min-height:0; height:100vh; overflow:hidden; min-width:0; }
+                     padding:12px 14px; gap:10px; min-height:0; height:100%; overflow:hidden; min-width:0; }
         .catc:not(.open) .catc-side { visibility:hidden; padding:0; border:0; }
         .catc-bar { display:flex; gap:8px; align-items:center; }
         .catc-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
@@ -119,7 +121,7 @@
         .catc-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-md); }
         .catc-x:hover { color:var(--text-strong); }
         .catc-side .chat { flex:1; }
-        .catc-launch { position:fixed; top:10px; right:14px; z-index:2; display:flex; gap:6px; align-items:center; }
+        .catc-launch { position:absolute; top:10px; right:14px; z-index:2; display:flex; gap:6px; align-items:center; }
         .catc-launch kbd { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--text-faint); }
         .catc-launch .chat-spin { display:none; }
         .catc-launch.busy .chat-spin { display:block; }
@@ -418,29 +420,21 @@
   };
 })();")
 
-(defn ^{:malli/schema [:=> [:cat :Conversation :string :map :boolean :any] :string]}
+(defn ^{:malli/schema [:=> [:cat :Conversation :string :map :boolean :any] :any]}
   chat-page
   "The catalog with its chat: the scene page in a frame at `frame-src`, and the chat panel over
    `transcript`, with `panel` its id and routes (see `nido.ui.components.chat`; `:picks-url` is
    where the picks are posted for their chips), under `change-bar` — the conversation's unlanded
    change, as `nido.ui.components.chat/change-bar` renders it. Closed — `open?` false — the frame is
    the whole page and a launcher is the only chat control; open, the panel slides in beside the
-   frame with Pick, which puts the frame into select mode. Reads nothing: the conversation, its
-   change, where the frame points and whether the chat starts open are its caller's."
+   frame with Pick, which puts the frame into select mode. Hiccup for the content area of the
+   dashboard's page chrome, which fills that area; the chrome is the caller's. Reads nothing: the
+   conversation, its change, where the frame points and whether the chat starts open are its
+   caller's."
   [transcript frame-src panel open? change-bar]
   (let [{:keys [picks busy]} (chat/signals (:id panel))]
-    (str
-     (h/html
-      [:html {:lang "en"}
-       [:head
-        [:meta {:charset "utf-8"}]
-        [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
-        [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
-        [:title "nido components"]
-        (datastar/datastar-script)
-        [:style (h/raw (css/stylesheet))]
-        [:style (h/raw chrome-css)]]
-       [:body
+    (list
+        [:style (h/raw chrome-css)]
         [:div.catc {:class (when open? "open")
                     "data-signals" (str "{catcFrame: '', catcOpen: " (boolean open?) "}")
                     "data-class:open" "$catcOpen"
@@ -468,4 +462,4 @@
           [:span.chat-spin {:aria-hidden "true"}] "Chat" [:kbd "⌘I"]]
          [:span {:hidden true "data-effect" "window.nidoChat && window.nidoChat.open($catcOpen)"}]
          [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.marks($" picks ")")}]]
-        [:script (h/raw host-js)]]]))))
+        [:script (h/raw host-js)])))

@@ -40,19 +40,23 @@
                   events))))
     (is (empty? (changed-events t3 t3)))))
 
+(defn- chrome [] {:needs-count 0 :daemon {:state :up} :scope "nido" :projects ["nido"]})
+
 (deftest the-frame-is-the-scene-page-alone-and-the-chat-page-wraps-it
   (with-redefs [chat/started? (constantly false)
                 change/pending (constantly nil)]
-    (is (not (str/includes? (catalog-chat/page "embed=1") "id=\"catc-frame\"")))
-    (let [page (catalog-chat/page nil)]
+    (is (not (str/includes? (catalog-chat/page "embed=1" #(throw (ex-info "the frame renders no chrome" {}))) "id=\"catc-frame\"")))
+    (let [page (catalog-chat/page nil chrome)]
       (is (str/includes? page "id=\"catc-frame\""))
-      (is (str/includes? page "/_catalog?embed=1") "with no design session the frame is this dashboard's"))))
+      (is (str/includes? page "/_catalog?embed=1") "with no design session the frame is this dashboard's")
+      (is (str/includes? page "class=\"topbar\"") "the page around the frame sits in the dashboard's chrome")
+      (is (str/includes? page "class=\"content bleed\"") "and fills its content area"))))
 
 (deftest the-chat-starts-closed-and-opens-from-the-url
   (with-redefs [chat/started? (constantly false)
                 change/pending (constantly nil)]
-    (let [closed (catalog-chat/page nil)
-          open   (catalog-chat/page "chat=1")]
+    (let [closed (catalog-chat/page nil chrome)
+          open   (catalog-chat/page "chat=1" chrome)]
       (is (str/includes? closed "catcOpen: false"))
       (is (not (str/includes? closed "class=\"catc open\"")))
       (is (str/includes? closed "id=\"catc-launch\"") "the launcher is the one chat control while closed")

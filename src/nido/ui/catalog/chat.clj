@@ -30,6 +30,7 @@
             [nido.ui.catalog :as catalog]
             [nido.ui.components.chat :as panel]
             [nido.ui.datastar :as datastar]
+            [nido.ui.views :as views]
             [org.httpkit.server :as http]))
 
 (def ^:private project "nido")
@@ -302,17 +303,20 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
          :post (= ["_catalog" "nowhere"] (take 2 segs))
          false)))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :string]] :string]}
+(defn ^{:malli/schema [:=> [:cat [:maybe :string] [:=> [:cat] :map]] :string]}
   page
   "/_catalog: the scene page alone when it is the frame (`embed=1`), else the catalog with its
-   chat — closed, unless the query string says `chat=1`."
-  [query-string]
+   chat — closed, unless the query string says `chat=1` — inside the dashboard's page chrome.
+   `chrome` returns that chrome's context (see `nido.ui.views/shell`); it is called only for the
+   page around the frame, so a frame reload never pays for it."
+  [query-string chrome]
   (let [params (set (str/split (str query-string) #"&"))]
     (if (params "embed=1")
       (catalog/catalog-page query-string)
-      (catalog/chat-page (chat/transcript design-chat) frame-src routes
-                         (boolean (params "chat=1"))
-                         (panel/change-bar panel-id (pending-change) @publishing change-routes)))))
+      (views/shell (assoc (chrome) :title "UI Catalog" :bleed? true)
+                   (catalog/chat-page (chat/transcript design-chat) frame-src routes
+                                      (boolean (params "chat=1"))
+                                      (panel/change-bar panel-id (pending-change) @publishing change-routes))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   handle!
