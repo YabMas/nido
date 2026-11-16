@@ -217,3 +217,35 @@
                 (slurp (str (fs/path (cstate/workstream-dir :brian (:id w)) (:file e))))
                 "2 layers: copy, then behaviour")
               "the whole sentence survives, not the leading 2"))))))
+
+(defn- list-out [rows & [opts]]
+  (with-redefs [nido.coordinator.work/list-workstreams (fn [_] rows)]
+    (str/split-lines (with-out-str (task/list* (merge {:project "nido"} opts))))))
+
+(deftest list-prints-the-work-planes-reading-of-each-row
+  ;; The band and who owes are printed as the listing answered them: nothing is created on disk,
+  ;; so a line that derived either itself would have nothing to derive it from.
+  (let [[line total] (list-out [{:ws-id "ws-a" :stage :in-progress :label "Build it"
+                                 :status {:owed-by :agent} :needs-you false
+                                 :last-activity "2026-11-16T10:00:00Z"}])]
+    (is (re-find #"^ws-a\s+in-progress\s+agent\s+-\s+Build it$" line))
+    (is (= "1 workstream(s), 0 waiting on a person" total))))
+
+(deftest list-puts-what-waits-on-a-person-first
+  (let [lines (list-out [{:ws-id "ws-new" :stage :in-progress :label "n" :needs-you false
+                          :last-activity "2026-11-16T12:00:00Z"}
+                         {:ws-id "ws-you" :stage :awaiting-gate :label "y" :needs-you true
+                          :status {:owed-by :person} :last-activity "2026-11-15T09:00:00Z"}
+                         {:ws-id "ws-old" :stage :in-progress :label "o" :needs-you false
+                          :last-activity "2026-11-14T09:00:00Z"}])]
+    (is (= ["ws-you" "ws-new" "ws-old"] (mapv #(first (str/split % #"\s+")) (butlast lines))))
+    (is (= "3 workstream(s), 1 waiting on a person" (last lines)))))
+
+(deftest list-leaves-out-settled-work-and-uncovered-tickets-unless-asked
+  (let [rows [{:ws-id "ws-live" :stage :in-progress :label "l" :needs-you false}
+              {:ws-id "ws-done" :stage :done :label "d" :needs-you false}
+              {:ws-id nil :bare? true :stage :incoming :label "a ticket" :needs-you false}]]
+    (is (= ["ws-live" "1"] (mapv #(first (str/split % #"\s+")) (list-out rows))))
+    (is (= ["ws-live" "ws-done" "2"]
+           (mapv #(first (str/split % #"\s+")) (list-out rows {:all true})))
+        ":all adds settled work; a ticket no workstream covers has no id and is never listed")))

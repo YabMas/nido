@@ -62,6 +62,11 @@
   (Operation release
     "Stop nido driving a session's background session; the session keeps running."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation start
+    "Start work on a goal from outside any session: bring a new session up as `up` does on a
+     workstream minted for it, activate that workstream, and drive the session on the brief as
+     its first instruction. Names no parent and links nothing."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation spawn
     "Bring a child session up as `up` does and drive it on the brief addressed back to the parent's
      agent: carried as `up` carries a session, occupying its workstream's whole seat when that seat

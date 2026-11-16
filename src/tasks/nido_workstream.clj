@@ -280,6 +280,43 @@
   reserve-cmd   [& args] (run* reserve* args #{:addresses}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   discharge-cmd [& args] (run* discharge* args #{:rev :addresses :worktree :bookmark}))
+(def ^:private settled-bands
+  "The bands of work that is over or is not work, which the list leaves out unless asked."
+  #{:done :dismissed :analysed})
+
+(defn- list-line
+  "One row as a line: id, band, who owes the next move, what is underway, title."
+  [row]
+  (str/join "  "
+            [(:ws-id row)
+             (format "%-13s" (name (:stage row)))
+             (format "%-7s" (if-let [by (get-in row [:status :owed-by])] (name by) "-"))
+             (format "%-28s" (or (wsv/doing-label (:doing row)) "-"))
+             (:label row)]))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  list*
+  "Print where each workstream of :project stands — its id, band, who owes the next move
+   (`person` first: those wait on a person), what is underway and its title — one line each,
+   and the count. Shows work that is not over; `:all true` adds the settled bands. A ticket no
+   workstream covers has no id to act on and is never listed."
+  [{:keys [project all]}]
+  (let [rows (->> (work/list-workstreams (keyword project))
+                  (remove :bare?)
+                  (remove #(and (not all) (settled-bands (:stage %))))
+                  (sort-by (juxt #(if (:needs-you %) 0 1) #(or (:last-activity %) "")))
+                  (partition-by :needs-you)
+                  (mapcat #(sort-by :last-activity (fn [a b] (compare b a)) %)))]
+    (doseq [r rows] (println (list-line r)))
+    (println (str (count rows) " workstream(s), " (count (filter :needs-you rows)) " waiting on a person"))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-cmd [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (when-not (:project opts)
+      (throw (ex-info "Missing :project <name>" {})))
+    (list* opts)))
+
 (defn- here
   "[project ws-id] from explicit opts — :project with :ws-id or :ref — else from the session the
    cwd is in. The agent recording its own progress is standing in its worktree, and naming the

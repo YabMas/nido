@@ -252,6 +252,74 @@
     (is (= "claude-opus-5-5" (model-of :carry (first (spawn-calls {} ":model" "claude-opus-5-5")))))
     (is (= "claude-opus-5-5" (model-of :drive (first (spawn-calls {} ":model" "claude-opus-5-5")))))))
 
+(defn- start-calls
+  "Run start with every effect recorded instead of performed, in a directory that is no session's.
+   `held` is the workstream already holding the name, if any. Returns [calls printed-output]."
+  [{:keys [held carried] :or {carried {:seat 1 :session "goal"}}} & args]
+  (let [calls (atom [])]
+    (with-redefs [lifecycle/session-from-cwd            (fn [] nil)
+                  lifecycle/session-home-coords-from-cwd (fn [& _] nil)
+                  lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
+                  lifecycle/session-weight              (fn [_ _] :heavy)
+                  lifecycle/link-add!                   (fn [s _] (swap! calls conj [:link s]))
+                  lifecycle/spawn-tab!                  (fn [s _] (swap! calls conj [:tab s]))
+                  conductor/carry!                      (fn [_p _w s & [b m]]
+                                                          (swap! calls conj [:carry s b m])
+                                                          {:carried carried})
+                  work/activate!                        (fn [p w s] (swap! calls conj [:activate p w s]) {})
+                  csession/workstream-id-for            (fn [_ _] (or held
+                                                                      (when (some #(= :birth (first %)) @calls) "ws-new")))
+                  state/session-home-dir                (fn [_ _] "/tmp/home")
+                  scratch/joinable                      (fn [& _] nil)
+                  scratch/birth!                        (fn [p s _w ws] (swap! calls conj [:birth p s ws]) (or ws "ws-new"))
+                  task/exit!                            (fn [c] (throw (ex-info (str "exit " c) {:exit c})))]
+      (let [out (with-out-str
+                  (try (apply task/start (concat [":project" "nido" "goal"] args))
+                       (catch clojure.lang.ExceptionInfo e (println (ex-message e)))))]
+        [@calls out]))))
+
+(deftest start-brings-a-session-up-on-a-minted-activated-workstream
+  (let [[calls out] (start-calls {} ":brief" "Make the widget; done when it renders.")]
+    (is (= [[:birth :nido "goal" nil] [:up "goal"] [:birth :nido "goal" "ws-new"]
+            [:activate :nido "ws-new" "goal"]
+            [:carry "goal"]]
+           (mapv #(if (= :carry (first %)) (vec (take 2 %)) %) calls))
+        "up's path with no workstream named, activated before it is carried")
+    (is (str/includes? out "Started workstream ws-new"))))
+
+(deftest start-needs-no-session-to-run-in
+  (let [[calls out] (start-calls {} ":brief" "Goal.")]
+    (is (some #(= [:up "goal"] %) calls))
+    (is (not-any? #(#{:link :tab} (first %)) calls) "it has no parent to link and opens no tab")
+    (is (not (str/includes? out "must run inside")))))
+
+(deftest start-reads-its-brief-from-a-file
+  (let [f (str (babashka.fs/create-temp-file))]
+    (spit f "From a file.")
+    (is (str/ends-with?
+         (nth (first (filter #(= :carry (first %)) (first (start-calls {} ":brief-file" f)))) 2)
+         "\n\nFrom a file."))))
+
+(deftest start-tells-the-session-to-record-the-goal-before-working-it
+  (let [b (nth (first (filter #(= :carry (first %)) (first (start-calls {} ":brief" "Ship the widget.")))) 2)]
+    (is (str/includes? b ":intent"))
+    (is (str/ends-with? b "\n\nShip the widget.") "the brief verbatim, last")))
+
+(deftest start-refuses-a-name-a-workstream-already-holds
+  (let [[calls out] (start-calls {:held "ws-old"} ":brief" "Goal.")]
+    (is (= [] calls) "refused before anything is provisioned")
+    (is (str/includes? out "ws-old"))))
+
+(deftest start-without-a-brief-starts-nothing
+  (let [[calls out] (start-calls {})]
+    (is (= [] calls))
+    (is (str/includes? out "Missing :brief-file"))))
+
+(deftest start-says-when-the-session-was-not-driven
+  (let [[_ out] (start-calls {:carried nil} ":brief" "Goal.")]
+    (is (str/includes? out "was not driven on the brief"))
+    (is (str/includes? out "exit 1"))))
+
 (defn- revive-world
   "Two casualties in temp worktrees — `quiz`, whose conversation is already running, and
    `conflicted` — with every effect revive could have recorded in `calls`."

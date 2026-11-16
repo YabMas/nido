@@ -719,6 +719,16 @@
    :doc "One-shot: discharge every approval whose decision note already records the outcome, from before :improvement-landed existed. Idempotent. :project <p>"
    :task (apply nido-workstream/backfill-landings-cmd *command-line-args*)}
 
+  nido:workstream:list
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "List where a project's workstreams stand, those waiting on a person first: id, band, who owes the next move, what is underway, title. :project <p> [:all true — include settled work]"
+   :task (apply nido-workstream/list-cmd *command-line-args*)}
+
+  nido:workstream:start
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "Start work on a goal from anywhere: a new session on a new, activated workstream, driven on the brief as its first instruction. :project <p> <session> (:brief-file <path> | :brief \"…\") [:model <id>] [up opts]. Prints the workstream's id."
+   :task (apply nido-session/start *command-line-args*)}
+
   nido:workstream:show
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Print a workstream's active ledger (own entries else ticket) + latest entry."

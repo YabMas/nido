@@ -9,6 +9,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.workstream :as workstream]
+            [canvas.coordinator.work :as work]
             [fukan.common.typing.malli]))
 
 (Module nido-workstream
@@ -42,6 +43,15 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation show-cmd
     "The `show-cmd` entry point."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation list*
+    "Print the lines and the count for the rows the work plane's listing answers, those waiting
+     on a person first; settled work only when asked, a ticket no workstream covers never."
+    {:signature [:=> [:catn [:opts :map]] :any]
+     :delegates [work/list-workstreams]})
+  (Operation list-cmd
+    "Print where every workstream of a project that is not settled stands, one line each: its id,
+     its band, who owes the next move, what is underway and its title, as the board reads them."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation landed*
     "Record that an approved proposal is now in the tree."

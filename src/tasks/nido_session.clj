@@ -569,6 +569,55 @@
           (println (str "  Not in Warp: open a terminal and run  " by-hand)))
         home))))
 
+(defn- goal-instruction
+  "The first instruction of a session started on a goal: the brief verbatim, after the one thing
+   the brief cannot say for itself — that the goal is recorded on the workstream before work
+   begins, so the workstream states what it is for to everyone who reads it later."
+  [brief]
+  (str "This workstream was started for the goal below, and nothing is recorded on it yet. "
+       "First record that goal as the workstream's :intent, with a falsifiable :done-when "
+       "(the /design skill, §7, has the form); if the goal cannot carry one, halt on a :blocker "
+       "saying what is missing instead of inventing it. Then work the goal.\n\n"
+       brief))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  start
+  "Start work on a goal: bring the new session `<session>` up on a workstream minted for it,
+   activate that workstream, and drive the session on the brief as its first instruction. Run
+   from anywhere — it names no parent, links nothing and opens no tab.
+
+     bb nido:workstream:start :project <p> <session> (:brief-file <path> | :brief \"…\") [:model <id>]
+
+   The session's agent is first told to record the brief's goal as the workstream's :intent,
+   then given the brief verbatim, so the brief states the goal and what done looks like. Prints the workstream's id. Exits 1, before anything is provisioned, when a
+   workstream already holds the name: a start that joined existing work would hand its brief to
+   nobody. Exits 1 with the session up when it could not be driven on the brief."
+  [& args]
+  (let [[pos opts] (task-args/split-args args #{:brief-file :brief :model})
+        project    (require-project opts)
+        session    (require-session-name pos)
+        p          (keyword project)
+        brief      (cond (:brief-file opts) (slurp (:brief-file opts))
+                         (:brief opts)      (str (:brief opts))
+                         :else (throw (ex-info "Missing :brief-file <path> or :brief <text>" {})))]
+    (when (str/blank? brief)
+      (throw (ex-info "The brief is empty" {})))
+    (when-let [holder (csession/workstream-id-for p session)]
+      (println (str "Refused — workstream " holder " already holds a session named " session "."))
+      (exit! 1))
+    ;; :yes — one command whoever issues it, as spawn is.
+    (when-let [{:keys [carried]}
+               (up* project session nil
+                    (-> (dissoc opts :brief-file :brief :model) (assoc :yes true))
+                    {:brief (goal-instruction brief) :model (:model opts) :activate? true})]
+      (let [ws-id (csession/workstream-id-for p session)]
+        (println)
+        (println (str "Started workstream " ws-id " — session " project "/" session "."))
+        (when-not carried
+          (println "  Its session is up but was not driven on the brief.")
+          (exit! 1))
+        ws-id))))
+
 (defn- on-its-workstream
   "`opts` naming, as the runtime key, the workstream holding `session` — so a verb that starts its
    services brings it up on that workstream's runtime even while it is down. Unchanged for a
