@@ -1299,15 +1299,32 @@
     (str "nido drive: " ws-id " at " (name at) " — skipped, " (name skipped))
     :else nil))
 
+(def ^:private slow-step-ms
+  "A tick step at least this long is logged. The loop is meant to turn about once a
+   second, and every source, gate and run waits on it, so one step holding it for
+   seconds is the thing to find; a step under this is noise."
+  1000)
+
+(defn- timed
+  "Call `f` and answer what it answers, printing a line naming `label` when it took
+   `slow-step-ms` or longer. A throw passes through untimed."
+  [label f]
+  (let [t0 (System/nanoTime)
+        r  (f)
+        ms (quot (- (System/nanoTime) t0) 1000000)]
+    (when (>= ms slow-step-ms)
+      (println (str "nido tick: slow step " label " took " ms " ms")))
+    r))
+
 (defn ^{:malli/schema [:=> [:cat] :any]}
   tick!
   "One iteration of the main loop. Public for testability."
   []
-  (let [triggers-by-project (load-all-triggers)
+  (let [triggers-by-project (timed "load-triggers" load-all-triggers)
         halt-info           (halt/read-halt-info)]
     ;; Before the halt branch: a halted daemon still has gates waiting on a
     ;; person, and the halt itself is one of the things to announce.
-    (maybe-notify-attention! (System/currentTimeMillis) halt-info)
+    (timed "notify-attention" #(maybe-notify-attention! (System/currentTimeMillis) halt-info))
     (if halt-info
       (heartbeat/write! {:status       :halted
                          :halted-by    (:source halt-info)
@@ -1319,15 +1336,16 @@
                             (usage-held? (System/currentTimeMillis))
                             (assoc :usage-held-until
                                    (str (java.time.Instant/ofEpochMilli @!usage-hold-until-ms)))))
-        (reconcile-sources! triggers-by-project)
+        (timed "reconcile-sources" #(reconcile-sources! triggers-by-project))
         ;; Drain queue first — this consumes envelopes emitted on the PREVIOUS
         ;; tick by source polls. Keeps each tick's unit of work small.
-        (doseq [env (queue/drain!)]
-          (dispatch-envelope! env triggers-by-project))
+        (timed "dispatch-queue"
+               #(doseq [env (queue/drain!)]
+                  (dispatch-envelope! env triggers-by-project)))
         ;; Reap finished executor futures and promote waiting Runs into
         ;; free slots. on-spawn dispatches :merge Runs to drive-home!
         ;; and everything else to run-blocking!.
-        (review/sweep-resolved!)
+        (timed "review-sweep-resolved" review/sweep-resolved!)
         ;; Advance the workstreams on the driver's allow-list. Empty by default,
         ;; so landing this drives nothing until somebody names a workstream.
         ;;
@@ -1340,7 +1358,7 @@
         ;; Only what it FIRED, and what it skipped for a reason an operator can do
         ;; something about. A workstream skipped as :not-mechanical every second
         ;; would fill the log with the fact that phase five has not happened yet.
-        (try (doseq [d (drive/tick!)]
+        (try (doseq [d (timed "drive" drive/tick!)]
                (when-let [line (drive-log-line d)]
                  (println line)))
              (catch Throwable t
@@ -1349,39 +1367,40 @@
                            (str "nido drive: tick failed — " (ex-message t))))))
         ;; The background sessions, before anything is promoted: a turn that ended
         ;; frees its slot in the same tick, and the working count is current.
-        (try (conduct-pass! (System/currentTimeMillis))
+        (try (timed "conduct" #(conduct-pass! (System/currentTimeMillis)))
              (catch Throwable t
                (binding [*err* *err*]
                  (.println ^java.io.PrintWriter *err*
                            (str "nido conduct: pass failed — " (ex-message t))))))
         (let [on-spawn  (fn [rid] (execute! rid))
-              in-flight (runs/in-progress-count-by-trigger)]
+              in-flight (timed "in-flight-count" runs/in-progress-count-by-trigger)]
           ;; Under a usage hold the queue waits: nothing is promoted, so no Run
           ;; starts only to be rejected. Reaping is skipped with it, which is
           ;; harmless — a finished future is reaped on the first tick after.
           (when-not (usage-held? (System/currentTimeMillis))
-            (executor/tick! on-spawn in-flight (:working @!conduct))))
+            (timed "executor" #(executor/tick! on-spawn in-flight (:working @!conduct)))))
         ;; Then poll due sources. Their emissions land in the queue and
         ;; will be picked up next tick.
         (let [now-ms (System/currentTimeMillis)]
           (doseq [[hash inst] @!source-instances
                   :when (>= (- now-ms (:last-polled-ms inst)) (:poll-ms inst))]
             (try
-              ((:poll! inst))
+              (timed (str "poll " (name (get-in inst [:source-config :type] :unknown)) " " hash)
+                     (:poll! inst))
               (catch Exception e
                 (binding [*err* *err*]
                   (.println ^java.io.PrintWriter *err*
                             (str "WARN: source " hash " poll! threw — " (ex-message e))))))
             (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms))
           ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
-          (maybe-reclaim! now-ms)
-          (maybe-adopt! now-ms)
-          (maybe-settle-reviews! now-ms)
-          (maybe-expire-inbox! now-ms)
-          (maybe-poll-github-merges! now-ms)
-          (maybe-poll-github-issues! now-ms)
-          (maybe-poll-notion-sync! now-ms)
-          (maybe-refresh-titles! now-ms))
+          (timed "reclaim" #(maybe-reclaim! now-ms))
+          (timed "adopt" #(maybe-adopt! now-ms))
+          (timed "settle-reviews" #(maybe-settle-reviews! now-ms))
+          (timed "expire-inbox" #(maybe-expire-inbox! now-ms))
+          (timed "github-merges" #(maybe-poll-github-merges! now-ms))
+          (timed "github-issues" #(maybe-poll-github-issues! now-ms))
+          (timed "notion-sync" #(maybe-poll-notion-sync! now-ms))
+          (timed "titles" #(maybe-refresh-titles! now-ms)))
         ;; After draining + polling, check anomaly thresholds.
         (when-let [trip (anomaly/check @!detector anomaly-thresholds)]
           (halt/halt! {:source  :auto

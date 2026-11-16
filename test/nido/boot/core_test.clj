@@ -897,6 +897,17 @@
     (is (nil? (core/drive-log-line {:ws-id "ws-2" :at :design-approved :skipped s}))
         (str s " is a resting state, not news"))))
 
+;; ── A tick step that holds the loop is named in the log ─────────────────────
+
+(deftest a-slow-tick-step-is-named-and-a-fast-one-is-not
+  ;; Every source, gate and run waits on the loop, so a step holding it for
+  ;; seconds has to be findable from the log alone.
+  (with-redefs [core/slow-step-ms 0]
+    (let [out (with-out-str (is (= :answer (#'core/timed "conduct" (constantly :answer)))))]
+      (is (str/includes? out "slow step conduct took"))))
+  (with-redefs [core/slow-step-ms 60000]
+    (is (= "" (with-out-str (#'core/timed "conduct" (constantly :answer)))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Session recovery: its brakes, its terminal state, and a restore's continuations
 ;; ---------------------------------------------------------------------------
