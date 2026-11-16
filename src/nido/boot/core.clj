@@ -307,6 +307,24 @@
   [instruction]
   (some-> (:for instruction) runs/read-run))
 
+(def ^:private slow-step-ms
+  "A tick step at least this long is logged. The loop is meant to turn about once a
+   second, and every source, gate and run waits on it, so one step holding it for
+   seconds is the thing to find; a step under this is noise."
+  1000)
+
+(defn- timed
+  "Call `f` and answer what it answers, printing a line naming `label` when it took
+   `slow-step-ms` or longer. A throw passes through untimed. A step that contains
+   timed steps prints its own line after theirs, so its total reads last."
+  [label f]
+  (let [t0 (System/nanoTime)
+        r  (f)
+        ms (quot (- (System/nanoTime) t0) 1000000)]
+    (when (>= ms slow-step-ms)
+      (println (str "nido tick: slow step " label " took " ms " ms")))
+    r))
+
 (defn- settle-turn-ends!
   "Settle the Run each ended turn's instruction was recorded as given for: a Run still :running
    moves to the state its turn's outcome calls for; a parked Run whose reply turn ended is parked
@@ -444,28 +462,33 @@
    stall back to its conductor (`conductor/stops!`), and — at most every :conductor-interval-ms — start and retire
    conductors, record and post the person's acts, and re-seat every carried workstream."
   [r now-ms]
-  (logged "answering escalations in place" #(conductor/answers-in-place! r))
-  (logged "posting hand-backs" #(conductor/hand-backs! r))
-  (doseq [{:keys [project ws-id session instruction]} (:turn-ends r)
-          :when (:conductor (session/read-session project ws-id session))]
-    (logged (str "closing " session "'s turn") #(conductor/close-unanswered! project ws-id session instruction)))
+  (timed "conductor answers-in-place" #(logged "answering escalations in place" (fn [] (conductor/answers-in-place! r))))
+  (timed "conductor hand-backs" #(logged "posting hand-backs" (fn [] (conductor/hand-backs! r))))
+  (timed "conductor close-unanswered"
+         #(doseq [{:keys [project ws-id session instruction]} (:turn-ends r)
+                  :when (:conductor (session/read-session project ws-id session))]
+            (logged (str "closing " session "'s turn") (fn [] (conductor/close-unanswered! project ws-id session instruction)))))
   ;; After this pass's turn ends had their hand-backs: what is still stopped — a dialog, a stall —
   ;; goes to whoever can answer it.
   (doseq [p (registered-projects)]
-    (logged (str "reading " (name p) "'s stops") #(conductor/stops! p now-ms)))
+    (timed (str "conductor stops " (name p))
+           #(logged (str "reading " (name p) "'s stops") (fn [] (conductor/stops! p now-ms)))))
   (when (>= (- now-ms @!last-conductor-sweep-ms) (:conductor-interval-ms defaults))
     (reset! !last-conductor-sweep-ms now-ms)
     ;; Who a person typed into is read once a sweep: every workstream's worked? reads it.
     ;; On :unread no conductor is started, re-seated or retired: an unreadable log is no reading.
-    (let [typed-in (conductor/prompted)]
+    (let [typed-in (timed "conductor prompted" conductor/prompted)]
       (doseq [p (registered-projects)]
         ;; Acts first: an act that closed its workstream is answered and posted before the
         ;; conductor that answers for it is retired.
-        (logged (str "reading " (name p) "'s acts") #(conductor/answers! p))
+        (timed (str "conductor answers " (name p))
+               #(logged (str "reading " (name p) "'s acts") (fn [] (conductor/answers! p))))
         (when-not (= :unread typed-in)
-          (logged (str "starting " (name p) "'s conductors") #(conductor/conductors! p typed-in))
-          (doseq [ws-id (ws/list-ids p)]
-            (logged (str "re-seating " ws-id) #(conductor/reseat! p ws-id typed-in))))))))
+          (timed (str "conductor conductors " (name p))
+                 #(logged (str "starting " (name p) "'s conductors") (fn [] (conductor/conductors! p typed-in))))
+          (timed (str "conductor reseat " (name p))
+                 #(doseq [ws-id (ws/list-ids p)]
+                    (logged (str "re-seating " ws-id) (fn [] (conductor/reseat! p ws-id typed-in))))))))))
 
 (defn- capped-working
   "How many of the `working` sessions ({:project :ws-id :session} each) hold a global slot, given
@@ -486,16 +509,16 @@
    activated, and keep what the rest of the tick reads."
   [now-ms]
   (let [projects (registered-projects)
-        r        (conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)
-                                    :mail {:owed seats/owed :delivered! seats/delivered!}})]
+        r        (timed "conduct read" #(conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)
+                                                           :mail {:owed seats/owed :delivered! seats/delivered!}}))]
     (when-not (:skipped r)
-      (settle-turn-ends! r)
-      (conductor-pass! r now-ms)
-      (let [faceted (conduct/faceted-sessions {:projects projects})
+      (timed "conduct settle-turn-ends" #(settle-turn-ends! r))
+      (timed "conductor pass" #(conductor-pass! r now-ms))
+      (let [faceted (timed "conduct faceted-sessions" #(conduct/faceted-sessions {:projects projects}))
             pending (outstanding faceted)]
-        (enforce-budgets! now-ms faceted)
-        (surface-refusals! r)
-        (surface-left-running! r faceted)
+        (timed "conduct enforce-budgets" #(enforce-budgets! now-ms faceted))
+        (timed "conduct surface-refusals" #(surface-refusals! r))
+        (timed "conduct surface-left-running" #(surface-left-running! r faceted))
         (when-let [notify! @!notify-fn]
           ;; One blocked after a turn that went to the conductor is the conductor's — only on an
           ;; activated workstream, the only kind that has one; the conductor's own is the
@@ -1298,23 +1321,6 @@
     (and skipped (not (quiet-skips skipped)))
     (str "nido drive: " ws-id " at " (name at) " — skipped, " (name skipped))
     :else nil))
-
-(def ^:private slow-step-ms
-  "A tick step at least this long is logged. The loop is meant to turn about once a
-   second, and every source, gate and run waits on it, so one step holding it for
-   seconds is the thing to find; a step under this is noise."
-  1000)
-
-(defn- timed
-  "Call `f` and answer what it answers, printing a line naming `label` when it took
-   `slow-step-ms` or longer. A throw passes through untimed."
-  [label f]
-  (let [t0 (System/nanoTime)
-        r  (f)
-        ms (quot (- (System/nanoTime) t0) 1000000)]
-    (when (>= ms slow-step-ms)
-      (println (str "nido tick: slow step " label " took " ms " ms")))
-    r))
 
 (defn ^{:malli/schema [:=> [:cat] :any]}
   tick!
