@@ -902,7 +902,10 @@
    :rationale "Recurring manual toil for ops; data + CSV helper already exist."
    :watch-out "Confirm filtered view vs all courses."
    :app-domain "Backend"
-   :product a-product})
+   :product {:where     "The admin courses tab, as staff."
+             :today     "Staff copy course rows into a spreadsheet by hand."
+             :asked-for "One button that exports the listed courses as a spreadsheet."
+             :why       "Saves operations staff a recurring manual chore."}})
 
 (deftest proposed-ticket-multi-schema-dispatches-on-type
   ;; improvement validates against ChangeProposal
@@ -924,6 +927,32 @@
   ;; a required change field missing is rejected
   (is (thrown? clojure.lang.ExceptionInfo
         (report/validate-event :proposed-ticket (dissoc improvement-proposal :rationale)))))
+
+(deftest an-improvement-is-written-with-its-own-product-sections
+  (let [bug-shaped (assoc improvement-proposal :product a-product)]
+    (testing "an improvement may not be written with the bug's sections"
+      (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :proposed-ticket bug-shaped))))
+    (testing "but one written that way before still reads, alone or in a thread's verdict"
+      (is (= bug-shaped (report/parse-event :proposed-ticket bug-shaped)))
+      (let [verdict {:format :proposed-tickets :title "t" :source-url "https://slack/x"
+                     :tickets [{:key "export" :ticket bug-shaped}]}]
+        (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :proposed-tickets verdict)))
+        (is (= verdict (report/parse-event :proposed-tickets verdict)))))
+    (testing "a bug may not carry the improvement's sections"
+      (is (thrown? clojure.lang.ExceptionInfo
+            (report/validate-event :proposed-ticket
+              (assoc compact-proposal :product (:product improvement-proposal))))))))
+
+(deftest an-improvement-page-reads-as-a-request
+  (let [page (report/product-page improvement-proposal)]
+    (is (= "Improvement request" (:title page)))
+    (is (= ["Where" "How it works today" "What's asked for" "Why it matters"]
+           (map :heading (:sections page)))))
+  (testing "an improvement filed before it had its own sections renders as written"
+    (is (= ["Where" "What happens" "Expected" "Who is affected"]
+           (map :heading (report/product-sections (assoc improvement-proposal :product a-product))))))
+  (is (= ["Where" "What happens" "Expected" "Who is affected"]
+         (map :heading (:sections (report/product-page compact-proposal))))))
 
 (deftest proposed-ticket-improvement-markdown
   (let [md (report/report->markdown improvement-proposal)]

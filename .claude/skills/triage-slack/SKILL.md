@@ -161,10 +161,26 @@ The verdict's `:doubt`, when you write one instead, is 1–3 sentences to Jaap i
                                  "Ask for an answer containing a long link or a table."]   ; optional
                :who-is-affected "Any teacher using the chat; the overflowing text is unreadable."}}
 
-;; ── ticket-type "improvement" ──  same conclusion fields; technical fields are
-;; :request / :proposed-change / :rationale (+ optional :watch-out).
-;; In :product, :what-happens is how it works today and :expected is what is asked for.
+;; ── ticket-type "improvement" ──
+{:format          :proposed-ticket
+ :title           "Split long Teaching Assistant answers into sections"
+ :ticket-type     "improvement"
+ :priority        nil
+ :source-url      "…"
+ ;; technical analysis — gate only
+ :request         "1-2 lines: what is asked for, and by whom."
+ :proposed-change "1-2 lines: where it would land, its rough size, the CONCRETE file:line touchpoints."
+ :rationale       "1-2 lines: why it is worth doing."
+ :watch-out       nil
+ ;; the ticket text — its own sections, not the bug's
+ :app-domain      "Teacher"
+ :product         {:where     "The Teaching Assistant chat, as a teacher."
+                   :today     "A long answer arrives as one unbroken block of text."
+                   :asked-for "Long answers split into sections the teacher can expand."
+                   :why       "Teachers skim answers on mobile, where one long block is hard to scan; every teacher using the chat."}}
 ```
+
+An improvement's `:product` is **`:where` / `:today` / `:asked-for` / `:why`** — never the bug's `:what-happens` / `:expected` / `:steps` / `:who-is-affected`, which `append` rejects on an improvement. `:today` is how it works now as a user meets it (not a defect); `:asked-for` is the change in the user's terms, not the implementation; `:why` is what it gets them and who.
 
 ### Writing `:product` — product terms only
 
@@ -173,7 +189,7 @@ The page body is read by product people, QA and the reporter. It says **what som
 - **No cause.** Not "because the bubble lacks overflow-wrap", not "the query is missing a filter". The cause lives in `:root-cause`.
 - **No code.** No file, namespace, function, CSS class, table, endpoint, flag or PR number. Name things as the UI names them ("the Teaching Assistant chat", "the quiz results page") — German label beside the English one where the UI has both.
 - **No properties.** Title, type, priority and app domain are set as page properties; don't repeat them in the sections.
-- `:steps` only when you know a sequence that shows it; omit the key otherwise.
+- `:steps` (bugs only) only when you know a sequence that shows it; omit the key otherwise.
 
 `append` **rejects** a `:product` section containing a backtick, a path with a source-file extension (`.clj`, `.css`, `.js`, …) or a `name:123` coordinate — but it cannot catch a cause written in plain words. That part is on you.
 

@@ -257,8 +257,8 @@
     #(not (re-find code-reference %))]])
 
 (def ProductSections
-  "The reader-facing description of a Slack report, in product terms: what someone using brian
-   meets and expects. Filed as the Notion page body; never carries a cause or a code name."
+  "The reader-facing description of a bug, in product terms: what someone using brian meets and
+   expects. Filed as the Notion page body; never carries a cause or a code name."
   [:map {:closed true}
    [:where           ProductText]
    [:what-happens    ProductText]
@@ -266,19 +266,38 @@
    [:steps           {:optional true} [:vector {:min 1} ProductText]]
    [:who-is-affected ProductText]])
 
-(def ^:private proposal-conclusion
-  "Fields saying how triage concluded: a :product to file (with the :app-domain it concerns), or
-   a :doubt to put to the owner instead. Optional here so the read-era schema can share them;
-   `one-conclusion` is what makes exactly one of the two required on write."
-  [[:product    {:optional true} ProductSections]
+(def ImprovementProduct
+  "The reader-facing description of an improvement, in product terms: where it lands, how it
+   works today, what is asked for, and why it matters and to whom. Filed as the Notion page body.
+   No steps: there is nothing to reproduce."
+  [:map {:closed true}
+   [:where     ProductText]
+   [:today     ProductText]
+   [:asked-for ProductText]
+   [:why       ProductText]])
+
+(defn- proposal-conclusion
+  "Fields saying how triage concluded: a :product of `product-schema` to file (with the
+   :app-domain it concerns), or a :doubt to put to the owner instead. Optional here so the
+   read-era schema can share them; `one-conclusion` is what makes exactly one of the two required
+   on write."
+  [product-schema]
+  [[:product    {:optional true} product-schema]
    [:app-domain {:optional true} AppDomain]
    [:doubt      {:optional true} :string]])
 
 (def ^:private ProposedTicketAny
-  "Every proposal ever written, including those from before :product/:doubt existed."
+  "Every proposal ever written: those from before :product/:doubt existed, and improvements filed
+   under the bug's product sections before they had their own."
   [:multi {:dispatch :ticket-type}
-   ["bug"         (into BugProposal proposal-conclusion)]
-   ["improvement" (into ChangeProposal proposal-conclusion)]])
+   ["bug"         (into BugProposal (proposal-conclusion ProductSections))]
+   ["improvement" (into ChangeProposal (proposal-conclusion [:or ImprovementProduct ProductSections]))]])
+
+(def ^:private ProposedTicketCurrent
+  "What a proposal may be written as: each type's own product sections."
+  [:multi {:dispatch :ticket-type}
+   ["bug"         (into BugProposal (proposal-conclusion ProductSections))]
+   ["improvement" (into ChangeProposal (proposal-conclusion ImprovementProduct))]])
 
 (defn- one-conclusion?
   [{:keys [product doubt app-domain]}]
@@ -286,28 +305,34 @@
     (and (nil? doubt) (some? app-domain))
     (and (string? doubt) (nil? app-domain))))
 
+(def ^:private one-conclusion
+  [:fn {:error/message "exactly one of :product (with :app-domain) or :doubt"} one-conclusion?])
+
 (def ProposedTicket
   "A grounded ticket the triage-slack skill proposes. The template is chosen by :ticket-type —
-   \"bug\" (problem/root-cause/fix) or \"improvement\" (request/proposed-change/rationale); no
-   default, so the skill has to classify.
+   \"bug\" (problem/root-cause/fix, filed as ProductSections) or \"improvement\"
+   (request/proposed-change/rationale, filed as ImprovementProduct); no default, so the skill has
+   to classify.
 
    It carries two texts for two readers. The technical fields are for whoever reviews the gate;
    exactly one of :product (filed as the Notion page, with its :app-domain) or :doubt (put to the
    owner in the Slack thread, nothing filed) says how triage concluded. The gate card shows both
    texts (proposed-ticket->markdown); the page shows only `product-page`."
-  [:and ProposedTicketAny
-   [:fn {:error/message "exactly one of :product (with :app-domain) or :doubt"} one-conclusion?]])
+  [:and ProposedTicketCurrent one-conclusion])
+
+(def ^:private ProposedTicketRead
+  "A ProposedTicket as any verdict on disk may hold it: an improvement may carry the bug's product
+   sections it was written with before improvements had their own."
+  [:and ProposedTicketAny one-conclusion])
 
 (def ^:private TicketKey
   "Names one ticket within a thread's verdict; it becomes part of that ticket's Slack id, so it is
    only what the Slack adapter's ticket id accepts."
   [:re #"^[a-z0-9][a-z0-9-]*$"])
 
-(def ProposedTickets
-  "A Slack THREAD's triage verdict: either the tickets the thread holds — each a ProposedTicket
-   concluding with :product, under a key unique within the record — or one :doubt about the whole
-   thread. Never both, never an empty list. Concluding it gives every ticket a workstream of its
-   own, where that ticket is filed, gated and driven exactly as a single proposal is."
+(defn- proposed-tickets
+  "A thread's verdict whose tickets are each `ticket-schema`."
+  [ticket-schema]
   [:and
    [:map {:closed true}
     [:format     [:= :proposed-tickets]]
@@ -317,13 +342,24 @@
      [:vector {:min 1}
       [:map {:closed true}
        [:key    TicketKey]
-       [:ticket [:and ProposedTicket [:fn {:error/message "a thread's ticket concludes with :product"}
-                                      #(some? (:product %))]]]]]]
+       [:ticket [:and ticket-schema [:fn {:error/message "a thread's ticket concludes with :product"}
+                                     #(some? (:product %))]]]]]]
     [:doubt      {:optional true} :string]]
    [:fn {:error/message "exactly one of :tickets or :doubt"}
     (fn [{:keys [tickets doubt]}] (not= (some? tickets) (some? doubt)))]
    [:fn {:error/message "ticket keys must be unique"}
     (fn [{:keys [tickets]}] (or (nil? tickets) (apply distinct? (map :key tickets))))]])
+
+(def ProposedTickets
+  "A Slack THREAD's triage verdict: either the tickets the thread holds — each a ProposedTicket
+   concluding with :product, under a key unique within the record — or one :doubt about the whole
+   thread. Never both, never an empty list. Concluding it gives every ticket a workstream of its
+   own, where that ticket is filed, gated and driven exactly as a single proposal is."
+  (proposed-tickets ProposedTicket))
+
+(def ^:private ProposedTicketsRead
+  "A thread's verdict as written before improvements had their own product sections."
+  (proposed-tickets ProposedTicketRead))
 
 (def ^:private standing-principles
   [:principles {:optional true} [:vector string?]])
@@ -4141,8 +4177,11 @@
    ;; the run history of every branch the loop has ever reviewed.
    :review ReviewReportAny
    ;; :product/:doubt became one-required. Every proposal written before that
-   ;; carries neither, and is still the gate's card for its workstream.
-   :proposed-ticket ProposedTicketAny})
+   ;; carries neither, and is still the gate's card for its workstream. An
+   ;; improvement written before improvements had their own product sections
+   ;; carries the bug's.
+   :proposed-ticket ProposedTicketAny
+   :proposed-tickets ProposedTicketsRead})
 
 (def ^:private compiled-schemas
   "[contract kind] → a delay of the compiled schema that pair validates under,
@@ -5485,11 +5524,22 @@
 (defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]}
   product-sections
   "The :product of a proposal as titled sections — {:heading s :text s} or {:heading s
-   :items [s]} — in the order a reader of the ticket meets them. [] for a doubt."
+   :items [s]} — in the order a reader of the ticket meets them. [] for a doubt. Its headings
+   follow the product's shape, not :ticket-type: an improvement written before it had its own
+   sections is shown as written."
   [{:keys [product]}]
-  (let [{:keys [where what-happens expected steps who-is-affected]} product]
-    (if-not product
+  (let [{:keys [where what-happens expected steps who-is-affected today asked-for why]} product]
+    (cond
+      (nil? product)
       []
+
+      (contains? product :asked-for)
+      [{:heading "Where" :text where}
+       {:heading "How it works today" :text today}
+       {:heading "What's asked for" :text asked-for}
+       {:heading "Why it matters" :text why}]
+
+      :else
       (cond-> [{:heading "Where" :text where}
                {:heading "What happens" :text what-happens}
                {:heading "Expected" :text expected}]
