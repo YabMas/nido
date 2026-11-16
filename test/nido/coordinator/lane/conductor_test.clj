@@ -757,6 +757,42 @@
             (is (nil? (in "fix-it" "bb nido:workstream:entry:add :kind intent"))
                 "on the first instruction its start gave — a spawn's brief — it writes the intent the brief states")))))))
 
+(deftest an-option-the-person-picked-grants-the-seat-its-goal-amendment
+  ;; The person answered 'Narrow, then approve' — amend the goal — and the seat, on the
+  ;; conductor's instruction carrying it out, was refused the amendment and handed the person a
+  ;; command to run instead.
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            c        (str id "--conductor")
+            in       (fn [n command]
+                       (in-session n #(conductor/refusal {:tool_name "Bash" :cwd "/wt" :tool_input {:command command}})))
+            append   (str "bb nido:workstream:entry:add :project brian :ws-id " id " :kind intent")]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id "fix-it" "conv" {:token "t" :at "t" :via :send :seen? true})
+        (prompted! "conv" "amend the goal\n\n[nido-send t]")
+        (with-redefs [commit-gate/acts (fn [command _]
+                                         (let [[_ task & args] (str/split command #" ")]
+                                           [{:kind :nido-task :task task :args (vec args)}]))]
+          (let [blocker (add :blocker {:format :blocker :summary "s" :needs "narrow the goal?"
+                                       :after "The seat amends it."})]
+            (is (some? (in "fix-it" append)) "before any answer, the goal is the person's")
+            (add :blocker-answered {:format :blocker-answered :blocker-seq blocker :summary "keep it"
+                                    :letter "B" :label "Keep"})
+            (is (some? (in "fix-it" append)) "an answer that grants nothing grants nothing")
+            (add :blocker-answered {:format :blocker-answered :blocker-seq blocker :summary "narrow it"
+                                    :letter "A" :label "Narrow" :grants [:intent]})
+            (is (nil? (in "fix-it" append)) "the option the person picked grants the amendment")
+            (is (some? (in "fix-it" (str "bb nido:workstream:entry:add :project brian :ws-id " id
+                                         " :kind design-approved")))
+                "and nothing it did not grant")
+            (is (some? (in "fix-it" "bb nido:workstream:entry:add :project brian :ws-id ws-other :kind intent"))
+                "to its own workstream only")
+            (is (some? (in c append)) "to a seat, never the conductor")
+            (add :intent {:format :intent :goal "narrowed" :done-when ["d"] :supersedes {:seq 1 :why "narrowed"}})
+            (is (some? (in "fix-it" append)) "one amendment: once written, the grant is spent")))))))
+
 (deftest a-start-gives-its-first-instruction-unless-the-conductor-asked-for-it
   (with-tmp
     (fn []

@@ -793,6 +793,17 @@
               "an option that does not hold is a new blocker, not a licence to
                take the other branch on the human's behalf"))))))
 
+(deftest the-answer-carries-what-the-picked-option-grants
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "Narrow the goal?" :after "The seat amends it."
+                   :options [(assoc (first sample-options) :grants [:intent]) (second sample-options)]}))
+        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
+        (is (= [:intent] (:grants (:report (work/workstream :brian (:id w) 2))))
+            "what the person handed the seat by picking it is on the ledger")))))
+
 (deftest an-answer-outlives-the-session-that-asked-the-question
   ;; The case that made this the shape it is: a run writes a blocker and then
   ;; dies (failed, budget-killed, torn down). The question is still the ledger's

@@ -48,6 +48,17 @@
         "one effect per action the gate offers")
     (is (= (:done-when intent) (get-in a [:goal :done-when])))))
 
+(deftest an-option-says-what-picking-it-grants
+  (let [granting (-> blocker
+                     (assoc-in [:options 0 :grants] [:intent])
+                     (assoc-in [:options 1 :grants] [:intent]))
+        [a b]    (:options (q1 (ask/ask :answer-blocker {:report granting :actions option-actions})))]
+    (is (= "Choosing this, the seat writes the goal amendment itself." (:consequence a))
+        "said even where the option names no cost")
+    (is (= "Cross-repo, a second ticket. Choosing this, the seat writes the goal amendment itself."
+           (:consequence b))
+        "and after the cost where it names one")))
+
 (deftest a-branch-with-no-button-is-not-offered
   (let [a (ask/ask :answer-blocker {:report blocker :actions [{:id :option-a :label "A" :kind :mutation}]})]
     (is (= [:option-a] (mapv :action (:options (q1 a)))))

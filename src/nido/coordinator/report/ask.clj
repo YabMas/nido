@@ -145,10 +145,20 @@
 
 (defn- non-blank [& xs] (vec (remove #(or (nil? %) (str/blank? (str %))) xs)))
 
-(defn- blocker-option [{:keys [label summary consequence recommended?]}]
-  (cond-> {:label label :summary (str summary)}
-    consequence  (assoc :consequence consequence)
-    recommended? (assoc :recommended? true)))
+(def ^:private grant-phrases
+  "What choosing an option that grants a kind hands the seat, as the card says it."
+  {:intent "the seat writes the goal amendment itself"})
+
+(defn- blocker-option
+  "A blocker's option as the card shows it. A grant is said beside the consequence: the person
+   should see what picking it hands over before they pick it."
+  [{:keys [label summary consequence recommended? grants]}]
+  (let [granted (when (seq grants)
+                  (str "Choosing this, " (str/join " and " (keep grant-phrases grants)) "."))
+        said    (str/join " " (remove str/blank? [consequence granted]))]
+    (cond-> {:label label :summary (str summary)}
+      (not (str/blank? said)) (assoc :consequence said)
+      recommended?            (assoc :recommended? true))))
 
 (defn- direction-option
   "A triage direction as a choice of its question: answered by Accept, so it carries no action."

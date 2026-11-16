@@ -183,7 +183,10 @@
          "`:summary \"…\"` (the context) and `:after \"…\"` (what happens once they answer), "
          "`:recommendation \"…\"` only when you genuinely hold a view on the answer, and "
          "`:options '[{:label … :summary … :consequence … :recommended? true} …]'` when it names "
-         "the branches.\n\n"
+         "the branches. An option that changes the goal carries `:grants [:intent]`: picking it lets "
+         "the seat write that one goal amendment itself, so instruct the seat to, and do not hand "
+         "the person a command to run. Nothing else can be granted; approving a design stays the "
+         "person's.\n\n"
          "Seats: " (seats-line (rseats/seats project ws-id)) "\n"
          "Governing design: " (design-line design) "\n"
          "Position: " (name position) (when next (str ", next " (pr-str next))) "\n\n"
@@ -958,6 +961,39 @@
                  (some #{:opaque} pos)
                  (person-kinds (try (keyword kind) (catch Exception _ nil)))))))
 
+(defn- unspent-grants
+  "The kinds the person handed to the sessions of workstream `ws-id` by answering a blocker with
+   an option that grants them (report/BlockerOption :grants), each still unspent: no entry of the
+   kind was appended after that answer. One grant is one entry — the goal amendment the option
+   names, not a standing licence to rewrite the goal."
+  [project ws-id]
+  (into #{}
+        (for [a (ws/entries-of project ws-id :blocker-answered)
+              :when (persons-act? a)
+              k (:grants a)
+              :when (not-any? #(> (:seq %) (:seq a)) (ws/entries-of project ws-id k))]
+          k)))
+
+(defn- granted?
+  "Whether `act` — one of commit-gate/acts — is a generic append the person granted to session
+   record `s`: of a kind an answer of theirs still grants (`unspent-grants`), to the session's own
+   workstream, read as the appends read their arguments. An append naming another project or
+   workstream, or none the gate can read, is granted nothing, and the conductor is granted
+   nothing: a grant is the person's to a seat."
+  [s {:keys [kind task args]}]
+  (boolean
+   (when (and (= :nido-task kind) (generic-appends task) (not (:conductor s)))
+     (let [[_ opts] (try (task-args/split-args args) (catch Exception _ nil))
+           project  (:project s)
+           own      (:workstream-id s)
+           entry    (try (keyword (:kind opts)) (catch Exception _ nil))
+           target   (cond (:ws-id opts) (str (:ws-id opts))
+                          (or (:br opts) (:ref opts))
+                          (:id (ws/find-by-ref-id project (str (or (:br opts) (:ref opts))))))]
+       (and entry own (= own target)
+            (or (nil? (:project opts)) (= (name project) (str/replace (str (:project opts)) #"^:" "")))
+            (contains? (unspent-grants project own) entry))))))
+
 (defn- persons-act
   "What a person's act `act` — one of commit-gate/acts — is, as a phrase, or nil. Pushing and
    opening or readying a PR are not a person's act; merging one is."
@@ -1025,7 +1061,8 @@
    acceptance, a phase gate, a blocker's answer, a landing, a PR merge or a close — run from the
    conductor's session, or from any other session's conversation in a turn whose latest prompt
    carries an instruction the conductor answers for (`answering-for-conductor?`), judged over
-   what the commit gate reads the command to do. Pushing,
+   what the commit gate reads the command to do — save an append the person granted the seat by
+   the option they answered a blocker with (`granted?`). Pushing,
    whatever the branch, and opening or readying a PR are not a person's act. Takes a Claude Code `PreToolUse` input; nil for any other session, and
    — failing open — when the session cannot be read."
   [{:keys [tool_name tool_input cwd session_id]}]
@@ -1034,7 +1071,8 @@
                    (record-at cwd))
                  (catch Throwable _ nil))]
     (when (answering-for-conductor? s session_id)
-      (when-let [act (some persons-act (commit-gate/acts (:command tool_input) cwd))]
+      (when-let [act (some #(when-not (granted? s %) (persons-act %))
+                           (commit-gate/acts (:command tool_input) cwd))]
         (str "Blocked: " act " is the person's to do, and this session "
              (if (:conductor s) "is the workstream's conductor" "is working on the conductor's instruction")
              ". Escalate instead: say what the person needs to do and why"

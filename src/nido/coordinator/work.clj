@@ -3022,12 +3022,13 @@
       (let [parked (parked-session project ws-id)]
         (cws/append-entry!
          project ws-id {:kind :blocker-answered}
-         (pr-str {:format      :blocker-answered
-                  :blocker-seq entry-seq
-                  :letter      (report/option-letter i)
-                  :label       (:label opt)
-                  :summary     (:summary opt)
-                  :resumed     (:name parked)}))
+         (pr-str (cond-> {:format      :blocker-answered
+                          :blocker-seq entry-seq
+                          :letter      (report/option-letter i)
+                          :label       (:label opt)
+                          :summary     (:summary opt)
+                          :resumed     (:name parked)}
+                   (seq (:grants opt)) (assoc :grants (vec (:grants opt))))))
         (if parked
           (assoc (resume/resume! project ws-id (option-input i opt) parked) :decision :answered)
           ;; Nobody to tell. The answer is on the ledger and the gate has stopped

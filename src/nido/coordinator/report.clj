@@ -1809,6 +1809,10 @@
    [:rounds  {:optional true} pos-int?]
    [:detail  {:optional true} string?]])
 
+(def grantable-kinds
+  "The person's acts a blocker option may hand to the seat (BlockerOption :grants)."
+  #{:intent})
+
 (def BlockerOption
   "One answerable branch of a blocker — what the human is picking BETWEEN.
 
@@ -1820,12 +1824,20 @@
    summaries with no prices is not a choice a human can make from the gate.
 
    :recommended? is what the agent's own derivation supports. It is a hint, not
-   a default: nothing auto-selects it, and the gate still waits."
+   a default: nothing auto-selects it, and the gate still waits.
+
+   :grants names the person's acts choosing the option hands to the seat — an option that says
+   'amend the goal to …' grants :intent, so the seat writes the amendment the person chose instead
+   of handing it back as a command to run. The card says so beside the option, the answer
+   records it, and the commit gate lets the seat append one entry of each kind granted
+   (conductor/granted?). Only `grantable-kinds`: approving a design, merging and closing stay
+   the person's own."
   [:map {:closed true}
    [:label        string?]
    [:summary      string?]
    [:consequence  {:optional true} string?]
-   [:recommended? {:optional true} boolean?]])
+   [:recommended? {:optional true} boolean?]
+   [:grants       {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]])
 
 (def Blocker
   "A halt that needs a human, in four parts: :needs is the one-sentence question, :summary its
@@ -1900,6 +1912,8 @@
    [:letter      {:optional true} string?]
    [:label       {:optional true} string?]
    [:summary     string?]
+   ;; The picked branch's :grants, copied in: what the person handed the seat by picking it.
+   [:grants      {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]
    ;; The session told about it, or nil when there was none to tell — the honest
    ;; record of whether this answer reached an agent or is waiting to be read.
    [:resumed     {:optional true} [:maybe string?]]
