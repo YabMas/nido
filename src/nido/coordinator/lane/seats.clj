@@ -252,10 +252,15 @@
    occupies in the current generation with no delivery recorded; for the conductor, those
    `owed-to-conductor?` says. Derived each time, so a replaced occupant's successor is owed what
    it was, and a session that is no seat's or conductor's is owed nothing. Empty for a workstream
-   or record not there."
+   or record not there.
+
+   Conduct asks this of every faceted session on every pass, so a record that can be addressed
+   as nothing — not live, or neither a conductor nor a seat's — answers before the ledger is
+   read: reading it for each one held the coordinator's loop for seconds."
   [project ws-id session-name]
   (let [s  (session/read-session project ws-id session-name)
-        w  (ws/read-ws project ws-id)
+        w  (when (and s (session/live? s) (or (:conductor s) (:seat s)))
+             (ws/read-ws project ws-id))
         g  (some-> w :entries generation/current)
         to (when (and s g) (addressee s g))
         as-owed (map (fn [{:keys [id from text]}]

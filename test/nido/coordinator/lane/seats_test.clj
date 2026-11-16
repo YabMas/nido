@@ -204,7 +204,14 @@
             (seats/replace! :brian id (embodied/embodiment) "canvas.strata/seats"))
           (let [successor (:session (first (filter #(= "canvas.strata/seats" (:seat %)) (seats/occupants :brian id))))]
             (is (= ["[seat message from seat canvas.strata/ledger]\n\nyour read is mine"]
-                   (mapv :text (seats/owed :brian id successor))))))
+                   (mapv :text (seats/owed :brian id successor))))
+            (testing "and a session addressed as nothing is owed nothing without the ledger being read"
+              ;; Conduct asks every faceted session on every pass; a ledger read for each held the
+              ;; coordinator's loop for seconds.
+              (with-redefs [ws/read-ws (fn [& _] (throw (ex-info "ledger read" {})))]
+                (is (= [] (seats/owed :brian id "no-such-session")) "a record not there")
+                (with-redefs [session/live? (constantly false)]
+                  (is (= [] (seats/owed :brian id successor)) "a seat's occupant that is not live"))))))
         (is (= :not-in-ensemble
                (:reason (ex-data (try (in-session nil #(seats/send! :brian id {:to :conductor :text "x"}))
                                       (catch Exception e e))))))
