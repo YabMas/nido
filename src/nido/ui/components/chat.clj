@@ -78,8 +78,8 @@
   [refs]
   (when (seq refs)
     (into [:ol.chat-picks.sent]
-          (map-indexed (fn [i {:keys [label]}]
-                         [:li.chat-pick {:title label} [:span.chat-pick-n (inc i)]
+          (map-indexed (fn [i {:keys [label title]}]
+                         [:li.chat-pick {:title (or title label)} [:span.chat-pick-n (inc i)]
                           [:span.chat-pick-l label]])
                        refs))))
 
@@ -152,8 +152,8 @@
    control that posts to `(:unpick-url routes)` of its index. Nothing when there are none."
   [id ps {:keys [unpick-url]}]
   (into [:div.chat-picks {:id (str id "-picks")}]
-        (map-indexed (fn [i {:keys [label]}]
-                       [:span.chat-pick {:title label}
+        (map-indexed (fn [i {:keys [label title]}]
+                       [:span.chat-pick {:title (or title label)}
                         [:span.chat-pick-n (inc i)]
                         [:span.chat-pick-l label]
                         [:button.chat-pick-x {:title "Remove" :type "button"
@@ -169,14 +169,67 @@
   (let [{:keys [text busy]} (signals id)]
     [:div.chat-compose {:id (str id "-compose")}
      (picks id [] routes)
-     [:textarea {"data-bind" text :rows 3 :placeholder "Message the agent"
-                 "data-on:keydown" (str "if (!$" busy " && (evt.metaKey || evt.ctrlKey) && evt.key === 'Enter') "
-                                        "{ evt.preventDefault(); @post('" send-url "') }")}]
-     [:div.chat-actions
-      [:button.btn.btn-primary {"data-show" (str "!$" busy)
-                                "data-on:click" (str "@post('" send-url "')")} "Send"]
-      [:button.btn {"data-show" (str "$" busy)
-                    "data-on:click" (str "@post('" cancel-url "')")} "Stop"]]]))
+     [:div.chat-field
+      [:textarea {"data-bind" text :rows 3 :placeholder "Message the agent"
+                  "data-on:keydown" (str "if (!$" busy " && (evt.metaKey || evt.ctrlKey) && evt.key === 'Enter') "
+                                         "{ evt.preventDefault(); @post('" send-url "') }")}]
+      [:div.chat-actions
+       [:button.btn.btn-primary {"data-show" (str "!$" busy)
+                                 "data-on:click" (str "@post('" send-url "')")} "Send"]
+       [:button.btn {"data-show" (str "$" busy)
+                     "data-on:click" (str "@post('" cancel-url "')")} "Stop"]]]]))
+
+(def ^:private scroll-js
+  "How the log scrolls — brian's chat model, for a log that scrolls itself:
+
+   - It opens at the bottom, and follows new content there until the person scrolls.
+   - A message the person sends is pinned to the top of the log, and the log keeps room below
+     the newest message (`--chat-tail`, under `.chat-log::after`) so the reply grows into the
+     space under it rather than pushing it away. The room shrinks as the reply fills it, so the
+     log never scrolls past the reply's end.
+   - The person's own wheel, touch or scroll ends following and the pin; only a scroll this code
+     made is not theirs.
+
+   No `$` or `@` in it: Datastar would read either as a signal or an action."
+  "(function(log){
+  if (log._chatScroll) return;
+  var st = log._chatScroll = {follow: true, until: 0};
+  var MARGIN = 8;
+  function mine(ms){ st.until = Math.max(st.until, Date.now() + ms); }
+  function newest(){ var ys = log.querySelectorAll('.chat-you'); return ys.length ? ys[ys.length - 1] : null; }
+  function topOf(m){ return m.getBoundingClientRect().top - log.getBoundingClientRect().top + log.scrollTop; }
+  function room(){
+    var m = newest(), last = log.lastElementChild;
+    if (!m || !last) { log.style.removeProperty('--chat-tail'); return; }
+    var below = last.getBoundingClientRect().bottom - m.getBoundingClientRect().top;
+    var gap = parseFloat(getComputedStyle(log).rowGap) || 0;
+    log.style.setProperty('--chat-tail', Math.max(0, log.clientHeight - below - gap - MARGIN) + 'px');
+  }
+  function bottom(){ mine(80); log.scrollTop = log.scrollHeight; }
+  function pin(m){ st.follow = false; room(); mine(600); log.scrollTo({top: topOf(m) - MARGIN, behavior: 'smooth'}); }
+  function release(){ st.follow = false; }
+  log.addEventListener('wheel', release, {passive: true});
+  log.addEventListener('touchmove', release, {passive: true});
+  log.addEventListener('scroll', function(){ if (Date.now() >= st.until) release(); }, {passive: true});
+  new MutationObserver(function(ms){
+    var sent = null;
+    ms.forEach(function(r){ r.addedNodes.forEach(function(n){
+      if (n.nodeType === 1 && n.classList.contains('chat-you') && n === log.lastElementChild) sent = n; }); });
+    if (sent) { pin(sent); return; }
+    room();
+    if (st.follow) bottom();
+  }).observe(log, {childList: true, subtree: true, characterData: true});
+  if (window.ResizeObserver) new ResizeObserver(function(){ room(); if (st.follow) bottom(); }).observe(log);
+  room(); bottom();
+})(el)")
+
+(defn ^{:malli/schema [:=> [:cat :string [:sequential :map] :map] :any]}
+  chat-log
+  "The transcript, under the DOM id `<id>-log`: each item as `chat-item` renders it, in a log that
+   scrolls the way `scroll-js` says. A stream re-rendering the whole log renders it with this, so
+   the morph keeps the log's scrolling."
+  [id items routes]
+  (into [:div.chat-log {:id (str id "-log") "data-init" scroll-js}] (map #(chat-item % routes) items)))
 
 (defn ^{:malli/schema [:=> [:cat :Conversation :map] :any]}
   chat-panel
@@ -190,6 +243,6 @@
                             "data-signals" (str "{" text ": '', " picks ": '[]', " busy ": "
                                                 (boolean busy?) "}")}
                      stream-url (assoc "data-init" (str "@get('" stream-url "')")))
-     (into [:div.chat-log {:id (str id "-log")}] (map #(chat-item % opts) items))
+     (chat-log id items opts)
      (turn-status id transcript)
      (composer id opts)]))

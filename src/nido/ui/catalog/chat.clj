@@ -91,18 +91,20 @@ deliberate act in this session's terminal, never a consequence of a chat message
    :instructions instructions :on-turn-end refresh-frame!})
 
 (defn- pick-ref
-  "A pick as the agent reads it: its label, which the person reads on its chip — block · scene ·
-   the element as tag.class — and the detail that lets the agent find the element in the code,
-   where the full path is."
+  "A pick as the agent reads it: its label, which the person reads on its chip — only the element
+   as tag.class, since its numbered mark on the scene already says where it is — the title the
+   chip shows on hover, block · scene · element, and the detail that lets the agent find the
+   element in the code, where the full path is."
   [{:strs [block scene path text html]}]
-  {:label  (str block " · " scene " · "
-                (-> (str path) (str/split #" > ") last (str/replace #":\d+$" "")))
+  (let [el (-> (str path) (str/split #" > ") last (str/replace #":\d+$" ""))]
+  {:label  el
+   :title  (str block " · " scene " · " el)
    :detail (str "Selected in nido's component catalog.\n"
                 "block: " block " (a function in nido.ui.components.*)\n"
                 "scene: " scene " (in nido.ui.catalog.scenes)\n"
                 "element path from the scene's frame: " path "\n"
                 (when (seq text) (str "its text: " text "\n"))
-                "it rendered as: " html)})
+                "it rendered as: " html)}))
 
 (defn- status-event [t]
   (datastar/patch-elements-event (html (panel/turn-status panel-id t))))
@@ -141,8 +143,7 @@ deliberate act in this session's terminal, never a consequence of a chat message
                                                       "Cache-Control" "no-cache"}} false)
                 (let [t (chat/transcript design-chat)]
                   (http/send! ch (str (datastar/patch-elements-event
-                                       (html (into [:div.chat-log {:id (str panel-id "-log")}]
-                                                   (map #(panel/chat-item % routes) (:items t)))))
+                                       (html (panel/chat-log panel-id (:items t) routes)))
                                       (status-event t)
                                       (busy-event t))
                               false)
@@ -177,7 +178,7 @@ deliberate act in this session's terminal, never a consequence of a chat message
 
 (defn- picks-event [ps]
   (datastar/patch-elements-event
-   (html (panel/picks panel-id (mapv (fn [p] {:label (:label (pick-ref p))}) ps) routes))))
+   (html (panel/picks panel-id (mapv #(select-keys (pick-ref %) [:label :title]) ps) routes))))
 
 (defn- send-message [req]
   (let [{:keys [text picks]} (panel/signals panel-id)

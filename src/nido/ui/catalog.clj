@@ -84,6 +84,7 @@
         .cat-rail-i { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
         .cat-pair { display:flex; gap:14px; align-items:baseline; }
         .cat-pair .cat-scene-fn { min-width:190px; }
+        .cat-scroll-box { display:flex; flex-direction:column; height:260px; }
         .cat-picking .cat-frame * { cursor:crosshair; }
         .cat-pick-hover { outline:2px dashed var(--accent); outline-offset:1px; }
         .cat-pick-mark { outline:2px solid var(--accent); outline-offset:1px; position:relative; }
@@ -103,7 +104,18 @@
         .catc:not(.open) .catc-side { visibility:hidden; padding:0; border:0; }
         .catc-bar { display:flex; gap:8px; align-items:center; }
         .catc-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
+        /* Select mode is a tool in the header, quiet like the close control beside it, and pressed
+           while it is on; on, a hint under the header says what a click does and how to stop. */
+        .catc-tool { display:inline-flex; gap:5px; align-items:center; background:none; cursor:pointer;
+                     border:1px solid transparent; border-radius:4px; padding:3px 7px;
+                     color:var(--text-muted); font:inherit; font-size:var(--fs-xs); }
+        .catc-tool:hover { color:var(--text-strong); background:var(--surface-hover); }
+        .catc-tool-i { font-size:var(--fs-md); line-height:1; }
         .catc-pick.on { background:var(--accent-bg); border-color:var(--accent-border); color:var(--accent-strong); }
+        .catc-hint { display:none; margin:0; font-size:var(--fs-xs); color:var(--accent-strong); background:var(--accent-bg);
+                     border:1px solid var(--accent-border); border-radius:4px; padding:5px 8px; }
+        .catc-hint kbd { font-family:var(--font-mono); }
+        .catc.picking .catc-hint { display:block; }
         .catc-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-md); }
         .catc-x:hover { color:var(--text-strong); }
         .catc-side .chat { flex:1; }
@@ -360,7 +372,8 @@
   var at = null, picking = false, marks = [];
   function post(m){ frame.contentWindow && frame.contentWindow.postMessage(m, '*'); }
   function isOpen(){ return root.classList.contains('open'); }
-  function setPicking(v){ picking = v; btn.classList.toggle('on', v); post({type: 'nido-pick', on: v}); }
+  function setPicking(v){ picking = v; btn.classList.toggle('on', v); btn.setAttribute('aria-pressed', v);
+    root.classList.toggle('picking', v); post({type: 'nido-pick', on: v}); }
   function sendMarks(){ post({type: 'nido-marks', marks: isOpen() ? marks : []}); }
   function picks(){ try { var v = JSON.parse(input.value || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
   function toggleOpen(){ document.getElementById(isOpen() ? 'catc-close' : 'catc-launch').click(); }
@@ -435,11 +448,13 @@
          [:aside.catc-side {:aria-label "Chat with the agent"}
           [:div.catc-bar
            [:h1 "Chat"]
-           [:button#catc-pick.btn.catc-pick {:type "button"
-                                             :title "Pick elements of a scene to talk about (Esc to stop)"}
-            "Select"]
+           [:button#catc-pick.catc-tool.catc-pick {:type "button" :aria-pressed "false"
+                                                   :title "Pick elements of a scene to talk about (Esc to stop)"}
+            [:span.catc-tool-i {:aria-hidden "true"} "⌖"] "Pick"]
            [:button#catc-close.catc-x {:type "button" :title "Close the chat (⌘I)"
                                        "data-on:click" "$catcOpen = false"} "✕"]]
+          [:p.catc-hint "Click elements in the scene to attach them. Click again to remove one; "
+           [:kbd "Esc"] " to stop."]
           (-> (chat/chat-panel transcript panel)
               (conj [:input#catc-picks {:type "hidden" "data-bind" picks}]
                     [:button#catc-picks-sync {:type "button" :hidden true

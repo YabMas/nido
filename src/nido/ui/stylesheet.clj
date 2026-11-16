@@ -518,12 +518,18 @@
            tint, the agent's are plain prose; a tool call is a one-line disclosure. */
         .chat { display:flex; flex-direction:column; gap:10px; min-height:0; font-size:var(--fs-sm); }
         .chat-log { display:flex; flex-direction:column; gap:8px; overflow-y:auto; min-height:0; flex:1; }
+        /* Room under the newest message for its reply to grow into; the log's script sizes it. */
+        .chat-log::after { content:''; flex:none; height:var(--chat-tail, 0px); }
+        .chat-you { scroll-margin-top:8px; }
         .chat-msg { max-width:var(--measure); }
         .chat-msg p { margin:0 0 6px; }
         .chat-you { align-self:flex-end; background:var(--accent-bg); border:1px solid var(--accent-border);
                     border-radius:6px; padding:6px 10px; color:var(--text-strong); }
         .chat-agent { color:var(--text); }
-        .chat-caret { color:var(--running); margin-left:2px; }
+        /* The reply is still being written: a text cursor at its end, blinking like one. */
+        .chat-caret { color:var(--running); margin-left:2px; animation:caret-blink 1s steps(1) infinite; }
+        @keyframes caret-blink { 50% { opacity:0; } }
+        @media (prefers-reduced-motion: reduce) { .chat-caret { animation:none; } }
         .chat-thought summary, .chat-tool summary { cursor:pointer; color:var(--text-muted);
                     font-size:var(--fs-xs); list-style:none; display:flex; gap:6px; align-items:baseline; }
         .chat-thought-text { color:var(--text-faint); font-style:italic;
@@ -554,10 +560,13 @@
         .chat-err { display:flex; gap:8px; align-items:baseline; color:var(--failed-strong); background:var(--failed-bg);
                     border-radius:4px; padding:6px 10px; }
         .chat-compose { display:flex; flex-direction:column; gap:6px; }
-        .chat-compose textarea { width:100%; resize:vertical; background:var(--surface-sunken); color:var(--text);
-                    border:1px solid var(--border); border-radius:4px; padding:6px 8px; font:inherit; }
+        /* The send/stop button sits inside the field's bottom-right corner, not on a row of its own. */
+        .chat-field { position:relative; }
+        .chat-compose textarea { display:block; width:100%; resize:vertical; background:var(--surface-sunken);
+                    color:var(--text); border:1px solid var(--border); border-radius:4px;
+                    padding:6px 72px 6px 8px; font:inherit; }
         .chat-compose textarea:focus { outline:none; border-color:var(--accent-border); }
-        .chat-actions { display:flex; justify-content:flex-end; gap:8px; }
+        .chat-actions { position:absolute; right:6px; bottom:6px; display:flex; gap:8px; }
         /* The turn's status row: a moving mark, the phase in words, the seconds so far. Each phase
            has its own mark colour so a glance tells thinking from running from writing. */
         .chat-status { display:flex; gap:8px; align-items:center; min-height:20px; font-size:var(--fs-xs);

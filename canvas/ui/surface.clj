@@ -176,6 +176,12 @@
     {:signature [:=> [:catn [:id :string]] :map]})
   (Operation chat-item "One transcript item, under the DOM id the panel gives it."
     {:signature [:=> [:catn [:item :map] [:routes :map]] :any]})
+  (Operation chat-log
+    "The transcript, under the DOM id a stream re-renders it by, in a log that scrolls the way a
+     chat reads: opened at the bottom, a sent message pinned to its top with room for the reply,
+     and let go when the person scrolls."
+    {:signature [:=> [:catn [:id :string] [:items [:sequential :map]] [:routes :map]] :any]
+     :delegates [chat-item]})
   (Operation turn-status
     "The status row: while a turn runs, the phase it is in — waiting, thinking, running a named
      tool, writing, or waiting for an answer — and the seconds since it started; empty otherwise."
@@ -191,7 +197,7 @@
      panel's id, where sending, cancelling, answering and removing a pick post, and the stream
      URL that keeps it live."
     {:signature [:=> [:catn [:transcript acp/Conversation] [:opts :map]] :any]
-     :delegates [chat-item turn-status composer signals]}))
+     :delegates [chat-log turn-status composer signals]}))
 
 (Module ui-views
   "The dashboard's pages and fragments, and the twenty per-kind cards a ledger record reads as.
@@ -419,6 +425,6 @@
     "One request under /_catalog/chat: the stream, a send, a cancel, a permission answer, the
      picks posted for their chips or one removed; nil for any other path."
     {:signature [:=> [:catn [:req :map]] [:maybe :map]]
-     :delegates [chat-item turn-status picks signals patch-elements-event patch-signals-event
+     :delegates [chat-item chat-log turn-status picks signals patch-elements-event patch-signals-event
                  chat/transcript chat/send! chat/cancel! chat/answer-permission! chat/subscribe!
                  chat/refresh! chat/note-error!]}))

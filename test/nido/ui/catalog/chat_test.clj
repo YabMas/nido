@@ -68,8 +68,10 @@
                                       :body (body picks)})]
     (is (= 200 (:status posted)))
     (is (str/includes? (:body posted) "catalog-chat-picks"))
-    (is (str/includes? (:body posted) "position-chip · every position · span<")
-        "a chip names the element by tag; the path is the agent's")
+    (is (str/includes? (:body posted) "chat-pick-l\">span<")
+        "a chip names the element by tag alone; the path is the agent's")
+    (is (str/includes? (:body posted) "title=\"position-chip · every position · span\"")
+        "where the element sits is on hover")
     (is (str/includes? (:body posted) "/_catalog/chat/unpick/1"))
     (let [removed (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/unpick/0"
                                          :body (body picks)})]

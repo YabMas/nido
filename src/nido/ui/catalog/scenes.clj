@@ -530,16 +530,16 @@
   {:busy? busy? :items (vec (map-indexed (fn [i item] (assoc item :id (str "i" i))) items))})
 
 (def ^:private chip
-  "position-chip · every position · span.pos-chip")
+  {:label "span.pos-chip" :title "position-chip · every position · span.pos-chip"})
 
 (def ^:private you
   {:kind :user :text "Make the needs-you chip a little quieter — it shouts beside the title."
-   :refs [{:label chip}]})
+   :refs [chip]})
 
 (def ^:private you-two
   {:kind :user :text "These two should read as one family — same weight, same tint."
-   :refs [{:label chip}
-          {:label "row · a running workstream · span.row-stage"}]})
+   :refs [chip
+          {:label "span.row-stage" :title "row · a running workstream · span.row-stage"}]})
 
 (def ^:private reply
   {:kind :agent :text "The chip takes `--needs` at full strength. I will move it to `--needs-dim`
@@ -591,6 +591,17 @@ for the text and keep the tint, so it still reads as **yours** without competing
               :render #(chat/chat-panel
                         (transcript false you {:kind :error :text "The agent process stopped."})
                         chat-routes)}]}
+   {:name "chat-log"
+    :note "The transcript alone, as it scrolls: it opens at the bottom, a message you send is
+           pinned to its top with room below for the reply, and your own scroll lets go."
+    :scenes [{:title "a long conversation, in a short box"
+              :note "Opens on the newest message, at the top, with the reply under it and the room
+                     the reply still has. Scroll up for the earlier turns."
+              :render #(vector :div.cat-scroll-box
+                               (chat/chat-log "scene-log"
+                                              (:items (transcript false you edit-call reply
+                                                                  you-two reply))
+                                              chat-routes))}]}
    {:name "turn-status"
     :note "The status row at the foot of the log: from Send to the turn's end it names what the
            agent is doing now and counts the seconds. Each phase against the others."
