@@ -10,13 +10,21 @@
    allowlist of tools and `dontAsk`, which denies what neither the list nor the CLI's own
    read-only classification (`find`, `wc`, …) admits, rather than waiting for a person who is not
    there. A denied write reaches the model as a refusal it has to work around; it never reaches
-   the tree."
+   the tree.
+
+   `--restricted` also confines the file tools to the working directory, a copy of ONE project's
+   tree, where codex's read-only sandbox reads the whole disk. A record that cites a second repo —
+   brian's PDF path runs through document-service — then gets its claims on that repo refused on
+   every claude round and never confirmed, and the loop can never pass it. So a claude reviewer
+   is given, with `--add-dir`, every project nido drives and the run's own directory (the earlier
+   rounds' logs). Settings files cannot do this: `--restricted` ignores them."
   (:require
    [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [nido.platform.process :as nprocess]))
+   [nido.platform.process :as nprocess]
+   [nido.platform.project :as project]))
 
 (def default-model
   "The model a claude review runs on when the caller names none."
@@ -42,7 +50,23 @@
   (str "\n\nTOOLS IN THIS REVIEW: your shell runs only `jj --ignore-working-copy diff …`,\n"
        "`jj --ignore-working-copy file show …` and `grep` (to filter their output). Use the Grep\n"
        "and Glob tools where the text above says `rg`, and the Read tool where it says `sed` or\n"
-       "`cat`. Anything else is refused.\n"))
+       "`cat`. Anything else is refused. The Read, Grep and Glob tools also reach the checkout of\n"
+       "every other project nido drives (e.g. a service this repo calls), at its absolute path.\n"))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:vector :string]]}
+  read-roots
+  "The directories a claude reviewer may read beyond its cwd: the checkout of every project nido
+   drives, and the directory `log-path` is in, which holds the run's earlier rounds. Only those
+   that exist; a project whose registry entry cannot be read adds nothing rather than failing
+   the review."
+  [log-path]
+  (let [projects (try (vals (project/list-projects)) (catch Exception _ nil))]
+    (->> (concat (keep :directory projects)
+                 (some-> log-path io/file .getAbsoluteFile .getParent vector))
+         (map str)
+         (filter #(.isDirectory (io/file %)))
+         distinct
+         vec)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   claude-argv
@@ -51,8 +75,9 @@
 
    `schema` is the schema's JSON text, not its path: claude takes it inline. The prompt goes in on
    stdin, where its size is not bounded by the argument list. stdout is the stream-json transcript
-   and goes to :log-path, with stderr merged in; `run-claude!` reads the answer back out of it."
-  [{:keys [cwd schema log-path prompt model claude-bin]}]
+   and goes to :log-path, with stderr merged in; `run-claude!` reads the answer back out of it.
+   `add-dirs` are the directories it may read beyond `cwd` (`read-roots`)."
+  [{:keys [cwd schema log-path prompt model claude-bin add-dirs]}]
   (into [{:dir cwd :continue true :in (str prompt tool-note)
           :out :write :out-file (io/file log-path) :err :out}
          (or claude-bin "claude") "--print"
@@ -65,11 +90,12 @@
          "--setting-sources" "user,project"
          "--permission-mode" "dontAsk"
          "--tools" "Bash,Read,Grep,Glob"
-         "--json-schema" schema
-         ;; Last, because the flag is variadic and would take whatever option followed it as one
-         ;; more rule.
-         "--allowedTools"]
-        allowed-commands))
+         "--json-schema" schema]
+        (concat (mapcat (fn [d] ["--add-dir" d]) add-dirs)
+                ;; --allowedTools last, because the flag is variadic and would take whatever option
+                ;; followed it as one more rule.
+                ["--allowedTools"]
+                allowed-commands)))
 
 (defn- result-event
   "The stream's final `result` event, or nil when the run ended without one."
@@ -118,7 +144,8 @@
    Registered as a child for the same reason as `run-codex!`: a stopped loop must not leave its
    reviewer running and billing."
   [{:keys [schema-path out-path log-path] :as opts}]
-  (let [[opts' & cmd] (claude-argv (assoc opts :schema (slurp schema-path)))
+  (let [[opts' & cmd] (claude-argv (assoc opts :schema (slurp schema-path)
+                                          :add-dirs (or (:add-dirs opts) (read-roots log-path))))
         proc (apply p/process opts' cmd)
         {:keys [exit timed-out?]} (nprocess/with-child-registered
                                    (:proc proc) #(nprocess/wait-within! (:proc proc) (:budget-ms opts)))

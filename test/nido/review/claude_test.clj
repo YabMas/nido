@@ -4,6 +4,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.platform.project]
    [nido.review.claude :as claude]))
 
 (defn- argv [opts]
@@ -32,6 +33,26 @@
               "Bash(grep:*)"]
              (vec (rest (drop-while #(not= "--allowedTools" %) args))))
           "--allowedTools is variadic, so it is last — an option after it would be read as a rule"))))
+
+(deftest a-claude-reviewer-may-read-the-directories-it-is-given
+  (let [args (argv {:add-dirs ["/Code/document-service" "/runs/r1"]})]
+    (is (= [["--add-dir" "/Code/document-service"] ["--add-dir" "/runs/r1"]]
+           (->> args (partition 2 1) (filter #(= "--add-dir" (first %))) (mapv vec)))
+        "--restricted confines the file tools to cwd; a record citing a second repo is unreadable without these")
+    (is (= "--allowedTools" (first (drop-while #(not= "--allowedTools" %) args))))
+    (is (= "Bash(grep:*)" (last args)) "--allowedTools stays last")))
+
+(deftest read-roots-are-the-registered-checkouts-and-the-run-dir
+  (let [tmp (str (fs/create-temp-dir))
+        a (str (fs/create-dirs (fs/path tmp "a")))
+        run (str (fs/create-dirs (fs/path tmp "run")))]
+    (with-redefs [nido.platform.project/list-projects
+                  (constantly {"a" {:directory a} "gone" {:directory (str tmp "/missing")}})]
+      (is (= [a run] (claude/read-roots (str run "/round-1.log")))
+          "a project whose checkout is gone adds nothing"))
+    (with-redefs [nido.platform.project/list-projects (fn [] (throw (ex-info "unreadable" {})))]
+      (is (= [run] (claude/read-roots (str run "/round-1.log")))
+          "an unreadable registry never fails the review"))))
 
 (deftest a-claude-reviewer-runs-on-opus-unless-told-otherwise
   (is (= "opus" (flag-value (argv {}) "--model")))
