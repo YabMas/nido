@@ -672,7 +672,9 @@
                                                                     :recovered-boot nil}
                                                            :dispatching nil}))
         (let [hb (seats/post! :brian id {:key "turn-1" :kind :hand-back :to :conductor :text "seat 1 stopped"})]
-          (is (= ["[seat message from nido]\n\nseat 1 stopped"] (mapv :text (seats/owed :brian id c))))
+          (is (= [(str "[seat message from nido]\n\nHand-back id: " (:id hb) "\nseat 1 stopped")]
+                 (mapv :text (seats/owed :brian id c)))
+              "the hand-back carries the id the conductor's decision names it by")
           (seats/delivered! :brian id (:id hb) "tok")
           (is (= [(:id hb)] (mapv :id (seats/owed :brian id c)))
               "given once to its running conversation, it is offered once more should that turn not decide it")

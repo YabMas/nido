@@ -177,7 +177,8 @@
     (str "You conduct workstream " ws-id " of " (name project) ". You occupy no seat and write no code. "
          "Each hand-back nido gives you — a turn nido gave that ended, a person's turn in one of its "
          "sessions (marked as the person's: they are steering it), or an act of the person's — you "
-         "answer with exactly one decision, recorded with `bb nido:seats:decide :hand-back <id>` and "
+         "answer with exactly one decision, recorded with `bb nido:seats:decide :hand-back <id>` — "
+         "the id on that hand-back's `Hand-back id:` line, never one read off the log — and "
          "either `:seat <id> :text \"…\"` (or `:instruct '[{:seat … :text …} …]'` for several seats) "
          "or `:escalate \"…?\"`, the one-sentence question the person is needed for, with "
          "`:summary \"…\"` (the context) and `:after \"…\"` (what happens once they answer), "
@@ -612,8 +613,10 @@
   (* 2 60 1000))
 
 (def stall-grace-ms
-  "How long an activated workstream may read stalled after its last turn end before the stall is
-   handed back: the turn end's own hand-back and its decision get that long to move it first."
+  "How long an activated workstream may read stalled after its last turn end, and after its
+   ledger's newest entry, before the stall is handed back: whatever last moved it — the turn end's
+   own hand-back and its decision, or a person's act that made the move an agent's — gets that
+   long to be acted on first."
   (* 10 60 1000))
 
 (defn- ms [iso] (try (.toEpochMilli (java.time.Instant/parse (str iso))) (catch Exception _ nil)))
@@ -688,13 +691,16 @@
 
 (defn- stall!
   "Hand the workstream's stall back to its conductor — once per turn end — when it is activated,
-   reads stalled since a recorded turn end at least `stall-grace-ms` old, owes its conductor no
-   hand-back already, and no session of it stands on a dialog. The hand-back carries status's :why."
+   reads stalled since a recorded turn end at least `stall-grace-ms` old, has gained no ledger
+   entry within that grace either, owes its conductor no hand-back already, and no session of it
+   stands on a dialog. The hand-back carries status's :why."
   [project ws-id w records now-ms]
   (let [{:keys [stalled why]} (pipeline/status project ws-id)
-        ended (ms (:ended-at why))]
+        ended (ms (:ended-at why))
+        ;; An entry without a readable :at moves nothing: it cannot say when it landed.
+        moved (or (ms (:at (last (:entries w)))) 0)]
     (when (and stalled ended (= :recorded (:turn-end why))
-               (>= (- now-ms ended) stall-grace-ms)
+               (>= (- now-ms (max ended moved)) stall-grace-ms)
                (not-any? #(get-in % [:claude :waiting]) records)
                (not (owes-hand-back? project ws-id w)))
       (let [s (some #(when (= (:session why) (:name %)) %) records)]
@@ -705,14 +711,67 @@
                           :session (:session why) :seat (get-in s [:seat :id]) :said (:said why)})
         [{:ws-id ws-id :session (:session why) :wrote :hand-back}]))))
 
+(def ^:private machinery-outcomes
+  "Stage outcomes that say a round could not be run to an answer — not what it found. A retryable
+   outcome out of attempts is one too, read off its disposition."
+  #{:timed-out :reviewer-unavailable :usage-limited :reviewer-recently-unavailable})
+
+(def ^:private reviewed-kind
+  "The record kind each driven review stage judges: a newer one is what its next run reads."
+  {:verify-baseline :baseline :decide-design :design})
+
+(defn- moot-halt
+  "Why the open blocker `b` no longer asks anything, when it halted a review stage at a machinery
+   outcome and the ledger has since gained a newer record of the kind that stage reviews: the
+   question was whether to run the round again on the old record, and the next run reads the new
+   one. Nil for every other blocker — a halt at a round's judgement among them."
+  [project ws-id b]
+  (let [{:keys [stage outcome]} (last (:tried b))
+        kind (reviewed-kind stage)]
+    (when (and kind (or (machinery-outcomes outcome) (= :retry (pipeline/disposition outcome))))
+      (when-let [newer (last (filter #(> (:seq %) (:seq b)) (ws/entries-of project ws-id kind)))]
+        (str "the " (name stage) " stage it halted at " (name outcome) " now reviews the newer "
+             (name kind) " at entry " (:seq newer))))))
+
+(defn- moot-escalation
+  "Why the open blocker `b` no longer asks anything, when nido parked it escalating a hand-back the
+   conductor ended its turns without deciding, and the conductor has since decided a later
+   hand-back from the same session — instructing the seats, or escalating in its own words: either
+   way it has taken that seat's situation up, and nido's stand-in question is superseded. Nil for
+   every other blocker, the conductor's own escalations among them."
+  [project ws-id b decisions]
+  (let [session-of #(:session (hand-back-message project ws-id (:hand-back %)))]
+    (when-let [esc (some #(when (and (= :nido (:by %)) (= (:seq b) (get-in % [:parked :seq]))) %) decisions)]
+      (when-let [session (session-of esc)]
+        (when-let [d (some #(when (and (= :conductor (:by %)) (> (:seq %) (:seq b)) (= session (session-of %))) %)
+                           decisions)]
+          (str "the conductor has since decided " session "'s later hand-back, at entry " (:seq d)))))))
+
+(defn- answer-moot!
+  "Answer, as nido, each of the workstream's open blockers that nido wrote and that no longer ask
+   anything (`moot-halt`, `moot-escalation`), its summary saying why. A blocker a person owes for
+   any other reason is left for them. Answers [{:ws-id :blocker :wrote :blocker-answered} …]."
+  [project ws-id]
+  (deciding
+   project ws-id
+   #(let [decisions (ws/entries-of project ws-id :conduct-decision)]
+      (vec (for [b    (open-blockers project ws-id)
+                 :let [why (or (moot-halt project ws-id b) (moot-escalation project ws-id b decisions))]
+                 :when why]
+             (do (ws/append-entry! project ws-id {:kind :blocker-answered}
+                                   (pr-str {:format :blocker-answered :blocker-seq (:seq b) :resumed nil :by :nido
+                                            :summary (str "it no longer asks anything: " why)}))
+                 {:ws-id ws-id :blocker (:seq b) :wrote :blocker-answered}))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :int] [:sequential :map]]}
   stops!
-  "One pass over `project`'s open workstreams with a session nido drives, at `now-ms`: ask a
-   person about each dialog a driven session has stood on past `dialog-grace-ms` — a :blocker nido
-   writes, worded with what the dialog asks, answered {:by :nido} once it closes — and hand an
-   activated workstream's stall back to its conductor (`stall!`), which decides it like any
-   hand-back. Nothing is sent to a session. Answers [{:ws-id :session :wrote} …]; a workstream
-   that throws is logged and skipped."
+  "One pass over `project`'s open workstreams with a session nido drives, at `now-ms`: answer as
+   nido each blocker it wrote that no longer asks anything (`answer-moot!`); ask a person about
+   each dialog a driven session has stood on past `dialog-grace-ms` — a :blocker nido writes,
+   worded with what the dialog asks, answered {:by :nido} once it closes — and hand an activated
+   workstream's stall back to its conductor (`stall!`), which decides it like any hand-back.
+   Nothing is sent to a session. Answers [{:ws-id :session :wrote} …]; a workstream that throws is
+   logged and skipped."
   [project now-ms]
   (let [faceted ((requiring-resolve 'nido.coordinator.lane.conduct/faceted-sessions) {:projects [project]})
         rows    (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {:projects [project]}))]
@@ -721,8 +780,12 @@
                (try
                  (let [w (ws/read-ws project ws-id)]
                    (when (and w (nil? (ws/closure w)))
-                     (let [records (filter :claude (session/list-sessions project ws-id))]
-                       (doall (concat (dialogs! project ws-id records now-ms @rows)
+                     (let [records (filter :claude (session/list-sessions project ws-id))
+                           moot    (answer-moot! project ws-id)
+                           ;; An answer just written moved the ledger: the stall reads it.
+                           w       (if (seq moot) (ws/read-ws project ws-id) w)]
+                       (doall (concat moot
+                                      (dialogs! project ws-id records now-ms @rows)
                                       (when (and (standing/activated? w) (not (standing/paused? w)))
                                         (stall! project ws-id w (remove :conductor records) now-ms)))))))
                  (catch Throwable t

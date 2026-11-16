@@ -256,7 +256,8 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:sequential :map]]}
   owed
   "The seat messages the session `session-name` is owed, oldest first, each {:id :kind :text} with
-   its sender named in the text and :kind as logged (:hand-back, :instruction, or nil): for a seat's occupant, those the log addresses to the seat it
+   its sender named in the text — and, for a hand-back, its id, which is what the conductor's
+   decision names it by — and :kind as logged (:hand-back, :instruction, or nil): for a seat's occupant, those the log addresses to the seat it
    occupies in the current generation with no delivery recorded; for the conductor, those
    `owed-to-conductor?` says. Derived each time, so a replaced occupant's successor is owed what
    it was, and a session that is no seat's or conductor's is owed nothing. Empty for a workstream
@@ -272,7 +273,10 @@
         g  (some-> w :entries generation/current)
         to (when (and s g) (addressee s g))
         as-owed (map (fn [{:keys [id kind from text]}]
-                       {:id id :kind kind :text (str "[seat message from " (describe from) "]\n\n" text)}))]
+                       {:id id :kind kind
+                        :text (str "[seat message from " (describe from) "]\n\n"
+                                   (when (= :hand-back kind) (str "Hand-back id: " id "\n"))
+                                   text)}))]
     (cond
       (nil? to) []
       (= :conductor to)

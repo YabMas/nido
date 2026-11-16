@@ -461,6 +461,57 @@
                 "the person reads what the seat reported"))
           (is (= [] (conductor/close-unanswered! :brian id c {:token "tok-2"})) "answered once, by nido"))))))
 
+(deftest an-undecided-hand-back-s-escalation-is-answered-once-the-conductor-decides-that-seat-s-next
+  ;; brian ws-20261116-325d89, entries 116-118: nido escalated a stall hand-back the conductor
+  ;; ended two turns without deciding, the conductor then decided the same seat's next hand-back,
+  ;; and the escalation still stood, asking the person what the seat should do next.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")
+            pass #(with-redefs [conduct/live-states (constantly {})] (conductor/stops! :brian (System/currentTimeMillis)))
+            answered-by-nido #(set (map :blocker-seq (filter (comp #{:nido} :by) (ws/entries-of :brian id :blocker-answered))))]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
+        (let [hb (hand-back! id)]
+          (doseq [tok ["tok" "tok-2"]]
+            (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] tok))
+            (seats/delivered! :brian id (:id hb) tok))
+          (let [[e] (conductor/close-unanswered! :brian id c {:token "tok-2"})
+                parked (get-in e [:parked :seq])]
+            (is (some? parked) "nido's escalation parked the workstream")
+            (testing "it stands while the conductor has decided nothing since"
+              (pass)
+              (is (empty? (answered-by-nido))))
+            (testing "once the conductor decides that seat's next hand-back, nido answers it, saying why"
+              (let [b (hand-back! id)]
+                (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back (:id b) :decision [:instruct [{:seat 1 :text "go on"}]]})))))
+                (pass)
+                (is (= #{parked} (answered-by-nido)) "that blocker, and only it")
+                (is (str/includes? (:summary (some #(when (= parked (:blocker-seq %)) %) (ws/entries-of :brian id :blocker-answered)))
+                                   "has since decided"))
+                (pass)
+                (is (= 1 (count (filter (comp #{:nido} :by) (ws/entries-of :brian id :blocker-answered))))
+                    "once")))))))))
+
+(deftest an-undecided-hand-back-s-escalation-gives-way-to-the-conductor-s-own-on-that-seat
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
+        (let [hb (hand-back! id)]
+          (doseq [tok ["tok" "tok-2"]]
+            (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] tok))
+            (seats/delivered! :brian id (:id hb) tok))
+          (let [parked (get-in (first (conductor/close-unanswered! :brian id c {:token "tok-2"})) [:parked :seq])
+                b      (hand-back! id)]
+            (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back (:id b) :decision [:escalate {:needs "Which way?"}]})))))
+            (with-redefs [conduct/live-states (constantly {})] (conductor/stops! :brian (System/currentTimeMillis)))
+            (is (= [parked] (map :blocker-seq (filter (comp #{:nido} :by) (ws/entries-of :brian id :blocker-answered))))
+                "the conductor's question about that seat supersedes nido's stand-in one")))))))
+
 (deftest a-hand-back-a-later-decided-one-from-the-same-session-covers-asks-nobody
   (with-tmp
     (fn []

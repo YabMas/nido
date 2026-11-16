@@ -139,7 +139,8 @@
      from the seat-message log alone."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]})
   (Operation owed
-    "The seat messages a session is owed, oldest first, with no delivery recorded: those the log
+    "The seat messages a session is owed, oldest first, a hand-back's text carrying its id, with
+     no delivery recorded: those the log
      addresses, in the current generation, to the seat it occupies — or, when it conducts, those
      addressed to the conductor in any generation, so a generation's opening drops none, and those
      addressed to the current generation's whole seat once it fixes ids; for the conductor, a

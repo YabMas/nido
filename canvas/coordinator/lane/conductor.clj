@@ -115,13 +115,18 @@
     {:signature [:=> [:catn [:report :map]] [:sequential :map]]
      :delegates [drive/of seats/occupants seats/post! standing/governing-design rseats/seats]})
   (Operation stops!
-    "One pass over a project's open workstreams with a session nido drives: a dialog a driven
-     session has stood on for two minutes becomes a :blocker nido writes for a person, worded with
-     what the dialog asks and answered by nido once it closes; an activated workstream that has
-     read stalled for ten minutes since its last turn end is handed back to its conductor, once per
-     turn end, with why. Sends nothing to a session."
+    "One pass over a project's open workstreams with a session nido drives: a blocker nido wrote
+     that no longer asks anything is answered by nido, saying why — a review stage's halt at a
+     machinery outcome once a newer record of the kind that stage reviews is on the ledger, and
+     nido's escalation of a hand-back the conductor did not decide once the conductor decides a later
+     hand-back from the same session; a dialog a driven session has stood on for
+     two minutes becomes a :blocker nido writes for a person, worded with what the dialog asks and
+     answered by nido once it closes; an activated workstream that has read stalled for ten minutes
+     since its last turn end and its ledger's newest entry is handed back to its conductor, once
+     per turn end, with why. Sends nothing to a session."
     {:signature [:=> [:catn [:project ProjectName] [:now-ms :int]] [:sequential :map]]
-     :delegates [drive/status seats/post! substrate/pending-dialog]})
+     :delegates [drive/status drive/disposition seats/post! substrate/pending-dialog
+                 workstream/entries-of workstream/append-entry!]})
   (Operation answers-in-place!
     "From one conduct pass's report, answer as nido each open escalation the conductor decided on
      a hand-back marked as a person's turn, and the blocker it parked, once the person prompts that

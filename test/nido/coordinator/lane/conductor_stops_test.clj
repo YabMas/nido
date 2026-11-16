@@ -7,7 +7,9 @@
    [nido.coordinator.agent.substrate :as substrate]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.conductor :as c]
+   [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.seats :as seats]
+   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.record.workstream :as ws]))
 
@@ -24,11 +26,13 @@
 
 (defn- workstream!
   "An open workstream with a goal and one session nido drives, its facet merged with `facet`;
-   activated when `activated?`. The session is \"worker\" unless `session` names another."
+   activated when `activated?`. The session is \"worker\" unless `session` names another. Its
+   ledger entries are stamped at t0, so a pass's grace counts from there."
   [facet activated? & [session]]
   (let [id (:id (ws/create! :brian {:external-refs []}))]
-    (ws/append-entry! :brian id {:kind :intent} (pr-str {:format :intent :goal "g" :done-when ["d"]}))
-    (when activated? (ws/activate! :brian id nil))
+    (with-redefs [clock/now-iso (constantly t0)]
+      (ws/append-entry! :brian id {:kind :intent} (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+      (when activated? (ws/activate! :brian id nil)))
     (sess/create! :brian id {:name (or session "worker") :weight :light :autonomy nil})
     (sess/update-claude! :brian id (or session "worker")
                          (constantly (merge {:session-id (str "s-" (or session "worker")) :bg-id (or session "worker") :origin :nido :driver :nido
@@ -97,6 +101,62 @@
             (sess/update-claude! :brian id "worker" #(assoc-in % [:last-stop :at] "2026-11-13T15:00:00Z"))
             (is (empty? (pass! 40)))
             (is (= 1 (count (stall-hand-backs id))))))))))
+
+(defn- at-iso [minutes] (str (java.time.Instant/ofEpochMilli (at minutes))))
+
+(deftest a-stall-waits-out-its-grace-from-the-ledger-s-newest-entry-too
+  ;; brian ws-20261116-325d89: the seat's turn ended at 16:14 waiting on the person's approval,
+  ;; the approval landed at 17:20:26, and the stall was handed back at 17:20:43 — before the
+  ;; conductor could pass the approval on.
+  (with-tmp
+    (fn [_]
+      (with-redefs [conduct/live-states (constantly {})]
+        (let [id (workstream! {:last-stop {:at t0 :message "Waiting on approval." :nido? true}} true)]
+          (with-redefs [clock/now-iso (constantly (at-iso 60))]
+            (ws/append-entry! :brian id {:kind :scratch} (pr-str {:format :scratch :session "worker"})))
+          (testing "an hour after the turn end, but a minute after the ledger moved, nothing is handed back"
+            (is (empty? (pass! 61))))
+          (testing "once the ledger has stood still for the grace too, the stall is handed back"
+            (is (= [:hand-back] (map :wrote (pass! 71))))))))))
+
+(defn- baseline [intent-seq]
+  {:format :baseline :strata [] :intent {:seq intent-seq}
+   :area "a" :bounded-by "b" :shape "s"
+   :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+           :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f" :evidence {:by :round}}]}
+   :read ["src/a.clj"]})
+
+(defn- answered-by-nido [id]
+  (set (map :blocker-seq (filter (comp #{:nido} :by) (ws/entries-of :brian id :blocker-answered)))))
+
+(deftest a-review-stage-s-machinery-halt-is-answered-once-a-newer-record-replaces-what-it-reviewed
+  ;; nido ws-20261116-a5116e, entries 6-8: verify-baseline timed out, the corrected baseline was
+  ;; appended next, and the timeout still asked the person how the stage should go on.
+  (with-tmp
+    (fn [_]
+      (with-redefs [conduct/live-states (constantly {})]
+        (let [id      (workstream! {} true)
+              halt    (fn [stage outcome]
+                        (:seq (drive/park! :brian id {:stage stage :outcome outcome
+                                                      :tried [{:stage stage :outcome outcome}]})))
+              _       (ws/append-entry! :brian id {:kind :baseline} (pr-str (baseline 1)))
+              timeout (halt :verify-baseline :timed-out)
+              judged  (halt :verify-baseline :disputed)]
+          (testing "while the record it reviewed is the newest, it stands"
+            (pass! 1)
+            (is (empty? (answered-by-nido id))))
+          (testing "a newer baseline answers the machinery halt, saying why"
+            (ws/append-entry! :brian id {:kind :baseline} (pr-str (assoc (baseline 1) :supersedes {:seq 3 :why "corrected"})))
+            (pass! 2)
+            (is (contains? (answered-by-nido id) timeout))
+            (is (str/includes? (:summary (first (ws/entries-of :brian id :blocker-answered))) "timed-out")))
+          (testing "a halt at a round's judgement stays the person's"
+            (is (not (contains? (answered-by-nido id) judged))))
+          (testing "a design halt is not answered by a newer baseline"
+            (let [d (halt :decide-design :usage-limited)]
+              (ws/append-entry! :brian id {:kind :baseline} (pr-str (assoc (baseline 1) :supersedes {:seq 6 :why "again"})))
+              (pass! 3)
+              (is (not (contains? (answered-by-nido id) d))))))))))
 
 (deftest catalog-chat-replay
   ;; catalog-chat as it stood at 15:00 on 2026-11-13: listed blocked, waiting, on an
