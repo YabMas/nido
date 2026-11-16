@@ -18,8 +18,9 @@
 
 (def min-version
   "The oldest Claude Code every behaviour here was observed on — dispatch, the listing, inbox
-   delivery, in-place wake, supervisor restart. Below it nido dispatches nothing."
-  [2 1 296])
+   delivery, in-place wake with the session's saved options, supervisor restart. Below it nido
+   dispatches nothing."
+  [2 1 325])
 
 (defn- claude!
   "Run a claude command line to completion with no stdin, in `opts`'s :dir when given, as
@@ -104,8 +105,9 @@
 (def ^:private driven-disallowed-tools
   "Tools a session nido starts or wakes runs without. AskUserQuestion opens a dialog only someone
    at that session's terminal can answer, and nobody is: what the agent wants to ask has to end
-   its turn instead, where whoever answers for the session reads it. Claude Code keeps the list a
-   session was launched with across a respawn, not across a resume, so a wake passes it again."
+   its turn instead, where whoever answers for the session reads it. Claude Code saves the list
+   with a background session and keeps it across a respawn and a resume alike, so only dispatch!
+   passes it."
   ["AskUserQuestion"])
 
 (defn- pause! [ms] (Thread/sleep (long ms)))
@@ -308,20 +310,18 @@
   wake!
   "Continue the session `session-id`, which has no live process, in the background under its own
    id with `text` as its next prompt, run from `opts`'s :cwd — the directory the listing shows it
-   in, where Claude Code finds its conversation and the session loads that directory's settings —
-   with permissions skipped and without `driven-disallowed-tools`, as dispatch! starts it, since a
-   resume takes both from its own command line and not from the conversation.
+   in, where Claude Code finds its conversation and the session loads that directory's settings.
+   It passes no other flag: a background session keeps the options it was started with (dispatch!
+   gave it the permission skip and `driven-disallowed-tools`), and since Claude Code 2.1.323 a
+   resume given any flag starts a copy instead of continuing the session — which this would undo
+   every time, so the session would never wake.
    Answers {:woke? true} or, when Claude Code started a copy
    instead — it does when the session turned out to be running — {:woke? false :copy <id>}, the
    copy stopped and removed again so nothing runs beside the session. Throws :reason
    :copy-cleanup-failed, naming the copy and the command Claude Code refused, when it was not —
    with the copy as :left-running only while its stop is unconfirmed."
   [session-id text {:keys [claude-bin cwd] :or {claude-bin "claude"}}]
-  (let [{:keys [exit out err]} (claude! (-> [claude-bin "--resume" session-id "--bg" "--dangerously-skip-permissions"
-                                              "--disallowedTools"]
-                                             (into driven-disallowed-tools)
-                                             (into ["--" text]))
-                                         {:dir cwd})]
+  (let [{:keys [exit out err]} (claude! [claude-bin "--resume" session-id "--bg" "--" text] {:dir cwd})]
     (if-let [copy (copy-note (str out err))]
       (let [cleanup! (fn [verb]
                        (let [r (claude! [claude-bin verb copy])]

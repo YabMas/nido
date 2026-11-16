@@ -21,7 +21,7 @@
   `(with-redefs-fn ~(into {} (map vec (partition 2 bindings)))
      (fn [] ~@body)))
 
-(def new-enough {"--version" {:exit 0 :out "2.1.296 (Claude Code)\n" :err ""}})
+(def new-enough {"--version" {:exit 0 :out "2.1.325 (Claude Code)\n" :err ""}})
 
 (deftest versions-compare-as-numbers
   (is (= [2 1 296] (sub/parse-version "2.1.296 (Claude Code)")))
@@ -130,8 +130,9 @@
       (sub/wake! "a56cda8b-3390" "go" {:cwd "/wt"}))
     (is (= {:dir "/wt"} (second (first @calls)))
         "where Claude Code finds the conversation and the directory's settings")
-    (is (= ["claude" "--resume" "a56cda8b-3390" "--bg" "--dangerously-skip-permissions" "--disallowedTools" "AskUserQuestion" "--" "go"] (ffirst @calls))
-        "with permissions skipped, which a resume takes from its command line alone")))
+    (is (= ["claude" "--resume" "a56cda8b-3390" "--bg" "--" "go"] (ffirst @calls))
+        "with no flag of its own: any flag makes Claude Code start a copy, and the session keeps
+         the options it was dispatched with")))
 
 (deftest trust-is-read-for-exactly-the-directory
   (let [dir (fs/create-temp-dir)
