@@ -333,6 +333,15 @@
   (or (first (filter #(= key (:key %)) (log-rows project ws-id)))
       (log! project ws-id w (assoc msg :from {:as :nido}))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] [:maybe :map]]}
+  posted
+  "The message logged under `key`, or nil. Read without the append lock, so nil only says no
+   post had landed when it was read: a caller that then posts still goes through `post!`, which
+   decides under the lock. What it buys is skipping the work of building a message that is
+   already logged."
+  [project ws-id key]
+  (first (filter #(= key (:key %)) (log-rows project ws-id))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   post!
   "Log a message nido writes — {:key :to :text :kind}, a :hand-back to the conductor or an

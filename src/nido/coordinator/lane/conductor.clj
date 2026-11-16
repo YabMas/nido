@@ -374,14 +374,18 @@
   "Post one hand-back to the workstream's conductor under `key`, carrying the position the
    pipeline derives now and the governing design and seats as the records give them now — so a
    conductor started under an earlier design decides on this one. A person's turn (`:turn
-   :person`) is marked so on the message, with the conversation it ran in."
+   :person`) is marked so on the message, with the conversation it ran in. A key already logged
+   answers that message without deriving anything: `answers!` offers every act the person ever
+   recorded on every pass, and deriving the position for each costs the coordinator's loop
+   minutes."
   [project ws-id key fields]
-  (let [pos (position project ws-id)
-        msg (merge fields pos {:design (standing/governing-design project ws-id)
-                               :seats  (rseats/seats project ws-id)})]
-    (seats/post! project ws-id (merge {:key key :kind :hand-back :to :conductor :text (hand-back-text msg)
-                                       :session (:session fields) :position (:position pos)}
-                                      (select-keys fields [:turn :conversation])))))
+  (or (seats/posted project ws-id key)
+      (let [pos (position project ws-id)
+            msg (merge fields pos {:design (standing/governing-design project ws-id)
+                                   :seats  (rseats/seats project ws-id)})]
+        (seats/post! project ws-id (merge {:key key :kind :hand-back :to :conductor :text (hand-back-text msg)
+                                           :session (:session fields) :position (:position pos)}
+                                          (select-keys fields [:turn :conversation]))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]}
   hand-backs!

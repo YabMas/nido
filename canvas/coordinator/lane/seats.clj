@@ -104,6 +104,11 @@
      same key logs nothing and answers the first."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:message :map]] :map]
      :delegates [rseats/seats]})
+  (Operation posted
+    "The message logged under a key, or nil — read without the append lock, so nil says only that
+     no post had landed when it was read; post! still decides. It lets a caller skip building a
+     message that is already logged."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:key :string]] [:maybe :map]]})
   (Operation post-held!
     "post!, for a caller already holding the workstream's ledger append lock with the workstream
      read under it — so an entry it appends under that lock and the messages it posts are one

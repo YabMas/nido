@@ -970,6 +970,26 @@
                     (filter #(= :hand-back (:kind %)) (seats/traffic :brian id 1)))
               "and is handed back to the conductor"))))))
 
+(deftest an-act-already-handed-back-derives-nothing-on-the-next-pass
+  ;; answers! offers every act the person ever recorded on every pass; deriving the pipeline's
+  ;; position for each one already posted held the coordinator's loop for minutes.
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            derived  (atom 0)]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (Thread/sleep 5)
+        (add :merged {:format :merged :commit "abc" :url "u" :title "t"})
+        (with-redefs [pipeline/of (fn [& _] (swap! derived inc) {:at :published})]
+          (conductor/answers! :brian)
+          (let [first-pass @derived
+                posted     (count (filter #(= :hand-back (:kind %)) (seats/traffic :brian id 1)))]
+            (is (pos? first-pass) "the first pass derives the position it posts")
+            (conductor/answers! :brian)
+            (is (= first-pass @derived) "the second pass derives nothing for the act already posted")
+            (is (= posted (count (filter #(= :hand-back (:kind %)) (seats/traffic :brian id 1))))
+                "and posts it no second time")))))))
+
 (deftest only-the-acceptance-of-the-verdict-found-answers-it
   (with-tmp
     (fn []
