@@ -79,3 +79,8 @@
     (is (= "plain" (t/prompt-text "plain" [])))
     (is (= [] (:refs (first (:items (run (upd {:sessionUpdate "user_message_chunk" :messageId "u1"
                                                 :content {:type "text" :text "plain"}})))))))))
+
+(deftest a-note-is-an-item-and-leaves-the-turn-alone
+  (let [t (run {:local :user :text "hi" :refs [] :at 1} {:local :note :text "Published."})]
+    (is (= {:kind :note :text "Published."} (dissoc (last (:items t)) :id)))
+    (is (:busy? t) "a note does not end a turn")))

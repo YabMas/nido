@@ -104,6 +104,7 @@
       :permission [:div {:id dom-id} (permission-item item routes)]
       :error      [:div.chat-err {:id dom-id} [:span.chat-st.chat-st-failed {:title "failed"} "⚠"]
                    [:span (:text item)]]
+      :note       [:p.chat-note {:id dom-id} (:text item)]
       [:div {:id dom-id}])))
 
 (defn- phase
@@ -246,3 +247,68 @@
      (chat-log id items opts)
      (turn-status id transcript)
      (composer id opts)]))
+
+(defn- first-line [s] (some-> s str/trim not-empty str/split-lines first))
+
+(defn ^{:malli/schema [:=> [:cat :string [:maybe :map] :map :map] :any]}
+  change-bar
+  "The conversation's unlanded change, under the DOM id `<id>-change`, and the two things a person
+   can do with it: publish it to main or throw it away, each asked to confirm first. Renders from
+   `change` — `{:description :files}`, see `nido.session.change`, or nil for none — and
+   `publishing`: `{:running? :step}` while a publish runs, its last `land · ` step as the status;
+   `{:landed <commit>}` or `{:refused <why>}` for how the last one ended; `{:reverted? true}` after a
+   throw-away; or {} for nothing to say.
+
+   No change and nothing to say renders the empty element, which takes no space. Publish is
+   withheld while the change has no description, since it would land unnamed, and both actions
+   are withheld while a turn runs (the panel's busy signal) — a change the agent is still making is
+   not one to land or lose. The confirm state is the page's alone: one signal, `<id>Confirm`."
+  [id change {:keys [running? step landed refused reverted?]} {:keys [publish-url revert-url]}]
+  (let [{:keys [busy]} (signals id)
+        confirm  (str (str/replace id "-" "") "Confirm")
+        n        (count (:files change))
+        desc     (first-line (:description change))
+        asking   (fn [v] (str "$" confirm " === '" v "'"))]
+    [:section.chat-change {:id (str id "-change") "data-signals" (str "{" confirm ": ''}")}
+     (cond
+       running?
+       [:p.chat-change-status {:role "status"} [:span.chat-spin {:aria-hidden "true"}]
+        "Publishing · " (or step "starting")]
+
+       landed
+       [:p.chat-change-done {:role "status"} "Published " [:code (subs landed 0 (min 12 (count landed)))]
+        " to main. The frame shows main now; the rest of the dashboard follows its next restart."]
+
+       refused
+       [:p.chat-change-refused {:role "alert"} "Not published: " refused]
+
+       reverted?
+       [:p.chat-change-done {:role "status"} "Edits thrown away. The frame shows main."])
+     (when (and change (not running?))
+       (list
+        [:details.chat-change-files
+         [:summary (str n (if (= 1 n) " file" " files") " changed, not on main")]
+         [:ul (for [{:keys [path status]} (:files change)]
+                [:li [:span.chat-change-st (name status)] " " [:code path]])]]
+        [:p.chat-change-desc
+         (or desc [:em "Not described yet — the agent describes its change as it works."])]
+        [:div.chat-change-acts {"data-show" (str "$" confirm " === ''")}
+         [:button.btn {:type "button" "data-attr:disabled" (str "$" busy)
+                       "data-on:click" (str "$" confirm " = 'revert'")} "Cancel"]
+         [:button.btn.btn-primary (cond-> {:type "button"
+                                           "data-attr:disabled" (if desc (str "$" busy) "true")
+                                           "data-on:click" (str "$" confirm " = 'publish'")}
+                                    (nil? desc) (assoc :title "Publish waits for the change's description"))
+          "Publish"]]
+        [:div.chat-change-ask {"data-show" (asking "publish")}
+         [:span "Land this on main? Tests and the landing check run first."]
+         [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
+         [:button.btn.btn-primary {:type "button" "data-attr:disabled" (str "$" busy)
+                                   "data-on:click" (str "$" confirm " = ''; @post('" publish-url "')")}
+          "Publish"]]
+        [:div.chat-change-ask {"data-show" (asking "revert")}
+         [:span "Throw these edits away? The conversation stays."]
+         [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
+         [:button.btn.btn-danger {:type "button" "data-attr:disabled" (str "$" busy)
+                                  "data-on:click" (str "$" confirm " = ''; @post('" revert-url "')")}
+          "Throw away"]]))]))

@@ -11,6 +11,7 @@
    only in prose is followed by whoever read the prose."
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as p]
    [clojure.string :as str]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.standing :as standing]
@@ -501,4 +502,109 @@
   "bb entry point: exits non-zero when the landing is not recorded, so the recipe's step stops there."
   [& args]
   (let [code (apply record args)]
+    (when-not (zero? code) (System/exit code))))
+
+(defn- short-id [rev] (subs rev 0 (min 12 (count rev))))
+
+(defn- step [& parts] (println (apply str "land · " parts)) (flush))
+
+(defn- conflicted-paths
+  "The paths conflicted anywhere in the arc between origin's main and @, or nil when none is."
+  [cwd]
+  (let [{:keys [exit out]} (jj/jj! cwd "log" "--no-graph" "-r" "(main@origin..@) & conflicts()"
+                                   "-T" "change_id.short() ++ \"\\n\"")]
+    (when (and (zero? exit) (not (str/blank? out)))
+      (let [{:keys [out]} (jj/jj! cwd "resolve" "--list" "-r" (first (str/split-lines out)))]
+        (or (not-empty (str/trim (str out))) "the arc")))))
+
+(defn ^{:malli/schema [:=> [:cat :string] :map]}
+  gate!
+  "Land the worktree's arc on origin's main, or refuse: fetch, rebase the arc onto origin's main,
+   run bb nido:test and the landing check at the tip that results, and push main to that tip.
+   Returns {:landed <commit id>} or {:refused <why> :way-out <what to do>}. Prints a `land · `
+   line as each step starts, for whoever is watching the output.
+
+   Refuses before pushing on anything the gate cannot show: nothing unlanded, a tip with no
+   description (it would land as an unnamed commit), a rebase that conflicts — which is undone, so
+   the worktree is left as it was — a red test run or a refused check. A push origin rejects
+   (main moved during the run) is a refusal too; running again rebases onto the new main.
+
+   The rebase is the gate's own because a tip tested anywhere but on origin's main is not the
+   commit that lands. It records nothing: what a landing is recorded on is the caller's."
+  [cwd]
+  (step "fetching origin")
+  (let [fetched (jj/jj! cwd "git" "fetch")
+        tip     (fn [] (layers/resolve-rev cwd "heads(::@ ~ empty())"))]
+    (cond
+      (not (zero? (:exit fetched)))
+      {:refused (str "origin could not be fetched: " (:err fetched)) :way-out "check the network, then run it again"}
+
+      (nil? (tip))
+      {:refused "the worktree's tip could not be read" :way-out "check `jj log` in the worktree"}
+
+      (layers/resolve-rev cwd (str (tip) " & ::main@origin"))
+      {:refused "origin's main already holds the worktree's tip — there is nothing to land"
+       :way-out "make the change first"}
+
+      (str/blank? (:out (jj/jj! cwd "log" "-r" (tip) "--no-graph" "-T" "description")))
+      {:refused "the change has no description, so it would land unnamed"
+       :way-out "describe it — jj describe -r <change> -m '<what it does>' — then run it again"}
+
+      :else
+      (let [before (:out (jj/jj! cwd "op" "log" "-n" "1" "--no-graph" "-T" "id"))]
+        (step "rebasing onto origin's main")
+        (jj/jj! cwd "rebase" "-b" "@" "-d" "main@origin")
+        (if-let [paths (conflicted-paths cwd)]
+          (do (jj/jj! cwd "op" "restore" before)
+              {:refused (str "rebasing onto origin's main conflicts: " paths)
+               :way-out "jj rebase -b @ -d main@origin, resolve the conflicts, then run it again"})
+          (let [landing (tip)]
+            (step "running bb nido:test at " (short-id landing))
+            (cond
+              (not (zero? (:exit (p/shell {:dir cwd :continue true} "bb" "nido:test"))))
+              {:refused "bb nido:test is red at the tip" :way-out "fix what it reports; a red landing is a red main for everyone"}
+
+              (do (step "running bb nido:land:check") (not (zero? (check ":cwd" cwd))))
+              {:refused "bb nido:land:check refused the tip" :way-out "clear what it names above, then run it again"}
+
+              :else
+              (let [_ (step "pushing main to " (short-id landing))
+                    {:keys [outcome detail]} (lifecycle/advance-remote! cwd "main" landing)]
+                (if (#{:advanced :already-there} outcome)
+                  {:landed landing}
+                  {:refused (str "origin did not take the push (" (name outcome) ")" (when detail (str ": " detail)))
+                   :way-out "main probably moved: run it again, which rebases onto the new main"})))))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
+  land
+  "bb nido:land — land the worktree's arc on nido's main through the gate (`gate!`), then record the
+   landing on the worktree's workstream (`record`). A worktree no workstream owns lands unrecorded,
+   and says so. Returns an exit code: non-zero, naming the way out, whenever nothing was pushed or
+   a pushed landing could not be recorded."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)
+        given (or (some-> (:cwd opts) str) (System/getProperty "user.dir"))
+        cwd   (or (lifecycle/worktree-from-cwd given) given)
+        {:keys [landed refused way-out]} (gate! cwd)]
+    (cond
+      refused
+      (do (println (str "land REFUSED · " refused))
+          (println (str "\nHow to clear it:\n  " way-out))
+          1)
+
+      (nil? (second (stages/project+ws-from-cwd cwd)))
+      (do (println (str "land ok · " (short-id landed) " is on origin's main · no workstream owns "
+                        cwd ", so no landing is recorded"))
+          0)
+
+      :else
+      (let [code (record ":cwd" cwd)]
+        (when (zero? code) (println (str "land ok · " (short-id landed) " is on origin's main")))
+        code))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  land-cmd
+  "bb entry point for `land`."
+  [& args]
+  (let [code (apply land args)]
     (when-not (zero? code) (System/exit code))))

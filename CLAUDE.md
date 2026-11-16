@@ -254,6 +254,11 @@ jj git push -b main
 bb nido:land:record                           # close the workstream and record the landing
 ```
 
+`bb nido:land` runs those steps as one verb and refuses, naming the way out,
+before pushing anything it could not show green — a rebase that conflicts is
+undone, not left for you. It is what the catalog's Publish runs, and
+`bb nido:recovery:land` lands through the same gate.
+
 **Record the landing after the push.** `bb nido:land:record` closes the
 workstream and appends a `:merged` naming the pushed commit and the design that
 stands, so a landed workstream stops reading as owed a draft PR. It refuses,

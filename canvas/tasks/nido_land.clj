@@ -35,4 +35,15 @@
     {:signature [:=> [:catn [:args [:* :any]]] :int]})
   (Operation record-cmd
     "bb entry point: exits non-zero when the landing is not recorded, so the recipe's step stops there."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]}))
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation gate!
+    "Land the worktree's arc on origin's main or refuse: fetch, rebase onto origin's main (undone
+     on a conflict), bb nido:test and the landing check at that tip, then push. {:landed} or
+     {:refused :way-out}; it records nothing."
+    {:signature [:=> [:catn [:cwd :string]] :map] :delegates [check]})
+  (Operation land
+    "bb nido:land: the gate, then the recording on the worktree's workstream when one owns it."
+    {:signature [:=> [:catn [:args [:* :any]]] :int] :delegates [gate! record]})
+  (Operation land-cmd
+    "bb entry point for land: exits non-zero when nothing was landed or the landing was not recorded."
+    {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [land]}))

@@ -558,6 +558,15 @@ for the text and keep the tint, so it still reads as **yours** without competing
              {:id "always" :name "Always allow" :kind :allow_always}
              {:id "deny" :name "Deny" :kind :reject_once}]})
 
+(def ^:private change-routes
+  {:publish-url "/_catalog/nowhere/chat/publish" :revert-url "/_catalog/nowhere/chat/revert"})
+
+(def ^:private a-change
+  {:description "Tighten the catalog chat's composer\n\nSend sits inside the message box."
+   :files [{:path "src/nido/ui/components/chat.clj" :status :modified}
+           {:path "src/nido/ui/stylesheet.clj" :status :modified}
+           {:path "src/nido/ui/catalog/new_scene.clj" :status :added}]})
+
 (defn- chat-scenes []
   [{:name "chat-panel"
     :note "A conversation with an agent: its transcript, the turn's status, then the composer.
@@ -602,6 +611,29 @@ for the text and keep the tint, so it still reads as **yours** without competing
                                               (:items (transcript false you edit-call reply
                                                                   you-two reply))
                                               chat-routes))}]}
+   {:name "change-bar"
+    :note "The conversation's change that main does not have, above the log, and what a person
+           can do with it: Publish lands it on main, Cancel throws it away, each confirmed in place."
+    :scenes [{:title "no change"
+              :note "Nothing unlanded and nothing to say: the empty element, which takes no space."
+              :render #(chat/change-bar "scene-chat" nil {} change-routes)}
+             {:title "a change"
+              :note "Its files fold away; what it would land as is its description."
+              :render #(chat/change-bar "scene-chat" a-change {} change-routes)}
+             {:title "a change not yet described"
+              :note "Publish waits: an undescribed change would land unnamed."
+              :render #(chat/change-bar "scene-chat" (assoc a-change :description "") {} change-routes)}
+             {:title "publishing"
+              :note "The landing verb's current step, until it ends."
+              :render #(chat/change-bar "scene-chat" a-change {:running? true :step "running bb nido:test at 0123456789ab"}
+                                        change-routes)}
+             {:title "refused"
+              :note "Why it did not land, with the change still there to fix and publish again."
+              :render #(chat/change-bar "scene-chat" a-change {:refused "bb nido:test is red at the tip"}
+                                        change-routes)}
+             {:title "published"
+              :note "Landed: no change left, and the commit it landed as."
+              :render #(chat/change-bar "scene-chat" nil {:landed "0123456789abcdef"} change-routes)}]}
    {:name "turn-status"
     :note "The status row at the foot of the log: from Send to the turn's end it names what the
            agent is doing now and counts the seconds. Each phase against the others."

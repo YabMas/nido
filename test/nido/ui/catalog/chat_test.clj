@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [cheshire.core]
+            [nido.session.change :as change]
             [nido.session.chat :as chat]
             [nido.session.preview :as preview]
             [nido.ui.catalog.chat :as catalog-chat]
@@ -40,14 +41,16 @@
     (is (empty? (changed-events t3 t3)))))
 
 (deftest the-frame-is-the-scene-page-alone-and-the-chat-page-wraps-it
-  (with-redefs [chat/started? (constantly false)]
+  (with-redefs [chat/started? (constantly false)
+                change/pending (constantly nil)]
     (is (not (str/includes? (catalog-chat/page "embed=1") "id=\"catc-frame\"")))
     (let [page (catalog-chat/page nil)]
       (is (str/includes? page "id=\"catc-frame\""))
       (is (str/includes? page "/_catalog?embed=1") "with no design session the frame is this dashboard's"))))
 
 (deftest the-chat-starts-closed-and-opens-from-the-url
-  (with-redefs [chat/started? (constantly false)]
+  (with-redefs [chat/started? (constantly false)
+                change/pending (constantly nil)]
     (let [closed (catalog-chat/page nil)
           open   (catalog-chat/page "chat=1")]
       (is (str/includes? closed "catcOpen: false"))
@@ -92,19 +95,103 @@
 (deftest a-finished-turn-reloads-every-open-frame-from-the-preview
   (with-open-panel
     (fn [sent]
-      (with-redefs [preview/refresh! (constantly "http://localhost:4444")]
+      (with-redefs [preview/refresh! (constantly nil)
+                    change/pending   (constantly nil)]
         (#'catalog-chat/refresh-frame! nil))
-      (is (= 1 (count @sent)))
+      (is (= 2 (count @sent)))
       (is (str/includes? (first @sent) "datastar-patch-signals"))
-      (is (str/includes? (first @sent) "http://localhost:4444#")))))
+      (is (str/includes? (first @sent) "catcFrame"))
+      (is (not (str/includes? (first @sent) "localhost")) "the frame reloads from the dashboard's own origin")
+      (is (str/includes? (second @sent) "catalog-chat-change") "the change bar follows the turn"))))
 
 (deftest a-refused-sync-is-said-in-the-conversation-and-the-frame-stays
   (let [noted (atom nil)]
     (with-open-panel
       (fn [sent]
         (with-redefs [preview/refresh! (fn [& _] (throw (ex-info "the working copies conflict" {})))
+                      change/pending   (constantly nil)
                       chat/note-error! (fn [c text] (reset! noted [(:session c) text]))]
           (#'catalog-chat/refresh-frame! nil))
-        (is (empty? @sent) "no frame is reloaded")
+        (is (not-any? #(str/includes? % "catcFrame") @sent) "no frame is reloaded")
         (is (= "catalog-design" (first @noted)) "the note goes to the catalog's conversation")
         (is (str/includes? (second @noted) "the working copies conflict"))))))
+
+(deftest the-frames-requests-are-forwarded-once-the-conversation-exists
+  (let [forwarded (atom [])]
+    (with-redefs [preview/forward! (fn [_ _ req] (swap! forwarded conj (:uri req)) {:status 200 :body "preview"})]
+      (testing "before the design conversation exists the dashboard answers itself"
+        (with-redefs [chat/started? (constantly false)]
+          (is (nil? (catalog-chat/handle! {:request-method :get :uri "/_catalog" :query-string "embed=1"})))))
+      (with-redefs [chat/started? (constantly true)]
+        (testing "the scene page and a scene's post go to the preview"
+          (is (= "preview" (:body (catalog-chat/handle! {:request-method :get :uri "/_catalog"
+                                                         :query-string "block=chat&embed=1"}))))
+          (is (= "preview" (:body (catalog-chat/handle! {:request-method :post
+                                                         :uri "/_catalog/nowhere/chat/send"})))))
+        (testing "the catalog page itself is the dashboard's"
+          (is (nil? (catalog-chat/handle! {:request-method :get :uri "/_catalog" :query-string "chat=1"}))))))
+    (is (= ["/_catalog" "/_catalog/nowhere/chat/send"] @forwarded))))
+
+(defn- settle-publish []
+  (let [deadline (+ (System/currentTimeMillis) 5000)]
+    (while (and (:running? @@#'catalog-chat/publishing) (< (System/currentTimeMillis) deadline))
+      (Thread/sleep 10))))
+
+(deftest publish-follows-the-verb-and-says-how-it-ended
+  (let [notes (atom [])]
+    (with-open-panel
+      (fn [sent]
+        (reset! @#'catalog-chat/publishing {})
+        (with-redefs [chat/transcript  (constantly {:items [] :busy? false})
+                      chat/note!       (fn [_ text] (swap! notes conj text))
+                      change/pending   (constantly nil)
+                      preview/refresh! (constantly nil)
+                      change/publish!  (fn [_ _ on-line]
+                                         (doseq [l ["land · fetching origin" "land · running bb nido:test at abc"
+                                                    "Ran 12 tests" "land ok · 0123456789ab is on origin's main"]]
+                                           (on-line l))
+                                         0)]
+          (is (= 204 (:status (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/publish"}))))
+          (settle-publish))
+        (is (= {:landed "0123456789ab"} @@#'catalog-chat/publishing))
+        (is (some #(str/includes? % "running bb nido:test") @sent) "each step reaches the bar as it starts")
+        (is (= ["Published to main as 0123456789ab."] @notes))))))
+
+(deftest a-refused-publish-names-why
+  (with-open-panel
+    (fn [_]
+      (reset! @#'catalog-chat/publishing {})
+      (with-redefs [chat/transcript  (constantly {:items [] :busy? false})
+                    chat/note!       (constantly nil)
+                    change/pending   (constantly nil)
+                    preview/refresh! (constantly nil)
+                    change/publish!  (fn [_ _ on-line] (on-line "land REFUSED · bb nido:test is red at the tip") 1)]
+        (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/publish"})
+        (settle-publish))
+      (is (= {:refused "bb nido:test is red at the tip"} @@#'catalog-chat/publishing)))))
+
+(deftest nothing-is-published-or-thrown-away-while-a-turn-runs
+  (let [touched (atom [])]
+    (reset! @#'catalog-chat/publishing {})
+    (with-redefs [chat/transcript (constantly {:items [] :busy? true})
+                  change/publish! (fn [& _] (swap! touched conj :publish) 0)
+                  change/revert!  (fn [& _] (swap! touched conj :revert))]
+      (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/publish"})
+      (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/revert"}))
+    (is (empty? @touched))))
+
+(deftest cancel-throws-the-change-away-and-notes-it
+  (let [notes (atom []) reverted (atom 0)]
+    (with-open-panel
+      (fn [_]
+        (reset! @#'catalog-chat/publishing {})
+        (with-redefs [chat/transcript  (constantly {:items [] :busy? false})
+                      chat/note!       (fn [_ text] (swap! notes conj text))
+                      change/pending   (constantly nil)
+                      preview/refresh! (constantly nil)
+                      change/revert!   (fn [& _] (swap! reverted inc))]
+          (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/revert"}))))
+    (is (= 1 @reverted))
+    (is (= {:reverted? true} @@#'catalog-chat/publishing))
+    (is (= 1 (count @notes)))
+    (reset! @#'catalog-chat/publishing {})))

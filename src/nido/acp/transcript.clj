@@ -21,10 +21,11 @@
      :permission  `:title` `:options` ([{:id :name :kind}]) `:request-id` `:answer` (an option id
                   once answered, else nil)
      :error       `:text`
+     :note        `:text` — something done to the conversation's worktree from outside the turn
 
    `fold` takes either an agent message exactly as `nido.acp.client` delivers it, or a local event
    — `{:local :user :text … :refs [{:label :detail}] :at ms}`, `{:local :turn-ended}`,
-   `{:local :error :text …}`, `{:local :answered :item-id … :option-id …}`. A message it does not
+   `{:local :error :text …}`, `{:local :note :text …}`, `{:local :answered :item-id … :option-id …}`. A message it does not
    read returns the transcript unchanged."
   (:require [clojure.string :as str]))
 
@@ -164,6 +165,7 @@
                     (append {:kind :error :text (:text e)})
                     (assoc :busy? false)
                     (dissoc :started-at))
+    :note       (append (settle-streams t) {:kind :note :text (:text e)})
     :answered   (if-let [i (index-where t #(= (:item-id e) (:id %)))]
                   (assoc-in t [:items i :answer] (:option-id e))
                   t)

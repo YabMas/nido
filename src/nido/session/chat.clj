@@ -33,11 +33,14 @@
 
 (def ^:private denied-tools
   "What a chat's agent may not run, whatever its permission mode: the commands that push, move
-   main, or record a landing. Claude Code applies a deny rule before it consults the mode, so
-   these hold with permissions skipped."
+   main, or land or record a landing. `bb nido:land` pushes from a process of its own, out of reach
+   of the push rules, so it is denied by name; its rules match the bare verb and the verb with
+   arguments but not `bb nido:land:check`, which only reads. Claude Code applies a deny rule before
+   it consults the mode, so these hold with permissions skipped."
   ["Bash(jj git push:*)" "Bash(git push:*)" "Bash(command git push:*)"
    "Bash(jj bookmark set main:*)" "Bash(jj bookmark move main:*)"
-   "Bash(bb nido:land:record:*)" "Bash(nido land:record:*)"])
+   "Bash(bb nido:land:record:*)" "Bash(nido land:record:*)"
+   "Bash(bb nido:land)" "Bash(bb nido:land :*)" "Bash(bb nido:recovery:land:*)"])
 
 (def ^:private idle-ms
   "How long an agent process with no turn running is kept before it is stopped."
@@ -205,6 +208,14 @@
    transcript: a conversation loaded again replays the agent's history, which never held it."
   [chat text]
   (fold! (chat-key chat) {:local :error :text text}))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] :any]}
+  note!
+  "Put a note about something done to the chat's worktree from outside a turn — a change published
+   or reverted — into the transcript, so every subscriber shows it. It does not reach the agent,
+   and like every transcript item it lasts as long as this process's transcript."
+  [chat text]
+  (fold! (chat-key chat) {:local :note :text text}))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   subscribe!

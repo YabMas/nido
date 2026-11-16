@@ -57,3 +57,33 @@
     (let [msg (html (chat/chat-item {:id "i0" :kind :user :text "hi" :refs [{:label "a"}]} routes))]
       (is (str/includes? msg "chat-pick-l\">a<"))
       (is (not (str/includes? msg "/u/0"))))))
+
+(def ^:private change-routes {:publish-url "/pub" :revert-url "/rev"})
+(def ^:private a-change {:description "Name the thing\n\nbody" :files [{:path "a.clj" :status :modified}]})
+
+(deftest the-change-bar-renders-what-is-unlanded-and-how-a-publish-went
+  (testing "no change and nothing to say is an empty element"
+    (is (= "<section class=\"chat-change\" data-signals=\"{pConfirm: &apos;&apos;}\" id=\"p-change\"></section>"
+           (html (chat/change-bar "p" nil {} change-routes)))))
+  (testing "a change names its files and what it would land as, with Publish and Cancel confirmed in place"
+    (let [out (html (chat/change-bar "p" a-change {} change-routes))]
+      (is (str/includes? out "1 file changed"))
+      (is (str/includes? out "Name the thing"))
+      (is (not (str/includes? out "body")) "only the subject line")
+      (is (str/includes? out "@post(&apos;/pub&apos;)"))
+      (is (str/includes? out "@post(&apos;/rev&apos;)"))
+      (is (str/includes? out "data-attr:disabled=\"$pBusy\"") "withheld while a turn runs")))
+  (testing "an undescribed change cannot be published"
+    (is (str/includes? (html (chat/change-bar "p" (assoc a-change :description " ") {} change-routes))
+                       "data-attr:disabled=\"true\"")))
+  (testing "a running publish shows its step and offers nothing"
+    (let [out (html (chat/change-bar "p" a-change {:running? true :step "pushing main"} change-routes))]
+      (is (str/includes? out "Publishing · pushing main"))
+      (is (not (str/includes? out "/pub")))))
+  (testing "how the last publish ended"
+    (is (str/includes? (html (chat/change-bar "p" nil {:landed "0123456789abcdef"} change-routes)) "0123456789ab<"))
+    (is (str/includes? (html (chat/change-bar "p" a-change {:refused "red"} change-routes)) "Not published: red"))))
+
+(deftest a-note-is-a-quiet-line
+  (is (str/includes? (html (chat/chat-item {:id "i0" :kind :note :text "Edits thrown away."} routes))
+                     "class=\"chat-note\"")))

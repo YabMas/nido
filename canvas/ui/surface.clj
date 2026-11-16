@@ -189,6 +189,12 @@
   (Operation picks
     "The pick chips, numbered as the page marks them, each with a control that removes it."
     {:signature [:=> [:catn [:id :string] [:picks [:sequential :map]] [:routes :map]] :any]})
+  (Operation change-bar
+    "The conversation's unlanded change and what can be done with it — Publish or Cancel, each
+     confirmed in place, both withheld while a turn runs — or how the last publish ended; an
+     empty element when there is neither."
+    {:signature [:=> [:catn [:id :string] [:change [:maybe :map]] [:publishing :map] [:routes :map]] :any]
+     :delegates [signals]})
   (Operation composer "The composer: the pick chips, the text box, and Send or Stop."
     {:signature [:=> [:catn [:id :string] [:routes :map]] :any]
      :delegates [signals picks]})
@@ -408,11 +414,11 @@
      :delegates [stylesheet datastar-script groups]})
   (Operation chat-page
     "The catalog with its chat: the scene page in a frame and, closed, one launcher; open, the
-     chat panel slid in beside the frame with Select, which puts the frame into select mode, and
-     the picks marked on the scenes. Reads nothing: the conversation, where the frame points and
-     whether it starts open are its caller's."
+     chat panel slid in beside the frame with Pick, which puts the frame into select mode, under
+     the conversation's change bar, and the picks marked on the scenes. Reads nothing: the
+     conversation, its change, where the frame points and whether it starts open are its caller's."
     {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:panel :map]
-                            [:open? :boolean]] :string]
+                            [:open? :boolean] [:change-bar :any]] :string]
      :delegates [stylesheet datastar-script chat-panel signals]}))
 
 (Module ui-catalog-chat
@@ -426,11 +432,14 @@
     "/_catalog: the scene page alone when it is the frame, else the catalog with its chat —
      closed unless the query string opens it."
     {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
-     :delegates [catalog-page chat-page chat/transcript chat/started? chat/preview-url]})
+     :delegates [catalog-page chat-page change-bar chat/transcript chat/started?]})
   (Operation handle!
     "One request under /_catalog/chat: the stream, a send, a cancel, a permission answer, the
-     picks posted for their chips or one removed; nil for any other path."
+     picks posted for their chips or one removed, a publish or a revert; or the frame's own
+     request, forwarded to the design session's preview once the conversation exists; nil for
+     any other."
     {:signature [:=> [:catn [:req :map]] [:maybe :map]]
      :delegates [chat-item chat-log turn-status picks signals patch-elements-event patch-signals-event
                  chat/transcript chat/send! chat/cancel! chat/answer-permission! chat/subscribe!
-                 chat/refresh! chat/note-error!]}))
+                 chat/refresh! chat/note-error! chat/note! chat/forward! change-bar
+                 chat/pending chat/publish! chat/revert!]}))

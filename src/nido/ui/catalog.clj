@@ -418,15 +418,16 @@
   };
 })();")
 
-(defn ^{:malli/schema [:=> [:cat :Conversation :string :map :boolean] :string]}
+(defn ^{:malli/schema [:=> [:cat :Conversation :string :map :boolean :any] :string]}
   chat-page
   "The catalog with its chat: the scene page in a frame at `frame-src`, and the chat panel over
    `transcript`, with `panel` its id and routes (see `nido.ui.components.chat`; `:picks-url` is
-   where the picks are posted for their chips). Closed — `open?` false — the frame is the whole
-   page and a launcher is the only chat control; open, the panel slides in beside the frame with
-   Select, which puts the frame into select mode. Reads nothing: the conversation, where the frame
-   points and whether the chat starts open are its caller's."
-  [transcript frame-src panel open?]
+   where the picks are posted for their chips), under `change-bar` — the conversation's unlanded
+   change, as `nido.ui.components.chat/change-bar` renders it. Closed — `open?` false — the frame is
+   the whole page and a launcher is the only chat control; open, the panel slides in beside the
+   frame with Pick, which puts the frame into select mode. Reads nothing: the conversation, its
+   change, where the frame points and whether the chat starts open are its caller's."
+  [transcript frame-src panel open? change-bar]
   (let [{:keys [picks busy]} (chat/signals (:id panel))]
     (str
      (h/html
@@ -455,6 +456,7 @@
                                        "data-on:click" "$catcOpen = false"} "✕"]]
           [:p.catc-hint "Click elements in the scene to attach them. Click again to remove one; "
            [:kbd "Esc"] " to stop."]
+          change-bar
           (-> (chat/chat-panel transcript panel)
               (conj [:input#catc-picks {:type "hidden" "data-bind" picks}]
                     [:button#catc-picks-sync {:type "button" :hidden true

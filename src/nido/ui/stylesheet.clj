@@ -575,6 +575,23 @@
         .chat-perm-a { color:var(--text); }
         .chat-err { display:flex; gap:8px; align-items:baseline; color:var(--failed-strong); background:var(--failed-bg);
                     border-radius:4px; padding:6px 10px; }
+        /* Something done to the worktree from outside a turn: quiet, centred, neither side's voice. */
+        .chat-note { margin:0; align-self:center; color:var(--text-muted); font-size:var(--fs-xs); }
+        /* The conversation's unlanded change, above the log: what it touches, what it would land as,
+           and Publish / Cancel — each confirmed in place rather than by a dialog. */
+        .chat-change { display:flex; flex-direction:column; gap:6px; font-size:var(--fs-xs); }
+        .chat-change:not(:empty) { border:1px solid var(--border); border-radius:6px; padding:8px 10px;
+                                   background:var(--surface-sunken); }
+        .chat-change p { margin:0; }
+        .chat-change-files summary { cursor:pointer; color:var(--text-muted); }
+        .chat-change-files ul { margin:4px 0 0; padding-left:16px; max-height:120px; overflow-y:auto; }
+        .chat-change-st { color:var(--text-muted); }
+        .chat-change-desc { color:var(--text-strong); }
+        .chat-change-acts, .chat-change-ask { display:flex; gap:6px; align-items:center; justify-content:flex-end; }
+        .chat-change-ask span { flex:1; color:var(--text); }
+        .chat-change-status { display:flex; gap:6px; align-items:center; color:var(--text); }
+        .chat-change-done { color:var(--text-muted); }
+        .chat-change-refused { color:var(--failed-strong); }
         .chat-compose { display:flex; flex-direction:column; gap:6px; }
         /* The send/stop button sits inside the field's bottom-right corner, not on a row of its own. */
         .chat-field { position:relative; }

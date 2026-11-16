@@ -7,13 +7,11 @@
    the exact tip it pushes, and refuses on a workstream whose diagnosis does not
    name a nido defect — a skill that skipped a step cannot land around it."
   (:require
-   [babashka.process :as p]
    [clojure.string :as str]
    [nido.coordinator.lane.restore :as restore]
    [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.source.start-failures :as start-failures]
    [nido.platform.task-args :as task-args]
-   [nido.review.layers :as layers]
    [nido.review.stages :as stages]
    [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]
@@ -127,9 +125,10 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
   land
   "bb nido:recovery:land — land this recovery's nido fix. Refuses unless the
-   workstream's diagnosis names a nido defect, the worktree is nido's and its tip
-   sits on origin's main, and bb nido:test and bb nido:land:check pass at that
-   tip; then fast-forwards origin's main to it and records the :merged once."
+   workstream's diagnosis names a nido defect and the worktree is nido's; then lands
+   through `nido-land/gate!` — rebase onto origin's main, bb nido:test and
+   bb nido:land:check at that tip, push — and records the :merged once. It does
+   not close the workstream: restore does, once every failure is back."
   [& args]
   (let [[_ opts] (task-args/split-args args)
         cwd      (cwd-of opts)
@@ -151,50 +150,20 @@
                "append a :session-diagnosis naming a nido defect, with its evidence, before landing")
 
       :else
-      (let [fetched (jj/jj! cwd "git" "fetch")
-            tip     (layers/resolve-rev cwd "heads(::@ ~ empty())")
-            based?  (when tip (layers/resolve-rev cwd (str "main@origin & ::" tip)))
-            landed? (when tip (layers/resolve-rev cwd (str tip " & ::main@origin")))]
-        (cond
-          (not (zero? (:exit fetched)))
-          (refused (str "origin could not be fetched: " (:err fetched)) "check the network, then run it again")
-
-          (nil? tip)
-          (refused "the worktree's tip could not be read" "check `jj log` in the worktree")
-
-          landed?
-          (refused (str "origin's main already holds " (subs tip 0 12) " — there is nothing of yours to land")
-                   "commit the fix on top of main@origin, then run it again")
-
-          (nil? based?)
-          (refused (str (subs tip 0 12) " is not on top of origin's main")
-                   "jj rebase -d main@origin, then run it again")
-
-          :else
-          (let [tested (p/shell {:dir cwd :continue true} "bb" "nido:test")]
-            (cond
-              (not (zero? (:exit tested)))
-              (refused "bb nido:test is red at the tip" "fix what it reports; a red landing is a red main for everyone")
-
-              (not (zero? (nido-land/check ":cwd" cwd)))
-              (refused "bb nido:land:check refused the tip" "clear what it names above, then run it again")
-
-              :else
-              (let [{:keys [outcome detail]} (lifecycle/advance-remote! cwd "main" tip)]
-                (if-not (#{:advanced :already-there} outcome)
-                  (refused (str "NOT PUSHED (" (name outcome) ")" (when detail (str ": " detail)))
-                           "main probably moved: jj git fetch, jj rebase -d main@origin, run it again")
-                  (let [title (:out (jj/jj! cwd "log" "-r" tip "--no-graph" "-T" "description.first_line()"))
-                        result (cws/append-entry-once!
-                                project ws-id {:kind :merged}
-                                (pr-str {:format :merged
-                                         :commit tip
-                                         :url    (commit-url cwd tip)
-                                         :title  (str title)})
-                                #(= tip (:commit %)))]
-                    (println (str "recovery:land ok · " (subs tip 0 12) " is on origin's main"
-                                  (when (:appended result) ", and its landing is recorded")))
-                    0))))))))))
+      (let [{:keys [landed way-out] why :refused} (nido-land/gate! cwd)]
+        (if why
+          (refused why way-out)
+          (let [title  (:out (jj/jj! cwd "log" "-r" landed "--no-graph" "-T" "description.first_line()"))
+                result (cws/append-entry-once!
+                        project ws-id {:kind :merged}
+                        (pr-str {:format :merged
+                                 :commit landed
+                                 :url    (commit-url cwd landed)
+                                 :title  (str title)})
+                        #(= landed (:commit %)))]
+            (println (str "recovery:land ok · " (subs landed 0 12) " is on origin's main"
+                          (when (:appended result) ", and its landing is recorded")))
+            0))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   restore-cmd [& args] (System/exit (apply restore args)))

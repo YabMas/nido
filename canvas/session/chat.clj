@@ -39,6 +39,9 @@
   (Operation note-error!
     "Put an error its caller met on the chat's behalf into the transcript, under the latest turn."
     {:signature [:=> [:catn [:chat :map] [:text :string]] :any] :delegates [acp/fold]})
+  (Operation note!
+    "Put a note about something done to the chat's worktree from outside a turn into the transcript."
+    {:signature [:=> [:catn [:chat :map] [:text :string]] :any] :delegates [acp/fold]})
   (Operation subscribe! "Call `f` with each new transcript; a function that unsubscribes."
     {:signature [:=> [:catn [:chat :map] [:f :any]] :any]}))
 
@@ -47,15 +50,32 @@
 
    HIDES how a preview is built — its classpath from the session's runtime checkout and the
    serving process's dependency jars, its port — and that a refresh is a sync of that checkout
-   followed by a restart.
+   followed by a restart. No caller learns the port: a request reaches the preview by being
+   forwarded, so whoever shows it keeps one origin.
 
-   Both operations answer the URL a running preview serves at, or throw an ex-info naming the
-   step that failed: the sync refused (the members' working copies conflict), the process
-   exited while starting, or it did not start in time. A refresh whose sync refuses leaves the
-   running preview as it was; one whose new process fails to start leaves none, and the next
-   preview-url starts one from the checkout as it then is."
-  (Operation preview-url "The preview's URL, starting it when it is not running."
-    {:signature [:=> [:catn [:project :any] [:session :string]] :string]})
-  (Operation refresh! "Sync the session's runtime checkout and restart its preview; its URL."
-    {:signature [:=> [:catn [:project :any] [:session :string]] :string]
-     :delegates [preview-url]}))
+   A refresh whose sync refuses (the members' working copies conflict) throws and leaves the
+   running preview as it was; one whose new process fails to start throws and leaves none, and
+   the next forward starts one from the checkout as it then is."
+  (Operation forward!
+    "Answer a ring request as the session's preview answers it, starting the preview when it is not
+     running; a 502 saying why when it will not start or answer, and nil in a preview's own process."
+    {:signature [:=> [:catn [:project :any] [:session :string] [:req :map]] [:maybe :map]]})
+  (Operation refresh! "Sync the session's runtime checkout and restart its preview."
+    {:signature [:=> [:catn [:project :any] [:session :string]] :any]}))
+
+(Module session-change
+  "A session's unlanded change: what it is, landing it, and throwing it away.
+
+   HIDES the revsets that say what a session has not landed — everything between origin's main
+   and its working copy — how a revert is made, and that publishing is the landing verb run as a
+   process in the session's worktree."
+  (Operation pending
+    "The change the session holds that origin's main does not — {:description :files} — or nil."
+    {:signature [:=> [:catn [:project :any] [:session :string]] [:maybe :map]]})
+  (Operation revert!
+    "Throw the session's unlanded change away, leaving its working copy empty on origin's main."
+    {:signature [:=> [:catn [:project :any] [:session :string]] :any]})
+  (Operation publish!
+    "Land the session's change through bb nido:land, calling `on-line` with each line it prints;
+     its exit code, zero when it landed."
+    {:signature [:=> [:catn [:project :any] [:session :string] [:on-line :any]] :int]}))
