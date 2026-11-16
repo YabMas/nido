@@ -4,9 +4,10 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements it
    is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
+            [canvas.ui.catalog-chat :refer [ui-catalog-chat]]
             [canvas.strata :refer [ui-blocks ui-state-marks ui-visual-language]]
             [canvas.ui.surface :refer [handle-request question-card shell status-heading
-                                        ui-catalog ui-catalog-chat ui-catalog-scenes ui-components-ask ui-components-row
+                                        ui-catalog ui-catalog-scenes ui-components-ask ui-components-row
                                         ui-components-state ui-datastar ui-server ui-stylesheet
                                         ui-views workstreams-fragment]]))
 

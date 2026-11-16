@@ -171,17 +171,19 @@
    it. Takes a transcript value plus where its controls post, so the catalog, a workstream pane
    or a question card can each host one without the panel knowing which."
   (Operation signals
-    "The names of a panel's page-state signals — its draft, its picks and whether a turn runs —
-     which a server reading a send reads back by the same names."
+    "The names of a panel's page-state signals — its draft, its picks, whether a turn runs and
+     whether a side panel is open — which a server reading a send reads back by the same names."
     {:signature [:=> [:catn [:id :string]] :map]})
   (Operation chat-item "One transcript item, under the DOM id the panel gives it."
     {:signature [:=> [:catn [:item :map] [:routes :map]] :any]})
+  (Operation log-id "The DOM id of a panel's log, which a stream appends new items to."
+    {:signature [:=> [:catn [:id :string]] :string]})
   (Operation chat-log
     "The transcript, under the DOM id a stream re-renders it by, in a log that scrolls the way a
      chat reads: opened at the bottom, a sent message pinned to its top with room for the reply,
      and let go when the person scrolls."
     {:signature [:=> [:catn [:id :string] [:items [:sequential :map]] [:routes :map]] :any]
-     :delegates [chat-item]})
+     :delegates [log-id chat-item]})
   (Operation turn-status
     "The status row: while a turn runs, the phase it is in — waiting, thinking, running a named
      tool, writing, or waiting for an answer — and the seconds since it started; empty otherwise."
@@ -203,7 +205,13 @@
      panel's id, where sending, cancelling, answering and removing a pick post, and the stream
      URL that keeps it live."
     {:signature [:=> [:catn [:transcript acp/Conversation] [:opts :map]] :any]
-     :delegates [chat-log turn-status composer signals]}))
+     :delegates [chat-log turn-status composer signals]})
+  (Operation side
+    "The panel as a side panel: a bar led by the one toggle that opens and closes it, over the
+     panel. Closed, the toggle is all that shows, so it rides the panel's left edge. Declares and
+     follows the panel's open signal; how wide the panel is, open or closed, is its page's."
+    {:signature [:=> [:catn [:transcript acp/Conversation] [:routes :map] [:opts :map]] :any]
+     :delegates [chat-panel signals]}))
 
 (Module ui-views
   "The dashboard's pages and fragments, and the twenty per-kind cards a ledger record reads as.
@@ -413,33 +421,10 @@
     {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
      :delegates [stylesheet datastar-script groups]})
   (Operation chat-page
-    "The catalog with its chat: the scene page in a frame and, closed, one launcher; open, the
-     chat panel slid in beside the frame with Pick, which puts the frame into select mode, under
-     the conversation's change bar, and the picks marked on the scenes. Reads nothing: the
+    "The catalog with its chat: the scene page in a frame beside the chat's side panel — closed,
+     its toggle alone; open, the panel with Pick, which puts the frame into select mode, under the
+     conversation's change bar, and the picks marked on the scenes. Reads nothing: the
      conversation, its change, where the frame points and whether it starts open are its caller's."
     {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:panel :map]
                             [:open? :boolean] [:change-bar :any]] :any]
-     :delegates [chat-panel signals]}))
-
-(Module ui-catalog-chat
-  "The catalog's chat: the page around the scene frame, and the routes its panel posts to.
-
-   HIDES which conversation the catalog talks to (one design session, made on the first send),
-   how a picked element is worded for the agent and labelled for the person, which frame source the page shows, and that a
-   finished turn refreshes the preview. The panel's markup is the chat block's; the conversation
-   and the preview are the Session band's."
-  (Operation page
-    "/_catalog: the scene page alone when it is the frame, else the catalog with its chat —
-     closed unless the query string opens it — inside the dashboard's page chrome."
-    {:signature [:=> [:catn [:query-string [:maybe :string]] [:chrome [:=> [:catn] :map]]] :string]
-     :delegates [catalog-page chat-page shell change-bar chat/transcript chat/started?]})
-  (Operation handle!
-    "One request under /_catalog/chat: the stream, a send, a cancel, a permission answer, the
-     picks posted for their chips or one removed, a publish or a revert; or the frame's own
-     request, forwarded to the design session's preview once the conversation exists; nil for
-     any other."
-    {:signature [:=> [:catn [:req :map]] [:maybe :map]]
-     :delegates [chat-item chat-log turn-status picks signals patch-elements-event patch-signals-event
-                 chat/transcript chat/send! chat/cancel! chat/answer-permission! chat/subscribe!
-                 chat/refresh! chat/note-error! chat/note! chat/forward! change-bar
-                 chat/pending chat/publish! chat/revert!]}))
+     :delegates [side signals]}))

@@ -7,10 +7,11 @@
             [canvas.integration.acp :refer [acp-transcript]]
             [canvas.session.chat :refer [session-chat session-preview]]
             [canvas.strata :refer [ui-blocks]]
-            [canvas.ui.surface :refer [ui-catalog ui-catalog-chat ui-catalog-scenes ui-components-chat ui-server]]))
+            [canvas.ui.catalog-chat :refer [ui-catalog-chat]]
+            [canvas.ui.surface :refer [ui-catalog ui-catalog-scenes ui-components-chat ui-server]]))
 
 (Claim closed-is-just-the-catalog
-  "With the chat closed, /_catalog shows the scene frame at the full page width and one launcher; no composer, prompt text, status row, picker or mark is on screen, and the scene page inside the frame carries none of them outside the chat block's own scenes, which render the panel as the catalog renders every block. The launcher or ⌘I (from the page or the frame) opens the panel, which slides in from the right and narrows the frame rather than covering it; below 1000px wide it overlays. Closing it removes the panel, ends select mode and removes every mark from the frame. The open state is in the page's URL, so a reload keeps it."
+  "With the chat closed, /_catalog shows the scene frame beside the chat's side panel narrowed to its toggle; no composer, prompt text, status row, picker or mark is on screen, and the scene page inside the frame carries none of them outside the chat block's own scenes, which render the panel as the catalog renders every block. The toggle at the panel's top-left, or ⌘I from the page or the frame, opens the panel, which widens from the right and narrows the frame rather than covering it; below 1000px wide it overlays. The same toggle closes it, and closing ends select mode and removes every mark from the frame. The open state is in the page's URL, so a reload keeps it."
   {:about [ui-catalog ui-catalog-chat] :evidence "round"})
 
 (Claim turn-state-from-send-to-end
@@ -38,7 +39,7 @@
   {:about [session-chat] :evidence "round"})
 
 (Claim panel-renders-a-value
-  "The chat panel, its items, its status row and its chips render from a transcript or picks value and the URLs their controls post to, and read nothing else. Every state the findings name has a scene over a literal value: the empty panel, the person's message with and without picks, a turn waiting, thinking, running a tool and writing, a finished reply, reasoning open and collapsed, a tool call collapsed, expanded and failed, a permission request, an error, and the composer with picks."
+  "The chat panel, its side form, its items, its status row and its chips render from a transcript or picks value, the URLs their controls post to and the options they are given, and read nothing else. Every state the findings name has a scene over a literal value: the empty panel, the person's message with and without picks, a turn waiting, thinking, running a tool and writing, a finished reply, reasoning open and collapsed, a tool call collapsed, expanded and failed, a permission request, an error, the composer with picks, and the side panel open, closed, and closed while a turn runs."
   {:about [ui-components-chat ui-blocks] :evidence "round"})
 
 (Claim chat-leads-the-catalog

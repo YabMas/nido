@@ -6,10 +6,11 @@
             [nido.session.chat :as chat]
             [nido.session.preview :as preview]
             [nido.ui.catalog.chat :as catalog-chat]
+            [nido.ui.chat-host :as host]
             [nido.ui.components.chat :as panel]
             [org.httpkit.server :as http]))
 
-(def ^:private changed-events #'catalog-chat/changed-events)
+(defn- changed-events [old new] (host/changed-events @#'catalog-chat/routes old new))
 
 (deftest a-stream-patches-only-what-changed
   (let [t0 {:items [{:id "i0" :kind :user :text "hi"}] :busy? true :started-at 1000}
@@ -57,10 +58,13 @@
                 change/pending (constantly nil)]
     (let [closed (catalog-chat/page nil chrome)
           open   (catalog-chat/page "chat=1" chrome)]
-      (is (str/includes? closed "catcOpen: false"))
+      (is (str/includes? closed "catalogchatOpen: false"))
       (is (not (str/includes? closed "class=\"catc open\"")))
-      (is (str/includes? closed "id=\"catc-launch\"") "the launcher is the one chat control while closed")
-      (is (str/includes? open "catcOpen: true"))
+      (is (str/includes? closed "id=\"catalog-chat-toggle\"") "one toggle opens the chat")
+      (is (str/includes? closed "aria-expanded=\"false\""))
+      (is (not (str/includes? closed "catc-close")) "and nothing else closes it")
+      (is (str/includes? open "aria-expanded=\"true\""))
+      (is (str/includes? open "catalogchatOpen: true"))
       (is (str/includes? open "class=\"catc open\"")))))
 
 (deftest picks-become-chips-and-a-chip-removes-its-pick
@@ -88,7 +92,7 @@
 
 (defn- with-open-panel [f]
   (let [sent (atom [])
-        streams @#'catalog-chat/streams
+        streams (:streams @#'catalog-chat/chat-host)
         ch (Object.)]
     (swap! streams assoc ch {})
     (try
@@ -107,6 +111,17 @@
       (is (str/includes? (first @sent) "catcFrame"))
       (is (not (str/includes? (first @sent) "localhost")) "the frame reloads from the dashboard's own origin")
       (is (str/includes? (second @sent) "catalog-chat-change") "the change bar follows the turn"))))
+
+(deftest a-frame-open-before-a-reload-is-still-refreshed-after-it
+  ;; `require :reload` rebuilds the host; a page whose stream opened before it must still be
+  ;; reached by the next finished turn, or it stops refreshing until it reconnects.
+  (with-open-panel
+    (fn [sent]
+      (require 'nido.ui.catalog.chat :reload)
+      (with-redefs [preview/refresh! (constantly nil)
+                    change/pending   (constantly nil)]
+        (#'catalog-chat/refresh-frame! nil))
+      (is (some #(str/includes? % "catcFrame") @sent) "the frame opened before the reload is reloaded"))))
 
 (deftest a-refused-sync-is-said-in-the-conversation-and-the-frame-stays
   (let [noted (atom nil)]

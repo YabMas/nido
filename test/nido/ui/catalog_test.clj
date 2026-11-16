@@ -62,6 +62,31 @@
     (testing (str name " · " title)
       (is (= (render-str scene) (render-str scene))))))
 
+(defn- page-state-names
+  "The DOM ids and the page signals a scene's markup declares. A card's state nests under
+   `qcard`, keyed by its workstream, so that key is the name it owns."
+  [html]
+  (let [signal-values (map second (re-seq #"data-signals[^=]*=\"([^\"]*)\"" html))]
+    (into (set (map #(str "#" (second %)) (re-seq #"\sid=\"([^\"]+)\"" html)))
+          (mapcat (fn [v]
+                    (if (str/starts-with? v "{qcard: {")
+                      (map #(str "$qcard." (second %)) (re-seq #"^\{qcard: \{(\w+)" v))
+                      (map #(str "$" (second %)) (re-seq #"(?:\{|, )(\w+): " v)))))
+          signal-values)))
+
+(deftest no-two-scenes-share-page-state
+  ;; The catalog draws every scene on one page, so a DOM id or a signal two scenes both declare
+  ;; is one element or one value between them: a toggle in one scene would open the other, and
+  ;; the later declaration would overwrite the earlier scene's literal state.
+  (let [owners (reduce (fn [acc [label names]]
+                         (reduce #(update %1 %2 (fnil conj []) label) acc names))
+                       {}
+                       (for [{:keys [name scenes]} (blocks)
+                             {:keys [title] :as scene} scenes]
+                         [(str name " · " title) (page-state-names (render-str scene))]))]
+    (doseq [[n labels] owners :when (> (count labels) 1)]
+      (is false (str n " is declared by more than one scene: " (str/join ", " labels))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Every block has one
 

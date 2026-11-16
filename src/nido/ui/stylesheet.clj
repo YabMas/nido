@@ -611,6 +611,32 @@
         .chat-status:empty { display:none; }
         .chat-status-l { color:var(--text); }
         .chat-elapsed { color:var(--text-faint); font-variant-numeric:tabular-nums; }
+        /* The side panel (see nido.ui.components.chat/side). Its width is its page's; closed, only
+           the toggle at the head of its bar shows. The toggle's two icons are stacked by absolute
+           position in a fixed box, which every engine lays out the same. */
+        .chat-side { border-left:1px solid var(--border); display:flex; flex-direction:column; background:var(--bg);
+                     padding:12px 14px; gap:10px; min-height:0; height:100vh; overflow:hidden; min-width:0;
+                     position:sticky; top:0; }
+        .chat-side:not(.open) > :not(.chat-side-bar),
+        .chat-side:not(.open) .chat-side-bar > :not(.chat-toggle) { display:none; }
+        .chat-side > .chat { flex:1; }
+        .chat-side-bar { display:flex; gap:8px; align-items:center; }
+        .chat-side-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
+        .chat-toggle { position:relative; flex:none; width:30px; height:30px; padding:0; border-radius:6px; cursor:pointer;
+                       background:none; border:1px solid transparent; color:var(--text-muted); }
+        .chat-toggle:hover, .chat-side.open .chat-toggle { color:var(--text-strong); }
+        .chat-toggle:hover { border-color:var(--border); }
+        .chat-toggle svg { position:absolute; inset:0; margin:auto; width:18px; height:18px;
+                           transition:opacity 0.18s ease-out; }
+        .chat-toggle .chat-i-close, .chat-side.open .chat-toggle .chat-i-open { opacity:0; }
+        .chat-side.open .chat-toggle .chat-i-close { opacity:1; }
+        .chat-toggle .chat-spin { display:none; position:absolute; top:-3px; right:-3px; }
+        .chat-side:not(.open) .chat-toggle.busy .chat-spin { display:block; }
+        @media (max-width: 999px) {
+          .chat-side.open { position:fixed; top:0; right:0; bottom:0; width:min(420px, 100vw); z-index:60;
+                            box-shadow:-8px 0 24px var(--surface-sunken); }
+        }
+        @media (prefers-reduced-motion: reduce) { .chat-toggle svg { transition:none; } }
         .chat-spin { width:8px; height:8px; border-radius:50%; background:var(--running);
                      animation:pulse 1.2s ease-in-out infinite; flex:none; }
         .chat-spin-waiting { background:var(--waiting); }

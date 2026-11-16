@@ -393,28 +393,29 @@
 (defn- ask-scenes []
   [{:name "question-card"
     :note "One Ask, answered. The pane supplies how a click is routed; the card reads nothing
-           else. Datastar is live here, so the stepper and the choices work."
+           else. Datastar is live here, so the stepper and the choices work — each scene's card
+           on a workstream id of its own, since a card's page state is keyed by it."
     :scenes [{:title "one question"
               :note "The ordinary gate. The question leads, its support follows, and the one
                      recommended answer is the one primary button."
-              :render #(ask/question-card "nido" "ws-1" one-question-ask one-question-actions
+              :render #(ask/question-card "nido" "ws-card-1" one-question-ask one-question-actions
                                           {:route nowhere :session "component-catalog"})}
              {:title "several questions"
               :note "A verdict with one question per defect cannot let each answer give itself,
                      because no one answer is the whole of it. One card, one question at a time,
                      a marker per question, and Accept as the one submitting action. Click
                      Previous/Next and the markers — the stepper is page state and works here."
-              :render #(ask/question-card "nido" "ws-1" two-question-ask two-question-actions
+              :render #(ask/question-card "nido" "ws-card-2" two-question-ask two-question-actions
                                           {:route nowhere :session "auto"})}
              {:title "pending"
               :note "Its agent is running. Every choice renders with no control at all, so a
                      poll cannot flip it back to a fresh button."
-              :render #(ask/question-card "nido" "ws-1" two-question-ask two-question-actions
+              :render #(ask/question-card "nido" "ws-card-3" two-question-ask two-question-actions
                                           {:route nowhere :pending? true :session "auto"})}
              {:title "a failed action"
               :note "Set above the first question, and the controls stay clickable so the person
                      can retry."
-              :render #(ask/question-card "nido" "ws-1" one-question-ask one-question-actions
+              :render #(ask/question-card "nido" "ws-card-4" one-question-ask one-question-actions
                                           {:route nowhere
                                            :error-msg "approve refused: the design cites a baseline no round found sufficient"})}
              {:title "no recommendation"
@@ -423,7 +424,7 @@
                      has an answer to."
               :render (fn []
                         (ask/question-card
-                         "nido" "ws-1"
+                         "nido" "ws-card-5"
                          (update-in one-question-ask [:questions 0]
                                     (fn [q] (-> q (dissoc :recommendation)
                                                 (update :options
@@ -436,7 +437,7 @@
                      would run, and where to answer it — a button here could not answer the prompt.
                      nido marks it answered when the prompt closes."
               :render #(ask/question-card
-                        "nido" "ws-1"
+                        "nido" "ws-card-6"
                         {:kind :answer-blocker
                          :question "Allow catalog-chat to use Bash: npm install --save-dev playwright?"
                          :questions [{:question "Allow catalog-chat to use Bash: npm install --save-dev playwright?"
@@ -451,7 +452,7 @@
               :note "A phase gate is asserted with what you observed on the running system. The
                      box is a row beside what it does, like every other control."
               :render #(ask/question-card
-                        "nido" "ws-1"
+                        "nido" "ws-card-7"
                         {:kind :assert-gate
                          :question "Has phase 2 landed on the running system?"
                          :questions [{:question "Has phase 2 landed on the running system?"
@@ -467,7 +468,7 @@
                      reading measure and is never clipped — if this one is cut off or runs the
                      width of the pane, the card is wrong."
               :render #(ask/question-card
-                        "nido" "ws-1"
+                        "nido" "ws-card-8"
                         (let [q (str "Should the component catalog cover the twenty per-kind record cards as "
                                      "well, given that each one reads a different ledger record's shape and "
                                      "would need a sample of that record to have a scene at all, or is that a "
@@ -514,9 +515,13 @@
 ;; ---------------------------------------------------------------------------
 ;; The chat panel
 
-(def ^:private chat-routes
-  "Where a scene's panel posts: the catalog's dead end, for every control."
-  {:id         "scene-chat"
+(defn- chat-routes
+  "Where the scene panel `id` posts: the catalog's dead end, for every control. Every scene's
+   panel has an id of its own, because the catalog draws the scenes on one page and a panel's
+   signals and DOM ids are keyed by it — two scenes sharing one would share their open, busy and
+   draft state, and a toggle in one would move the other."
+  [id]
+  {:id         id
    :send-url   "/_catalog/nowhere/chat/send"
    :cancel-url "/_catalog/nowhere/chat/cancel"
    :answer-url (fn [item option] (str "/_catalog/nowhere/chat/permission/" item "/" option))
@@ -574,11 +579,11 @@ for the text and keep the tint, so it still reads as **yours** without competing
            as the catalog does."
     :scenes [{:title "empty"
               :note "Nothing said yet: only the composer, waiting for the first message."
-              :render #(chat/chat-panel (transcript false) chat-routes)}
+              :render #(chat/chat-panel (transcript false) (chat-routes "scene-chat-1"))}
              {:title "sent, nothing back yet"
               :note "The moment after Send: the message with the elements it carried, and the
                      status row saying the turn is under way before the agent has said anything."
-              :render #(chat/chat-panel (transcript true you-two) chat-routes)}
+              :render #(chat/chat-panel (transcript true you-two) (chat-routes "scene-chat-2"))}
              {:title "a streaming reply"
               :note "The reply grows, the caret marks where, the thought before it has folded,
                      the status row says writing, and Send is Stop."
@@ -587,19 +592,34 @@ for the text and keep the tint, so it still reads as **yours** without competing
                                     {:kind :thought :text "The chip sits beside an --fs-lg title…"}
                                     (assoc reply :text "The chip takes `--needs` at full strength. I will"
                                            :streaming? true))
-                        chat-routes)}
+                        (chat-routes "scene-chat-3"))}
              {:title "a finished reply"
               :note "A turn ended: the reply settled, a tool call folded, no status, and Send is back."
-              :render #(chat/chat-panel (transcript false you edit-call reply) chat-routes)}
+              :render #(chat/chat-panel (transcript false you edit-call reply) (chat-routes "scene-chat-4"))}
              {:title "a permission request"
               :note "The agent asks before a tool runs: the request and its answers, each a
                      button, and the status row saying it waits for you."
-              :render #(chat/chat-panel (transcript true you asking) chat-routes)}
+              :render #(chat/chat-panel (transcript true you asking) (chat-routes "scene-chat-5"))}
              {:title "an error"
               :note "A turn that failed: what went wrong, and the composer ready again."
               :render #(chat/chat-panel
                         (transcript false you {:kind :error :text "The agent process stopped."})
-                        chat-routes)}]}
+                        (chat-routes "scene-chat-6"))}]}
+   {:name "side"
+    :note "The panel as a side panel: a toggle that opens and closes it, leading a bar over the
+           panel. Closed, the toggle is all that shows; the page gives it the width."
+    :scenes [{:title "open"
+              :note "The toggle points out, the bar names the chat, and the panel is under it."
+              :render #(vector :div.cat-sidepanel
+                               (chat/side (transcript false you reply) (chat-routes "scene-chat-7") {:open? true}))}
+             {:title "closed"
+              :note "Only the toggle, pointing in."
+              :render #(vector :div.cat-sidepanel
+                               (chat/side (transcript false you reply) (chat-routes "scene-chat-8") {:open? false}))}
+             {:title "closed while a turn runs"
+              :note "The running dot on the toggle's corner says the agent is still at work."
+              :render #(vector :div.cat-sidepanel
+                               (chat/side (transcript true you) (chat-routes "scene-chat-9") {:open? false}))}]}
    {:name "chat-log"
     :note "The transcript alone, as it scrolls: it opens at the bottom, a message you send is
            pinned to its top with room below for the reply, and your own scroll lets go."
@@ -610,99 +630,118 @@ for the text and keep the tint, so it still reads as **yours** without competing
                                (chat/chat-log "scene-log"
                                               (:items (transcript false you edit-call reply
                                                                   you-two reply))
-                                              chat-routes))}]}
+                                              (chat-routes "scene-log")))}]}
+   {:name "log-id"
+    :note "The id a stream appends a new item under. Words, not markup — but the one name a stream
+           and the panel must agree on."
+    :scenes [{:title "one per panel"
+              :render #(into [:div]
+                             (for [id ["catalog-chat" "nido-chat"]]
+                               [:div.cat-pair [:span.cat-scene-fn id] [:span.mono (chat/log-id id)]]))}]}
    {:name "change-bar"
     :note "The conversation's change that main does not have, above the log, and what a person
            can do with it: Publish lands it on main, Cancel throws it away, each confirmed in place."
     :scenes [{:title "no change"
               :note "Nothing unlanded and nothing to say: the empty element, which takes no space."
-              :render #(chat/change-bar "scene-chat" nil {} change-routes)}
+              :render #(chat/change-bar "scene-change-1" nil {} change-routes)}
              {:title "a change"
               :note "Its files fold away; what it would land as is its description."
-              :render #(chat/change-bar "scene-chat" a-change {} change-routes)}
+              :render #(chat/change-bar "scene-change-2" a-change {} change-routes)}
              {:title "a change not yet described"
               :note "Publish waits: an undescribed change would land unnamed."
-              :render #(chat/change-bar "scene-chat" (assoc a-change :description "") {} change-routes)}
+              :render #(chat/change-bar "scene-change-3" (assoc a-change :description "") {} change-routes)}
              {:title "publishing"
               :note "The landing verb's current step, until it ends."
-              :render #(chat/change-bar "scene-chat" a-change {:running? true :step "running bb nido:test at 0123456789ab"}
+              :render #(chat/change-bar "scene-change-4" a-change {:running? true :step "running bb nido:test at 0123456789ab"}
                                         change-routes)}
              {:title "refused"
               :note "Why it did not land, with the change still there to fix and publish again."
-              :render #(chat/change-bar "scene-chat" a-change {:refused "bb nido:test is red at the tip"}
+              :render #(chat/change-bar "scene-change-5" a-change {:refused "bb nido:test is red at the tip"}
                                         change-routes)}
              {:title "published"
               :note "Landed: no change left, and the commit it landed as."
-              :render #(chat/change-bar "scene-chat" nil {:landed "0123456789abcdef"} change-routes)}]}
+              :render #(chat/change-bar "scene-change-6" nil {:landed "0123456789abcdef"} change-routes)}]}
    {:name "turn-status"
     :note "The status row at the foot of the log: from Send to the turn's end it names what the
            agent is doing now and counts the seconds. Each phase against the others."
     :scenes [{:title "waiting"
               :note "Sent; nothing back from the agent yet."
-              :render #(chat/turn-status "scene-chat" (transcript true you))}
+              :render #(chat/turn-status "scene-chat-12" (transcript true you))}
              {:title "thinking"
-              :render #(chat/turn-status "scene-chat"
+              :render #(chat/turn-status "scene-chat-13"
                                          (transcript true you {:kind :thought :streaming? true
                                                                :text "The chip sits…"}))}
              {:title "running a tool"
               :note "Names the tool, by its title."
-              :render #(chat/turn-status "scene-chat"
+              :render #(chat/turn-status "scene-chat-14"
                                          (transcript true you {:kind :tool :title "bb nido:test"
                                                                :status :in-progress :diffs []}))}
              {:title "writing"
-              :render #(chat/turn-status "scene-chat"
+              :render #(chat/turn-status "scene-chat-15"
                                          (transcript true you (assoc reply :streaming? true)))}
              {:title "waiting for your answer"
               :note "Still: nothing moves until you answer."
-              :render #(chat/turn-status "scene-chat" (transcript true you asking))}
+              :render #(chat/turn-status "scene-chat-16" (transcript true you asking))}
              {:title "no turn running"
               :note "Renders an empty row, which takes no space."
-              :render #(chat/turn-status "scene-chat" (transcript false you reply))}]}
+              :render #(chat/turn-status "scene-chat-17" (transcript false you reply))}]}
    {:name "chat-item"
     :note "One transcript item, under the DOM id a stream patches it by."
     :scenes [{:title "your message with picks"
               :note "The elements it carried, numbered as they were marked, above the words."
-              :render #(chat/chat-item (assoc you-two :id "i0") chat-routes)}
+              :render #(chat/chat-item (assoc you-two :id "i0") (chat-routes "scene-chat-18"))}
+             {:title "your message without picks"
+              :note "Words alone: no chips above them."
+              :render #(chat/chat-item {:id "i0" :kind :user
+                                        :text "Why does the board sort parked rows first?"}
+                                       (chat-routes "scene-chat-29"))}
              {:title "a thought, streaming and done"
               :note "Open while it streams; folded to one line once the next item starts."
               :render #(list (chat/chat-item {:id "i0" :kind :thought :streaming? true
                                               :text "The chip sits beside an --fs-lg title…"}
-                                             chat-routes)
+                                             (chat-routes "scene-chat-19"))
                              (chat/chat-item {:id "i1" :kind :thought
                                               :text "The chip sits beside an --fs-lg title…"}
-                                             chat-routes))}
+                                             (chat-routes "scene-chat-20")))}
              {:title "a tool call, collapsed"
               :note "How a tool call reads in passing: its status mark and what it did, one line."
-              :render #(chat/chat-item (assoc edit-call :id "i0") chat-routes)}
+              :render #(chat/chat-item (assoc edit-call :id "i0") (chat-routes "scene-chat-21"))}
              {:title "a tool call, expanded"
               :note "Opened: its output and its diff. Click the line to fold it."
-              :render #(update (chat/chat-item (assoc edit-call :id "i0") chat-routes) 2
+              :render #(update (chat/chat-item (assoc edit-call :id "i0") (chat-routes "scene-chat-22")) 2
                                ;; The same markup with the disclosure opened, as a click opens it.
                                (fn [details] (into [(first details) {:open true}] (rest details))))}
              {:title "a running and a failed tool call"
               :note "The failed one opens itself, so its output is read without a click."
               :render #(list (chat/chat-item {:id "i0" :kind :tool :title "bb nido:test" :status :in-progress
-                                              :diffs []} chat-routes)
+                                              :diffs []} (chat-routes "scene-chat-23"))
                              (chat/chat-item {:id "i1" :kind :tool :title "Read src/missing.clj"
                                               :status :failed :body "File does not exist." :diffs []}
-                                             chat-routes))}
+                                             (chat-routes "scene-chat-24")))}
              {:title "an answered permission request"
               :note "Once answered, a request folds to one line saying what was chosen."
               :render #(chat/chat-item {:id "i0" :kind :permission :title "Run bb nido:test"
                                         :answer "allow" :request-id 3
                                         :options [{:id "allow" :name "Allow" :kind :allow_once}]}
-                                       chat-routes)}]}
+                                       (chat-routes "scene-chat-25"))}]}
    {:name "picks"
     :note "The elements picked for the next message, as chips: numbered as the page marks them,
            each removable."
     :scenes [{:title "two picks"
-              :render #(chat/picks "scene-chat" (:refs you-two) chat-routes)}
+              :render #(chat/picks "scene-chat-26" (:refs you-two) (chat-routes "scene-chat-26"))}
              {:title "none"
               :note "Renders an empty row, which takes no space."
-              :render #(chat/picks "scene-chat" [] chat-routes)}]}
+              :render #(chat/picks "scene-chat-27" [] (chat-routes "scene-chat-27"))}]}
    {:name "composer"
     :note "The composer alone: the pick chips, the text box, and Send — or Stop, by the busy signal."
-    :scenes [{:title "ready" :render #(chat/composer "scene-chat" chat-routes)}]}
+    :scenes [{:title "ready" :render #(chat/composer "scene-chat-28" (chat-routes "scene-chat-28"))}
+             {:title "with picks"
+              :note "Two elements picked for the next message: their chips above the text box."
+              :render #(let [routes (chat-routes "scene-chat-30")]
+                         ;; The composer renders its chips empty; a pick patches them in by
+                         ;; `picks`, so the same markup with that patch made, as a pick makes it.
+                         (assoc (chat/composer "scene-chat-30" routes) 2
+                                (chat/picks "scene-chat-30" (:refs you-two) routes)))}]}
    {:name "signals"
     :note "The page-state names a panel keeps its draft, its picks and its busy flag under.
            Words, not markup — but the one thing two panels on one page must not share."

@@ -19,19 +19,19 @@
    being made is not one to land, and a change being landed is not one to edit.
 
    The panel's markup is the chat block's and the page's is the catalog's; the conversation and the
-   preview are the Session band's. What this holds is the one live thing on the dashboard: a panel's
-   stream, which patches each transcript item as it changes and unsubscribes when its browser goes."
+   preview are the Session band's, and keeping a panel live — its stream, send, stop and permission
+   answers — is `nido.ui.chat-host`'s. What this adds to the host is the picks, the frame and the
+   change bar."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [hiccup2.core :as h]
             [nido.session.change :as change]
             [nido.session.chat :as chat]
             [nido.session.preview :as preview]
             [nido.ui.catalog :as catalog]
+            [nido.ui.chat-host :as host]
             [nido.ui.components.chat :as panel]
             [nido.ui.datastar :as datastar]
-            [nido.ui.views :as views]
-            [org.httpkit.server :as http]))
+            [nido.ui.views :as views]))
 
 (def ^:private project "nido")
 (def ^:private design-session "catalog-design")
@@ -63,10 +63,6 @@ you did earlier.
 Never push, fast-forward or move main, and never record a landing: landing is the person's own
 deliberate act — Publish in the catalog, or a terminal — never a consequence of a chat message.")
 
-(defonce ^:private streams
-  ;; httpkit channel -> {:unsubscribe fn :sent transcript}
-  (atom {}))
-
 (defonce ^:private publishing
   ;; what the change bar says beside the change: {:running? :step}, {:landed}, {:refused},
   ;; {:reverted? true} or {} — see nido.ui.components.chat/change-bar
@@ -85,17 +81,14 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   {:publish-url "/_catalog/chat/publish"
    :revert-url  "/_catalog/chat/revert"})
 
-(defn- html [hiccup] (str (h/html hiccup)))
-
-(defn- broadcast! [event]
-  (doseq [ch (keys @streams)] (http/send! ch event false)))
+(def ^:private html host/html)
 
 (def ^:private frame-src
   "Where the frame loads the scene page from: always this dashboard, which forwards it to the
    design session's preview once the conversation exists."
   "/_catalog?embed=1")
 
-(declare design-chat)
+(declare design-chat chat-host)
 
 (defn- pending-change
   "The design session's unlanded change, or nil — also when there is no session to read yet."
@@ -110,7 +103,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   "Reload every open page's frame. The value only has to change: the page keeps the scene it was
    on and loads it from its own origin."
   []
-  (broadcast! (datastar/patch-signals-event
+  (host/broadcast! chat-host (datastar/patch-signals-event
                (json/generate-string {:catcFrame (str "#" (System/currentTimeMillis))}))))
 
 (defn- refresh-frame!
@@ -125,7 +118,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
     (catch Exception e
       (chat/note-error! design-chat (str "The preview was not refreshed, so the frame still shows "
                                          "the code before this turn: " (ex-message e)))))
-  (broadcast! (bar-event)))
+  (host/broadcast! chat-host (bar-event)))
 
 (def ^:private design-chat
   {:project project :session design-session :name "catalog"
@@ -147,64 +140,6 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
                 (when (seq text) (str "its text: " text "\n"))
                 "it rendered as: " html)}))
 
-(defn- status-event [t]
-  (datastar/patch-elements-event (html (panel/turn-status panel-id t))))
-
-(defn- busy-event [t]
-  (datastar/patch-signals-event (json/generate-string {(:busy (panel/signals panel-id)) (boolean (:busy? t))})))
-
-(defn- changed-events
-  "The patches that take a page from transcript `old` to `new`: an item that is new is appended to
-   the log, one that changed is morphed in place by its id, the status row is re-rendered when
-   what it says changes, and the busy signal is set when a turn starts or ends. Items are only
-   ever appended, so position is identity."
-  [old new]
-  (let [old-items (:items old)]
-    (concat
-     (for [[i item] (map-indexed vector (:items new))
-           :let [before (get old-items i)]
-           :when (not= before item)]
-       (let [markup (html (panel/chat-item item routes))]
-         (if before
-           (datastar/patch-elements-event markup)
-           (datastar/patch-elements-event markup {:selector (str "#" panel-id "-log") :mode "append"}))))
-     (when (not= (panel/turn-status panel-id old) (panel/turn-status panel-id new))
-       [(status-event new)])
-     (when (not= (:busy? old) (:busy? new))
-       [(busy-event new)]))))
-
-(defn- stream
-  "A panel's stream: the whole log, the status row and the busy signal once, then each change as
-   it happens, until the browser goes."
-  [req]
-  (http/as-channel
-   req
-   {:on-open  (fn [ch]
-                (http/send! ch {:status 200 :headers {"Content-Type"  "text/event-stream"
-                                                      "Cache-Control" "no-cache"}} false)
-                (let [t (chat/transcript design-chat)]
-                  (http/send! ch (str (datastar/patch-elements-event
-                                       (html (panel/chat-log panel-id (:items t) routes)))
-                                      (status-event t)
-                                      (busy-event t)
-                                      (bar-event))
-                              false)
-                  (swap! streams assoc ch {:sent t})
-                  (let [unsub (chat/subscribe!
-                               design-chat
-                               (fn [t']
-                                 (let [{:keys [sent]} (get @streams ch)]
-                                   (when sent
-                                     (swap! streams assoc-in [ch :sent] t')
-                                     (doseq [e (changed-events sent t')] (http/send! ch e false))))))]
-                    (swap! streams assoc-in [ch :unsubscribe] unsub))))
-    :on-close (fn [ch _]
-                (when-let [unsub (:unsubscribe (get @streams ch))] (unsub))
-                (swap! streams dissoc ch))}))
-
-(defn- body-json [req]
-  (try (json/parse-string (slurp (:body req))) (catch Exception _ {})))
-
 (defn- posted-picks
   "The picks signal a request posted, as a vector of string-keyed maps; empty when absent or not
    an array of objects."
@@ -213,31 +148,24 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
                (catch Exception _ nil))]
     (if (and (sequential? v) (every? map? v)) (vec v) [])))
 
-(defn- sse [& events]
-  {:status 200
-   :headers {"Content-Type" "text/event-stream" "Cache-Control" "no-cache"}
-   :body (apply str events)})
-
 (defn- picks-event [ps]
   (datastar/patch-elements-event
    (html (panel/picks panel-id (mapv #(select-keys (pick-ref %) [:label :title]) ps) routes))))
 
-(defn- send-message [req]
-  (let [{:keys [text picks]} (panel/signals panel-id)
-        body  (body-json req)
-        words (str/trim (str (get body text)))
-        ps    (posted-picks body)]
-    ;; A refused message (a turn is running) keeps the draft and its picks, so nothing is lost.
-    (if (and (seq words) (not (:running? @publishing))
-             (chat/send! design-chat words (mapv pick-ref ps)))
-      (sse (datastar/patch-signals-event (json/generate-string {text "" picks "[]"}))
-           (picks-event []))
-      (sse))))
+(def ^:private chat-host
+  (assoc (host/host design-chat routes ["_catalog" "chat"] (fn [body] (mapv pick-ref (posted-picks body))))
+         ;; A sent message took its picks with it.
+         :on-sent (fn [] [(datastar/patch-signals-event
+                           (json/generate-string {(:picks (panel/signals panel-id)) "[]"}))
+                          (picks-event [])])
+         ;; No message is sent while a publish runs: a change being landed is not one to edit.
+         :holds?  (fn [] (boolean (:running? @publishing)))
+         :opening (fn [] [(bar-event)])))
 
 (defn- unpick [req i]
-  (let [ps   (posted-picks (body-json req))
+  (let [ps   (posted-picks (host/body-json req))
         kept (vec (keep-indexed (fn [j p] (when (not= j i) p)) ps))]
-    (sse (datastar/patch-signals-event
+    (host/sse (datastar/patch-signals-event
           (json/generate-string {(:picks (panel/signals panel-id)) (json/generate-string kept)}))
          (picks-event kept))))
 
@@ -251,7 +179,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   (try (preview/refresh! project design-session) (reload-frames!)
        (catch Exception e
          (chat/note-error! design-chat (str "The preview was not refreshed: " (ex-message e)))))
-  (broadcast! (bar-event)))
+  (host/broadcast! chat-host (bar-event)))
 
 (defn- publish!
   "Start landing the design session's change, unless a turn or a publish is running; the bar
@@ -259,14 +187,14 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   []
   (when (and (not (:busy? (chat/transcript design-chat)))
              (not (:running? (first (swap-vals! publishing #(if (:running? %) % {:running? true}))))))
-    (broadcast! (bar-event))
+    (host/broadcast! chat-host (bar-event))
     (future
       (let [seen (atom {})
             exit (try (change/publish! project design-session
                                        (fn [line]
                                          (when-let [[_ st] (re-find step-line line)]
                                            (swap! publishing assoc :step st)
-                                           (broadcast! (bar-event)))
+                                           (host/broadcast! chat-host (bar-event)))
                                          (when-let [[_ why] (re-find refused-line line)]
                                            (swap! seen assoc :refused why))
                                          (when-let [[_ c] (re-find landed-line line)]
@@ -327,18 +255,13 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   (let [segs (vec (remove str/blank? (str/split (str uri) #"/")))]
     (if (forwarded? req segs)
       (preview/forward! project design-session req)
-     (when (= ["_catalog" "chat"] (take 2 segs))
-      (case [request-method (get segs 2)]
-        [:get "stream"]      (stream req)
-        [:post "send"]       (send-message req)
-        [:post "cancel"]     (do (chat/cancel! design-chat) {:status 204})
-        [:post "permission"] (do (when (= 5 (count segs))
-                                   (chat/answer-permission! design-chat (get segs 3) (get segs 4)))
-                                 {:status 204})
-        [:post "picks"]      (sse (picks-event (posted-picks (body-json req))))
-        [:post "unpick"]     (if-let [i (some-> (get segs 3) parse-long)]
-                               (unpick req i)
-                               {:status 404 :body ""})
-        [:post "publish"]    (do (publish!) {:status 204})
-        [:post "revert"]     (do (revert!) {:status 204})
-        {:status 404 :body ""})))))
+      (or (host/handle! chat-host req)
+          (when (= ["_catalog" "chat"] (take 2 segs))
+            (case [request-method (get segs 2)]
+              [:post "picks"]   (host/sse (picks-event (posted-picks (host/body-json req))))
+              [:post "unpick"]  (if-let [i (some-> (get segs 3) parse-long)]
+                                  (unpick req i)
+                                  {:status 404 :body ""})
+              [:post "publish"] (do (publish!) {:status 204})
+              [:post "revert"]  (do (revert!) {:status 204})
+              {:status 404 :body ""}))))))

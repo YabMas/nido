@@ -84,6 +84,10 @@
         .cat-rail { display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start; }
         .cat-rail-i { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
         .cat-pair { display:flex; gap:14px; align-items:baseline; }
+        /* A side panel in a scene: a box of fixed height it fills, at its width open or closed. */
+        .cat-sidepanel { display:flex; justify-content:flex-end; height:380px; }
+        .cat-sidepanel .chat-side { position:static; height:100%; width:420px; }
+        .cat-sidepanel .chat-side:not(.open) { width:58px; }
         .cat-pair .cat-scene-fn { min-width:190px; }
         .cat-scroll-box { display:flex; flex-direction:column; height:260px; }
         .cat-picking .cat-frame * { cursor:crosshair; }
@@ -94,20 +98,16 @@
                                 background:var(--accent-bg); color:var(--accent-strong);
                                 border:1px solid var(--accent-border); font:var(--fs-xs)/14px var(--font-mono);
                                 text-align:center; pointer-events:none; }
-        /* The page around the frame, filling the chrome's content area. Closed, the frame is all of
-           it and the launcher the one chat control; open, the panel pushes the frame narrower, and
-           below 1000px covers it. */
-        .catc { position:relative; display:grid; grid-template-columns:1fr 0px; height:100%; min-height:0;
+        /* The page around the frame, filling the chrome's content area: two columns, the frame and
+           the chat's side panel — just wide enough for its toggle when closed; open, it pushes the
+           frame narrower, and below 1000px covers it instead. */
+        .catc { position:relative; display:grid; grid-template-columns:1fr 58px; height:100%; min-height:0;
                 transition:grid-template-columns 0.18s ease-out; }
         .catc.open { grid-template-columns:1fr 420px; }
         .catc-frame { border:0; width:100%; height:100%; background:var(--bg); }
-        .catc-side { border-left:1px solid var(--border); display:flex; flex-direction:column; background:var(--bg);
-                     padding:12px 14px; gap:10px; min-height:0; height:100%; overflow:hidden; min-width:0; }
-        .catc:not(.open) .catc-side { visibility:hidden; padding:0; border:0; }
-        .catc-bar { display:flex; gap:8px; align-items:center; }
-        .catc-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
-        /* Select mode is a tool in the header, quiet like the close control beside it, and pressed
-           while it is on; on, a hint under the header says what a click does and how to stop. */
+        .catc > .chat-side { height:100%; }
+        /* Select mode is a tool in the panel's bar, quiet like the toggle beside it, and pressed
+           while it is on; on, a hint under the bar says what a click does and how to stop. */
         .catc-tool { display:inline-flex; gap:5px; align-items:center; background:none; cursor:pointer;
                      border:1px solid transparent; border-radius:4px; padding:3px 7px;
                      color:var(--text-muted); font:inherit; font-size:var(--fs-xs); }
@@ -118,18 +118,7 @@
                      border:1px solid var(--accent-border); border-radius:4px; padding:5px 8px; }
         .catc-hint kbd { font-family:var(--font-mono); }
         .catc.picking .catc-hint { display:block; }
-        .catc-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-md); }
-        .catc-x:hover { color:var(--text-strong); }
-        .catc-side .chat { flex:1; }
-        .catc-launch { position:absolute; top:10px; right:14px; z-index:2; display:flex; gap:6px; align-items:center; }
-        .catc-launch kbd { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--text-faint); }
-        .catc-launch .chat-spin { display:none; }
-        .catc-launch.busy .chat-spin { display:block; }
-        @media (max-width: 999px) {
-          .catc.open { grid-template-columns:1fr 0px; }
-          .catc.open .catc-side { position:fixed; top:0; right:0; bottom:0; width:min(420px, 100vw); z-index:3;
-                                  box-shadow:-8px 0 24px var(--surface-sunken); }
-        }
+        @media (max-width: 999px) { .catc.open { grid-template-columns:1fr 58px; } }
         @media (prefers-reduced-motion: reduce) { .catc { transition:none; } }
 ")
 
@@ -357,8 +346,8 @@
 (def ^:private host-js
   "The page around the scene frame. It owns the chat's open state, select mode and the marks:
 
-   - Open and closed: the launcher, the panel's ✕ and ⌘I/Ctrl+I (here or in the frame) flip the
-     `catcOpen` signal; `nidoChat.open` follows it into the URL (`chat=1`), and closing ends select
+   - Open and closed: the side panel's toggle and ⌘I/Ctrl+I (here or in the frame) flip its open
+     signal; `nidoChat.open` follows it into the URL (`chat=1`), and closing ends select
      mode and clears the frame's marks, so a closed chat leaves nothing on the scenes.
    - Picks: a `nido-picked` message toggles that element in the panel's picks signal, written
      through its hidden bound input — the one way plain script sets Datastar page state — and the
@@ -378,7 +367,7 @@
     root.classList.toggle('picking', v); post({type: 'nido-pick', on: v}); }
   function sendMarks(){ post({type: 'nido-marks', marks: isOpen() ? marks : []}); }
   function picks(){ try { var v = JSON.parse(input.value || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
-  function toggleOpen(){ document.getElementById(isOpen() ? 'catc-close' : 'catc-launch').click(); }
+  function toggleOpen(){ document.querySelector('.chat-toggle').click(); }
   btn.addEventListener('click', function(){ setPicking(!picking); });
   window.addEventListener('keydown', function(e){
     if ((e.metaKey || e.ctrlKey) && (e.key === 'i' || e.key === 'I')) { e.preventDefault(); toggleOpen(); }
@@ -425,41 +414,33 @@
   "The catalog with its chat: the scene page in a frame at `frame-src`, and the chat panel over
    `transcript`, with `panel` its id and routes (see `nido.ui.components.chat`; `:picks-url` is
    where the picks are posted for their chips), under `change-bar` — the conversation's unlanded
-   change, as `nido.ui.components.chat/change-bar` renders it. Closed — `open?` false — the frame is
-   the whole page and a launcher is the only chat control; open, the panel slides in beside the
-   frame with Pick, which puts the frame into select mode. Hiccup for the content area of the
+   change, as `nido.ui.components.chat/change-bar` renders it. The panel is
+   `nido.ui.components.chat/side`: closed — `open?` false — it narrows to its toggle beside the
+   frame; open, it slides in with Pick, which puts the frame into select mode. Hiccup for the content area of the
    dashboard's page chrome, which fills that area; the chrome is the caller's. Reads nothing: the
    conversation, its change, where the frame points and whether the chat starts open are its
    caller's."
   [transcript frame-src panel open? change-bar]
-  (let [{:keys [picks busy]} (chat/signals (:id panel))]
+  (let [{:keys [picks open]} (chat/signals (:id panel))]
     (list
         [:style (h/raw chrome-css)]
         [:div.catc {:class (when open? "open")
-                    "data-signals" (str "{catcFrame: '', catcOpen: " (boolean open?) "}")
-                    "data-class:open" "$catcOpen"
+                    "data-signals" "{catcFrame: ''}"
+                    "data-class:open" (str "$" open)
                     "data-effect" "$catcFrame && window.nidoReloadFrame($catcFrame)"}
          [:iframe#catc-frame.catc-frame {:src frame-src :title "Components"}]
-         [:aside.catc-side {:aria-label "Chat with the agent"}
-          [:div.catc-bar
-           [:h1 "Chat"]
-           [:button#catc-pick.catc-tool.catc-pick {:type "button" :aria-pressed "false"
-                                                   :title "Pick elements of a scene to talk about (Esc to stop)"}
-            [:span.catc-tool-i {:aria-hidden "true"} "⌖"] "Pick"]
-           [:button#catc-close.catc-x {:type "button" :title "Close the chat (⌘I)"
-                                       "data-on:click" "$catcOpen = false"} "✕"]]
-          [:p.catc-hint "Click elements in the scene to attach them. Click again to remove one; "
-           [:kbd "Esc"] " to stop."]
-          change-bar
-          (-> (chat/chat-panel transcript panel)
-              (conj [:input#catc-picks {:type "hidden" "data-bind" picks}]
-                    [:button#catc-picks-sync {:type "button" :hidden true
-                                              "data-on:click" (str "@post('" (:picks-url panel) "')")}]))]
-         [:button#catc-launch.btn.catc-launch {:type "button" :title "Chat with the agent (⌘I)"
-                                               "data-show" "!$catcOpen"
-                                               "data-on:click" "$catcOpen = true"
-                                               "data-class:busy" (str "$" busy)}
-          [:span.chat-spin {:aria-hidden "true"}] "Chat" [:kbd "⌘I"]]
-         [:span {:hidden true "data-effect" "window.nidoChat && window.nidoChat.open($catcOpen)"}]
+         (chat/side transcript panel
+                    {:open?  open?
+                     :bar    [[:button#catc-pick.catc-tool.catc-pick
+                               {:type "button" :aria-pressed "false"
+                                :title "Pick elements of a scene to talk about (Esc to stop)"}
+                               [:span.catc-tool-i {:aria-hidden "true"} "⌖"] "Pick"]]
+                     :top    [[:p.catc-hint "Click elements in the scene to attach them. Click again to remove one; "
+                               [:kbd "Esc"] " to stop."]
+                              change-bar]
+                     :extra  [[:input#catc-picks {:type "hidden" "data-bind" picks}]
+                              [:button#catc-picks-sync {:type "button" :hidden true
+                                                        "data-on:click" (str "@post('" (:picks-url panel) "')")}]]})
+         [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.open($" open ")")}]
          [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.marks($" picks ")")}]]
         [:script (h/raw host-js)])))

@@ -29,11 +29,11 @@
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   signals
   "The names of a panel's page-state signals — `:text` (the draft), `:picks` (the picks, as JSON
-   text) and `:busy` (whether a turn is running) — for the panel `id`. Each panel on a page gets
-   its own, so two panels never share a draft."
+   text), `:busy` (whether a turn is running) and `:open` (whether a `side` panel is open) — for
+   the panel `id`. Each panel on a page gets its own, so two panels never share a draft."
   [id]
   (let [k (str/replace id #"[^A-Za-z0-9]" "")]
-    {:text (str k "Text") :picks (str k "Picks") :busy (str k "Busy")}))
+    {:text (str k "Text") :picks (str k "Picks") :busy (str k "Busy") :open (str k "Open")}))
 
 (defn- item-dom-id [panel-id item] (str panel-id "-" (:id item)))
 
@@ -224,13 +224,19 @@
   room(); bottom();
 })(el)")
 
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  log-id
+  "The DOM id of the panel `id`'s log: what a stream appends a new item to, by selector."
+  [id]
+  (str id "-log"))
+
 (defn ^{:malli/schema [:=> [:cat :string [:sequential :map] :map] :any]}
   chat-log
-  "The transcript, under the DOM id `<id>-log`: each item as `chat-item` renders it, in a log that
-   scrolls the way `scroll-js` says. A stream re-rendering the whole log renders it with this, so
-   the morph keeps the log's scrolling."
+  "The transcript, under the DOM id `log-id` gives: each item as `chat-item` renders it, in a log
+   that scrolls the way `scroll-js` says. A stream re-rendering the whole log renders it with this,
+   so the morph keeps the log's scrolling and the page's log is always the panel's own markup."
   [id items routes]
-  (into [:div.chat-log {:id (str id "-log") "data-init" scroll-js}] (map #(chat-item % routes) items)))
+  (into [:div.chat-log {:id (log-id id) "data-init" scroll-js}] (map #(chat-item % routes) items)))
 
 (defn ^{:malli/schema [:=> [:cat :Conversation :map] :any]}
   chat-panel
@@ -247,6 +253,47 @@
      (chat-log id items opts)
      (turn-status id transcript)
      (composer id opts)]))
+
+(defn- panel-icon
+  "A right-hand panel glyph with a chevron drawn by `chevron` (an SVG path): pointing in, the
+   panel opens; pointing out, it closes. The toggle stacks both and fades between them."
+  [cls chevron]
+  [:svg {:class cls :viewBox "0 0 24 24" :fill "none" :stroke "currentColor"
+         :stroke-width "2" :stroke-linecap "round" :stroke-linejoin "round" :aria-hidden "true"}
+   [:rect {:width "18" :height "18" :x "3" :y "3" :rx "2"}]
+   [:path {:d "M15 3v18"}]
+   [:path {:d chevron}]])
+
+(defn ^{:malli/schema [:=> [:cat :Conversation :map :map] :any]}
+  side
+  "The panel as a side panel that opens and closes: a bar — the toggle, `:heading`, then the
+   hiccup in `:bar` — then the hiccup in `:top`, over the panel, with the hiccup in `:extra`
+   appended inside it. The toggle leads the bar, so it rides the panel's left edge; closed, the
+   toggle is all that shows.
+
+   Whether it is open is the panel's `:open` signal (see `signals`), declared here starting at
+   `:open?`, and the aside carries class `open` while it is. How wide it is, open or closed, is
+   the page's: give the closed column room for the toggle and the bar's padding, 58px."
+  [transcript {:keys [id] :as routes} {:keys [open? heading bar top extra]}]
+  (let [{:keys [open busy]} (signals id)]
+    (-> [:aside.chat-side {:class (when open? "open")
+                           :aria-label "Chat with the agent"
+                           "data-signals" (str "{" open ": " (boolean open?) "}")
+                           "data-class:open" (str "$" open)}
+         (into [:div.chat-side-bar
+                [:button.chat-toggle {:id (str id "-toggle") :type "button"
+                                      :title "Chat with the agent (⌘I)" :aria-label "Chat with the agent"
+                                      :aria-expanded (str (boolean open?))
+                                      "data-attr:aria-expanded" (str "$" open)
+                                      "data-on:click" (str "$" open " = !$" open)
+                                      "data-class:busy" (str "$" busy)}
+                 (panel-icon "chat-i-open" "m10 15-3-3 3-3")
+                 (panel-icon "chat-i-close" "m8 9 3 3-3 3")
+                 [:span.chat-spin {:aria-hidden "true"}]]
+                [:h1 (or heading "Chat")]]
+               bar)]
+        (into top)
+        (conj (into (chat-panel transcript routes) extra)))))
 
 (defn- first-line [s] (some-> s str/trim not-empty str/split-lines first))
 
