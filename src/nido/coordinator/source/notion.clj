@@ -182,6 +182,38 @@
                            :consecutive-failures next-failures)
               tripped? (assoc :breaker :open :breaker-opened-at (clock/now-iso)))))))))
 
+(defn- read-all
+  "Every workstream of `project` that reads, in `ws/list-ids` order."
+  [project]
+  (vec (keep #(ws/read-ws project %) (ws/list-ids project))))
+
+(defn- by-ref
+  "Each external-ref id the workstreams `wss` carry → the first of them, in `wss`'s order, that
+   carries it: `ws/find-by-ref-id`'s answer for every id at once. A poll asks it of every page
+   that has left its view, and a scan of every ledger per page held the coordinator's loop for
+   most of each poll."
+  [wss]
+  (reduce (fn [m w]
+            (reduce #(if (contains? %1 (:id %2)) %1 (assoc %1 (:id %2) w))
+                    m (:external-refs w)))
+          {}
+          wss))
+
+(defn- record-status-changes-in!
+  "`record-status-changes!` over `wss`, the project's workstreams as the poll already read them
+   (`read-all`)."
+  [project pages wss]
+  (let [carrying (by-ref wss)]
+    (into []
+          (keep (fn [[page-id {:keys [status br]}]]
+                  (when-let [w (and status br (carrying br))]
+                    (when-not (= status (:status (last (ws/entries-of project (:id w) :notion-status))))
+                      (ws/append-entry! project (:id w) {:kind :notion-status}
+                                        (pr-str {:format :notion-status :page-id page-id
+                                                 :status status :by :poller}))
+                      (:id w)))))
+          pages)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
   record-status-changes!
   "Append a :notion-status entry to the workstream of every page this poll observed, when that
@@ -193,20 +225,7 @@
    workstream after it was first polled, and a restart all compare against the one record that
    says what the workstream last saw, and each change is recorded once."
   [project pages]
-  (let [by-ref (reduce (fn [m w]
-                         (reduce #(if (contains? %1 (:id %2)) %1 (assoc %1 (:id %2) w))
-                                 m (:external-refs w)))
-                       {}
-                       (keep #(ws/read-ws project %) (ws/list-ids project)))]
-    (into []
-          (keep (fn [[page-id {:keys [status br]}]]
-                  (when-let [w (and status br (by-ref br))]
-                    (when-not (= status (:status (last (ws/entries-of project (:id w) :notion-status))))
-                      (ws/append-entry! project (:id w) {:kind :notion-status}
-                                        (pr-str {:format :notion-status :page-id page-id
-                                                 :status status :by :poller}))
-                      (:id w)))))
-          pages)))
+  (record-status-changes-in! project pages (read-all project)))
 
 (defn- ref-page-id
   "The page a Notion ref names: its :page-id, else the one its :url names."
@@ -217,12 +236,11 @@
   "The pages an open workstream's Notion ref names that neither `prior-pages` nor `pages` holds,
    while that workstream records no Notion status — a page that left the view before its
    workstream existed, which no poll would otherwise ask about again. Once recorded it is
-   tracked as any departed page is."
-  [project prior-pages pages]
+   tracked as any departed page is. `wss` is the project's workstreams (`read-all`)."
+  [prior-pages pages wss]
   (into {}
-        (for [id    (ws/list-ids project)
-              :let  [w (ws/read-ws project id)]
-              :when (and w (nil? (ws/closure w))
+        (for [w     wss
+              :when (and (nil? (ws/closure w))
                          (not-any? #(= :notion-status (:kind %)) (:entries w)))
               r     (:external-refs w)
               :let  [page-id (and (= :notion (:adapter r)) (:id r) (ref-page-id r))]
@@ -238,12 +256,14 @@
    view. A page no open workstream carries — its workstream closed, or not yet created — is kept
    as last seen and not asked about, so the BR it maps to is still known when a workstream
    reopens or first claims it. A page Notion no longer has (404) is left out; any other failure
-   to fetch throws, so the poll keeps its baseline and asks again."
-  [project prior-pages pages token]
+   to fetch throws, so the poll keeps its baseline and asks again. `wss` is the project's
+   workstreams as the poll read them once (`read-all`)."
+  [prior-pages pages token wss]
   (into {}
-        (keep (fn [[page-id {:keys [br] :as prior}]]
+        (keep (let [carrying (by-ref wss)]
+               (fn [[page-id {:keys [br] :as prior}]]
                 (when (and br (not (contains? pages page-id)))
-                  (let [w (ws/find-by-ref-id project br)]
+                  (let [w (carrying br)]
                     (if (or (nil? w) (ws/closure w))
                       [page-id (select-keys prior [:status :br])]
                       (let [p (notion/retrieve-page page-id token)]
@@ -251,8 +271,8 @@
                           (not (:error p))    [page-id {:status (:status (notion/normalise-page p)) :br br}]
                           (= 404 (:status p)) nil
                           :else (throw (ex-info (str "fetching departed page " page-id " failed")
-                                                {:page-id page-id :error (:error p)})))))))))
-        (merge (unrecorded-pages project prior-pages pages) prior-pages)))
+                                                {:page-id page-id :error (:error p)}))))))))))
+        (merge (unrecorded-pages prior-pages pages wss) prior-pages)))
 
 (defn ^{:malli/schema [:=> [:cat :map :any :map] :map]}
   start-instance!
@@ -281,8 +301,9 @@
                     next        (poll-once! source-config token emit)]
                 (if (= :ok (:last-poll-result next))
                   (let [project  (:project source-config)
-                        departed (try (let [d (departed-pages project baseline (:pages next) token)]
-                                        (record-status-changes! project (merge (:pages next) d))
+                        departed (try (let [wss (read-all project)
+                                            d   (departed-pages baseline (:pages next) token wss)]
+                                        (record-status-changes-in! project (merge (:pages next) d) wss)
                                         d)
                                       (catch Exception e
                                         (binding [*out* *err*]

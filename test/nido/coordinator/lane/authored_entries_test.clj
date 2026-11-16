@@ -101,6 +101,32 @@
                  (mapv :status (ws/entries-of :brian id :notion-status)))
               "reopened, it is fetched again"))))))
 
+(deftest a-poll-reads-the-ledgers-once-however-many-pages-left-its-view
+  ;; Every page that ever left a view is asked about on every poll; finding each one's workstream
+  ;; by scanning every ledger held the coordinator's loop for most of each poll.
+  (with-tmp
+    (fn []
+      (let [ids   (mapv #(:id (ws/create! :brian {:stage :in-progress
+                                                  :external-refs [{:adapter :notion :id (str "BR-" %) :page-id (str "p" %)}]}))
+                        (range 3))
+            pages (atom (into {} (map (fn [i] [(str "p" i) {:status "In progress" :br (str "BR-" i)}])) (range 3)))
+            reads (atom 0)
+            read-ws ws/read-ws
+            poll! (:poll! (notion-src/start-instance! {:type :notion-view :project :brian :view :v}
+                                                      (fn [_]) {:token "t"}))]
+        (with-redefs [notion-src/poll-once!       (fn [_ _ _] {:last-poll-result :ok :pages @pages})
+                      notion-client/retrieve-page (fn [_ _] {:properties {:Status {:type "status" :status {:name "Review"}}}})]
+          (poll!)
+          (reset! pages {})
+          (with-redefs [ws/read-ws (fn [& args] (swap! reads inc) (apply read-ws args))]
+            (poll!))
+          (is (= ["In progress" "Review"] (mapv :status (ws/entries-of :brian (first ids) :notion-status)))
+              "each page that left is still fetched and its new status recorded")
+          ;; One read of every workstream for the poll, plus the newest-status check and the append
+          ;; for each page whose status moved — 9 here. A scan of every ledger per departed page
+          ;; read them 21 times.
+          (is (<= @reads (* 3 (count ids))) "the ledgers read once for the poll, not once per departed page"))))))
+
 (deftest a-page-that-left-the-view-before-its-workstream-existed-is-recorded
   (with-tmp
     (fn []
