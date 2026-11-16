@@ -1063,7 +1063,7 @@
 (def ^:private session-hook-events
   "The Claude Code hooks nido's session hook records. One list, so the settings it is installed
    in and the events it understands cannot drift apart."
-  ["SessionStart" "UserPromptSubmit" "Stop" "PermissionDenied" "Notification"])
+  ["SessionStart" "UserPromptSubmit" "Stop" "StopFailure" "PermissionDenied" "Notification"])
 
 (def ^:private nido-hook-markers
   "What identifies a hook entry as nido's own: the bb task each of nido's hooks runs."

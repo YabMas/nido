@@ -21,6 +21,11 @@
           :cwd nil :permission-mode "auto"}
          (hook/->event "Stop" {:last_assistant_message "done" :background_tasks [{} {}]
                                :session_crons [] :permission_mode "auto"})))
+  (is (= {:event :stop :failure "server_error" :last-message "API Error: Connection lost"
+          :cwd "/w" :permission-mode nil}
+         (hook/->event "StopFailure" {:error "server_error" :last_assistant_message "API Error: Connection lost"
+                                      :cwd "/w"}))
+      "a turn an API error ended is over all the same")
   (is (= :permission-denied (:event (hook/->event "PermissionDenied" {:tool_name "Bash"}))))
   (is (= :notification (:event (hook/->event "Notification" {:notification_type "permission_prompt"}))))
   (is (nil? (hook/->event "PreToolUse" {})) "a hook it does not record"))

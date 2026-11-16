@@ -56,6 +56,12 @@
                                       :last-message     (clip (:last_assistant_message payload))
                                       :background-tasks (count (:background_tasks payload))
                                       :crons            (count (:session_crons payload))})
+      ;; Fired INSTEAD of Stop when an API error ended the turn (Claude Code 2.1.325): the turn
+      ;; is over all the same. Unrecorded, the instruction it was given stayed outstanding for
+      ;; good, and the session was never given anything again.
+      "StopFailure"      (merge base {:event        :stop
+                                      :failure      (str (:error payload))
+                                      :last-message (clip (:last_assistant_message payload))})
       "PermissionDenied" (merge base {:event     :permission-denied
                                       :tool-name (:tool_name payload)
                                       :tool-input (clip (some-> (:tool_input payload) json/generate-string))})

@@ -409,14 +409,34 @@
         (is (= :live (:reason (ex-data (try (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"})
                                             (catch Exception e e))))))))))
 
-(deftest seat-messages-are-given-in-the-order-owed-after-any-queued-instruction
-  (let [owed [{:id "m1" :text "first"} {:id "m2" :text "second"}]
+(deftest seat-messages-are-given-after-any-queued-instruction
+  (let [owed [{:id "m1" :text "first"}]
         f    (assoc driving :queued "do it")
         d1   (conduct/decide f done-row [] (assoc ctx :owed owed))]
     (is (= ["do it" nil] (subvec (first (:actions d1)) 3)) "the queued instruction goes first")
     (let [d2 (conduct/decide (assoc (:facet d1) :pending nil) done-row [] (assoc ctx :owed owed))]
-      (is (= ["first" "m1"] (subvec (first (:actions d2)) 3)) "then the oldest message owed, by its id")
+      (is (= ["first" ["m1"]] (subvec (first (:actions d2)) 3)) "then the message owed, by its id, in its own words")
+      (is (= ["m1"] (get-in d2 [:facet :pending :messages])))
       (is (nil? (get-in d2 [:facet :queued]))))))
+
+(deftest every-seat-message-owed-is-given-in-one-turn
+  ;; One a turn fell behind for good: each turn end drew one more instruction from the conductor,
+  ;; so the seat worked hours-old instructions while a person's answer waited behind them.
+  (let [owed [{:id "m1" :kind :instruction :text "wait for the person"}
+              {:id "m2" :kind :instruction :text "the person answered: amend"}]
+        [_ _ _ text ids] (first (:actions (conduct/decide driving done-row [] (assoc ctx :owed owed))))]
+    (is (= ["m1" "m2"] ids) "every one marked given")
+    (is (< (str/index-of text "wait for the person") (str/index-of text "the person answered: amend"))
+        "oldest first")
+    (is (str/includes? text "newest stands") "and the newest stands where they disagree")))
+
+(deftest a-hand-back-is-given-alone
+  ;; A conductor's turn answers exactly one hand-back.
+  (let [hb   (fn [id] {:id id :kind :hand-back :text id})
+        ids  (fn [owed] (last (first (:actions (conduct/decide driving done-row [] (assoc ctx :owed owed))))))]
+    (is (= ["h1"] (ids [(hb "h1") (hb "h2")])))
+    (is (= ["s1" "s2"] (ids [{:id "s1" :text "x"} {:id "s2" :text "y"} (hb "h1")]))
+        "messages before a hand-back go together, the hand-back after them")))
 (deftest start-refuses-while-a-start-is-in-flight
   (with-tmp
     (fn []
@@ -798,9 +818,10 @@
         (is (nil? (:pending (facet))))
         (is (nil? (:queued (facet))) "and puts nothing on the facet")
         (with-redefs [substrate/listing (constantly [done-row])
-                      substrate/send!   (fn [_ text] (is (str/starts-with? text "first")) {:delivered? true})]
+                      substrate/send!   (fn [_ text] (is (str/includes? text "first")) (is (str/includes? text "second"))
+                                          {:delivered? true})]
           (is (= 1 (count (:delivered (conduct/conduct! {:projects [:nido] :mail mail}))))))
-        (is (= ["m1"] @delivered))))))
+        (is (= ["m1" "m2"] @delivered) "both given in the one turn, each marked")))))
 
 (deftest outstanding-is-what-the-next-fold-would-leave
   (with-tmp

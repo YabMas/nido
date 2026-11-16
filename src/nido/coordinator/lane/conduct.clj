@@ -214,6 +214,31 @@
   (cond-> (dissoc facet :hold :idle-seen)
     (= :person (:driver facet)) (assoc :driver :nobody)))
 
+(defn- given-together
+  "The seat messages owed that one turn is given: a hand-back alone, since a conductor's turn
+   answers exactly one; otherwise every message owed up to the next hand-back. One message a turn
+   could not keep up with a seat whose every turn end the conductor answers with one more
+   instruction — the queue grew by one for each one it gave, and the seat worked hours-old
+   instructions while the newest, a person's answer among them, waited behind them."
+  [owed]
+  (when-let [[m & more] (seq owed)]
+    (if (= :hand-back (:kind m))
+      [m]
+      (into [m] (take-while #(not= :hand-back (:kind %))) more))))
+
+(defn- together-text
+  "The text giving `messages` in one turn: a lone message's own; several in order, numbered,
+   with the newest saying what stands where they disagree."
+  [messages]
+  (if (= 1 (count messages))
+    (:text (first messages))
+    (let [n (count messages)]
+      (str "You are given " n " seat messages at once, oldest first. Where they disagree, the "
+           "newest stands: act on it, and on an older one only as far as the newer ones leave it.\n\n"
+           (str/join "\n\n"
+                     (map-indexed (fn [i m] (str "── message " (inc i) " of " n " ──\n" (:text m)))
+                                  messages))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   outstanding
   "The instruction still outstanding on the session record `s`'s facet as its driven
@@ -246,17 +271,17 @@
    and changes nothing of who drives.
 
    Actions: [:turn-ended event instruction] — instruction the one nido gave whose token a
-   recorded prompt of the turn carried, with :for naming the Run it was given for and :message
-   the seat message it was, nil for a turn whose prompts carried none — [:prompted event] for a
-   prompt a person typed, [:denial event], [:notify-blocked unrun?] — unrun? when nothing is
-   outstanding and its last Stop ended no instruction recorded for a Run — [:refused why] when
-   only the baseline keeps a queued instruction back, and at most one of
-   [:send tagged-text token text message-id] / [:wake tagged-text token text message-id] —
+   recorded prompt of the turn carried, with :for naming the Run it was given for and :messages
+   the ids of the seat messages it was, nil for a turn whose prompts carried none — [:prompted
+   event] for a prompt a person typed, [:denial event], [:notify-blocked unrun?] — unrun? when
+   nothing is outstanding and its last Stop ended no instruction recorded for a Run — [:refused
+   why] when only the baseline keeps a queued instruction back, and at most one of
+   [:send tagged-text token text message-ids] / [:wake tagged-text token text message-ids] —
    whose token the returned facet already holds as pending, so it is recorded before anything is
-   delivered. What is given is the queued instruction, else the oldest seat message owed, whose
-   :id the action carries (nil for an instruction). Only a session the listing shows done, or
-   blocked or idle with its Stop as its latest recorded event, is given anything; a wake goes only to a
-   session whose latest recorded event is its Stop."
+   delivered. What is given is the queued instruction, else the seat messages owed that
+   `given-together` takes, whose ids the action carries (nil for an instruction). Only a session
+   the listing shows done, or blocked or idle with its Stop as its latest recorded event, is given
+   anything; a wake goes only to a session whose latest recorded event is its Stop."
   [facet row evs {:keys [now token hold-sends? baseline latest owed]}]
   (let [{f :facet acts :actions} (reduce read-event {:facet (current facet) :actions []} evs)
         blocked?  (= "blocked" (:state row))
@@ -273,8 +298,8 @@
         ;; Blocked after its Stop, a session is waiting on the answer a person queued for it;
         ;; blocked mid-turn, it is waiting on something a message would not answer.
         ready-state? (or (= "done" (:state row)) (and blocked? stopped?) (idle-after-stop? row latest))
-        message   (when (nil? (:queued f)) (first owed))
-        text      (if message (:text message) (:queued f))
+        messages  (when (nil? (:queued f)) (given-together owed))
+        text      (if messages (together-text messages) (:queued f))
         gated?    (and (= :nido (:driver f)) free?
                        text row ready-state? (not (:own-work? f))
                        (not hold-sends?)
@@ -283,16 +308,16 @@
     {:facet   (cond-> f
                 (and ready? lapsed) (update :lapsed #(vec (take-last lapsed-kept (conj (vec %) (:pending f)))))
                 ready? (assoc :pending (cond-> {:token token :at now :via via :seen? false}
-                                         (and (not message) (:queued-for f)) (assoc :for (:queued-for f))
-                                         message (assoc :message (:id message))))
-                (and ready? (not message)) (assoc :queued nil :queued-for nil))
+                                         (and (not messages) (:queued-for f)) (assoc :for (:queued-for f))
+                                         messages (assoc :messages (mapv :id messages))))
+                (and ready? (not messages)) (assoc :queued nil :queued-for nil))
      :actions (cond-> acts
                 ;; Blocked after a turn that ended no Run's instruction, it waits on whoever that
                 ;; turn end went to. Blocked mid-turn, nothing has gone anywhere, and only a person
                 ;; can answer it.
                 announce? (conj [:notify-blocked (boolean (and free? (:ended-unrun? f)))])
                 (and gated? (not ready?)) (conj [:refused baseline])
-                ready?    (conj [via (tagged text token) token text (:id message)]))}))
+                ready?    (conj [via (tagged text token) token text (some->> messages (mapv :id))]))}))
 
 ;; ── finding the sessions ────────────────────────────────────────────────────
 
@@ -574,9 +599,9 @@
    a turn end or prompt only when `counted` counts it, a turn end and a blocked session `mark`ed."
   [report who {:keys [decided row driven]} {:keys [opts project ws-id session-name counted mark]}]
   (let [sid    driven
-        given! (fn [id token] (when id ((get-in opts [:mail :delivered!]) project ws-id id token)))]
+        given! (fn [ids token] (doseq [id ids] ((get-in opts [:mail :delivered!]) project ws-id id token)))]
     (reduce
-     (fn [r [kind a b c message-id]]
+     (fn [r [kind a b c message-ids]]
        (case kind
          :turn-ended     (if (counted a b)
                            (update r :turn-ends conj (mark (assoc who :event a :instruction b :run (:for b) :conversation sid)))
@@ -593,20 +618,20 @@
                running (when (instance? Throwable ok) (left-running ok))]
            (cond
              (true? ok)
-             (do (given! message-id b)
+             (do (given! message-ids b)
                  (update r :delivered conj (assoc who :via kind :token b)))
              ;; Something the attempt started still runs: the instruction stays outstanding,
              ;; so nothing is given again until it ends or lapses — a seat message included,
              ;; which that process may already hold.
              running
-             (do (given! message-id b)
+             (do (given! message-ids b)
                  (update r :left-running conj (assoc who :via kind :running running)))
              :else
              (do (session/update-claude! project ws-id session-name
                                          ;; Back where it waited: undelivered is not outstanding.
                                          ;; A seat message stays owed, so it needs no putting back.
                                          #(cond-> (assoc % :pending nil)
-                                            (not message-id) (assoc :queued c
+                                            (not message-ids) (assoc :queued c
                                                                     :queued-for (get-in decided [:facet :pending :for]))))
                  (update r :failed conj (assoc who :via kind)))))))
      report

@@ -44,7 +44,10 @@
    ;; brief, not the conductor's instruction — so the commit gate lets its turn take a person's act
    ;; the start asked for (an intent from a brief).
    [:given-by {:optional true} [:enum :start]]
-   ;; The seat message it was, when it was one.
+   ;; The seat messages it was, when it was any — every one a seat was owed goes in one turn.
+   [:messages {:optional true} [:vector {:min 1} string?]]
+   ;; The one seat message an instruction given before 2026-11-16 was: such a facet may still be
+   ;; on disk, pending or lapsed. Nothing writes it now.
    [:message {:optional true} string?]])
 
 (def Claude
