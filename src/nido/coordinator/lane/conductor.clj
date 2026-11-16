@@ -532,12 +532,42 @@
               [:refused :not-a-seat]
               (throw e))))))))
 
+(defn- excerpt [s n]
+  (let [s (str/trim (str/replace (str s) #"\s+" " "))]
+    (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
+
+(defn- covering
+  "The hand-back that covers hand-back `m` among `hand-backs`: a later one from the same session
+   that a :conduct-decision answers — that session's newer report, decided, supersedes the
+   older one. Nil when there is none."
+  [project ws-id m hand-backs]
+  (let [answered (into #{} (map :hand-back) (ws/entries-of project ws-id :conduct-decision))
+        at       #(try (java.time.Instant/parse (str %)) (catch Exception _ nil))
+        m-at     (at (:at m))]
+    (last (filter #(and (:session m) (= (:session m) (:session %)) (not= (:id m) (:id %))
+                        (answered (:id %))
+                        (let [a (at (:at %))] (and a m-at (.isAfter ^java.time.Instant a m-at))))
+                  hand-backs))))
+
+(defn- unanswered-escalation
+  "nido's escalation of hand-back `m`, which `offers` conductor turns ended without deciding:
+   the question carries the seat's report, so the person reads what it was about."
+  [m offers]
+  {:needs   "What should the seat do next, given the report below that the conductor could not decide on?"
+   :summary (str "The conductor ended " offers " turns without deciding this hand-back, so the seat that sent it is waiting. "
+                 "The hand-back reads: " (excerpt (:text m) 1200))
+   :after   "Your answer reaches the conductor on its next pass, which instructs the waiting seat."})
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:maybe :map]] [:sequential :map]]}
   close-unanswered!
-  "When a conductor turn ends, escalate the hand-back delivered to it for that turn — the one
-   delivered under the ended `instruction`'s token, to its running conversation — if the turn left
-   it unanswered, naming that the conductor reached no decision. A hand-back not yet delivered,
-   or delivered for a turn that has not ended, stays owed. Answers the escalations written."
+  "When a conductor turn ends leaving the hand-back delivered to it for that turn — the one
+   delivered under the ended `instruction`'s token, to its running conversation — unanswered,
+   settle what follows. A hand-back a later, decided hand-back from the same session covers
+   (`covering`) is recorded as :covered by it, and nobody is asked. Otherwise a turn that was its
+   first offer to that conversation leaves it owed, so the conductor is given it again
+   (`seats/hand-back-offers`); the last offer ending undecided escalates it to a person, the
+   seat's report quoted. A hand-back not yet delivered, or delivered for a turn that has not
+   ended, stays owed. Answers the decisions written."
   [project ws-id session-name instruction]
   (let [conversation (get-in (session/read-session project ws-id session-name) [:claude :session-id])
         token        (:token instruction)
@@ -552,15 +582,22 @@
        project ws-id
        #(if (answered? project ws-id (:id m))
           []
-          (let [{:keys [position next owes]} (position project ws-id)]
-            [(record-decision! project ws-id (cond-> {:format :conduct-decision :hand-back (:id m)
-                                                      :position position :by :nido
-                                                      :decision [:escalate
-                                                                 {:needs "What should happen with this hand-back, which the conductor reached no decision on?"
-                                                                  :summary "The conductor's turn ended without deciding a hand-back it was given, so the seat that handed it back is waiting."
-                                                                  :after "Your answer reaches the conductor on its next pass, which instructs the waiting seat."}]}
-                                               next (assoc :next next)
-                                               owes (assoc :owes owes)))])))
+          (let [cover  (covering project ws-id m (seats/hand-backs project ws-id))
+                ;; Which offer to this conversation the ended turn was, counting from 1.
+                offer  (inc (count (take-while (fn [d] (not= token (:token d)))
+                                               (filter (fn [d] (= conversation (:conversation d)))
+                                                       (:deliveries m)))))
+                {:keys [position next owes]} (position project ws-id)
+                decide (fn [decision]
+                         [(record-decision! project ws-id (cond-> {:format :conduct-decision :hand-back (:id m)
+                                                                   :position position :by :nido
+                                                                   :decision decision}
+                                                            next (assoc :next next)
+                                                            owes (assoc :owes owes)))])]
+            (cond
+              cover                            (decide [:covered {:by (:id cover)}])
+              (< offer seats/hand-back-offers) []
+              :else                            (decide [:escalate (unanswered-escalation m offer)])))))
       [])))
 
 ;; ── stops: a dialog nobody can answer, and work that stalled ────────────────
@@ -577,10 +614,6 @@
   (* 10 60 1000))
 
 (defn- ms [iso] (try (.toEpochMilli (java.time.Instant/parse (str iso))) (catch Exception _ nil)))
-
-(defn- excerpt [s n]
-  (let [s (str/trim (str/replace (str s) #"\s+" " "))]
-    (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
 
 (defn- question
   "`s`'s first sentence as a question that fits a blocker's :needs — 240 characters, which the

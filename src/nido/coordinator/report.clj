@@ -3989,8 +3989,9 @@
   "The conductor's answer to one hand-back: instructions to one or more seats, or an escalation
    naming what the person is needed for. :position and :next are what the pipeline derived when it
    was decided — a reading kept for the record, never the workstream's current position. :by is
-   :nido for the escalation nido writes when a conductor turn ends leaving its hand-back
-   unanswered. An escalation's :summary and :options are those of the blocker it parks on, when it
+   :nido for what nido writes when a conductor turn ends leaving its hand-back unanswered: a
+   :covered naming the later hand-back from the same session whose decision supersedes it, or an
+   escalation once the conductor was offered it again and still decided nothing. An escalation's :summary and :options are those of the blocker it parks on, when it
    parks one. An escalation cites the :blocker it parked the workstream on, which is appended
    before it, so no accepted escalation is ever without its blocker."
   [:map {:closed true}
@@ -4018,7 +4019,8 @@
                                             [:recommendation {:optional true} [:string {:min 1}]]
                                             [:after   {:optional true} [:string {:min 1}]]
                                             [:options {:optional true}
-                                             [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]]]]]
+                                             [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]]]
+                    [:tuple [:= :covered] [:map {:closed true} [:by [:string {:min 1}]]]]]]
    [:parked    {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Generation
@@ -4901,16 +4903,21 @@
   (let [[verb body] decision]
     (str/join "\n"
               (remove nil?
-               (concat [(if (= :instruct verb) "# Conductor instructs" "# Conductor escalates")
-                       ""
-                       (str "_" (if (= :nido by) "nido, for a conductor turn that reached no decision"
-                                    "the conductor")
-                            " · hand-back `" hand-back "` · at " (name position) "_")
-                       ""]
-                      (if (= :instruct verb)
-                        (map #(str "- **" (addressee->text (:seat %)) "** — " (:text %)) body)
-                        [(str "**Needs** — " (:needs body))
-                         (when parked (str "\nParked on the blocker at entry " (:seq parked) "."))]))))))
+               (concat [(case verb
+                          :instruct "# Conductor instructs"
+                          :covered  "# Hand-back covered"
+                          "# Conductor escalates")
+                        ""
+                        (str "_" (if (= :nido by) "nido, for a conductor turn that reached no decision"
+                                     "the conductor")
+                             " · hand-back `" hand-back "` · at " (name position) "_")
+                        ""]
+                       (case verb
+                         :instruct (map #(str "- **" (addressee->text (:seat %)) "** — " (:text %)) body)
+                         :covered  [(str "The same session's later hand-back `" (:by body)
+                                         "` was decided, which supersedes this one; nothing is asked.")]
+                         [(str "**Needs** — " (:needs body))
+                          (when parked (str "\nParked on the blocker at entry " (:seq parked) "."))]))))))
 
 (defn- phase-gate->markdown [{:keys [design opens evidence]}]
   (str/join "\n" ["# Phase gate met"
@@ -5665,8 +5672,9 @@
                                    (first-line (:terms report)))
     :withdrawal               (str "Tension at entry " (:seq (:tension report)) " withdrawn")
     :conduct-decision         (let [[verb body] (:decision report)]
-                                (if (= :instruct verb)
-                                  (str "Conductor instructs " (str/join ", " (map (comp addressee->text :seat) body)))
+                                (case verb
+                                  :instruct (str "Conductor instructs " (str/join ", " (map (comp addressee->text :seat) body)))
+                                  :covered  "Hand-back covered by a later one"
                                   (str "Conductor escalates: " (first-line (:needs body)))))
     :issue                    (str "Issue " (:id report))
     :triage-accepted          (let [answers (accepted-answers report)

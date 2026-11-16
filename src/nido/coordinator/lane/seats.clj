@@ -231,18 +231,26 @@
   [project ws-id]
   (into #{} (map :hand-back) (ws/entries-of project ws-id :conduct-decision)))
 
+(def hand-back-offers
+  "How many times one conductor conversation is given a hand-back no decision answers: a turn that
+   ends without deciding it is given it once more before nido escalates it to a person
+   (`conductor/close-unanswered!`)."
+  2)
+
 (defn- owed-to-conductor?
   "Whether the conductor, whose running conversation is `conversation`, is owed message `m` of
    workstream `w`: one addressed to it in any generation — so a generation's opening drops none —
    or to the current generation's whole seat once that generation fixes ids. Owed while no
    delivery is recorded; a hand-back no decision answers is owed until its running conversation
-   was given it, so one a stopped conversation took is owed again."
+   was given it `hand-back-offers` times, so one a stopped conversation took is owed again, and
+   one a turn ended without deciding is offered once more."
   [m w answered conversation]
   (let [g (generation/current (:entries w))]
     (and (or (= :conductor (:to m))
              (and (= g (:to m)) (seq (generation/fixed-ids w))))
          (if (and (= :hand-back (:kind m)) (not (answered (:id m))))
-           (not-any? #(and conversation (= conversation (:conversation %))) (:deliveries m))
+           (< (count (filter #(and conversation (= conversation (:conversation %))) (:deliveries m)))
+              hand-back-offers)
            (not (:delivered? m))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:sequential :map]]}

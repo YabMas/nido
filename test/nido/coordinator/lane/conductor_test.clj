@@ -435,21 +435,54 @@
             (is (= [accepted] (mapv (comp :seq :act) (ws/entries-of :brian id :blocker-answered)))
                 "the acceptance answers the blocker escalated at accepting the triage")))))))
 
-(deftest a-conductor-turn-that-leaves-its-hand-back-unanswered-escalates-it
+(deftest a-conductor-turn-that-leaves-its-hand-back-unanswered-is-offered-it-again-then-escalates
   (with-tmp
     (fn []
       (let [[id] (workstream)
-            c    (str id "--conductor")]
+            c    (str id "--conductor")
+            owed #(set (map :id (seats/owed :brian id c)))]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
         (let [hb (hand-back! id)]
           (is (= [] (conductor/close-unanswered! :brian id c {:token "tok"})) "a hand-back not yet delivered stays owed")
           (seats/delivered! :brian id (:id hb) "tok")
-          (let [[e] (conductor/close-unanswered! :brian id c {:token "tok"})]
+          (is (= [] (conductor/close-unanswered! :brian id c {:token "tok"}))
+              "a first turn that decided nothing asks nobody")
+          (is (contains? (owed) (:id hb)) "the conductor is given it again")
+          (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] "tok-2"))
+          (seats/delivered! :brian id (:id hb) "tok-2")
+          (is (not (contains? (owed) (:id hb))) "offered twice, it is owed no more")
+          (let [[e] (conductor/close-unanswered! :brian id c {:token "tok-2"})
+                [verb body] (:decision e)]
             (is (= :nido (:by e)))
             (is (= (:id hb) (:hand-back e)))
-            (is (= :escalate (first (:decision e)))))
-          (is (= [] (conductor/close-unanswered! :brian id c {:token "tok"})) "answered once, by nido"))))))
+            (is (= :escalate verb))
+            (is (str/includes? (:summary body) (subs (:text hb) 0 20))
+                "the person reads what the seat reported"))
+          (is (= [] (conductor/close-unanswered! :brian id c {:token "tok-2"})) "answered once, by nido"))))))
+
+(deftest a-hand-back-a-later-decided-one-from-the-same-session-covers-asks-nobody
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (launching [_]
+          (seats/conductor! :brian id "conduct it")
+          (conductor/carry! :brian id "fix-it"))
+        (let [turn (fn [tok] (:id (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
+                                                                               :event {} :instruction {:token tok} :run nil}]}))))
+              a    (turn "t1")
+              _    (Thread/sleep 5)
+              b    (turn "t2")]
+          (driving id c "conv-1" {:token "tok-a" :at "t" :via :send :seen? false})
+          (seats/delivered! :brian id a "tok-a")
+          (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back b :decision [:instruct [{:seat 1 :text "go on"}]]})))))
+          (let [[e] (conductor/close-unanswered! :brian id c {:token "tok-a"})]
+            (is (= [:covered {:by b}] (:decision e)))
+            (is (= :nido (:by e))))
+          (is (empty? (ws/entries-of :brian id :blocker)) "nobody is asked")
+          (is (not-any? #(= a (:id %)) (seats/owed :brian id c)) "and the conductor is not given it again"))))))
 
 (deftest a-conductor-turn-end-escalates-only-the-hand-back-of-the-turn-that-ended
   (with-tmp
@@ -457,8 +490,10 @@
       (let [[id] (workstream)
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
-        (driving id c "conv-1" {:token "tok-a" :at "t" :via :send :seen? false})
+        (driving id c "conv-1" {:token "tok-a0" :at "t" :via :send :seen? false})
         (let [a (hand-back! id)]
+          (seats/delivered! :brian id (:id a) "tok-a0")
+          (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] "tok-a"))
           (seats/delivered! :brian id (:id a) "tok-a")
           (let [b (hand-back! id)]
             (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] "tok-b"))

@@ -674,7 +674,11 @@
         (let [hb (seats/post! :brian id {:key "turn-1" :kind :hand-back :to :conductor :text "seat 1 stopped"})]
           (is (= ["[seat message from nido]\n\nseat 1 stopped"] (mapv :text (seats/owed :brian id c))))
           (seats/delivered! :brian id (:id hb) "tok")
-          (is (= [] (seats/owed :brian id c)) "given to its running conversation")
+          (is (= [(:id hb)] (mapv :id (seats/owed :brian id c)))
+              "given once to its running conversation, it is offered once more should that turn not decide it")
+          (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] "tok-2"))
+          (seats/delivered! :brian id (:id hb) "tok-2")
+          (is (= [] (seats/owed :brian id c)) "given twice to its running conversation")
           (session/update-claude! :brian id c #(assoc % :session-id "conv-2"))
           (is (= [(:id hb)] (mapv :id (seats/owed :brian id c)))
               "a conversation that stopped before answering it leaves it owed to the next")
