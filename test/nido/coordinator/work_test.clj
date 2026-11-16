@@ -2077,6 +2077,12 @@
     (is (= 2 (:needs-count s)))
     (is (= 2 (count (:gates s))))))
 
+(deftest screen-needs-count-spans-every-project
+  (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "nido"}]
+        s (work/screen {:scope "nido"} {:groups [] :gates gates :pending #{}})]
+    (is (= 2 (:needs-count s)) "the badge counts every project's gates")
+    (is (= ["b"] (map :ws-id (:gates s))) "the scoped view keeps its own")))
+
 (deftest screen-marks-pending-gates-working
   (let [gates [{:ws-id "a" :project "brian" :working? false}
                {:ws-id "b" :project "brian" :working? true}]

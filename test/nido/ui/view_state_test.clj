@@ -5,7 +5,7 @@
 (deftest parse-defaults
   (let [v (vs/parse {:uri "/workstreams" :query-string nil})]
     (is (= :workstreams (:surface v)))
-    (is (= "all" (:scope v)))
+    (is (nil? (:scope v)) "no focus said — the server supplies one")
     (is (nil? (:selection v)))
     (is (nil? (:entry v)) "no ledger entry opens itself")
     (is (nil? (:rounds v)) "and no review round is unfolded")
@@ -14,7 +14,20 @@
 
 (deftest parse-surface-from-path
   (is (= :needs (:surface (vs/parse {:uri "/" :query-string nil}))))
-  (is (= :workstreams (:surface (vs/parse {:uri "/workstreams" :query-string nil})))))
+  (is (= :workstreams (:surface (vs/parse {:uri "/workstreams" :query-string nil}))))
+  (is (= :structure (:surface (vs/parse {:uri "/structure" :query-string nil}))))
+  (is (= :development (:surface (vs/parse {:uri "/development" :query-string nil})))))
+
+(deftest parse-focus-order
+  (let [cookie {"cookie" "a=1; nido-focus=brian"}]
+    (is (= "nido" (:scope (vs/parse {:uri "/" :query-string "scope=nido" :headers cookie})))
+        "an explicit ?scope= wins")
+    (is (= "nido" (:scope (vs/parse {:uri "/workstreams" :query-string "sel=nido%3Aws-1" :headers cookie})))
+        "then the selected workstream's project")
+    (is (= "brian" (:scope (vs/parse {:uri "/" :query-string nil :headers cookie})))
+        "then the remembered focus")
+    (is (= "brian" (:scope (vs/parse {:uri "/" :query-string "scope=all" :headers cookie})))
+        "a legacy ?scope=all says nothing")))
 
 (deftest parse-scope-and-selection
   (let [v (vs/parse {:uri "/workstreams" :query-string "scope=brian&sel=brian%3Aws-1&entry=3"})]
@@ -35,7 +48,7 @@
 (deftest parse-ignores-a-legacy-filter-bookmark
   ;; An old ?source=/facet bookmark must parse cleanly and filter nothing.
   (let [v (vs/parse {:uri "/workstreams" :query-string "source=scratch&app-domain=Teacher"})]
-    (is (= "all" (:scope v)))
+    (is (nil? (:scope v)))
     (is (not (contains? v :source)))
     (is (not (contains? v :facets)))))
 

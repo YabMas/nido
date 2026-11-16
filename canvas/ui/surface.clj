@@ -212,7 +212,7 @@
    sharing this boundary with the pages, and the reason is in the design that moved the others
    out — a card is read from a ledger record's shape, and reading twenty of those apart is a
    different job from the blocks a person iterates on."
-  (Operation rail-status-fragment "The live rail: what needs you, and how the daemon is."
+  (Operation rail-status-fragment "The top bar's live bits: what needs you, and how the daemon is."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation fire-signal "The signal name for one field of a fire form."
     {:signature [:=> [:catn [:trigger-name :any] [:k :keyword]] :string]})
@@ -220,7 +220,9 @@
     {:signature [:=> [:catn [:fleet :map]] :any]})
   (Operation ops-panel-fragment "The ambient ops chrome: daemon, halt, breakers, triggers, fleet."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [fleet-card fire-signal]})
-  (Operation shell "The page chrome every page sits inside."
+  (Operation shell
+    "The page chrome every page sits inside: a top bar for what spans projects, a sidebar of the
+     focused project's slices."
     {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [stylesheet datastar-script]})
   (Operation needs-fragment "The needs-you column."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [gate-row]})
@@ -243,7 +245,7 @@
     {:signature [:=> [:catn [:project ProjectName]] :any]})
   (Operation pickup-result-fragment "What a pickup attempt swaps in."
     {:signature [:=> [:catn [:result :map] [:opts :map]] :string]})
-  (Operation workstreams-page "The overview and its ledger pane."
+  (Operation workstreams-page "The Scratch slice: the focused project's board and its ledger pane."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
      :delegates [shell workstreams-fragment workstream-pane pickup-bar]})
   (Operation operations-fragment "The proposal list."
@@ -293,6 +295,10 @@
      :delegates [shell recovery-fragment]})
   (Operation proposal-result-fragment "What deciding a proposal swaps in."
     {:signature [:=> [:catn [:result :map] [:proposals :any]] :any] :delegates [operations-fragment]})
+  (Operation slice-page "A slice nothing populates yet, pointing at Scratch."
+    {:signature [:=> [:catn [:ctx :map] [:slice :keyword]] :any] :delegates [shell]})
+  (Operation development-page "Pages for working on the dashboard itself, one tile each."
+    {:signature [:=> [:catn [:ctx :map]] :any] :delegates [shell]})
   (Operation not-found-page "The 404."
     {:signature [:=> [:catn] :any] :delegates [shell]}))
 

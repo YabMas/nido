@@ -24,6 +24,14 @@
    :headers {"Content-Type" "text/html; charset=utf-8"}
    :body body})
 
+(defn- page-response
+  "A full page under the chrome: 200, remembering `focus` so the next bare URL
+   opens on the same project."
+  [focus body]
+  (assoc-in (html-response 200 body) [:headers "Set-Cookie"]
+            (str view-state/focus-cookie "=" (java.net.URLEncoder/encode (str focus) "UTF-8")
+                 "; Path=/; Max-Age=31536000; SameSite=Lax")))
+
 (defn- sse-fragment
   "Format an SSE event that patches elements via datastar."
   [html-fragment]
@@ -150,15 +158,32 @@
                                              rows))))
                         groups))))))
 
+(defn- project-names [] (vec (sort (map (comp name key) (project/list-projects)))))
+
+(defn- view-state
+  "The request's view-state with its focus settled on a project nido knows: the
+   one the request names (view-state/parse), or the first project when it names
+   none or one since removed. Every view has a focused project."
+  [req]
+  (let [vs    (view-state/parse req)
+        known (project-names)]
+    (assoc vs :scope (if (some #{(:scope vs)} known) (:scope vs) (first known)))))
+
+(defn- needs-screen
+  "The screen Needs you renders: every project's gates, whatever is focused."
+  [vs]
+  (derive-screen (assoc vs :scope "all")))
+
 (defn- rail-ctx
-  "Rail context for the screen-based surfaces (needs, workstreams). The badge
-   count is the screen's own needs-count, so rail + inbox always agree."
-  [active screen]
+  "Chrome context: the slice or page that is `active`, the focused project, and
+   the Needs-you badge — the screen's needs-count, which counts every project's
+   gates, so the badge and the Needs-you list always agree."
+  [active focus screen]
   {:active      active
-   :scope       (:scope screen)
+   :scope       focus
    :needs-count (:needs-count screen)
    :daemon      (read-rail-daemon)
-   :projects    (mapv (comp name key) (project/list-projects))})
+   :projects    (project-names)})
 
 (defn- needs-fragment-response [screen]
   (sse-response
@@ -308,18 +333,15 @@
   (sse-response (sse-fragment (views/recovery-fragment (session-recovery feed-from)))))
 
 (defn- ops-fragment-response
-  "`scope` filters the badge count to one project's gates (string :project on
-   each gate); \"all\" (or omitted) counts every gate, matching prior behavior."
-  ([] (ops-fragment-response "all"))
-  ([scope]
-   (sse-response
-    (sse-fragment
-     (str (views/ops-panel-fragment (ops-context))
-          (views/rail-status-fragment
-           {:needs-count (->> (work/all-gates)
-                              (filter #(or (= "all" scope) (= scope (:project %))))
-                              count)
-            :daemon (read-rail-daemon)}))))))
+  "The ops panel, with the top bar's live bits: the Needs-you badge counts every
+   project's gates, as it does on every page."
+  []
+  (sse-response
+   (sse-fragment
+    (str (views/ops-panel-fragment (ops-context))
+         (views/rail-status-fragment
+          {:needs-count (count (work/all-gates))
+           :daemon (read-rail-daemon)})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Routing
@@ -587,7 +609,7 @@
                (dev/clear-app-state! k)
                (catch Exception e
                  (dev/set-app-state! k :failed (ex-message e)))))
-        (workstreams-fragment-response (derive-screen (view-state/parse req))))
+        (workstreams-fragment-response (derive-screen (view-state req))))
 
       ;; POST /workstreams/:project/:ws-id/findings — file a staging findings round
       (and (= 4 (count segs)) (= "workstreams" (first segs)) (= "findings" (nth segs 3)))
@@ -693,7 +715,7 @@
                                    [k (str (get body* (keyword (views/fire-signal tname k)) ""))]))]
             (control/fire! project tname payload))
           :else nil)
-        (ops-fragment-response (:scope (view-state/parse req))))
+        (ops-fragment-response))
 
       ;; POST /_catalog/nowhere/… — where a catalog scene's buttons post. Every control a
       ;; block renders is present and shaped exactly as it is on a real page; this is what
@@ -722,11 +744,11 @@
       ;; selection here (?sel=) is a link from when the list carried a pane, and
       ;; goes to the workstream it names.
       []
-      (let [vs (view-state/parse req)]
+      (let [vs (view-state req)]
         (if-let [{:keys [project ws-id]} (:selection vs)]
           (ws-redirect project ws-id)
-          (let [screen (derive-screen vs)]
-            (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))))
+          (let [screen (needs-screen vs)]
+            (page-response (:scope vs) (views/needs-page (rail-ctx :needs (:scope vs) screen) screen)))))
 
       ;; GET /_catalog — the component catalog and its chat. Linked from nothing: a dev surface
       ;; a person reaches by typing it, served on every dashboard rather than behind a flag that
@@ -735,27 +757,42 @@
       ["_catalog"]
       (html-response 200 (catalog-chat/page (:query-string req)))
 
+      ;; GET /development — pages for working on the dashboard itself, one tile each
+      ["development"]
+      (let [vs (view-state req)]
+        (page-response (:scope vs) (views/development-page
+                                    (rail-ctx :development (:scope vs) (needs-screen vs)))))
+
+      ;; GET /domain, /functionality, /structure — the focused project's slices.
+      ;; Nothing populates them yet; Scratch (/workstreams) holds the board meanwhile.
+      (["domain"] ["functionality"] ["structure"])
+      (let [vs (view-state req)]
+        (page-response (:scope vs) (views/slice-page
+                                    (rail-ctx (:surface vs) (:scope vs) (needs-screen vs))
+                                    (:surface vs))))
+
       ;; GET /system — dissolved; the rail lost the destination, redirect callers on.
       ["system"]
       {:status 302 :headers {"Location" "/workstreams"}}
 
       ;; GET /workstreams — overview (selection, if any, comes from ?sel=)
       ["workstreams"]
-      (let [screen (derive-screen (view-state/parse req))]
-        (html-response 200 (views/workstreams-page (rail-ctx :workstreams screen) screen)))
+      (let [vs     (view-state req)
+            screen (derive-screen vs)]
+        (page-response (:scope vs) (views/workstreams-page (rail-ctx :workstreams (:scope vs) screen) screen)))
 
       ;; GET /_fragment/workstreams — SSE workstreams refresh
       ["_fragment" "workstreams"]
-      (workstreams-fragment-response (derive-screen (view-state/parse req)))
+      (workstreams-fragment-response (derive-screen (view-state req)))
 
-      ;; GET /_fragment/needs — queue + rail
+      ;; GET /_fragment/needs — queue + badge, across every project
       ["_fragment" "needs"]
-      (needs-fragment-response (derive-screen (view-state/parse req)))
+      (needs-fragment-response (needs-screen (view-state req)))
 
       ;; GET /operations — the home: one card per operational concern
       ["operations"]
       (html-response 200 (views/operations-home-page
-                          (rail-ctx :operations (derive-screen (view-state/parse req)))
+                          (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
                           (operations-home-cards)))
 
       ;; GET /_fragment/operations — SSE card-grid refresh
@@ -765,7 +802,7 @@
       ;; GET /operations/improvements — nido's own improvement backlog, one row per proposal
       ["operations" "improvements"]
       (html-response 200 (views/improvements-page
-                          (rail-ctx :operations (derive-screen (view-state/parse req)))
+                          (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
                           (all-proposals)
                           (improvement-holds)))
 
@@ -775,7 +812,7 @@
       ;; GET /operations/recovery — session recovery and its activity feed
       ["operations" "recovery"]
       (html-response 200 (views/recovery-page
-                          (rail-ctx :operations (derive-screen (view-state/parse req)))
+                          (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
                           (session-recovery (feed-position req))))
 
       ["_fragment" "operations" "recovery"]
@@ -785,7 +822,7 @@
       ["operations" "review-queue"]
       (let [qs (review-queues)]
         (html-response 200 (views/review-queue-page
-                            (rail-ctx :operations (derive-screen (view-state/parse req)))
+                            (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
                             qs (requested-projects qs))))
 
       ["_fragment" "operations" "review-queue"]
@@ -796,20 +833,21 @@
       ;; so the shell's scoped poll (see views/shell) gets a scoped badge count
       ;; instead of the unscoped total clobbering it every 5s.
       ["_fragment" "ops"]
-      (ops-fragment-response (:scope (view-state/parse req)))
+      (ops-fragment-response)
 
       ;; Otherwise, dispatch on structure
       (cond
         ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
-        (ws-pane-fragment-response (nth segments 2) (nth segments 3) (view-state/parse req))
+        (ws-pane-fragment-response (nth segments 2) (nth segments 3) (view-state req))
 
         ;; GET /workstreams/:project/:ws-id — legacy deep link → canonical selection
         (and (= 3 (count segments)) (= "workstreams" (first segments)))
-        (let [vs     (assoc (view-state/parse req) :surface :workstreams
-                            :selection {:project (nth segments 1) :ws-id (nth segments 2)})
-              screen (derive-screen vs)]
-          (html-response 200 (views/workstreams-page (rail-ctx :workstreams screen) screen)))
+        (let [project (nth segments 1)
+              vs      (assoc (view-state req) :surface :workstreams :scope project
+                             :selection {:project project :ws-id (nth segments 2)})
+              screen  (derive-screen vs)]
+          (page-response project (views/workstreams-page (rail-ctx :workstreams project screen) screen)))
 
         ;; GET /gate/:project/:ws-id — legacy deep link → the workstream it names
         (and (= 3 (count segments)) (= "gate" (first segments)))

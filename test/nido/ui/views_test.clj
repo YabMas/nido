@@ -185,7 +185,7 @@
   (let [html (views/needs-page {:active :needs :needs-count 1 :daemon {:state :up} :scope "all" :projects []}
                                {:gates [sample-gate] :selection {:project "brian" :ws-id "ws-1"}
                                 :scope "all"})]
-    (is (str/includes? html "rail-link active"))        ; rail present + active
+    (is (str/includes? html "topbar-link active"))      ; chrome present + Needs you active
     (is (str/includes? html "/_fragment/needs"))         ; polls the renamed fragment
     (is (str/includes? html "BR-7"))))                   ; the selected gate fills the pane
 
@@ -416,7 +416,7 @@
                                       :scope "all" :projects []}
                                      {:scope "all" :selection nil
                                       :groups [{:project "brian" :grouped sample-grouped}]})]
-    (is (str/includes? html "rail-link active"))
+    (is (str/includes? html "side-link active"))
     (is (str/includes? html "/_fragment/workstreams"))))
 
 (deftest workstreams-page-poll-carries-scope
@@ -499,37 +499,33 @@
     (is (str/includes? html "resume failed"))
     (is (str/includes? html "exec failed"))))
 
-(deftest shell-renders-rail-with-active-and-badge
-  (let [html (views/shell {:active :workstreams :title "Workstreams"
-                           :needs-count 3 :daemon {:state :up} :scope "all" :projects []}
+(deftest shell-renders-chrome-with-active-and-badge
+  (let [html (views/shell {:active :workstreams :title "Scratch"
+                           :needs-count 3 :daemon {:state :up} :scope "brian" :projects ["brian" "nido"]}
                           [:p "body-here"])]
-    ;; both destinations always present (no per-page drift)
+    ;; the top bar: Needs you, the menu with Operations and Development
     (is (str/includes? html "Needs you"))
-    (is (str/includes? html "Workstreams"))
-    ;; active highlight on the current destination
-    (is (str/includes? html "rail-link active"))
+    (is (str/includes? html "href=\"/operations\""))
+    (is (str/includes? html "href=\"/development\""))
+    ;; the sidebar: every slice, the active one highlighted
+    (doseq [label ["Domain" "Functionality" "Structure" "Scratch"]]
+      (is (str/includes? html label)))
+    (is (str/includes? html "side-link active"))
+    (is (not (str/includes? html "All projects")) "there is no all-project view")
     ;; live needs badge + count
     (is (str/includes? html "id=\"rail-needs-count\""))
     (is (str/includes? html ">3<"))
     ;; daemon dot
     (is (str/includes? html "id=\"rail-health\""))
     (is (str/includes? html "dot-up"))
-    ;; the page body lands in the content area
     (is (str/includes? html "body-here"))))
 
-(deftest shell-ops-poll-carries-the-active-scope
-  ;; Fix 2: the ops mount's @get must carry the current scope so a scoped
-  ;; badge count isn't periodically clobbered by the unscoped total.
-  (let [scoped   (views/shell {:active :workstreams :title "t" :needs-count 0
-                               :daemon {:state :up} :scope "brian" :projects []}
-                              [:p "body"])
-        unscoped (views/shell {:active :workstreams :title "t" :needs-count 0
-                               :daemon {:state :up} :scope "all" :projects []}
-                              [:p "body"])]
-    (is (str/includes? scoped "@get(&apos;/_fragment/ops?scope=brian&apos;)"))
-    (is (str/includes? unscoped "@get(&apos;/_fragment/ops&apos;)")
-        "\"all\" scope omits the query param, matching the pre-fix url")
-    (is (not (str/includes? unscoped "scope=")))))
+(deftest shell-ops-poll-carries-no-scope
+  ;; The badge it patches counts every project's gates.
+  (let [html (views/shell {:active :workstreams :title "t" :needs-count 0
+                           :daemon {:state :up} :scope "brian" :projects []}
+                          [:p "body"])]
+    (is (str/includes? html "@get(&apos;/_fragment/ops&apos;)"))))
 
 (deftest rail-status-fragment-has-both-live-bits
   (let [html (views/rail-status-fragment {:needs-count 2 :daemon {:state :halted}})]
@@ -538,17 +534,28 @@
     (is (str/includes? html "id=\"rail-health\""))
     (is (str/includes? html "dot-halted"))))
 
-(deftest rail-scope-link-stays-on-current-surface
-  (let [html (str (h/html (#'views/rail {:active :workstreams :scope "all" :needs-count 0
-                                         :daemon {:state :up} :projects ["brian"]})))]
-    (is (re-find #"/workstreams\?scope=brian" html) "a scope link stays on the current (workstreams) surface")
-    (is (not (re-find #"href=\"/\?scope=brian\"" html)) "scope link does NOT jump to the home surface")))
+(deftest sidebar-links-carry-the-focus
+  (let [html (str (h/html (#'views/sidebar {:active :needs :scope "brian"})))]
+    (is (re-find #"href=\"/structure\?scope=brian\"" html))
+    (is (re-find #"href=\"/workstreams\?scope=brian\"" html))
+    (is (not (str/includes? html "side-link active")) "no slice is active off a slice")))
 
-(deftest rail-surface-link-carries-current-scope
-  (let [html (str (h/html (#'views/rail {:active :needs :scope "brian" :needs-count 0
-                                         :daemon {:state :up} :projects ["brian"]})))]
-    (is (re-find #"/workstreams\?scope=brian" html) "the Workstreams surface link carries the current scope")
-    (is (re-find #"href=\"/\?scope=brian\"" html) "the Needs-you surface link carries the current scope")))
+(deftest switcher-stays-on-the-slice
+  (let [on-slice (str (h/html (#'views/project-switcher {:active :structure :scope "brian" :projects ["brian" "nido"]})))
+        off      (str (h/html (#'views/project-switcher {:active :operations :scope "brian" :projects ["brian" "nido"]})))]
+    (is (re-find #"href=\"/structure\?scope=nido\"" on-slice) "picking a project keeps the slice")
+    (is (re-find #"href=\"/workstreams\?scope=nido\"" off) "off a slice it opens Scratch")))
+
+(deftest slice-page-points-at-scratch
+  (let [html (views/slice-page {:needs-count 0 :daemon {:state :up} :scope "brian" :projects ["brian"]}
+                               :domain)]
+    (is (str/includes? html "<h1>Domain</h1>"))
+    (is (str/includes? html "href=\"/workstreams?scope=brian\""))))
+
+(deftest development-page-has-the-catalog-tile
+  (let [html (views/development-page {:needs-count 0 :daemon {:state :up} :scope "brian" :projects []})]
+    (is (str/includes? html "href=\"/_catalog\""))
+    (is (str/includes? html "UI Catalog"))))
 
 (def ^:private ledger-entries
   [{:seq 2 :kind :impl   :at "2026-06-19T00:00:00Z" :title "Draft PR"}

@@ -4103,7 +4103,9 @@
     {:scope       scope
      :groups      scoped
      :gates       kept-gates
-     :needs-count (count kept-gates)}))
+     ;; Every project's, not the scope's: Needs you spans all projects whatever
+     ;; a view is focused on, and this is the count its badge shows.
+     :needs-count (count gates)}))
 
 ;; ── the acts a surface performs on the work plane ────────────────────────────
 ;;

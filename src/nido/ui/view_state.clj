@@ -16,9 +16,13 @@
 (defn- surface [uri]
   (let [segs (remove str/blank? (str/split (or uri "") #"/"))]
     (case (first segs)
-      nil          :needs
-      "workstreams" :workstreams
-      "operations"  :operations
+      nil             :needs
+      "workstreams"   :workstreams
+      "domain"        :domain
+      "functionality" :functionality
+      "structure"     :structure
+      "operations"    :operations
+      "development"   :development
       :other)))
 
 (defn- selection [ps]
@@ -26,6 +30,28 @@
     (let [[project ws-id] (str/split (decode raw) #":" 2)]
       (when (and (seq project) (seq ws-id))
         {:project project :ws-id ws-id}))))
+
+(def focus-cookie
+  "The cookie that remembers the focused project between visits."
+  "nido-focus")
+
+(defn- cookie [headers k]
+  (some->> (get headers "cookie")
+           (re-find (re-pattern (str "(?:^|;\\s*)" k "=([^;]*)")))
+           second
+           decode
+           not-empty))
+
+(defn- focus
+  "The project a request is about, as far as the request itself says: an explicit
+   `?scope=`, then the project of the selected workstream, then the remembered
+   focus. nil when none says — the caller supplies a default, since only it knows
+   which projects exist. `?scope=all` is a link from before every view had one
+   project, and says nothing."
+  [ps selection headers]
+  (or (some (fn [[k v]] (when (and (= k "scope") (not= "all" v)) (not-empty (decode v)))) ps)
+      (:project selection)
+      (cookie headers focus-cookie)))
 
 (defn- rounds
   "`?rounds=1,3` -> #{1 3}: which review rounds the workstream pane has unfolded
@@ -58,8 +84,9 @@
 (defn ^{:malli/schema [:=> [:cat :map] :ViewState]}
   parse
   "Request map -> view-state:
-     {:surface :needs|:workstreams|:operations|:other
-      :scope   \"all\"|<project>
+     {:surface :needs|:workstreams|:domain|:functionality|:structure
+               |:operations|:development|:other
+      :scope   <project>|nil   — the focused project; see `focus`
       :selection {:project _ :ws-id _}|nil
       :entry   <long>|nil
       :rounds  #{<long>}|nil
@@ -69,11 +96,12 @@
    No source/facet filtering: the board shows every origin (see
    nido.coordinator.work/board-bands). A legacy ?source= / facet / ?tab= bookmark
    parses cleanly and constrains nothing."
-  [{:keys [uri query-string]}]
-  (let [ps (pairs query-string)]
+  [{:keys [uri query-string headers]}]
+  (let [ps  (pairs query-string)
+        sel (selection ps)]
     {:surface   (surface uri)
-     :scope     (or (some (fn [[k v]] (when (= k "scope") v)) ps) "all")
-     :selection (selection ps)
+     :scope     (focus ps sel headers)
+     :selection sel
      :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)
      :rounds    (rounds ps)
      :stage     (stage ps)

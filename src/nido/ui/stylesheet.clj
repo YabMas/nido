@@ -364,26 +364,42 @@
                     line-height:1.9; }
         .link-k { color:var(--text-faint); font-size:var(--fs-xs); text-transform:uppercase;
                   letter-spacing:0.04em; min-width:82px; }"
-   ;; rail + content-area chrome
-   " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr; min-height:100vh; }
-     .content { padding:20px 28px; overflow:auto; }
-     .rail { background:var(--surface-raised); border-right:1px solid var(--border); padding:18px 14px;
-             display:flex; flex-direction:column; gap:3px; }
-     .rail-brand { display:block; margin-bottom:16px; line-height:0; }
-     .rail-brand:hover { text-decoration:none; }
-     .rail-logo { display:block; width:84px; height:84px; border-radius:50%;
-                  margin:0 auto; transition:filter .15s ease; }
-     .rail-brand:hover .rail-logo { filter:brightness(1.12); }
-     .rail-link { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:5px;
-                  color:var(--text-muted); border-left:3px solid transparent; }
-     .rail-link:hover { background:var(--surface-hover); text-decoration:none; }
-     .rail-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
-     .rail-badge { margin-left:auto; background:var(--accent-bg); color:var(--accent-strong); border-radius:9px;
+   ;; top bar + sidebar + content-area chrome
+   " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr;
+            grid-template-rows:auto 1fr; grid-template-areas:'top top' 'side main'; min-height:100vh; }
+     .topbar { grid-area:top; display:flex; align-items:center; gap:14px; padding:8px 18px;
+               background:var(--surface-raised); border-bottom:1px solid var(--border); }
+     .topbar-brand { line-height:0; }
+     .topbar-brand:hover { text-decoration:none; }
+     .topbar-logo { width:30px; height:30px; border-radius:50%; transition:filter .15s ease; }
+     .topbar-brand:hover .topbar-logo { filter:brightness(1.12); }
+     .topbar-gap { flex:1; }
+     .topbar-link { display:flex; align-items:center; gap:8px; padding:5px 10px; border-radius:5px;
+                    color:var(--text-muted); }
+     .topbar-link:hover { background:var(--surface-hover); text-decoration:none; }
+     .topbar-link.active { background:var(--surface); color:var(--text-strong); }
+     .switcher, .gear { position:relative; }
+     .switcher summary, .gear summary { list-style:none; cursor:pointer; padding:5px 10px; border-radius:5px;
+                                        color:var(--text-strong); }
+     .switcher summary::-webkit-details-marker, .gear summary::-webkit-details-marker { display:none; }
+     .switcher summary:hover, .gear summary:hover { background:var(--surface-hover); }
+     .gear summary { color:var(--text-muted); font-size:var(--fs-lg); line-height:1; }
+     .menu { position:absolute; top:calc(100% + 4px); z-index:60; min-width:160px; padding:4px;
+             background:var(--surface); border:1px solid var(--border); border-radius:6px; }
+     .switcher .menu { left:0; } .gear .menu { right:0; }
+     .menu a { display:block; padding:6px 10px; border-radius:4px; color:var(--text-muted); }
+     .menu a:hover { background:var(--surface-hover); text-decoration:none; }
+     .menu a.active { color:var(--text-strong); }
+     .sidebar { grid-area:side; background:var(--surface-raised); border-right:1px solid var(--border);
+                padding:14px; display:flex; flex-direction:column; gap:3px; }
+     .side-link { display:block; padding:7px 10px; border-radius:5px; color:var(--text-muted);
+                  border-left:3px solid transparent; }
+     .side-link:hover { background:var(--surface-hover); text-decoration:none; }
+     .side-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
+     .content { grid-area:main; padding:20px 28px; overflow:auto; }
+     .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:9px;
                    padding:0 7px; font-size:var(--fs-xs); min-width:18px; text-align:center; }
      .rail-badge.zero { background:var(--neutral-bg); color:var(--text-faint); }
-     .rail-scope { margin-top:16px; padding-top:14px; border-top:1px solid var(--border); font-size:var(--fs-xs); }
-     .rail-scope a { display:block; padding:3px 6px; color:var(--text-muted); }
-     .rail-scope a.active { color:var(--text-strong); }
      .rail-health { margin-top:auto; padding-top:14px; font-size:var(--fs-xs); color:var(--text-muted); }
      .rail-health-btn { background:none; border:none; color:inherit; font:inherit;
                         cursor:pointer; padding:0; display:flex; align-items:center; }

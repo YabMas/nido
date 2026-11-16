@@ -152,7 +152,7 @@
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams"})]
       (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "Workstreams")))))
+      (is (str/includes? (:body resp) "Scratch")))))
 
 (deftest workstreams-route-renders-the-driven-bands-end-to-end
   ;; parse → derive-screen → views. A legacy ?tab=intake bookmark opens the same
@@ -285,7 +285,7 @@
       (is (nil? (dev/current-app-state "brian/ws-notion-ok")))
       (finally (dev/clear-app-state! "brian/ws-notion-ok")))))
 
-(deftest scope-filters-needs-to-one-project
+(deftest needs-spans-every-project-whatever-the-focus
   (with-redefs [nido.coordinator.work/all-gates (fn [] [{:ws-id "a" :project "brian" :origin :notion :stage :triage
                                              :label "BR-1" :report nil :actions [] :session nil}
                                             {:ws-id "b" :project "foo" :origin :notion :stage :triage
@@ -296,7 +296,33 @@
                 project/list-projects (fn [] {"brian" {:directory "/x"} "foo" {:directory "/y"}})]
     (let [resp (server/handle-request {:request-method :get :uri "/" :query-string "scope=brian"})]
       (is (str/includes? (:body resp) "BR-1"))
-      (is (not (str/includes? (:body resp) "FOO-1"))))))
+      (is (str/includes? (:body resp) "FOO-1")))))
+
+(deftest a-page-remembers-its-focus
+  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/all-grouped (fn [] [])
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})
+                project/list-projects (fn [] {"brian" {:directory "/x"} "nido" {:directory "/y"}})]
+    (let [focused (server/handle-request {:request-method :get :uri "/structure" :query-string "scope=nido"})
+          bare    (server/handle-request {:request-method :get :uri "/structure"
+                                          :headers {"cookie" "nido-focus=nido"}})
+          gone    (server/handle-request {:request-method :get :uri "/structure"
+                                          :headers {"cookie" "nido-focus=removed"}})]
+      (is (str/starts-with? (get-in focused [:headers "Set-Cookie"]) "nido-focus=nido;"))
+      (is (str/includes? (:body bare) "href=\"/domain?scope=nido\"") "a bare URL opens on the remembered project")
+      (is (str/includes? (:body gone) "href=\"/domain?scope=brian\"") "a project since removed falls back to the first"))))
+
+(deftest a-workstream-link-focuses-its-project
+  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/all-grouped (fn [] [])
+                nido.coordinator.work/workstream (fn [& _] nil)
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})
+                project/list-projects (fn [] {"brian" {:directory "/x"} "nido" {:directory "/y"}})]
+    (let [resp (server/handle-request {:request-method :get :uri "/workstreams/nido/ws-1"
+                                       :headers {"cookie" "nido-focus=brian"}})]
+      (is (str/includes? (:body resp) "href=\"/domain?scope=nido\"")))))
 
 ;; (view-state parsing — scope/tab/selection/entry — is tested in
 ;;  nido.ui.view-state-test. nido.coordinator.work/screen does no row filtering at all —
@@ -566,9 +592,8 @@
         (is @halted)
         (is (str/includes? (:body resp) "ops-panel"))))))
 
-(deftest ops-fragment-badge-count-is-scoped-when-scope-param-present
-  ;; Fix 2: GET /_fragment/ops?scope=brian must filter the rail badge to
-  ;; brian's gates only; the scope-less request keeps counting every gate.
+(deftest ops-fragment-badge-counts-every-project
+  ;; Needs you spans every project, so the badge ignores the focus.
   (with-redefs [nido.coordinator.work/all-gates (fn [] [{:project "brian" :ws-id "w1"}
                                             {:project "brian" :ws-id "w2"}
                                             {:project "fukan" :ws-id "w3"}])
@@ -580,7 +605,7 @@
     (let [scoped   (server/handle-request {:request-method :get :uri "/_fragment/ops"
                                            :query-string "scope=brian"})
           unscoped (server/handle-request {:request-method :get :uri "/_fragment/ops"})]
-      (is (str/includes? (:body scoped) ">2<") "scoped badge counts only brian's 2 gates")
+      (is (str/includes? (:body scoped) ">3<") "a focus does not narrow the badge")
       (is (str/includes? (:body unscoped) ">3<") "unscoped badge counts all 3 gates"))))
 
 (deftest post-pane-gate-reply-passes-input-from-body

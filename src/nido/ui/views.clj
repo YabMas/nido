@@ -32,53 +32,65 @@
                                :title "ops panel"}
       [:span {:class (str "dot dot-" s)}] s]]))
 
-(defn- rail
-  "The persistent navigation rail. Scope is a sticky dimension: a scope link stays on the
-   current surface (changing only scope); a surface link carries the current scope.
-   Selecting a project changes what you see, never where you are."
-  [{:keys [active needs-count daemon scope projects]}]
-  (let [surface-path {:needs "/" :workstreams "/workstreams" :operations "/operations"}
-        q (fn [scope-val]
-            (if (and scope-val (not= "all" scope-val)) (str "?scope=" scope-val) ""))
-        ;; Operations is the one destination scope does not reach — see the
-        ;; comment on its link below — so it is linked bare and never carries
-        ;; the scope the reader arrived with.
-        dest (fn [id href label]
-               [:a {:class (str "rail-link" (when (= id active) " active"))
-                    :href (if (= id :operations)
-                            href
-                            (str href (q scope)))}
-                [:span label]
-                (when (= id :needs) (rail-needs-badge needs-count))])
-        scope-link (fn [scope-val label]
-                     [:a {:class (when (= scope scope-val) "active")
-                          :href (str (surface-path active) (q scope-val))}
-                      label])]
-    [:nav.rail
-     [:a.rail-brand {:href "/" :title "nido"}
-      [:img.rail-logo {:src "/nido-logo.png" :alt "nido" :width 84 :height 84}]]
-     (dest :needs "/" "Needs you")
-     (dest :workstreams "/workstreams" "Workstreams")
-     ;; A third destination, and the first that is not workstream-shaped: its
-     ;; unit is the proposal. /system was dissolved for being a second view of
-     ;; the plane the board already showed; this is a different plane — records
-     ;; that are not a stage of any arc, read across workstreams.
-     (dest :operations "/operations" "Operations")
-     ;; No scope selector on Operations. Scope picks which project's WORK you
-     ;; are looking at, and this surface is not looking at work — it is nido
-     ;; operating on itself, across every project at once. Offering the control
-     ;; where it means nothing invites the reading that an empty project scope
-     ;; means an empty backlog.
-     (when-not (= :operations active)
-       [:div.rail-scope
-        [:div.meta "Scope"]
-        (scope-link "all" "All projects")
-        (for [p projects] (scope-link p p))])
-     (rail-health daemon)]))
+(def ^:private slices
+  "The sidebar: the focused project seen as a system, one slice per perspective.
+
+   Scratch is the workstream board, standing in until the other three have
+   content — Domain, Functionality and Structure render a placeholder (see
+   `slice-page`). Scratch keeps the /workstreams path because every workstream
+   link in the dashboard already points there."
+  [[:domain        "/domain"        "Domain"]
+   [:functionality "/functionality" "Functionality"]
+   [:structure     "/structure"     "Structure"]
+   [:workstreams   "/workstreams"   "Scratch"]])
+
+(def ^:private slice-path (into {} (map (juxt first second)) slices))
+
+(defn- project-switcher
+  "Which project the sidebar is about. Picking one stays on the slice you are
+   reading; from a page that is not a slice it opens Scratch, since Needs you and
+   the menu's pages are the same whatever is focused. A selection is dropped: it
+   names a workstream of the project being left."
+  [{:keys [active scope projects]}]
+  (let [path (slice-path active "/workstreams")]
+    [:details.switcher
+     [:summary {:title "focused project"} [:span scope] " ▾"]
+     [:div.menu
+      (for [p projects]
+        [:a {:href (str path "?scope=" p) :class (when (= p scope) "active")} p])]]))
+
+(defn- topbar
+  "What spans every project: the project switcher, Needs you, and the menu
+   holding nido's own pages."
+  [{:keys [active needs-count] :as ctx}]
+  [:header.topbar
+   [:a.topbar-brand {:href "/" :title "nido"}
+    [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 30 :height 30}]]
+   (project-switcher ctx)
+   [:div.topbar-gap]
+   [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/"}
+    [:span "Needs you"] (rail-needs-badge needs-count)]
+   [:details.gear
+    [:summary {:title "menu" :aria-label "menu"} "⚙"]
+    [:div.menu
+     [:a {:href "/operations" :class (when (= :operations active) "active")} "Operations"]
+     [:a {:href "/development" :class (when (= :development active) "active")} "Development"]]]])
+
+(defn- sidebar
+  "The focused project's slices, and the daemon's state at the foot. Every link
+   carries the focus, so the sidebar reads the same on every page — on a page
+   that is not a slice, none is active."
+  [{:keys [active scope daemon]}]
+  [:nav.sidebar
+   (for [[id href label] slices]
+     [:a {:class (str "side-link" (when (= id active) " active"))
+          :href  (str href "?scope=" scope)}
+      label])
+   (rail-health daemon)])
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   rail-status-fragment
-  "The two live rail elements, for SSE patching alongside a surface fragment."
+  "The two live top-bar elements, for SSE patching alongside a surface fragment."
   [{:keys [needs-count daemon]}]
   (str (h/html (rail-needs-badge needs-count))
        (h/html (rail-health daemon))))
@@ -218,30 +230,55 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   shell
-  "Page chrome: persistent rail + content area. Replaces `layout`. `ctx` carries
-   {:active :title :needs-count :daemon :scope :projects}; `content` is hiccup.
-   The ops poll carries the current :scope (when not \"all\") so the badge count
-   the poll patches in stays scoped instead of periodically clobbering it back
-   to the global count."
-  [{:keys [title scope] :as ctx} & content]
-  (let [ops-q (if (and scope (not= "all" scope)) (str "?scope=" scope) "")]
-    (str
-     (h/html
-      [:html {:lang "en"}
-       [:head
-        [:meta {:charset "utf-8"}]
-        [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
-        [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
-        [:title (or title "nido") " — nido"]
-        (datastar/datastar-script)
-        [:style (h/raw (css/stylesheet))]]
-       [:body {:data-signals__ifmissing "{opsOpen: false}"}
-        (rail ctx)
-        (into [:main.content] content)
-        [:div.ops-wrap {:data-show "$opsOpen"
-                        :data-on-interval__duration.5s
-                        (str "$opsOpen && @get('/_fragment/ops" ops-q "')")}
-         [:div {:id "ops-panel"} [:p.meta "…"]]]]]))))
+  "Page chrome: top bar, sidebar, content area. `ctx` carries
+   {:active :title :needs-count :daemon :scope :projects}, where :scope is the
+   focused project — always one project, never \"all\"; `content` is hiccup.
+   The Needs-you badge counts every project's gates, so the ops poll that
+   patches it carries no scope."
+  [{:keys [title] :as ctx} & content]
+  (str
+   (h/html
+    [:html {:lang "en"}
+     [:head
+      [:meta {:charset "utf-8"}]
+      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
+      [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
+      [:title (or title "nido") " — nido"]
+      (datastar/datastar-script)
+      [:style (h/raw (css/stylesheet))]]
+     [:body {:data-signals__ifmissing "{opsOpen: false}"}
+      (topbar ctx)
+      (sidebar ctx)
+      (into [:main.content] content)
+      [:div.ops-wrap {:data-show "$opsOpen"
+                      :data-on-interval__duration.5s "$opsOpen && @get('/_fragment/ops')"}
+       [:div {:id "ops-panel"} [:p.meta "…"]]]]])))
+
+(defn ^{:malli/schema [:=> [:cat :map :keyword] :any]}
+  slice-page
+  "A slice with nothing populating it yet: its name, and where the focused
+   project's workstreams are meanwhile."
+  [{:keys [scope] :as ctx} slice]
+  (let [label (some (fn [[id _ l]] (when (= id slice) l)) slices)]
+    (shell
+     (assoc ctx :active slice :title label)
+     [:h1 label]
+     [:p.meta "Nothing populates this slice yet. "
+      [:a {:href (str "/workstreams?scope=" scope)} "Scratch"]
+      " holds " scope "'s workstreams meanwhile."])))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  development-page
+  "Pages for working on nido's own dashboard, one tile each."
+  [ctx]
+  (shell
+   (assoc ctx :active :development :title "Development")
+   [:div.ops-col
+    [:h1 "Development"]
+    [:div.ops-cards
+     [:a.ops-card {:href "/_catalog"}
+      [:div.ops-card-title "UI Catalog"]
+      [:div.meta "Every dashboard component in its scenes, with a chat beside it."]]]]))
 
 ;; ---------------------------------------------------------------------------
 ;; Components
@@ -1776,9 +1813,9 @@
   [ctx {:keys [selection] :as screen}]
   (let [sel-id  (:ws-id selection)
         q       (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))
-        project (if (= "all" (:scope screen)) "brian" (:scope screen))]
+        project (:scope screen)]
     (shell
-     (assoc ctx :active :workstreams :title "Workstreams")
+     (assoc ctx :active :workstreams :title "Scratch")
      ;; Section-fold signals are declared here, on the stable page chrome that the
      ;; 5s poll never replaces (the poll only patches #workstreams inside .inbox).
      ;; __ifmissing seeds them from localStorage on load without clobbering live
