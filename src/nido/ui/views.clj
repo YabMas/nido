@@ -65,7 +65,7 @@
   [{:keys [active needs-count] :as ctx}]
   [:header.topbar
    [:a.topbar-brand {:href "/" :title "nido"}
-    [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 30 :height 30}]]
+    [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 44 :height 44}]]
    (project-switcher ctx)
    [:div.topbar-gap]
    [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/"}

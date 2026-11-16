@@ -28,6 +28,7 @@
           --fs-sm: 13px;  /* secondary text, dense rows */
           --fs-md: 15px;  /* body prose */
           --fs-lg: 18px;  /* page and pane titles, a question's line, the big number on a card */
+          --fs-icon: 26px; /* a glyph standing alone as a control, like the menu's gear */
           --font-prose: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
           --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
           --measure: 72ch; /* the reading width of a prose block */
@@ -367,23 +368,24 @@
    ;; top bar + sidebar + content-area chrome
    " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr;
             grid-template-rows:auto 1fr; grid-template-areas:'top top' 'side main'; min-height:100vh; }
-     .topbar { grid-area:top; display:flex; align-items:center; gap:14px; padding:8px 18px;
+     .topbar { grid-area:top; display:flex; align-items:center; gap:16px; padding:12px 22px;
                background:var(--surface-raised); border-bottom:1px solid var(--border); }
      .topbar-brand { line-height:0; }
      .topbar-brand:hover { text-decoration:none; }
-     .topbar-logo { width:30px; height:30px; border-radius:50%; transition:filter .15s ease; }
+     .topbar-logo { width:44px; height:44px; border-radius:50%; transition:filter .15s ease; }
      .topbar-brand:hover .topbar-logo { filter:brightness(1.12); }
      .topbar-gap { flex:1; }
-     .topbar-link { display:flex; align-items:center; gap:8px; padding:5px 10px; border-radius:5px;
+     .topbar-link { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:5px;
                     color:var(--text-muted); }
      .topbar-link:hover { background:var(--surface-hover); text-decoration:none; }
      .topbar-link.active { background:var(--surface); color:var(--text-strong); }
      .switcher, .gear { position:relative; }
-     .switcher summary, .gear summary { list-style:none; cursor:pointer; padding:5px 10px; border-radius:5px;
+     .switcher summary, .gear summary { list-style:none; cursor:pointer; padding:7px 12px; border-radius:5px;
                                         color:var(--text-strong); }
      .switcher summary::-webkit-details-marker, .gear summary::-webkit-details-marker { display:none; }
      .switcher summary:hover, .gear summary:hover { background:var(--surface-hover); }
-     .gear summary { color:var(--text-muted); font-size:var(--fs-lg); line-height:1; }
+     .switcher summary { font-size:var(--fs-lg); }
+     .gear summary { color:var(--text-muted); font-size:var(--fs-icon); line-height:1; }
      .menu { position:absolute; top:calc(100% + 4px); z-index:60; min-width:160px; padding:4px;
              background:var(--surface); border:1px solid var(--border); border-radius:6px; }
      .switcher .menu { left:0; } .gear .menu { right:0; }
