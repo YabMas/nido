@@ -188,14 +188,24 @@
 
       acc)))
 
+(defn- idle-after-stop?
+  "Whether the listing `row` shows the session's process at its prompt with its Stop as the
+   `latest` recorded event — its turn over, whatever :state the listing reports. Since Claude Code
+   2.1.325 :state judges the task from the agent's last message (\"working\" when it said more
+   was to come, \"blocked\" when it asked for a person) rather than the process, so a turn that
+   ended saying what comes next lists \"working\" for as long as its process is kept; :status
+   \"idle\" is what says the process waits for a prompt."
+  [row latest]
+  (boolean (and (= "idle" (:status row)) (= :stop (:event latest)))))
+
 (defn- lapsed?
   "Whether the instruction `pending` has lapsed: no prompt carrying its token was recorded, a Stop
    recorded after it was given is its conversation's `latest` event, and the listing `row` shows
-   the session done."
+   the session done, or idle after that Stop."
   [pending latest row]
   (boolean (and pending (not (:seen? pending))
                 (= :stop (:event latest)) (after? (:at latest) (:at pending))
-                (= "done" (:state row)))))
+                (or (= "done" (:state row)) (idle-after-stop? row latest)))))
 
 (defn- current
   "`facet` as this design reads it: a hold written before is ignored and dropped, and a :person
@@ -245,7 +255,7 @@
    whose token the returned facet already holds as pending, so it is recorded before anything is
    delivered. What is given is the queued instruction, else the oldest seat message owed, whose
    :id the action carries (nil for an instruction). Only a session the listing shows done, or
-   blocked with its Stop as its latest recorded event, is given anything; a wake goes only to a
+   blocked or idle with its Stop as its latest recorded event, is given anything; a wake goes only to a
    session whose latest recorded event is its Stop."
   [facet row evs {:keys [now token hold-sends? baseline latest owed]}]
   (let [{f :facet acts :actions} (reduce read-event {:facet (current facet) :actions []} evs)
@@ -262,7 +272,7 @@
         stopped?  (= :stop (:event latest))
         ;; Blocked after its Stop, a session is waiting on the answer a person queued for it;
         ;; blocked mid-turn, it is waiting on something a message would not answer.
-        ready-state? (or (= "done" (:state row)) (and blocked? stopped?))
+        ready-state? (or (= "done" (:state row)) (and blocked? stopped?) (idle-after-stop? row latest))
         message   (when (nil? (:queued f)) (first owed))
         text      (if message (:text message) (:queued f))
         gated?    (and (= :nido (:driver f)) free?

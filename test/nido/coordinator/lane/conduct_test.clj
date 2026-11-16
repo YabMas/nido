@@ -52,6 +52,21 @@
     (is (= [:notify-blocked :send] (kinds (conduct/decide (assoc driving :queued "x") blocked [] ctx))))
     (is (= [:notify-blocked :wake] (kinds (conduct/decide (assoc driving :queued "x") (dissoc blocked :pid) [] ctx))))))
 
+(deftest a-session-idle-after-its-stop-is-given-whatever-state-the-listing-reports
+  ;; Claude Code 2.1.325 lists a turn that ended saying what comes next as "working", its
+  ;; process idle at the prompt — the seat waits on nido, not on itself.
+  (let [idle-working (assoc done-row :state "working" :status "idle")]
+    (is (= [:send] (kinds (conduct/decide (assoc driving :queued "x") idle-working [] ctx))))
+    (is (not-any? #{:send :wake} (kinds (conduct/decide (assoc driving :queued "x") idle-working []
+                                                        (assoc ctx :latest {:event :prompt}))))
+        "idle with a prompt after its Stop is mid-delivery, not between turns")
+    (is (not-any? #{:send :wake} (kinds (conduct/decide (assoc driving :queued "x")
+                                                        (assoc idle-working :status "busy") [] ctx)))
+        "a busy process is mid-turn")
+    (is (= [:send] (kinds (conduct/decide (assoc driving :queued "x" :pending {:token "P" :at "2026-11-16T10:00:00Z" :via :send :seen? false})
+                                          idle-working [] (assoc ctx :latest {:event :stop :at "2026-11-16T11:00:00Z"}))))
+        "an undelivered instruction lapses once the session is idle after a later Stop")))
+
 (deftest a-wake-needs-the-session-s-stop-as-its-latest-event
   (is (not-any? #{:wake} (kinds (conduct/decide (assoc driving :queued "x") (dissoc done-row :pid) []
                                                 (assoc ctx :latest {:event :prompt})))))
@@ -164,7 +179,7 @@
     (is (= [:send] (kinds (conduct/decide f done-row [] (assoc ctx :latest later))))
         "a Stop after it was given is the latest event and the listing shows it done: it keeps nothing back")
     (testing "it lapses only on all three"
-      (is (= [] (kinds (conduct/decide f (assoc done-row :state "working") [] (assoc ctx :latest later)))))
+      (is (= [] (kinds (conduct/decide f (assoc done-row :state "working" :status "busy") [] (assoc ctx :latest later)))))
       (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :latest {:event :stop :at "2026-10-16T07:00:00Z"}))))
           "a Stop from before it was given")
       (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :latest {:event :prompt :at "2026-10-16T08:30:00Z"})))))
