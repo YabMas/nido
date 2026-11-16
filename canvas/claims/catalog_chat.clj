@@ -62,6 +62,3 @@
   "docs/reference/chat-panel-survey.md records the surveyed patterns and implementations with their sources, and each of its conclusions names the sections and sources it rests on; every choice this design makes about placement, turn state, disclosure and picks is one of those conclusions."
   {:about [ui-components-chat ui-catalog] :evidence "round"})
 
-(Claim lands-checked
-  "The change lands only on a tip where bb nido:test is green and bb nido:design:check reports ok."
-  {:about [acp-transcript session-chat ui-components-chat ui-catalog ui-catalog-chat] :evidence "round"})

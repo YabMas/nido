@@ -10,6 +10,7 @@
             [nido.ui.dev :as dev]
             [nido.coordinator.control :as control]
             [nido.ui.catalog.chat :as catalog-chat]
+            [nido.ui.side-chat :as side-chat]
             [nido.ui.components.ask :as ask]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
@@ -175,11 +176,13 @@
   (derive-screen (assoc vs :scope "all")))
 
 (defn- rail-ctx
-  "Chrome context: the slice or page that is `active`, the focused project, and
-   the Needs-you badge — the screen's needs-count, which counts every project's
-   gates, so the badge and the Needs-you list always agree."
-  [active focus screen]
-  {:active      active
+  "Chrome context: the slice or page that is `active`, the focused project, the
+   Needs-you badge — the screen's needs-count, which counts every project's
+   gates, so the badge and the Needs-you list always agree — and the chat's side
+   panel as the request's page last left it."
+  [req active focus screen]
+  {:side-chat   (side-chat/panel (side-chat/open? req))
+   :active      active
    :scope       focus
    :needs-count (:needs-count screen)
    :daemon      (read-rail-daemon)
@@ -748,7 +751,7 @@
         (if-let [{:keys [project ws-id]} (:selection vs)]
           (ws-redirect project ws-id)
           (let [screen (needs-screen vs)]
-            (page-response (:scope vs) (views/needs-page (rail-ctx :needs (:scope vs) screen) screen)))))
+            (page-response (:scope vs) (views/needs-page (rail-ctx req :needs (:scope vs) screen) screen)))))
 
       ;; GET /_catalog — the component catalog and its chat. Linked from nothing: a dev surface
       ;; a person reaches by typing it, served on every dashboard rather than behind a flag that
@@ -756,21 +759,24 @@
       ;; chat beside it is nido.ui.catalog.chat's.
       ["_catalog"]
       (html-response 200 (catalog-chat/page (:query-string req)
+                                            ;; The catalog's own chat is the panel here; the
+                                            ;; dashboard's would be a second one beside it.
                                             #(let [vs (view-state req)]
-                                               (rail-ctx :development (:scope vs) (needs-screen vs)))))
+                                               (dissoc (rail-ctx req :development (:scope vs) (needs-screen vs))
+                                                       :side-chat))))
 
       ;; GET /development — pages for working on the dashboard itself, one tile each
       ["development"]
       (let [vs (view-state req)]
         (page-response (:scope vs) (views/development-page
-                                    (rail-ctx :development (:scope vs) (needs-screen vs)))))
+                                    (rail-ctx req :development (:scope vs) (needs-screen vs)))))
 
       ;; GET /domain, /functionality, /structure — the focused project's slices.
       ;; Nothing populates them yet; Scratch (/workstreams) holds the board meanwhile.
       (["domain"] ["functionality"] ["structure"])
       (let [vs (view-state req)]
         (page-response (:scope vs) (views/slice-page
-                                    (rail-ctx (:surface vs) (:scope vs) (needs-screen vs))
+                                    (rail-ctx req (:surface vs) (:scope vs) (needs-screen vs))
                                     (:surface vs))))
 
       ;; GET /system — dissolved; the rail lost the destination, redirect callers on.
@@ -781,7 +787,7 @@
       ["workstreams"]
       (let [vs     (view-state req)
             screen (derive-screen vs)]
-        (page-response (:scope vs) (views/workstreams-page (rail-ctx :workstreams (:scope vs) screen) screen)))
+        (page-response (:scope vs) (views/workstreams-page (rail-ctx req :workstreams (:scope vs) screen) screen)))
 
       ;; GET /_fragment/workstreams — SSE workstreams refresh
       ["_fragment" "workstreams"]
@@ -794,7 +800,7 @@
       ;; GET /operations — the home: one card per operational concern
       ["operations"]
       (html-response 200 (views/operations-home-page
-                          (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
+                          (let [vs (view-state req)] (rail-ctx req :operations (:scope vs) (needs-screen vs)))
                           (operations-home-cards)))
 
       ;; GET /_fragment/operations — SSE card-grid refresh
@@ -804,7 +810,7 @@
       ;; GET /operations/improvements — nido's own improvement backlog, one row per proposal
       ["operations" "improvements"]
       (html-response 200 (views/improvements-page
-                          (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
+                          (let [vs (view-state req)] (rail-ctx req :operations (:scope vs) (needs-screen vs)))
                           (all-proposals)
                           (improvement-holds)))
 
@@ -814,7 +820,7 @@
       ;; GET /operations/recovery — session recovery and its activity feed
       ["operations" "recovery"]
       (html-response 200 (views/recovery-page
-                          (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
+                          (let [vs (view-state req)] (rail-ctx req :operations (:scope vs) (needs-screen vs)))
                           (session-recovery (feed-position req))))
 
       ["_fragment" "operations" "recovery"]
@@ -824,7 +830,7 @@
       ["operations" "review-queue"]
       (let [qs (review-queues)]
         (html-response 200 (views/review-queue-page
-                            (let [vs (view-state req)] (rail-ctx :operations (:scope vs) (needs-screen vs)))
+                            (let [vs (view-state req)] (rail-ctx req :operations (:scope vs) (needs-screen vs)))
                             qs (requested-projects qs))))
 
       ["_fragment" "operations" "review-queue"]
@@ -849,7 +855,7 @@
               vs      (assoc (view-state req) :surface :workstreams :scope project
                              :selection {:project project :ws-id (nth segments 2)})
               screen  (derive-screen vs)]
-          (page-response project (views/workstreams-page (rail-ctx :workstreams project screen) screen)))
+          (page-response project (views/workstreams-page (rail-ctx req :workstreams project screen) screen)))
 
         ;; GET /gate/:project/:ws-id — legacy deep link → the workstream it names
         (and (= 3 (count segments)) (= "gate" (first segments)))
@@ -860,8 +866,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   handle-request [{:keys [request-method] :as req}]
-  ;; /_catalog/chat/* first: its stream is the one response that stays open.
+  ;; The chats' requests first: their streams are the responses that stay open.
   (or (catalog-chat/handle! req)
+      (side-chat/handle! req)
       (case request-method
         :post (handle-post req)
         (handle-get req))))

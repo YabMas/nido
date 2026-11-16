@@ -44,7 +44,7 @@
   {:about [ui-catalog ui-catalog-scenes ui-stylesheet ui-datastar] :evidence "round"})
 
 (Claim catalog-is-unlinked
-  "GET /_catalog is served by the one dashboard handler, on every dashboard, and nothing in the product's chrome links to it. Its scene page reads nothing but the registry and its query string. Only the catalog's chat reaches a process, and only through the conversation host and the preview."
+  "GET /_catalog is served by the one dashboard handler, on every dashboard, and the product reaches it only through the Development page's tile. Its scene page reads nothing but the registry and its query string. Of the catalog, only its chat reaches a process: through its conversation, the preview, and the verbs that publish or throw away its session's change."
   {:about [ui-catalog ui-catalog-chat handle-request] :evidence "round"})
 
 (Claim markup-unchanged

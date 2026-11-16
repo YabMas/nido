@@ -401,6 +401,14 @@
      .side-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
      .content { grid-area:main; padding:20px 28px; overflow:auto; }
      .content.bleed { padding:0; overflow:hidden; display:grid; }
+     /* With the chat's side panel, a third column under the top bar: room for its toggle when
+        closed, the panel when open — below 1000px it covers the page instead. */
+     body:has(> .chat-side) { grid-template-columns:180px 1fr 58px; grid-template-areas:'top top top' 'side main chat';
+                              transition:grid-template-columns 0.18s ease-out; }
+     body:has(> .chat-side.open) { grid-template-columns:180px 1fr 420px; }
+     body > .chat-side { grid-area:chat; height:100%; position:static; }
+     @media (max-width: 999px) { body:has(> .chat-side.open) { grid-template-columns:180px 1fr 58px; } }
+     @media (prefers-reduced-motion: reduce) { body:has(> .chat-side) { transition:none; } }
      .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:9px;
                    padding:0 7px; font-size:var(--fs-xs); min-width:18px; text-align:center; }
      .rail-badge.zero { background:var(--neutral-bg); color:var(--text-faint); }

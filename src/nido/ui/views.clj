@@ -237,10 +237,11 @@
   "Page chrome: top bar, sidebar, content area. `ctx` carries
    {:active :title :needs-count :daemon :scope :projects}, where :scope is the
    focused project — always one project, never \"all\" — and :bleed?, true for a page
-   that fills the content area edge to edge and scrolls within itself; `content` is hiccup.
+   that fills the content area edge to edge and scrolls within itself, and :side-chat, the chat's
+   side panel (hiccup) when the page carries one — the grid gives it a column; `content` is hiccup.
    The Needs-you badge counts every project's gates, so the ops poll that
    patches it carries no scope."
-  [{:keys [title bleed?] :as ctx} & content]
+  [{:keys [title bleed? side-chat] :as ctx} & content]
   (str
    (h/html
     [:html {:lang "en"}
@@ -255,6 +256,7 @@
       (topbar ctx)
       (sidebar ctx)
       (into [:main {:class (str "content" (when bleed? " bleed"))}] content)
+      side-chat
       [:div.ops-wrap {:data-show "$opsOpen"
                       :data-on-interval__duration.5s "$opsOpen && @get('/_fragment/ops')"}
        [:div {:id "ops-panel"} [:p.meta "…"]]]]])))
