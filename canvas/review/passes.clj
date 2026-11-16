@@ -15,10 +15,14 @@
    Read-only comes from the CLI — restricted mode, a shell allowlist of the two jj reads and grep
    beside what the CLI itself runs as read-only, and everything else denied — never from the
    prompt, and never from the user's settings, which it ignores."
+  (Operation read-roots
+    "The directories a claude reviewer may read beyond its cwd: every registered project's
+     checkout, and the run's own directory — only those that exist."
+    {:signature [:=> [:catn [:log-path [:maybe :string]]] [:vector :string]]})
   (Operation claude-argv "The argument vector for one claude review."
     {:signature [:=> [:catn [:opts :map]] :any]})
   (Operation run-claude! "Run claude as a reviewer and keep its answer."
-    {:signature [:=> [:catn [:opts :map]] :map] :delegates [claude-argv]})
+    {:signature [:=> [:catn [:opts :map]] :map] :delegates [claude-argv read-roots]})
   (Operation failed-call?
     "Whether a claude review's stream shows a tool call that was refused or errored — false when
      the log cannot be read."
