@@ -37,12 +37,14 @@
 
    Scratch is the workstream board, standing in until the other three have
    content — Domain, Functionality and Structure render a placeholder (see
-   `slice-page`). Scratch keeps the /workstreams path because every workstream
-   link in the dashboard already points there."
-  [[:domain        "/domain"        "Domain"]
+   `slice-page`). It comes first and stands apart from them, because it is not
+   a perspective on the system but the work as it was listed before there were
+   any. It keeps the /workstreams path because every workstream link in the
+   dashboard already points there."
+  [[:workstreams   "/workstreams"   "Scratch"]
+   [:domain        "/domain"        "Domain"]
    [:functionality "/functionality" "Functionality"]
-   [:structure     "/structure"     "Structure"]
-   [:workstreams   "/workstreams"   "Scratch"]])
+   [:structure     "/structure"     "Structure"]])
 
 (def ^:private slice-path (into {} (map (juxt first second)) slices))
 
@@ -83,9 +85,11 @@
   [{:keys [active scope daemon]}]
   [:nav.sidebar
    (for [[id href label] slices]
-     [:a {:class (str "side-link" (when (= id active) " active"))
-          :href  (str href "?scope=" scope)}
-      label])
+     (list
+      [:a {:class (str "side-link" (when (= id active) " active"))
+           :href  (str href "?scope=" scope)}
+       label]
+      (when (= :workstreams id) [:hr.side-divider])))
    (rail-health daemon)])
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}

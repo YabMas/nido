@@ -397,6 +397,7 @@
      .side-link { display:block; padding:7px 10px; border-radius:5px; color:var(--text-muted);
                   border-left:3px solid transparent; }
      .side-link:hover { background:var(--surface-hover); text-decoration:none; }
+     .side-divider { border:none; border-top:1px solid var(--border); margin:8px 0; width:100%; }
      .side-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
      .content { grid-area:main; padding:20px 28px; overflow:auto; }
      .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:9px;

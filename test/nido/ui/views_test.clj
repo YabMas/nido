@@ -538,7 +538,9 @@
   (let [html (str (h/html (#'views/sidebar {:active :needs :scope "brian"})))]
     (is (re-find #"href=\"/structure\?scope=brian\"" html))
     (is (re-find #"href=\"/workstreams\?scope=brian\"" html))
-    (is (not (str/includes? html "side-link active")) "no slice is active off a slice")))
+    (is (not (str/includes? html "side-link active")) "no slice is active off a slice")
+    (is (re-find #"Scratch</a><hr class=\"side-divider\" /><a[^>]*>Domain" html)
+        "Scratch comes first, divided from the slices")))
 
 (deftest switcher-stays-on-the-slice
   (let [on-slice (str (h/html (#'views/project-switcher {:active :structure :scope "brian" :projects ["brian" "nido"]})))
