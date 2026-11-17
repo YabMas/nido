@@ -150,12 +150,15 @@
   {:intent "the seat writes the goal amendment itself"})
 
 (defn- blocker-option
-  "A blocker's option as the card shows it. A grant is said beside the consequence: the person
-   should see what picking it hands over before they pick it."
-  [{:keys [label summary consequence recommended? grants]}]
-  (let [granted (when (seq grants)
-                  (str "Choosing this, " (str/join " and " (keep grant-phrases grants)) "."))
-        said    (str/join " " (remove str/blank? [consequence granted]))]
+  "A blocker's option as the card shows it. What picking it does beyond answering — approving a
+   design, handing the seat an act — is said beside the consequence: the person should see it
+   before they pick it."
+  [{:keys [label summary consequence recommended? grants approves-design]}]
+  (let [approves (when approves-design
+                   (str "Choosing this approves the design at entry " approves-design "."))
+        granted  (when (seq grants)
+                   (str "Choosing this, " (str/join " and " (keep grant-phrases grants)) "."))
+        said     (str/join " " (remove str/blank? [consequence approves granted]))]
     (cond-> {:label label :summary (str summary)}
       (not (str/blank? said)) (assoc :consequence said)
       recommended?            (assoc :recommended? true))))

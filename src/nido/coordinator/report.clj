@@ -1830,14 +1830,20 @@
    'amend the goal to …' grants :intent, so the seat writes the amendment the person chose instead
    of handing it back as a command to run. The card says so beside the option, the answer
    records it, and the commit gate lets the seat append one entry of each kind granted
-   (conductor/granted?). Only `grantable-kinds`: approving a design, merging and closing stay
-   the person's own."
+   (conductor/granted?). Only `grantable-kinds`: merging and closing stay the person's own, and
+   so does approving a design — which no seat is handed, because the person's pick does it.
+
+   :approves-design names the design entry picking the option approves. The pick itself is then
+   the person's grant: the click records the same :design-approved the chat command does, for
+   that design, before the answer — or is refused, recording nothing, when that design is not
+   the newest or its decision sent it back (work/grant-design!)."
   [:map {:closed true}
-   [:label        string?]
-   [:summary      string?]
-   [:consequence  {:optional true} string?]
-   [:recommended? {:optional true} boolean?]
-   [:grants       {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]])
+   [:label           string?]
+   [:summary         string?]
+   [:consequence     {:optional true} string?]
+   [:recommended?    {:optional true} boolean?]
+   [:grants          {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]
+   [:approves-design {:optional true} pos-int?]])
 
 (def Blocker
   "A halt that needs a human, in four parts: :needs is the one-sentence question, :summary its

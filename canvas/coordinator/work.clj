@@ -173,10 +173,12 @@
   (Operation resolve-gate!
     "Apply a gate follow-action. Position-carrying actions check the ledger has not moved, which
      is what makes two people clicking the same button safe. A reply to a workstream a
-     conductor's escalation parked is recorded as that blocker's answer, for the conductor."
+     conductor's escalation parked is recorded as that blocker's answer, for the conductor. A
+     picked option that approves a design records the person's grant of it (grant-design!)
+     before the answer, or is refused whole when that grant is."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
-     :delegates [option-input set-stage! conductor/answer!]})
+     :delegates [option-input set-stage! conductor/answer! grant-design!]})
   (Operation new! "Birth a scratch workstream and bring its session up."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [lanes/birth! lifecycle/up!]})

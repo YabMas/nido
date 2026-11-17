@@ -1231,6 +1231,49 @@
         (is (= :already-granted (:decision (work/grant-design! :brian id d nil nil)))
             "an agent repeating the command does not stack a second grant")))))
 
+(defn- approve-card!
+  "A conductor's question card on workstream `id` whose first option approves design `d`; its seq."
+  [id d]
+  (workstream/append-entry! :brian id {:kind :blocker}
+                            (pr-str {:format :blocker :summary "s" :needs "Do you approve building this design?"
+                                     :after "The seat builds it."
+                                     :options [{:label "Approve and build" :summary "Build it as designed."
+                                                :approves-design d}
+                                               {:label "Hold" :summary "Leave it unapproved."}]}))
+  (count (:entries (workstream/read-ws :brian id))))
+
+(deftest picking-an-approving-option-is-the-person-s-approval
+  ;; brian ws-20261116-43c620 entries 39-50: the person picked 'Approve and build' on the
+  ;; conductor's card, nothing recorded a grant, and they were asked to approve twice more.
+  (with-tmp
+    (fn [_]
+      (let [[id _ d _] (approvable)
+            ask  (decide! id d :ask)
+            card (approve-card! id d)]
+        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian id :option-a card))))
+        (is (= {:format :design-approved :design {:seq d} :at-seq ask
+                :note "Approve and build: Build it as designed."}
+               (dissoc (workstream/latest-entry :brian id :design-approved) :seq :at :kind :file))
+            "the click wrote the grant the chat command writes, in the person's picked words")
+        (is (< (:seq (workstream/latest-entry :brian id :design-approved))
+               (:seq (workstream/latest-entry :brian id :blocker-answered)))
+            "before the answer, so the answer never stands without the approval it was picked for")
+        (is (:decided? (standing/of-design :brian id (workstream/latest-entry :brian id :design)))
+            "standing counts it as the grant it is")))))
+
+(deftest an-approving-option-for-a-design-sent-back-records-nothing
+  (with-tmp
+    (fn [_]
+      (let [[id _ d _] (approvable)
+            _    (decide! id d :amend)
+            card (approve-card! id d)
+            out  (work/resolve-gate! :brian id :option-a card)]
+        (is (= :approval-refused (:decision out)))
+        (is (= :sent-back (get-in out [:because :reason])) "and says why")
+        (is (nil? (workstream/latest-entry :brian id :design-approved)))
+        (is (nil? (workstream/latest-entry :brian id :blocker-answered))
+            "nor the answer: the card still asks, rather than standing answered and unapproved")))))
+
 (deftest a-chat-grant-refuses-what-the-round-sent-back-naming-the-way-past-it
   (with-tmp
     (fn [_]

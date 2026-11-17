@@ -59,6 +59,11 @@
            (:consequence b))
         "and after the cost where it names one")))
 
+(deftest an-option-says-it-approves-the-design-it-names
+  (let [[a] (:options (q1 (ask/ask :answer-blocker {:report (assoc-in blocker [:options 0 :approves-design] 36)
+                                                    :actions option-actions})))]
+    (is (= "Choosing this approves the design at entry 36." (:consequence a)))))
+
 (deftest a-branch-with-no-button-is-not-offered
   (let [a (ask/ask :answer-blocker {:report blocker :actions [{:id :option-a :label "A" :kind :mutation}]})]
     (is (= [:option-a] (mapv :action (:options (q1 a)))))

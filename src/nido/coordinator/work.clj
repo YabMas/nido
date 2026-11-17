@@ -2979,6 +2979,29 @@
   [text]
   (str "A human replied at the gate to what you parked on. Their words:\n\n" text))
 
+(defn- choose-option-recorded!
+  "The answer half of `choose-option!`, once any grant the option carries is written: append the
+   :blocker-answered for option `i` of the blocker at `entry-seq`, then resume `parked`, the
+   session waiting on it, when there is one."
+  [project ws-id entry-seq i opt parked]
+  (cws/append-entry!
+   project ws-id {:kind :blocker-answered}
+   (pr-str (cond-> {:format      :blocker-answered
+                    :blocker-seq entry-seq
+                    :letter      (report/option-letter i)
+                    :label       (:label opt)
+                    :summary     (:summary opt)
+                    :resumed     (:name parked)}
+             (seq (:grants opt)) (assoc :grants (vec (:grants opt))))))
+  (if parked
+    (assoc (resume/resume! project ws-id (option-input i opt) parked) :decision :answered)
+    ;; Nobody to tell. The answer is on the ledger and the gate has stopped
+    ;; asking; this is a real outcome, not a failure, so it must not read as
+    ;; one — see ui.server/resolve-failure-msg.
+    {:decision :answered-unresumed}))
+
+(declare grant-design!)
+
 (defn- choose-option!
   "ANSWER the blocker, then tell whoever is listening. The answer is written to
    the ledger first (a :blocker-answered entry) and only then does this try to
@@ -3008,7 +3031,13 @@
    The one other question a click may answer is the blocker the pipeline is halted on
    (`pipeline/owed-blocker`) when later records have buried it. That is the blocker the gate
    offers (`answered-report`), and it is owed until an answer names it. Answering it makes it
-   no longer owed, so a second click on it is refused just as above."
+   no longer owed, so a second click on it is refused just as above.
+
+   An option that approves a design (:approves-design) is the person's grant as well as their
+   answer, and the grant is written first, through `grant-design!` — the chat command's path,
+   which answers a round that asked as well as one that proceeded. A grant it refuses refuses
+   the click: nothing is written, and the refusal says why, because an answer recorded without
+   the approval it was picked for is the question that gets asked again."
   [project ws-id action-id entry-seq]
   (let [latest (latest-report project ws-id)
         report (cond
@@ -3019,22 +3048,12 @@
                    (report-at base-dir entries entry-seq)))
         i      (option-index action-id)]
     (if-let [opt (get (vec (:options report)) i)]
-      (let [parked (parked-session project ws-id)]
-        (cws/append-entry!
-         project ws-id {:kind :blocker-answered}
-         (pr-str (cond-> {:format      :blocker-answered
-                          :blocker-seq entry-seq
-                          :letter      (report/option-letter i)
-                          :label       (:label opt)
-                          :summary     (:summary opt)
-                          :resumed     (:name parked)}
-                   (seq (:grants opt)) (assoc :grants (vec (:grants opt))))))
-        (if parked
-          (assoc (resume/resume! project ws-id (option-input i opt) parked) :decision :answered)
-          ;; Nobody to tell. The answer is on the ledger and the gate has stopped
-          ;; asking; this is a real outcome, not a failure, so it must not read as
-          ;; one — see ui.server/resolve-failure-msg.
-          {:decision :answered-unresumed}))
+      (let [parked  (parked-session project ws-id)
+            granted (when-let [n (:approves-design opt)]
+                      (grant-design! project ws-id n (str (:label opt) ": " (:summary opt)) nil))]
+        (if (and granted (not (#{:approved :already-granted} (:decision granted))))
+          granted
+          (choose-option-recorded! project ws-id entry-seq i opt parked)))
       {:decision :option-stale})))
 
 (defn- answer-owed!
