@@ -84,6 +84,25 @@
     (is (str/includes? (html (chat/change-bar "p" nil {:landed "0123456789abcdef"} change-routes)) "0123456789ab<"))
     (is (str/includes? (html (chat/change-bar "p" a-change {:refused "red"} change-routes)) "Not published: red"))))
 
+(deftest the-change-bar-carries-the-latest-landing-whatever-else-it-shows
+  (let [owed    {:landing {:state :owed :commit "0123456789abcdef" :owed-at "t" :by-pid 1}
+                 :waits ["1 run(s) to finish: r1"]}
+        running {:landing {:state :running :commit "0123456789abcdef" :owed-at "t" :since "s1" :pid 2}}]
+    (testing "owed: the commit and what it waits for, beside a publish result"
+      (let [out (html (chat/change-bar "p" nil {:landed "0123456789abcdef" :landing owed} change-routes))]
+        (is (str/includes? out "restarts onto"))
+        (is (str/includes? out "1 run(s) to finish: r1"))))
+    (testing "running: shown with no change and no publish result"
+      (let [out (html (chat/change-bar "p" nil {:landing running} change-routes))]
+        (is (str/includes? out "The dashboard runs"))
+        (is (str/includes? out "since s1"))))
+    (testing "unreadable is said, not dropped"
+      (is (str/includes? (html (chat/change-bar "p" nil {:landing {:unreadable "bad"}} change-routes))
+                         "cannot be read: bad")))
+    (testing "no landing and nothing else: still the empty element"
+      (is (= (html (chat/change-bar "p" nil {} change-routes))
+             (html (chat/change-bar "p" nil {:landing {:none true}} change-routes)))))))
+
 (deftest a-note-is-a-quiet-line
   (is (str/includes? (html (chat/chat-item {:id "i0" :kind :note :text "Edits thrown away."} routes))
                      "class=\"chat-note\"")))

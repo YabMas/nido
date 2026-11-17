@@ -408,6 +408,23 @@
 
 (defn- first-line [s] (some-> s str/trim not-empty str/split-lines first))
 
+(defn- landing-line
+  "The latest landing, as `nido.coordinator.control/latest-landing` answers it, in one line; nil for
+   none."
+  [{:keys [landing waits unreadable]}]
+  (let [short (fn [c] [:code (subs c 0 (min 12 (count c)))])]
+    (cond
+      unreadable
+      [:p.chat-change-refused {:role "alert"} "The latest landing cannot be read: " unreadable]
+
+      (= :owed (:state landing))
+      [:p.chat-change-status {:role "status"} "The dashboard restarts onto " (short (:commit landing))
+       (if (seq waits) (str " · waiting for " (str/join "; " waits)) " now") "."]
+
+      (= :running (:state landing))
+      [:p.chat-change-done {:role "status"} "The dashboard runs " (short (:commit landing))
+       " since " (:since landing) "."])))
+
 (defn ^{:malli/schema [:=> [:cat :string [:maybe :map] :map :map] :any]}
   change-bar
   "The conversation's unlanded change, under the DOM id `<id>-change`, and the two things a person
@@ -415,13 +432,15 @@
    `change` — `{:description :files}`, see `nido.session.change`, or nil for none — and
    `publishing`: `{:running? :step}` while a publish runs, its last `land · ` step as the status;
    `{:landed <commit>}` or `{:refused <why>}` for how the last one ended; `{:reverted? true}` after a
-   throw-away; or {} for nothing to say.
+   throw-away; or {} for nothing to say. Beside any of these, `:landing` carries the latest landing
+   as `nido.coordinator.control/latest-landing` answers it, shown whether or not there is a change
+   or a publish result: owed with what it waits for, running since a time, or unreadable.
 
-   No change and nothing to say renders the empty element, which takes no space. Publish is
+   No change, nothing to say and no landing renders the empty element, which takes no space. Publish is
    withheld while the change has no description, since it would land unnamed, and both actions
    are withheld while a turn runs (the panel's busy signal) — a change the agent is still making is
    not one to land or lose. The confirm state is the page's alone: one signal, `<id>Confirm`."
-  [id change {:keys [running? step landed refused reverted?]} {:keys [publish-url revert-url]}]
+  [id change {:keys [running? step landed refused reverted? landing]} {:keys [publish-url revert-url]}]
   (let [{:keys [busy]} (signals id)
         confirm  (str (str/replace id "-" "") "Confirm")
         n        (count (:files change))
@@ -435,13 +454,14 @@
 
        landed
        [:p.chat-change-done {:role "status"} "Published " [:code (subs landed 0 (min 12 (count landed)))]
-        " to main. The frame shows main now; the rest of the dashboard follows its next restart."]
+        " to main. The frame shows main now."]
 
        refused
        [:p.chat-change-refused {:role "alert"} "Not published: " refused]
 
        reverted?
        [:p.chat-change-done {:role "status"} "Edits thrown away. The frame shows main."])
+     (landing-line landing)
      (when (and change (not running?))
        (list
         [:details.chat-change-files

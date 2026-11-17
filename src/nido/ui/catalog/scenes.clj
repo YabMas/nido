@@ -689,7 +689,27 @@ for the text and keep the tint, so it still reads as **yours** without competing
                                         change-routes)}
              {:title "published"
               :note "Landed: no change left, and the commit it landed as."
-              :render #(chat/change-bar "scene-change-6" nil {:landed "0123456789abcdef"} change-routes)}]}
+              :render #(chat/change-bar "scene-change-6" nil {:landed "0123456789abcdef"} change-routes)}
+             {:title "published, restart owed"
+              :note "The landing's restart is owed, and the bar names what the daemon waits for."
+              :render #(chat/change-bar "scene-change-7" nil
+                                        {:landed  "0123456789abcdef"
+                                         :landing {:landing {:state :owed :commit "0123456789abcdef"
+                                                             :owed-at "2026-11-17T12:00:00Z" :by-pid 4242}
+                                                   :waits ["1 run(s) to finish: 2026-11-17-nido-review-1a2b"]}}
+                                        change-routes)}
+             {:title "running the landing"
+              :note "After the restart: the bar says which commit the dashboard runs, with no publish in its memory."
+              :render #(chat/change-bar "scene-change-8" nil
+                                        {:landing {:landing {:state :running :commit "0123456789abcdef"
+                                                             :owed-at "2026-11-17T12:00:00Z"
+                                                             :since "2026-11-17T12:03:10Z" :pid 5151}}}
+                                        change-routes)}
+             {:title "landing unreadable"
+              :note "A record nobody can read is said, never taken for no landing."
+              :render #(chat/change-bar "scene-change-9" nil
+                                        {:landing {:unreadable "restart-owed.edn does not hold a landing"}}
+                                        change-routes)}]}
    {:name "turn-status"
     :note "The status row at the foot of the log: from Send to the turn's end it names what the
            agent is doing now and counts the seconds. Each phase against the others."

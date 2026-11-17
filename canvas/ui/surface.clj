@@ -199,8 +199,9 @@
     {:signature [:=> [:catn [:id :string] [:images [:sequential :map]] [:routes :map]] :any]})
   (Operation change-bar
     "The conversation's unlanded change and what can be done with it — Publish or Cancel, each
-     confirmed in place, both withheld while a turn runs — or how the last publish ended; an
-     empty element when there is neither."
+     confirmed in place, both withheld while a turn runs — or how the last publish ended; and,
+     whether or not there is either, the latest landing the publishing value carries. An empty
+     element only when there is none of the three."
     {:signature [:=> [:catn [:id :string] [:change [:maybe :map]] [:publishing :map] [:routes :map]] :any]
      :delegates [signals]})
   (Operation composer "The composer: the pick chips, the staged images and attach control where routes offer attaching, the text box, and Send or Stop."

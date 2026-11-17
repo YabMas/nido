@@ -4,6 +4,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.daemon.brakes :as brakes]
+            [canvas.coordinator.daemon.lifecycle :as lifecycle]
             [canvas.coordinator.record.triggers :as triggers :refer [Trigger]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -29,6 +30,22 @@
    dashboard, where they were coordinator semantics wearing a UI namespace. The surfaces render
    what these return."
   {:child [DaemonHealth]}
+  (Operation latest-landing
+    "The latest landing as the record's boundary answers it, as one of four alternatives: an owed
+     landing with the :waits `waits` reads at this call; a running landing, which carries no waits;
+     {:none} when none is recorded; or {:unreadable <why>}, kept apart from none so a surface can
+     say the record cannot be read."
+    {:signature [:=> [:catn]
+                 [:or
+                  [:map {:closed true}
+                   [:landing [:map [:state [:enum :owed]] [:commit :string] [:owed-at :string] [:by-pid :int]]]
+                   [:waits [:vector :string]]]
+                  [:map {:closed true}
+                   [:landing [:map [:state [:enum :running]] [:commit :string] [:owed-at :string]
+                              [:since :string] [:pid :int]]]]
+                  [:map [:none :boolean]]
+                  [:map [:unreadable :string]]]]
+     :delegates [lifecycle/landing lifecycle/waits]})
   (Operation daemon-health
     "Derive the rail state from already-read inputs. Pure."
     {:signature [:=> [:catn [:inputs :map]] DaemonHealth]})

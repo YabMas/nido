@@ -22,10 +22,33 @@
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.daemon.halt :as halt]
    [nido.coordinator.daemon.pid :as pid]
+   [nido.coordinator.daemon.restart :as restart]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.source.queue :as queue]
    [nido.platform.io :as io]))
+
+;; ── the latest landing: whether the daemon is on it yet ─────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat]
+                       [:or
+                        [:map {:closed true}
+                         [:landing [:map [:state [:enum :owed]] [:commit :string] [:owed-at :string] [:by-pid :int]]]
+                         [:waits [:vector :string]]]
+                        [:map {:closed true}
+                         [:landing [:map [:state [:enum :running]] [:commit :string] [:owed-at :string]
+                                    [:since :string] [:pid :int]]]]
+                        [:map [:none :boolean]]
+                        [:map [:unreadable :string]]]]}
+  latest-landing
+  "The latest landing as the record's boundary answers it: an owed landing with what it waits for,
+   read now; a running landing, which waits for nothing; {:none true}; or {:unreadable <why>},
+   kept apart from none so a surface can say the record cannot be read."
+  []
+  (let [{:keys [landing] :as answer} (restart/landing)]
+    (if (= :owed (:state landing))
+      {:landing landing :waits (restart/waits landing)}
+      answer)))
 
 ;; ── health: the rail dot, and the different question underneath it ───────────
 

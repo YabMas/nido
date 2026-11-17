@@ -24,6 +24,7 @@
    change bar."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [nido.coordinator.control :as control]
             [nido.session.change :as change]
             [nido.session.chat :as chat]
             [nido.session.preview :as preview]
@@ -68,6 +69,13 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   ;; {:reverted? true} or {} — see nido.ui.components.chat/change-bar
   (atom {}))
 
+(defn- bar-value
+  "What the change bar renders: how the last publish went, with the latest landing as Control
+   reports it at this render — asked each time, because the daemon restarting onto a landing is
+   what erases `publishing`, and the record is what survives it."
+  []
+  (assoc @publishing :landing (control/latest-landing)))
+
 (def ^:private routes
   {:id         panel-id
    :send-url   "/_catalog/chat/send"
@@ -98,7 +106,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
 
 (defn- bar-event []
   (datastar/patch-elements-event
-   (html (panel/change-bar panel-id (pending-change) @publishing change-routes))))
+   (html (panel/change-bar panel-id (pending-change) (bar-value) change-routes))))
 
 (defn- reload-frames!
   "Reload every open page's frame. The value only has to change: the page keeps the scene it was
@@ -245,7 +253,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
       (views/shell (assoc (chrome) :title "UI Catalog" :bleed? true)
                    (catalog/chat-page (chat/transcript design-chat) frame-src routes
                                       (boolean (params "chat=1"))
-                                      (panel/change-bar panel-id (pending-change) @publishing change-routes))))))
+                                      (panel/change-bar panel-id (pending-change) (bar-value) change-routes))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   handle!
