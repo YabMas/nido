@@ -254,9 +254,9 @@
   (Operation gate-action-skip-fragment "What is rendered when a gate action is not offered."
     {:signature [:=> [:catn [:msg :string] [:project ProjectName] [:ws-id WorkstreamId]
                             [:pane-id :string]] :any]})
-  (Operation needs-page "The home page: the list of what waits on you, each row opening its workstream."
+  (Operation needs-page "The home page: the list of what waits on you beside the pane of the workstream a row selects."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
-     :delegates [shell needs-fragment]})
+     :delegates [shell needs-fragment workstream-pane]})
   (Operation workstreams-fragment "The selected tab's stage groups."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [board-row winddown-row]})
   (Operation workstream-pane "The read-only ledger pane for one workstream."

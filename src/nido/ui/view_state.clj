@@ -27,16 +27,16 @@
 
 (defn- selection
   "The workstream the request has open: the one a /workstreams/:project/:ws-id
-   deep link names — where Needs-you rows, redirects and open-the-gate links land
-   — or `?sel=project:ws-id`, so either way of reaching a workstream parses to it.
-   The path wins when both are present: it is the page, and a `?sel=` beside it
-   names no other."
+   deep link names, or `?sel=<project>:<ws-id>` — the pane Needs you opens beside its
+   list — so either way of reaching a workstream parses to it. `<project>/<ws-id>`
+   reads as the colon does: neither part can hold either separator. The path wins
+   when both are present: it is the page, and a `?sel=` beside it names no other."
   [uri ps]
   (or (let [[root project ws-id & more] (remove str/blank? (str/split (or uri "") #"/"))]
         (when (and (= "workstreams" root) (seq project) (seq ws-id) (empty? more))
           {:project (decode project) :ws-id (decode ws-id)}))
       (when-let [raw (some (fn [[k v]] (when (= k "sel") v)) ps)]
-        (let [[project ws-id] (str/split (decode raw) #":" 2)]
+        (let [[project ws-id] (str/split (decode raw) #"[:/]" 2)]
           (when (and (seq project) (seq ws-id))
             {:project project :ws-id ws-id})))))
 

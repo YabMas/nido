@@ -114,7 +114,9 @@
     (-> screen
         (assoc :selection
                (when sel
-                 (let [ws (when (= :workstreams (:surface view-state))
+                 ;; The two pages that draw a pane beside their list; every other render with a
+                 ;; selection (the list polls among them) only needs to know which row is open.
+                 (let [ws (when (#{:needs :workstreams} (:surface view-state))
                             (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
                    (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
                      ws (assoc :ws (cond-> (assoc ws :open-rounds (:rounds view-state)
@@ -777,15 +779,12 @@
       ;; GET /nido-logo.png — looser circular mark for the rail home button
       ["nido-logo.png"] (png-resource-response "nido-logo.png")
 
-      ;; GET / — Needs you (home): the list only. A row opens its workstream, so a
-      ;; selection here (?sel=) is a link from when the list carried a pane, and
-      ;; goes to the workstream it names.
+      ;; GET / — Needs you (home): the list, and beside it the pane of the workstream ?sel=
+      ;; names, so a person works the list without leaving it.
       []
-      (let [vs (view-state req)]
-        (if-let [{:keys [project ws-id]} (:selection vs)]
-          (ws-redirect project ws-id)
-          (let [screen (needs-screen vs)]
-            (page-response (:scope vs) (views/needs-page (rail-ctx req :needs (:scope vs) screen) screen)))))
+      (let [vs     (view-state req)
+            screen (needs-screen vs)]
+        (page-response (:scope vs) (views/needs-page (rail-ctx req :needs (:scope vs) screen) screen)))
 
       ;; GET /_catalog — the component catalog and its chat. Linked from nothing: a dev surface
       ;; a person reaches by typing it, served on every dashboard rather than behind a flag that

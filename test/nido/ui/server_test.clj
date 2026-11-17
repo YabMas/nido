@@ -83,13 +83,28 @@
       (is (str/includes? (:body resp) "rail-needs-count")))))   ; rail patched too
 
 (deftest a-gate-link-opens-its-workstream
-  ;; A gate is answered on its workstream's pane, so both of the old ways to open one
-  ;; on the home page — /gate/… and /?sel= — go there instead.
-  (doseq [req [{:request-method :get :uri "/gate/brian/ws-1"}
-               {:request-method :get :uri "/" :query-string "sel=brian:ws-1"}]]
-    (let [resp (server/handle-request req)]
-      (is (= 302 (:status resp)) (:uri req))
-      (is (= "/workstreams/brian/ws-1" (get-in resp [:headers "Location"])) (:uri req)))))
+  (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
+    (is (= 302 (:status resp)))
+    (is (= "/workstreams/brian/ws-1" (get-in resp [:headers "Location"])))))
+
+(deftest home-with-a-selection-opens-its-pane-in-place
+  ;; Needs you keeps the list in view: ?sel= draws the selected workstream's pane beside it,
+  ;; whichever separator names it.
+  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/all-grouped (fn [] [])
+                nido.coordinator.work/refresh-list! (fn [] nil)
+                nido.coordinator.work/workstream (fn [p id & _] {:project p :ws-id id :label "Pane of ws-1"
+                                                                 :stage :triage :entries [] :sessions []})
+                nido.coordinator.work/machine-facts (fn [& _] {})
+                nido.ui.dev/ws-session-dev-states (fn [& _] {})
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (doseq [q ["sel=brian:ws-1" "sel=brian/ws-1" "sel=brian%2Fws-1"]]
+      (let [resp (server/handle-request {:request-method :get :uri "/" :query-string q})]
+        (is (= 200 (:status resp)) q)
+        (is (str/includes? (:body resp) "Pane of ws-1") q)
+        (is (str/includes? (:body resp) "Needs you") q)))))
 
 (deftest there-is-no-home-gate-route-to-post-to
   (with-redefs [nido.coordinator.work/resolve-gate! (fn [& _] (throw (ex-info "must not resolve" {})))]

@@ -429,8 +429,9 @@
 
    Only the position moves. The path stays: the workstream's own page
    (/workstreams/:project/:ws-id) parses to the same selection, and rewriting it
-   would send a reload back to the board; anywhere else — the board — the selection
-   rides ?sel=. And the `?scope=` the location states stays, read from the location
+   would send a reload back to the board; Needs you (/) hosts the pane beside its
+   list and stays /, or a reload would open the board instead; anywhere else — the
+   board — the selection rides ?sel=. And the `?scope=` the location states stays, read from the location
    because the pane does not know it: without it parse would focus the selection's
    project, and a reload would draw another project's board beside the pane.
 
@@ -438,11 +439,12 @@
   [{:keys [project ws-id] :as pos}]
   (let [own   (str "/workstreams/" project "/" ws-id)
         own?  (str "location.pathname === '" own "'")
+        home? "location.pathname === '/'"
         scope "new URLSearchParams(location.search).get('scope')"
         ps    (concat [(str "(" scope " ? 'scope=' + encodeURIComponent(" scope ") : '')")
                        (str "(" own? " ? '' : 'sel=" project ":" ws-id "')")]
                       (map #(str "'" % "'") (position-params pos)))]
-    (str "history.replaceState(history.state, '', [" own? " ? '" own "' : '/workstreams', ["
+    (str "history.replaceState(history.state, '', [" own? " ? '" own "' : " home? " ? '/' : '/workstreams', ["
          (str/join ", " ps) "].filter(Boolean).join('&')].filter(Boolean).join('?'))")))
 
 (defn- at-entry
@@ -483,28 +485,37 @@
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
   "The needs-you list — initial render + SSE refresh: one row per gate, each opening that
-   workstream's pane, where its question is answered."
-  [{:keys [gates]}]
+   workstream's pane beside the list (/?sel=), where its question is answered, and the open one
+   marked."
+  [{:keys [gates selection] :as screen}]
   (str
    (h/html
     (if (seq gates)
       [:div {:id "needs"}
-       ;; A drain its slices raised escalations through opens the drains page, which lists
-       ;; them beside the drain's own, each with the workstream it is answered on.
-       (for [g gates]
-         (row/gate-row g (if (seq (:raised-by g))
-                           (str "/drains?scope=" (:project g))
-                           (str "/workstreams/" (:project g) "/" (:ws-id g)))))]
+       (for [g gates
+             :let [sel (str (:project g) ":" (:ws-id g))]]
+         (list
+          (row/gate-row (assoc g :selected? (and (= (:project g) (:project selection))
+                                                 (= (:ws-id g) (:ws-id selection))))
+                        (str "/" (screen-query screen {:sel sel})))
+          ;; A drain its slices raised escalations through: their questions are answered on
+          ;; the drains page, which lists them beside the drain's own.
+          (when (seq (:raised-by g))
+            [:a.gate-tag {:href (str "/drains?scope=" (:project g))}
+             (str (count (:raised-by g)) " slice question" (when (< 1 (count (:raised-by g))) "s")
+                  " on the drains page →")])))]
       [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
 
 (defn- gate-action-fragment
   "Shared shape for the immediate, action-keyed gate-action pane fragment:
    headline `msg` over ws-id + the follow-it links. `pane-id` is the element it
-   patches — \"ws-pane\", the workstream pane the action was taken from."
+   patches — \"ws-pane\", the workstream pane the action was taken from. It keeps
+   the pane's own poll, so the pane comes back showing the act's effect on whichever
+   page hosts it."
   [msg project ws-id pane-id]
   (str
    (h/html
-    [:div {:id pane-id}
+    [:div {:id pane-id :data-on-interval__duration.3s (pane-fragment {:project project :ws-id ws-id})}
      [:h1 msg]
      [:p.meta "ws " ws-id]
      [:p "Follow it: "
@@ -1295,19 +1306,25 @@
      :proposed-tickets         (md/render (report/report->markdown report))
      (md/render (:markdown report))))))
 
-;; The position and arc vocabulary the workstream pane defines below; the gate pane names a
-;; position and marks a stage exactly as it does.
+;; Defined below with the Workstreams page, which hosts the same pane.
+(declare workstream-pane)
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   needs-page
-  "Home: the list of what waits on you, inside the shell, rendered from the screen. No pane of its
-   own: each row opens its workstream's pane, where the question is answered, so the context a
-   reader re-orients by is the workstream's and is not drawn a second time here. The poll query
-   carries the scope so the 3s refresh keeps it."
-  [ctx screen]
-  (shell
-   (assoc ctx :active :needs :title "Needs you")
-   [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" (screen-query screen nil) "')")}
-    (h/raw (needs-fragment screen))]))
+  "Home: the list of what waits on you, inside the shell, rendered from the screen, beside the
+   pane of the workstream a row selects — the same workstream-pane the Scratch page draws, so the
+   context a reader re-orients by is the workstream's and is drawn once. The poll query carries
+   the selection so the 3s refresh keeps the open row marked; the pane polls itself."
+  [ctx {:keys [selection] :as screen}]
+  (let [q (screen-query screen (when-let [id (:ws-id selection)]
+                                 {:sel (str (:project selection) ":" id)}))]
+    (shell
+     (assoc ctx :active :needs :title "Needs you")
+     [:div.gate-wrap
+      [:div.queue-col
+       [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" q "')")}
+        (h/raw (needs-fragment screen))]]
+      [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection) (:machine selection)))]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Workstreams (overview + ledger) — replaces the board + ws-detail.

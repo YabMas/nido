@@ -69,15 +69,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :string] :any]}
   gate-row
-  "One needs-you row, linking to `href` — the workstream the gate is answered on. A
+  "One needs-you row, linking to `href` — where the page opens the gate's workstream — and marked
+   as the open one when the gate carries `:selected?`. A
    `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'.
    `:error-msg` (a gate action that came back failed) renders on the row — the
    resolve is async, so this is the only trace a failed Apply leaves.
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [project stage label tag report ask session resume-error pending? error-msg doing denials]} href]
-  [:a {:class "gate-card"
+  [{:keys [project stage label tag report ask session resume-error pending? error-msg doing denials selected?]} href]
+  [:a {:class (str "gate-card" (when selected? " sel"))
        :href  href}
    [:div.gate-top (status-slot [:span.needs {:title "needs you"}]) [:span.lbl label]]
    (tag-line tag)

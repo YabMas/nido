@@ -56,7 +56,7 @@
    function of the path for a surface whose pages share it) and its subject (a function of the
    view-state, or nil for a page that declares none). A surface missing here is not a page a chat
    can be on; one whose :subject is nil names the page alone, by declaration."
-  {:needs         {:title "Needs you"     :subject nil}
+  {:needs         {:title "Needs you"     :subject workstream-subject}
    :workstreams   {:title "Workstreams"   :subject workstream-subject}
    :domain        {:title "Domain"        :subject nil}
    :functionality {:title "Functionality" :subject nil}

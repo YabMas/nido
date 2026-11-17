@@ -61,9 +61,41 @@
     (is (str/includes? html "BR-7"))
     (is (str/includes? html "class=\"row-st\"><span class=\"needs\"")
         "a needs-you row leads with the needs-you dot, not where it came from")
-    ;; a row opens its workstream, where the gate is answered
-    (is (str/includes? html "href=\"/workstreams/brian/ws-1\""))
-    (is (not (str/includes? html "sel=brian:ws-1")))))
+    ;; a row opens its workstream's pane beside the list, where the gate is answered
+    (is (str/includes? html "href=\"/?sel=brian:ws-1\""))
+    (is (not (str/includes? html "href=\"/workstreams/brian/ws-1\"")))
+    (is (not (str/includes? html "gate-card sel")) "nothing is selected, so no row is marked")))
+
+(deftest needs-fragment-marks-the-open-row
+  (let [html (views/needs-fragment {:gates [sample-gate (assoc sample-gate :ws-id "ws-2")]
+                                    :selection {:project "brian" :ws-id "ws-2"} :scope "all"})]
+    (is (= 1 (count (re-seq #"gate-card sel" html))) "exactly the selected row is marked")
+    (is (re-find #"class=\"gate-card sel\" href=\"/\?sel=brian:ws-2\"" html))))
+
+(deftest a-slice-raised-drain-opens-in-place-and-points-at-the-drains-page
+  (let [html (views/needs-fragment {:gates [(assoc sample-gate :raised-by ["ws-s1" "ws-s2"])]
+                                    :selection nil :scope "all"})]
+    (is (str/includes? html "href=\"/?sel=brian:ws-1\"") "the drain's own row opens its pane on /")
+    (is (str/includes? html "href=\"/drains?scope=brian\"") "its slices' questions are one link away")
+    (is (str/includes? html "2 slice questions"))))
+
+(deftest needs-page-lays-the-selected-pane-beside-the-list
+  (let [ctx    {:needs-count 1 :scope "brian" :projects ["brian"]}
+        pane   (views/needs-page ctx {:gates [sample-gate] :scope "all"
+                                      :selection {:project "brian" :ws-id "ws-1"
+                                                  :ws {:project "brian" :ws-id "ws-1" :label "Label of ws-1"
+                                                       :stage :triage :entries []}}})
+        bare   (views/needs-page ctx {:gates [sample-gate] :scope "all" :selection nil})]
+    (is (str/includes? pane "id=\"ws-pane\""))
+    (is (str/includes? pane "Label of ws-1") "the selected workstream's own pane")
+    (is (str/includes? pane "/_fragment/needs?sel=brian:ws-1") "the list's poll keeps the selection")
+    (is (str/includes? bare "Select a workstream.") "no selection: the pane's placeholder")))
+
+(deftest a-gate-action-confirmation-keeps-the-panes-poll
+  (doseq [html [(views/gate-action-confirm-fragment :dismiss "brian" "ws-1" "ws-pane")
+                (views/gate-action-skip-fragment "already running" "brian" "ws-1" "ws-pane")]]
+    (is (str/includes? html "/_fragment/workstream/brian/ws-1")
+        "the pane comes back on its own poll, whichever page hosts it")))
 
 (deftest needs-fragment-empty-state-is-calm
   (is (str/includes? (views/needs-fragment {:gates [] :selection nil}) "Nothing needs you")))
@@ -1905,8 +1937,10 @@
         vs    ((requiring-resolve 'nido.ui.view-state/parse)
                {:uri "/workstreams" :query-string (str/join "&" parts)})]
     (is (seq parts) "the pane carries the location of its position")
-    (is (str/includes? js "location.pathname === '/workstreams/brian/ws-1' ? '/workstreams/brian/ws-1' : '/workstreams'")
+    (is (str/includes? js "[location.pathname === '/workstreams/brian/ws-1' ? '/workstreams/brian/ws-1' : ")
         "on the workstream's own page the path stays, so a reload stays on that page")
+    (is (str/includes? js " : location.pathname === '/' ? '/' : '/workstreams', [")
+        "on Needs you the path stays /, so a reload stays beside the list; elsewhere it is the board")
     (is (str/includes? js "(location.pathname === '/workstreams/brian/ws-1' ? '' : 'sel=brian:ws-1')")
         "and the selection rides ?sel= only where the path does not say it")
     (is (= ["entry=5" "rounds=1,3" "stage=design" "history=1"] (rest parts)))

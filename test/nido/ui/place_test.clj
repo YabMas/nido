@@ -72,6 +72,19 @@
       (is (= ["page · Workstreams" "workstream · brian/ws-minted"]
              (map :label (place/references p)))))))
 
+(deftest needs-you-names-the-workstream-its-pane-has-open
+  ;; / draws the selected workstream's pane beside its list, so the place names it as the board
+  ;; does; with no selection the page has nothing open.
+  (with-redefs [work/workstream (fn [p w _] {:project p :ws-id w :label "Move Licences" :stage :design})]
+    (let [p (place/place (sent-from "/?sel=brian:ws-1"))]
+      (is (= ["brian" "ws-1"] ((juxt :project :ws-id) (:subject p))))
+      (is (= ["page · Needs you" "workstream · brian/ws-1"] (map :label (place/references p)))))
+    (is (= "ws-1" (get-in (place/page-place {:uri "/" :query-string "sel=brian/ws-1"}) [:subject :ws-id]))
+        "the page being drawn, which is what picks the rail's chat")
+    (let [p (place/place (sent-from "/"))]
+      (is (:known? p))
+      (is (nil? (:subject p))))))
+
 (deftest a-ticket-with-no-workstream-is-a-page-with-nothing-open
   ;; A bare pane says "No nido workstream yet": the place is the known page, and names none.
   (with-redefs [work/workstream (fn [p w _] {:project p :ws-id w :bare? true :label "Move Licences"

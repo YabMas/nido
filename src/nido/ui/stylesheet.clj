@@ -135,6 +135,7 @@
         .inbox { overflow:auto; flex:1; }
         .gate-card { display:block; padding:10px 16px; border-bottom:1px solid var(--border-subtle); color:inherit; }
         .gate-card:hover { background:var(--surface-hover); text-decoration:none; }
+        .gate-card.sel { background:var(--surface-selected); }
         .gate-top { display:flex; align-items:center; gap:8px; }
         .row-st { flex:none; width:12px; display:inline-flex; align-items:center; justify-content:center; }
         .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-strong); }

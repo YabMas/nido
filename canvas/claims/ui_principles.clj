@@ -7,7 +7,7 @@
             [canvas.coordinator.lane.drive :refer [arc stage-active]]
             [canvas.coordinator.report.ask :refer [report-ask Ask]]
             [canvas.coordinator.work :refer [gates workstream]]
-            [canvas.ui.surface :refer [ui-views shell needs-page needs-fragment ui-server workstream-pane workstreams-fragment]]))
+            [canvas.ui.surface :refer [ui-views shell workstream-pane workstreams-fragment]]))
 
 (Claim principles-stated
   "docs/reference/ui-principles.md states the web dashboard's principles of hierarchy, type, colour, actions, disclosure and orientation, each as a rule a reader can check a page against and each naming the established pattern it is drawn from; it governs the web dashboard and says it does not govern the TUI."
@@ -20,10 +20,6 @@
 (Claim prose-is-proportional
   "The dashboard's body text is set in the prose face token (a system-ui stack); the mono face token is applied only to code, pre, kbd and the classes that carry identifiers, paths, commands and machine facts. Prose blocks on the gate pane are bounded to a reading measure in ch, never truncated."
   {:about [ui-views shell] :evidence "round"})
-
-(Claim home-lists-what-waits
-  "GET / renders needs-page as the needs-you list alone, with no detail pane, each row linking to /workstreams/<project>/<ws-id>. GET / with ?sel=<project>:<ws-id> and GET /gate/<project>/<ws-id> each redirect to /workstreams/<project>/<ws-id>, and every link the dashboard renders as opening a gate — the list's rows and the 'open the gate' links of the operations and recovery notices — is /workstreams/<project>/<ws-id>. Nothing renders gate-pane or patches #gate-pane, and there is no POST /gate/<project>/<ws-id>/<action> route: a gate action posts through pane-route."
-  {:about [ui-server needs-page needs-fragment] :evidence "test"})
 
 (Claim gate-carries-no-pane-facts
   "A gate map carries no :arc and no :position key; of the gate and workstream maps, only the workstream map carries them."
