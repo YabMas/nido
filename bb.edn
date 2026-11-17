@@ -729,6 +729,11 @@
    :doc "Start work on a goal from anywhere: a new session on a new, activated workstream, driven on the brief as its first instruction. :project <p> <session> (:brief-file <path> | :brief \"…\") [:model <id>] [up opts]. Prints the workstream's id."
    :task (apply nido-session/start *command-line-args*)}
 
+  nido:workstream:tell
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "From a workstream's chat, pass word on to that workstream's conductor, which answers it with one decision: :text \"…\". Runs only in the chat's session; the workstream must be activated."
+   :task (apply nido-workstream/tell-cmd *command-line-args*)}
+
   nido:workstream:show
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Print a workstream's active ledger (own entries else ticket) + latest entry."

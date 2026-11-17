@@ -6,8 +6,11 @@
    stopped, and how a change reaches whoever is watching.
 
    A chat is named by `{:project :session :name}`, and any map holding those three keys names it;
-   the rest of the map is how to start it (`:instructions`, appended to the agent's system prompt)
-   and what to do when a turn ends (`:on-turn-end`, a function of the chat). The only thing kept on
+   the rest of the map is how to start it (`:instructions`, appended to the agent's system prompt;
+   `:ready!`, a function of the chat that brings its session up its caller's way before each agent
+   start, in place of this namespace's own bringing it up on the project's defaults — what it
+   throws is the conversation's error) and what to do when a turn ends (`:on-turn-end`, a
+   function of the chat). The only thing kept on
    disk is the ACP session id. The transcript lives in this process and is rebuilt when it is not
    there: the conversation is loaded again by id, and its history replays through the same fold.
    So a dashboard restart costs a conversation its replay time and nothing else.
@@ -89,11 +92,13 @@
     (:instructions chat) (assoc :systemPrompt {:append (:instructions chat)})))
 
 (defn- worktree!
-  "The chat's session's worktree, bringing the session up first when it is down or does not exist."
-  [{:keys [project session]}]
+  "The chat's session's worktree, with the session brought up first: by the chat's `:ready!` when
+   it has one, else by this namespace when the session is down or does not exist."
+  [{:keys [project session ready!] :as chat}]
   (let [opts {:project (name project)}]
-    (when-not (lifecycle/runtime-of session opts)
-      (lifecycle/up! session opts))
+    (cond
+      ready!                                     (ready! chat)
+      (not (lifecycle/runtime-of session opts))  (lifecycle/up! session opts))
     (:wt-path (lifecycle/session-coords session opts))))
 
 (defn- ensure-agent!

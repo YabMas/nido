@@ -1415,8 +1415,9 @@
                     (owed-by-mode mode :nobody)
                     :nobody)
          ;; Past the conductor's record: it runs for as long as the workstream is open, so counting
-         ;; it would read every worked workstream live and none stalled.
-         sessions (remove :conductor (csession/list-sessions project ws-id))
+         ;; it would read every worked workstream live and none stalled. And past the chat's: a
+         ;; session a person talks in about the work is up without any of the work moving.
+         sessions (remove #(or (:conductor %) (:chat %)) (csession/list-sessions project ws-id))
          ;; A person's own session is live while it is up — observed, never a stored phase. One nido
          ;; drives through a facet is read off the listing instead, whatever its :autonomy: its
          ;; services stay up between turns. Absent the caller's observation, make one, and only when

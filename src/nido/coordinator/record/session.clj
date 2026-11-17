@@ -149,6 +149,10 @@
    [:released          {:optional true} [:= true]]
    ;; The workstream's conductor, whatever the generation. Never also a seat's occupant.
    [:conductor         {:optional true} [:= true]]
+   ;; The session the workstream's chat runs in: a person's conversation about the workstream,
+   ;; held from the dashboard. It occupies no seat and is not the conductor, and its turn ends
+   ;; are not handed back.
+   [:chat              {:optional true} [:= true]]
    ;; The instruction and model nido last started a conversation on this record with, and who
    ;; gave it, so a start that failed is retried on what it was given rather than on a recipe
    ;; rebuilt without it.
@@ -173,6 +177,9 @@
     (and (:seat s) (:conductor s))
     (throw (ex-info "A session record names a seat or the conductor, never both"
                     {:session (:name s) :seat (:seat s)}))
+    (and (:chat s) (or (:seat s) (:conductor s)))
+    (throw (ex-info "A workstream's chat session occupies no seat and is not the conductor"
+                    {:session (:name s)}))
     :else s))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:maybe :Session]]}
@@ -245,7 +252,7 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Session]}
   create!
   "Persist a fresh :live session. `opts` carries :name, :weight, and :autonomy
-   (nil for human sessions, or a full Autonomy map), and optionally :seat or :conductor.
+   (nil for human sessions, or a full Autonomy map), and optionally :seat, :conductor or :chat.
    Reads via (:name opts) rather than destructuring to avoid shadowing clojure.core/name."
   [project ws-id opts]
   (let [now (clock/now-iso)]
@@ -257,7 +264,7 @@
                     :substrate-history [{:at now :substrate :live}]
                     :autonomy          (:autonomy opts)
                     :created-at        now}
-                   (select-keys opts [:seat :conductor])))))
+                   (select-keys opts [:seat :conductor :chat])))))
 
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   live?       [s] (= :live (:substrate s)))

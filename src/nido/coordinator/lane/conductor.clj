@@ -183,7 +183,8 @@
         {:keys [position next]} (position project ws-id)]
     (str "You conduct workstream " ws-id " of " (name project) ". You occupy no seat and write no code. "
          "Each hand-back nido gives you — a turn nido gave that ended, a person's turn in one of its "
-         "sessions (marked as the person's: they are steering it), or an act of the person's — you "
+         "sessions (marked as the person's: they are steering it), word the workstream's chat passes "
+         "on from the person talking there, or an act of the person's — you "
          "answer with exactly one decision, recorded with `bb nido:seats:decide :hand-back <id>` — "
          "the id on that hand-back's `Hand-back id:` line, never one read off the log — and "
          "either `:seat <id> :text \"…\"` (or `:instruct '[{:seat … :text …} …]'` for several seats) "
@@ -411,7 +412,7 @@
 ;; ── hand-backs ──────────────────────────────────────────────────────────────
 
 (defn- hand-back-text
-  [{:keys [what turn session seat said position next design seats]}]
+  [{:keys [what turn session seat said word position next design seats]}]
   (str "Hand-back: " what "\n"
        "Session: " session (when seat (str " (seat " seat ")")) "\n"
        (when (= :person turn)
@@ -419,7 +420,8 @@
        "Position: " (name position) (when next (str ", next " (pr-str next))) "\n"
        "Governing design: " (design-line design) "\n"
        "Seats: " (seats-line seats) "\n"
-       (when said (str "\nIts last message:\n\n" said "\n"))))
+       (when said (str "\nIts last message:\n\n" said "\n"))
+       (when word (str "\nWhat the chat passes on:\n\n" word "\n"))))
 
 (defn- conducted-by
   "The workstream whose conductor answers `ws-id`'s hand-backs: a slice's drain, whose coordinator
@@ -466,14 +468,15 @@
    as the records give them then. One that ended an instruction nido gave is keyed on that
    instruction's token; one that ended none is a person's turn, marked as such and keyed on its
    conversation and the Stop's time. A workstream not activated has no conductor to read it, and
-   is logged nothing. Answers the hand-backs posted."
+   is logged nothing; nor is a turn end of the workstream's chat, whose word reaches the conductor
+   only when the chat passes it on (`tell!`). Answers the hand-backs posted."
   [{:keys [turn-ends]}]
   (let [conducted? (memoize (fn [project ws-id] (conducted? (ws/read-ws project ws-id))))]
     (vec
      (for [{:keys [project ws-id session event instruction run conversation]} turn-ends
            :when (nil? run)
            :let  [s (session/read-session project ws-id session)]
-           :when (and s (not (:conductor s)) (conducted? project ws-id))]
+           :when (and s (not (:conductor s)) (not (:chat s)) (conducted? project ws-id))]
        (if instruction
          (post-hand-back! project ws-id (str "turn:" session ":" (:token instruction))
                           {:what "a turn nido gave ended" :session session :seat (get-in s [:seat :id])
@@ -482,6 +485,42 @@
                           {:what "a person's turn ended" :turn :person :session session
                            :conversation conversation :seat (get-in s [:seat :id])
                            :said (:last-message event)}))))))
+
+(defn- session-here
+  "The name of the nido session this process runs in — its worktree or its home — or nil."
+  []
+  (let [cwd (System/getProperty "user.dir")]
+    (or (some-> (lifecycle/session-from-cwd cwd) :session)
+        (second (lifecycle/session-home-coords-from-cwd cwd)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :map]}
+  tell!
+  "Pass `text` on to the workstream's conductor from the workstream's chat, which this must run
+   in: posted once as a hand-back naming the chat's session, which the conductor answers with one
+   decision like any other. It is not marked a person's turn: an escalation decided on it waits
+   for the person's answer as any blocker does, and no later chat message answers it in place.
+   Refused from any other session or from outside every session (:not-the-chat), on a
+   workstream that is not activated, which nothing conducts (:not-activated), on a closed one
+   (:closed), and for blank text (:no-text). Answers the logged message."
+  [project ws-id text]
+  (let [n (session-here)
+        s (when n (session/read-session project ws-id n))
+        w (ws/read-ws project ws-id)]
+    (cond
+      (not (:chat s))
+      (throw (ex-info (str "Only workstream " ws-id "'s chat passes word to its conductor — this runs "
+                           (if n (str "in " n) "outside every session"))
+                      {:reason :not-the-chat :session n}))
+      (ws/closure w)
+      (throw (ex-info (str "Workstream " ws-id " is closed: nothing conducts it") {:reason :closed}))
+      (not (standing/activated? w))
+      (throw (ex-info (str "Workstream " ws-id " is not activated, so it has no conductor to tell")
+                      {:reason :not-activated}))
+      (str/blank? text)
+      (throw (ex-info "Nothing to pass on: the text is blank" {:reason :no-text})))
+    (post-hand-back! project ws-id (str "chat-word:" n ":" (random-uuid))
+                     {:what "the workstream's chat has word for you, from the person talking there"
+                      :session n :word (str/trim text)})))
 
 ;; ── decisions ───────────────────────────────────────────────────────────────
 

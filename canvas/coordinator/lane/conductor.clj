@@ -106,12 +106,18 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
                       [:prompted [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]]] :map]
      :delegates [prompted seats/reseat! seats/held seats/default-embodiment seats/occupy! embodied-strata/carry! embodied-strata/refused? drive/park!]})
+  (Operation tell!
+    "Pass word on to the workstream's conductor from the workstream's chat, which it must run in:
+     posted once as a hand-back naming the chat's session. Refused from
+     any other session, for blank text, and on a workstream that is closed or not activated."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:text :string]] :map]
+     :delegates [session/read-session workstream/read-ws standing/activated? seats/post!]})
   (Operation hand-backs!
     "From one conduct pass's report, log to an activated workstream's conductor each turn end of a
-     session on it other than the conductor, faceted or not, that ended no instruction recorded
-     for a Run — once per turn end, a person's turn marked as such — with the session, its seat
-     when it has one, the turn's last message, the position the pipeline derives at that moment,
-     and the governing design and seats as the records give them then."
+     session on it other than the conductor and the workstream's chat, faceted or not, that ended
+     no instruction recorded for a Run — once per turn end, a person's turn marked as such — with
+     the session, its seat when it has one, the turn's last message, the position the pipeline
+     derives at that moment, and the governing design and seats as the records give them then."
     {:signature [:=> [:catn [:report :map]] [:sequential :map]]
      :delegates [drive/of seats/occupants seats/post! standing/governing-design rseats/seats]})
   (Operation stops!

@@ -118,7 +118,7 @@
     "A workstream's position, who owes its next move, and whether anything is live — the one
      answer every surface renders. Paused while a person's pause stands. Stalled — a fault —
      when an agent owes the move, nothing is live, no question is open and no pause stands, and
-     then with the reason; its conductor's session is not what makes it live. A turn that answered
+     then with the reason; neither its conductor's session nor its chat's is what makes it live. A turn that answered
      only a person's own prompt, on a workstream not activated, is theirs and not a stall."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
                       [:live-names [:? [:maybe [:set :string]]]]] WorkstreamStatus]

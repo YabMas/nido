@@ -247,6 +247,17 @@
      the recipe was running."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] :map]
      :delegates [workstream/deactivate! standing/activated?]})
+  (Operation chat-place
+    "Where a workstream's chat runs, as its session's name, or nil when it has none to offer: no
+     workstream of the project has that id, or it is closed and no chat's session record stands
+     on it. Reads only."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [workstream/read-ws session/read-session seats/chat-session]})
+  (Operation open-chat!
+    "Make the session a workstream's chat runs in ready for a conversation: on that workstream,
+     occupying no seat, up with no services."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
+     :delegates [seats/chat-session!]})
   (Operation start!
     "Bring a session up on the workstream holding it — a fresh one-off when none does — and on that
      workstream's runtime. The workstream is settled first so the session comes up on its runtime

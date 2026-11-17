@@ -92,6 +92,16 @@
      the conductor, whose word reaches a seat only as a decided instruction (post!)."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:message :map]] :map]
      :delegates [rseats/seats]})
+  (Operation chat-session
+    "The name of the session a workstream's chat runs in, whether or not it exists yet."
+    {:signature [:=> [:catn [:ws-id WorkstreamId]] SessionName]})
+  (Operation chat-session!
+    "Make the session a workstream's chat runs in ready for a conversation: its one record, marked
+     the chat's and occupying no seat, created when absent; and its working copy brought up when it
+     is down, on the workstream's runtime with no services. Refused on a closed workstream no chat
+     was held on, and for an id that names none. nido drives no conversation on the record."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
+     :delegates [ws/read-ws lifecycle/runtime-of lifecycle/up!]})
   (Operation default-embodiment
     "The whole seat's embodiment, as the data occupancy takes: its occupant's session named for
      the workstream, briefed to work the recipe's next stage — unless it is a person's step, which

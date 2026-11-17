@@ -17,6 +17,8 @@
    its record archived, save one carried from a person's or a Run's start, which is released to
    them instead — and the conductor's continues. The conductor is retired only with its
    workstream, its record kept, and started again on the same record if the workstream reopens.
+   A workstream's chat runs in one more session that occupies no seat (`chat-session!`): a
+   record marked the chat's, brought up like the conductor's, on which nido drives nothing.
 
    A first brief is built from records — the seat, its interface, its open tensions, the accords
    that settled tensions it was party to, and what the generation inherited — never from another
@@ -92,9 +94,9 @@
 (defn- conductor-name [ws-id] (str ws-id "--conductor"))
 
 (defn- conductor-profile
-  "The profile a conductor comes up with: a working copy of its own, made as the project's :full
-   profile makes one, and no services. A conductor instructs seats and reads code; it runs no app,
-   and a runtime it is the last member of runs nothing."
+  "The profile a conductor comes up with, and a workstream's chat: a working copy of its own, made
+   as the project's :full profile makes one, and no services. Each reads code and runs nido's
+   verbs; neither runs an app, and a runtime one is the last member of runs nothing."
   [project]
   (assoc (profiles/resolve-profile (name project) :full) :services []))
 
@@ -660,6 +662,39 @@
         (lifecycle/down! n {:project (name project)}))
       {:session n})
     {}))
+
+(defn ^{:malli/schema [:=> [:cat :WorkstreamId] :SessionName]}
+  chat-session
+  "The name of the session workstream `ws-id`'s chat runs in, whether or not it exists yet."
+  [ws-id]
+  (str ws-id "--chat"))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  chat-session!
+  "Make the session the workstream's chat runs in ready for a conversation: its one record,
+   marked the chat's and occupying no seat, created when absent and made live when archived; and
+   its working copy brought up when it is down, on the workstream's runtime with no services
+   (`conductor-profile`). A session already up is left as it is. Refused (:closed) on a closed
+   workstream no chat was held on — one whose chat's record stands keeps its chat — and
+   (:no-workstream) for an id that names none. nido drives no conversation on the
+   record: the chat's is the caller's to run. Answers {:session}."
+  [project ws-id]
+  (when-not (ws/read-ws project ws-id)
+    (throw (ex-info (str "No workstream " ws-id " in " (name project)) {:reason :no-workstream :ws-id ws-id})))
+  (when-not (:chat (session/read-session project ws-id (chat-session ws-id)))
+    (refuse-closed! project ws-id))
+  (serially
+   project ws-id
+   (fn []
+     (let [n    (chat-session ws-id)
+           c    (session/read-session project ws-id n)
+           opts {:project (name project) :runtime-key ws-id}]
+       (cond
+         (nil? c)               (session/create! project ws-id {:name n :weight :heavy :autonomy nil :chat true})
+         (not (session/live? c)) (session/write! (assoc c :substrate :live)))
+       (when-not (lifecycle/runtime-of n opts)
+         (lifecycle/up! n (assoc opts :profile (conductor-profile project))))
+       {:session n}))))
 
 (defn ^{:malli/schema [:=> [:cat] :map]}
   default-embodiment

@@ -180,9 +180,12 @@
   "Chrome context: the slice or page that is `active`, the focused project, the
    Needs-you badge — the screen's needs-count, which counts every project's
    gates, so the badge and the Needs-you list always agree — and the chat's side
-   panel as the request's page last left it."
+   panel as the request's page last left it, for the place the page shows: the
+   workstream the screen has selected, when it is drawing one."
   [req active focus screen]
-  {:side-chat   (side-chat/panel (side-chat/open? req))
+  {:side-chat   (side-chat/panel (side-chat/open? req)
+                                 (when (:ws (:selection screen))
+                                   (select-keys (:selection screen) [:project :ws-id])))
    :active      active
    :scope       focus
    :needs-count (:needs-count screen)

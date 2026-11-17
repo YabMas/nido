@@ -22,10 +22,6 @@
   "Every page the server draws through the shell with the dashboard's context, other than the component catalog — Needs, Workstreams with or without a workstream selected, Operations and its subpages, Development, and the Domain, Functionality and Structure slices — carries the dashboard chat's side panel, which the server puts into that context. The catalog carries its own chat and not the dashboard's."
   {:about [ui-views ui-server ui-side-chat] :evidence "round"})
 
-(Claim one-dashboard-conversation
-  "The dashboard chat's panel shows one conversation, in nido's operator session, on whichever page carries it, so a message sent from one page is in the panel on every other."
-  {:about [ui-side-chat session-chat] :evidence "round"})
-
 (Claim message-names-its-page
   "Every message the dashboard chat sends carries a reference naming the title and path of the page it was sent from, which the agent reads with the message."
   {:about [ui-side-chat] :evidence "round"})

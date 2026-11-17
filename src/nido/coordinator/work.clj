@@ -3563,6 +3563,28 @@
     (cws/deactivate! p ws-id session)
     {:ws-id ws-id :was? was?}))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  chat-place
+  "Where the chat of workstream `ws-id` runs, as {:session <name>}, or nil when it has none to
+   offer: no workstream of the project has that id, or it is closed and no chat was ever held on
+   it — a closed one keeps the chat whose session record still stands. Reads only; on an open
+   workstream the session need not exist yet (`open-chat!`)."
+  [project ws-id]
+  (let [p (keyword (name project))
+        w (cws/read-ws p ws-id)
+        n (seats/chat-session ws-id)]
+    (when (and w (or (not (cws/closure w)) (:chat (csession/read-session p ws-id n))))
+      {:session n})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  open-chat!
+  "Make the session workstream `ws-id`'s chat runs in ready for a conversation: on that
+   workstream, occupying no seat, up with no services. Slow the first time, when it makes the
+   working copy. Throws, naming why in :reason, for no such workstream, or a closed one no chat
+   was held on. Answers {:session}."
+  [project ws-id]
+  (seats/chat-session! (keyword (name project)) ws-id))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :any]}
   start!
   "Bring the session `session-name` up on the workstream holding it — a fresh one-off when none

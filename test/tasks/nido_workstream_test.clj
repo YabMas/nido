@@ -249,3 +249,11 @@
     (is (= ["ws-live" "ws-done" "2"]
            (mapv #(first (str/split % #"\s+")) (list-out rows {:all true})))
         ":all adds settled work; a ticket no workstream covers has no id and is never listed")))
+
+(deftest tell-passes-the-chats-word-to-the-conductor-of-the-workstream-it-runs-in
+  (let [told (atom [])]
+    (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian "ws-9"])
+                  nido.coordinator.lane.conductor/tell!  (fn [p id text] (swap! told conj [p id text]) {:id "hb-1"})]
+      (let [out (with-out-str (task/tell* {:text "drop the export"}))]
+        (is (= [[:brian "ws-9" "drop the export"]] @told) "the workstream is the one the chat's session is on")
+        (is (str/includes? out "hand-back hb-1"))))))

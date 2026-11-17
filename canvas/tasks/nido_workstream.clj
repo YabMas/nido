@@ -7,6 +7,7 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.conductor :as conductor]
             [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.coordinator.work :as work]
@@ -80,6 +81,14 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation layer-complete-cmd
     "bb nido:workstream:layer:complete — the entry point for `layer-complete*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation tell*
+    "Pass word on to the conductor of the workstream whose chat this runs in, and print the id of
+     the hand-back it became."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [conductor/tell!]})
+  (Operation tell-cmd
+    "bb nido:workstream:tell — the entry point for `tell*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation blocker-answer-cmd
     "bb nido:workstream:blocker:answer — the entry point for `blocker-answer*`."

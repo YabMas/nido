@@ -5,6 +5,7 @@
   (:require
    [clojure.edn :as edn]
    [clojure.string :as str]
+   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.view.workstreams :as wsv]
@@ -414,6 +415,18 @@
     (ws/append-entry! p id {:kind :blocker-answered}
                       (pr-str {:format :blocker-answered :blocker-seq n :summary (str answer)}))))
 
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  tell*
+  "Pass :text on to the conductor of the workstream whose chat this runs in, and print the id of
+   the hand-back it became. Refused anywhere else."
+  [{:keys [text] :as opts}]
+  (let [[p id] (here opts)
+        m      (conductor/tell! p id (str text))]
+    (println (str "hand-back " (:id m) " posted to " id "'s conductor"))
+    m))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  tell-cmd [& args] (run* tell* args #{:text}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   layer-complete-cmd [& args] (run* layer-complete* args #{:bookmark :commit :seat}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

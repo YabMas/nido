@@ -216,6 +216,85 @@
           (is (= [] (conductor/hand-backs! (assoc-in turn [:turn-ends 0 :session] (str id "--conductor"))))
               "the conductor's own turn is no hand-back"))))))
 
+(defn- refusal-of
+  "The :reason `f` throws with, or :none when it returns."
+  [f]
+  (try (f) :none (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))
+
+(deftest a-workstreams-chat-session-holds-no-seat-and-comes-up-without-services
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (seats/chat-session id)
+            ups  (atom [])
+            up?  (atom false)]
+        (launching [_]
+          (with-redefs [lifecycle/runtime-of (fn [_ _] (when @up? {:instance-id "brian--ws" :key id}))
+                        lifecycle/up!        (fn [n o] (swap! ups conj [n (:runtime-key o) (:services (:profile o))])
+                                               (reset! up? true))]
+            (is (= {:session c} (seats/chat-session! :brian id)))
+            (is (= [[c id []]] @ups) "brought up on the workstream's runtime, with no services")
+            (let [s (session/read-session :brian id c)]
+              (is (:chat s))
+              (is (nil? (:seat s)))
+              (is (nil? (:conductor s)))
+              (is (session/person? s) "a person talks there"))
+            (is (= {:session c} (seats/chat-session! :brian id)))
+            (is (= 1 (count @ups)) "a session already up is left as it is")
+            (is (= [] (seats/occupants :brian id)) "it occupies no seat")
+            (ws/close! :brian id :done nil :person)
+            (is (= {:session c} (seats/chat-session! :brian id)) "a closed workstream keeps the chat it had")
+            (let [[fresh] (workstream)]
+              (ws/close! :brian fresh :done nil :person)
+              (is (= :closed (refusal-of #(seats/chat-session! :brian fresh))) "and starts none"))
+            (is (= :no-workstream (refusal-of #(seats/chat-session! :brian "ws-none"))))))))))
+
+(deftest a-workstreams-chat-reaches-the-conductor-only-by-telling-it
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (seats/chat-session id)]
+        (session/create! :brian id {:name c :weight :heavy :autonomy nil :chat true})
+        (session/create! :brian id {:name "plain-one" :weight :heavy :autonomy nil})
+        (is (= [] (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session c :conversation "c-1"
+                                                       :event {:last-message "an answer to a question" :at "2026-11-17T10:00:00Z"}
+                                                       :instruction nil :run nil}]}))
+            "a chat turn's end is handed to no one")
+        (is (= :not-the-chat (refusal-of #(in-session "plain-one" (fn [] (conductor/tell! :brian id "go left"))))))
+        (is (= :not-the-chat (refusal-of #(in-session nil (fn [] (conductor/tell! :brian id "go left"))))))
+        (is (= :no-text (refusal-of #(in-session c (fn [] (conductor/tell! :brian id "  "))))))
+        (let [hb (in-session c #(conductor/tell! :brian id "The person wants the export dropped."))]
+          (is (= {:kind :hand-back :to :conductor :session c} (select-keys hb [:kind :to :turn :session]))
+              "a hand-back naming the chat's session, and no person's turn to answer in place")
+          (is (str/includes? (:text hb) "The person wants the export dropped."))
+          (is (= [(:id hb)] (mapv :id (seats/hand-backs :brian id))) "posted once, as a hand-back")
+          (is (not= (:id hb) (:id (in-session c #(conductor/tell! :brian id "The person wants the export dropped."))))
+              "the same words told again are another hand-back"))
+        (is (= :not-in-ensemble
+               (refusal-of #(in-session c (fn [] (seats/send! :brian id {:to :conductor :text "hello"})))))
+            "it still sends no seat message")))))
+
+(deftest a-chat-session-being-up-makes-no-workstream-live
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (seats/chat-session id)]
+        (session/create! :brian id {:name c :weight :heavy :autonomy nil :chat true})
+        (is (not (:live (pipeline/status :brian id #{c}))) "the chat's session is no work")
+        (session/create! :brian id {:name "plain-one" :weight :heavy :autonomy nil})
+        (is (:live (pipeline/status :brian id #{c "plain-one"})) "a person's working session still is")))))
+
+(deftest a-chat-tells-no-conductor-where-none-conducts
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)
+            c    (seats/chat-session id)]
+        (session/create! :brian id {:name c :weight :heavy :autonomy nil :chat true})
+        (is (= :not-activated (refusal-of #(in-session c (fn [] (conductor/tell! :brian id "go left"))))))
+        (ws/close! :brian id :done nil :person)
+        (is (= :closed (refusal-of #(in-session c (fn [] (conductor/tell! :brian id "go left"))))))
+        (is (= [] (seats/hand-backs :brian id)))))))
+
 (deftest a-hand-back-takes-one-decision-from-the-conductor
   (with-tmp
     (fn []

@@ -1,6 +1,7 @@
 (ns nido.ui.side-chat-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [nido.coordinator.work :as work]
             [nido.session.change :as change]
             [nido.session.chat :as chat]
             [nido.ui.server :as server]
@@ -23,7 +24,7 @@
 
 (deftest every-page-carries-the-panel-as-the-person-left-it
   (with-redefs [chat/transcript (constantly {:items [] :busy? false})]
-    (let [page (fn [open?] (views/shell {:title "Workstreams" :side-chat (side-chat/panel open?)}
+    (let [page (fn [open?] (views/shell {:title "Workstreams" :side-chat (side-chat/panel open? nil)}
                                         [:h1 "Workstreams"]))]
       (testing "closed"
         (let [p (page false)]
@@ -34,6 +35,46 @@
         (is (str/includes? (page true) "class=\"chat-side open\"")))
       (testing "a page without a chat has none"
         (is (not (str/includes? (views/shell {:title "x"} [:p]) "<aside")))))))
+
+(deftest the-place-a-page-shows-chooses-the-conversation
+  (let [asked (atom [])]
+    (with-redefs [chat/transcript (fn [c] (swap! asked conj (select-keys c [:project :session :name]))
+                                    {:items [] :busy? false})
+                  work/chat-place (fn [_ ws-id] (when (= "ws-open" ws-id) {:session "ws-open--chat"}))]
+      (testing "no place: nido's operator"
+        (let [p (str (views/shell {:title "Needs" :side-chat (side-chat/panel true nil)} [:p]))]
+          (is (re-find #"[^a-z]/_chat/stream" p))
+          (is (= {:project "nido" :session "operator" :name "operator"} (last @asked)))))
+      (testing "an open workstream: its own chat, under a path naming it"
+        (let [p (str (views/shell {:title "Workstreams"
+                                   :side-chat (side-chat/panel true {:project "brian" :ws-id "ws-open"})}
+                                  [:p]))]
+          (is (str/includes? p "/_chat/ws/brian/ws-open/stream"))
+          (is (not (re-find #"[^a-z0-9]/_chat/stream" p)))
+          (is (= {:project "brian" :session "ws-open--chat" :name "workstream"} (last @asked)))))
+      (testing "a workstream with no chat to offer — closed, or a row no workstream stands behind: the operator"
+        (side-chat/panel true {:project "brian" :ws-id "ws-closed"})
+        (is (= "operator" (:session (last @asked))))))))
+
+(deftest a-workstreams-chat-is-briefed-on-its-workstream-and-brought-up-through-the-work-plane
+  (let [sent (atom nil) opened (atom [])]
+    (with-redefs [work/chat-place (fn [_ _] {:session "ws-1--chat"})
+                  work/open-chat! (fn [p id] (swap! opened conj [p id]) {:session "ws-1--chat"})
+                  chat/send!      (fn [c text _] (reset! sent [c text]) true)]
+      (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-1/send"
+                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"nidochatText\": \"where does it stand?\"}"))})
+      (let [[c text] @sent]
+        (is (= "where does it stand?" text))
+        (is (= {:project "brian" :session "ws-1--chat" :name "workstream"} (select-keys c [:project :session :name])))
+        (is (str/includes? (:instructions c) "workstream ws-1 of project brian") "it is told which workstream it is in")
+        (is (str/includes? (:instructions c) "nido:workstream:tell") "and how its word reaches the conductor")
+        ((:ready! c) c)
+        (is (= [["brian" "ws-1"]] @opened) "its session is the work plane's to bring up")))))
+
+(deftest a-workstream-path-with-no-chat-is-not-the-operators
+  (with-redefs [work/chat-place (constantly nil)
+                chat/cancel!    (fn [_] (throw (ex-info "the operator's turn was cancelled" {})))]
+    (is (nil? (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-gone/cancel"})))))
 
 (deftest the-chat-answers-only-its-own-paths
   (is (nil? (side-chat/handle! {:request-method :get :uri "/workstreams"})))
