@@ -508,8 +508,9 @@
 
 (defn- gh-api-pr-merge
   "`{:verb \"api\"}` when `words` are a `gh api` call that writes (`writes?`) and may merge a pull
-   request — a `pulls/<n>/merge` path, a GraphQL query naming a merge or whose body the gate cannot
-   read (one read from a file or stdin, by `--input` or a field's `@`), or any call with a word the
+   request — a `pulls/<n>/merge` path, a GraphQL query naming a merge or a merge-queue enqueue
+   (`enqueuePullRequest`) or whose body the gate cannot read (one read from a file or stdin, by
+   `--input` or a field's `@`), or any call with a word the
    gate cannot read, which may stand for either; else nil. Any other write to a pull request opens
    or edits it, which is not a merge."
   [words]
@@ -519,7 +520,7 @@
                  (or (some #{:opaque} args)
                      (some #(re-find #"pulls/[^/\s]+/merge" %) args)
                      (and (some #(re-find #"(?i)(^|/)graphql/?$" %) args)
-                          (some #(re-find #"(?i)merge|=@|^@|^--input" %) args))))
+                          (some #(re-find #"(?i)merge|enqueue|=@|^@|^--input" %) args))))
         {:verb "api"}))))
 
 (defn- nido-task
@@ -555,7 +556,7 @@
    {:words ["gh" "api"]
     :read  (fn [words _] (some-> (gh-api-pr-merge words) (assoc :kind :gh-pr)))}
    {:words ["nido" ":"]
-    :read  (fn [words _] (some-> (nido-task words) (assoc :kind :nido-task)))}])
+    :read  (fn [words dir] (some-> (nido-task words) (assoc :kind :nido-task :dir dir)))}])
 
 (def ^:private act-named
   "Whether a word names, as text, an act `act-readers` reads: its words in order."
@@ -567,16 +568,19 @@
 
 (defn- acts*
   "`acts`, in a directory nil when a `cd` left it unknown — as a command line handed to a shell is
-   read, in whatever directory its own line left."
+   read, in whatever directory its own line left. A line with a `(` may hold a subshell, whose `cd`
+   does not outlast it, and segments carry no such scope: there any `cd` leaves the directory
+   unknown, as `pushd` and `popd` always do."
   [command cwd]
   (loop [[ws & more] (map strip-prefix (segments (tokenize command)))
          dir cwd
          out []]
     (if (nil? ws)
       out
-      (if (= "cd" (first ws))
+      (if (#{"cd" "pushd" "popd"} (first ws))
         (let [to (second ws)]
-          (recur more (when (and dir (string? to) (not= "-" to))
+          (recur more (when (and dir (= "cd" (first ws)) (not (str/includes? command "("))
+                                 (string? to) (not= "-" to))
                         (str (fs/normalize (fs/path dir (str/replace to #"^~(?=/|$)" (System/getProperty "user.home"))))))
                  out))
         (let [direct (fn [words] (some #((:read %) words dir) act-readers))
@@ -599,7 +603,8 @@
   "What a Bash command run in `cwd` would do that a caller judges on its own terms, in order — one
    act per reader of `act-readers`: `{:kind :gh-pr :verb v}` for each `gh pr <verb>`, and
    `{:kind :gh-pr :verb \"api\"}` for each `gh api` write that may merge a pull request
-   (`gh-api-pr-merge`); `{:kind :nido-task :task t :args [word …]}` for each nido task it runs; and
+   (`gh-api-pr-merge`); `{:kind :nido-task :task t :args [word …] :dir d}` for each nido task it
+   runs, `d` the directory it runs in — nil when a `cd` left it unknown; and
    `{:kind :unread :what <why>}` for each of these it cannot read: a later word naming one, unless
    it is a command line handed to a shell that yields one. Each is found wherever its program
    stands, so a wrapper (`nice`, `env` …) hides none."

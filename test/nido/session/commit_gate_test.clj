@@ -39,6 +39,7 @@
   (testing "a gh api write that may merge a pull request, and no other"
     (doseq [cmd ["gh api -X PUT repos/o/r/pulls/1/merge"
                  "gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"
+                 "gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){clientMutationId}}' -f id=PR_x"
                  "gh api graphql -F query=@q.graphql"
                  "gh api graphql --input /tmp/request.json"
                  "gh api graphql --input -"
@@ -54,8 +55,13 @@
                  "gh api graphql -f query='{ viewer { login } }'"]]
       (is (= [] (gate/acts cmd "/s")) cmd)))
   (testing "a nido task, by bb or by the shell wrapper, with its arguments"
-    (is (= [{:kind :nido-task :task "nido:design:approve" :args [":design-seq" "4"]}]
+    (is (= [{:kind :nido-task :task "nido:design:approve" :args [":design-seq" "4"] :dir "/s"}]
            (gate/acts "bb --config /n/bb.edn nido:design:approve :design-seq 4" "/s")))
+    (is (= ["/t/b" nil] (map :dir (gate/acts "cd ../b && bb nido:workstream:pr:land :pr 7; cd \"$D\" && nido workstream:pr:land :pr 7" "/t/a")))
+        "in the directory it runs in — nil when a `cd` left it unknown")
+    (is (= [nil] (map :dir (gate/acts "cd ../b && (cd ../a); bb nido:workstream:pr:land :pr 7" "/t/a")))
+        "a subshell's cd does not outlast it, and the gate reads no such scope: the directory is unknown")
+    (is (= [nil] (map :dir (gate/acts "pushd ../b && bb nido:workstream:pr:land :pr 7" "/t/a"))))
     (is (= ["nido:workstream:close"] (map :task (gate/acts "nido workstream:close" "/s")))))
   (testing "a push is no act"
     (is (= [] (gate/acts "jj git push -b main" "/s")))

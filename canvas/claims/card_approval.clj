@@ -14,5 +14,5 @@
   {:about [resolve-gate! grant-design!] :evidence "test"})
 
 (Claim options-grant-only-the-goal
-  "A blocker option may hand the person's act to a seat only for :intent, under :grants; it approves a design only by naming that design under :approves-design, never under :grants. The card says beside the option what picking it approves or hands over, and the conductor's brief tells it to mark an approving option with the design it approves and never to ask again or hand the person a command for that approval."
+  "A blocker option may hand the person's act to a seat only for :intent or :merge, under :grants; it approves a design only by naming that design under :approves-design, never under :grants. The card says beside the option what picking it approves or hands over, and the conductor's brief tells it to mark an approving option with the design it approves and never to ask again or hand the person a command for that approval."
   {:about [coordinator-report report-ask lane-conductor] :evidence "test"})

@@ -108,9 +108,12 @@
      :delegates [prompted seats/reseat! seats/held seats/default-embodiment seats/occupy! embodied-strata/carry! embodied-strata/refused? drive/park!]})
   (Operation tell!
     "Pass word on to the workstream's conductor from the workstream's chat, which it must run in:
-     posted once as a hand-back naming the chat's session. Refused from
-     any other session, for blank text, and on a workstream that is closed or not activated."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:text :string]] :map]
+     posted once as a hand-back naming the chat's session — and, when the person's word grants the
+     seats an act, recorded first as their :grant, whose hand-back it then is. Refused from
+     any other session, for blank text, for a grant of an act no grant may hand, and on a
+     workstream that is closed or not activated."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:text :string]
+                      [:grants [:? [:maybe [:sequential :keyword]]]]] :map]
      :delegates [session/read-session workstream/read-ws standing/activated? seats/post!]})
   (Operation hand-backs!
     "From one conduct pass's report, log to an activated workstream's conductor each turn end of a

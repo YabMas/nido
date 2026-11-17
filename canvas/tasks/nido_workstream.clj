@@ -11,6 +11,7 @@
             [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.coordinator.work :as work]
+            [canvas.integration.github :as github]
             [fukan.common.typing.malli]))
 
 (Module nido-workstream
@@ -87,6 +88,15 @@
      the hand-back it became."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [conductor/tell!]})
+  (Operation pr-land*
+    "Land the workstream's own pull request — the :github ref :pr names, read off the workstream of
+     the session this runs in — through the GitHub adapter; refused, landing nothing, for a PR the
+     workstream has no ref for."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [workstream/own-pr github/land-pr!]})
+  (Operation pr-land-cmd
+    "bb nido:workstream:pr:land — the entry point for `pr-land*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation tell-cmd
     "bb nido:workstream:tell — the entry point for `tell*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

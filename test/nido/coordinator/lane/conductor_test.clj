@@ -1070,8 +1070,123 @@
             (is (some? (in "fix-it" "bb nido:workstream:entry:add :project brian :ws-id ws-other :kind intent"))
                 "to its own workstream only")
             (is (some? (in c append)) "to a seat, never the conductor")
+            (testing "its own workstream as each task reads its arguments"
+              (let [[other] (workstream)]
+                (ws/add-ref! :brian id {:adapter :notion :id "BR-1"})
+                (ws/add-ref! :brian other {:adapter :notion :id "BR-2"})
+                (is (nil? (in "fix-it" "bb nido:ticket:append :project brian :br BR-1 :kind intent")) "by its ticket")
+                (is (nil? (in "fix-it" "bb nido:workstream:entry:add :project brian :ref BR-1 :kind intent")) "by its ref")
+                (is (some? (in "fix-it" (str "bb nido:ticket:append :project brian :ws-id " id " :br BR-2 :kind intent")))
+                    "ticket:append writes where :br points, whatever :ws-id says")
+                (is (some? (in "fix-it" "bb nido:workstream:entry:add :project brian :br BR-1 :ref BR-2 :kind intent"))
+                    "entry:add writes where :ref points, whatever :br says")))
             (add :intent {:format :intent :goal "narrowed" :done-when ["d"] :supersedes {:seq 1 :why "narrowed"}})
             (is (some? (in "fix-it" append)) "one amendment: once written, the grant is spent")))))))
+
+(deftest a-merge-grant-lets-a-seat-land-its-own-pr-once
+  ;; brian ws-20261116-43c620, entry 185: the person said /land, the seat did everything else, and
+  ;; the gate refused its enqueue — the landing came back to the person as a command to paste.
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            c        (str id "--conductor")
+            in       (fn [n command]
+                       (in-session n #(conductor/refusal {:tool_name "Bash" :cwd "/wt" :tool_input {:command command}})))
+            land     "bb nido:workstream:pr:land :pr brian-study/brian#412"]
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#412" :url "u412"})
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id "fix-it" "conv" {:token "t" :at "t" :via :send :seen? true})
+        (prompted! "conv" "land it\n\n[nido-send t]")
+        (is (some? (in "fix-it" land)) "without a grant, the landing is the person's")
+        (is (str/includes? (in "fix-it" "gh pr merge 412 --auto") "Escalate")
+            "and a raw merge is refused with the escalation it always was")
+        (let [blocker (add :blocker {:format :blocker :summary "s" :needs "land it?" :after "The seat lands it."})]
+          (add :blocker-answered {:format :blocker-answered :blocker-seq blocker :summary "land it"
+                                  :letter "A" :label "Land it" :grants [:merge]}))
+        (is (nil? (in "fix-it" land)) "the option the person picked grants the landing of its own PR")
+        (is (nil? (in "fix-it" "bb nido:workstream:pr:land :pr 412")) "named by its number alone too")
+        (is (some? (in "fix-it" "bb nido:workstream:pr:land :pr brian-study/brian#413"))
+            "a PR the workstream does not record is refused under the grant")
+        (is (some? (in "fix-it" "bb nido:workstream:pr:land :pr other/repo#412")) "and one of another repository")
+        (is (some? (in "fix-it" (str land " :ws-id ws-other"))) "and one named for another workstream")
+        (is (some? (in "fix-it" "bb nido:workstream:pr:land :pr $PR")) "and one the gate cannot read")
+        (is (some? (in c land)) "to a seat, never the conductor")
+        (let [raw (in "fix-it" "gh pr merge 412 --auto")]
+          (is (some? raw) "no grant admits a raw merge")
+          (is (str/includes? raw "nido:workstream:pr:land") "its refusal names the verb the grant admits"))
+        (is (some? (in "fix-it" "gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}'"))
+            "nor a raw enqueue")
+        (is (some? (in "fix-it" "bb nido:workstream:ref:add :adapter github :id other/repo#9"))
+            "nor may the seat make another PR its own while the grant stands")
+        (is (some? (in "fix-it" (str "bb nido:workstream:close :project brian :ws-id " id " :outcome done")))
+            "closing stays the person's under it")
+        (is (some? (in "fix-it" (str "bb nido:design:approve :project brian :ws-id " id " :design-seq 1")))
+            "and approving a design")
+        (is (some? (in "fix-it" (str "bb nido:workstream:entry:add :project brian :ws-id " id " :kind merged")))
+            "and recording the landing")
+        (is (some? (in "fix-it" (str "bb nido:workstream:entry:add :project brian :ws-id " id " :kind grant")))
+            "and granting itself more")
+        (testing "the workstream the landing runs in, not the session the hook was given"
+          (let [[other] (workstream)]
+            (ws/add-ref! :brian other {:adapter :github :id "other/repo#412" :url "o412"})
+            (session/create! :brian other {:name "elsewhere" :weight :heavy :autonomy nil})
+            (driving other "elsewhere" "conv2" {:token "t2" :at "t" :via :send :seen? true})
+            (prompted! "conv2" "record it\n\n[nido-send t2]")
+            (with-redefs [lifecycle/session-from-cwd (fn [& [d]] ({"/wt" {:project "brian" :session "fix-it"}
+                                                                   "/other" {:project "brian" :session "elsewhere"}} d))
+                          lifecycle/session-home-coords-from-cwd (fn [& _] nil)]
+              (let [run (fn [command] (conductor/refusal {:tool_name "Bash" :cwd "/wt" :tool_input {:command command}}))]
+                (is (nil? (run land)) "its own, from its own worktree")
+                (is (some? (run "cd /other && bb nido:workstream:pr:land :pr 412"))
+                    "a cd into another workstream's worktree lands that workstream's PR, which no grant reaches")
+                (is (some? (run "cd \"$W\" && bb nido:workstream:pr:land :pr 412"))
+                    "nor one a cd left unknown")
+                (is (some? (run "cd /other && (cd /wt); bb nido:workstream:pr:land :pr 412"))
+                    "nor one a subshell's cd would seem to bring back")))
+            (is (some? (in "elsewhere" (str "bb nido:workstream:ref:add :project brian :ws-id " id
+                                            " :adapter github :id other/repo#9")))
+                "a session of another workstream adds no ref to the granted one")))
+        (is (some? (in c (str "bb nido:workstream:ref:add :project brian :ws-id " id " :adapter github :id other/repo#9")))
+            "nor does the conductor, whose workstream holds the grant its seats exercise")
+        (doseq [cmd [(str "cd /chat && bb nido:workstream:tell :project brian :ws-id " id " :text 'land it' :grants merge")
+                     "bb nido:workstream:tell :text 'land it' :GRANTS merge"
+                     "bb nido:workstream:tell :text x \"$K\" merge"]]
+          (is (some? (in c cmd)) (str "no conductor turn records the person's grant: " cmd))
+          (is (some? (in "fix-it" cmd)) (str "nor a seat's on its instruction: " cmd)))
+        (is (nil? (in c "bb nido:workstream:tell :text 'see the PR'")) "word with no grant is no act of the person's")
+        (let [raw (in c "gh pr merge 412 --auto")]
+          (is (some? raw) "the conductor merges nothing under it")
+          (is (str/includes? raw "nido:workstream:pr:land") "and is told the verb its seats land with"))
+        (add :merged {:format :merged :pr "brian-study/brian#412" :url "u412" :title "t"})
+        (is (some? (in "fix-it" land)) "one landing: once it is recorded, the grant is spent")
+        (is (nil? (in c (str "bb nido:workstream:ref:add :project brian :ws-id " id " :adapter github :id other/repo#9")))
+            "a spent grant restricts no ref")))))
+
+(deftest a-grant-the-chat-recorded-from-the-persons-word-lets-the-seat-land
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            in   (fn [n command]
+                   (in-session n #(conductor/refusal {:tool_name "Bash" :cwd "/wt" :tool_input {:command command}})))
+            land "bb nido:workstream:pr:land :pr brian-study/brian#412"]
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#412" :url "u412"})
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (session/create! :brian id {:name "chat" :weight :light :autonomy nil :chat true})
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id "fix-it" "conv" {:token "t" :at "t" :via :send :seen? true})
+        (prompted! "conv" "land it\n\n[nido-send t]")
+        (in-session "chat" #(conductor/tell! :brian id "please land it" nil))
+        (is (some? (in "fix-it" land)) "word passed on with no grant grants nothing — its text is not read")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"stays the person's own"
+                              (in-session "chat" #(conductor/tell! :brian id "close it" [:closed])))
+            "closing cannot be granted")
+        (let [m (in-session "chat" #(conductor/tell! :brian id "/land" [:merge]))
+              g (last (ws/entries-of :brian id :grant))]
+          (is (= [:merge] (:grants g)) "the person's word is recorded as their grant")
+          (is (= "/land" (:words g)) "with what they said")
+          (is (= (str "act:" (:seq g)) (:key m)) "and passed on as that act's one hand-back"))
+        (is (nil? (in "fix-it" land)) "the seat then lands its own PR")))))
 
 (deftest a-start-gives-its-first-instruction-unless-the-conductor-asked-for-it
   (with-tmp

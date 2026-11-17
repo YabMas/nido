@@ -253,7 +253,54 @@
 (deftest tell-passes-the-chats-word-to-the-conductor-of-the-workstream-it-runs-in
   (let [told (atom [])]
     (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian "ws-9"])
-                  nido.coordinator.lane.conductor/tell!  (fn [p id text] (swap! told conj [p id text]) {:id "hb-1"})]
+                  nido.coordinator.lane.conductor/tell!  (fn [p id text grants] (swap! told conj [p id text grants]) {:id "hb-1"})]
       (let [out (with-out-str (task/tell* {:text "drop the export"}))]
-        (is (= [[:brian "ws-9" "drop the export"]] @told) "the workstream is the one the chat's session is on")
-        (is (str/includes? out "hand-back hb-1"))))))
+        (is (= [[:brian "ws-9" "drop the export" nil]] @told) "the workstream is the one the chat's session is on")
+        (is (str/includes? out "hand-back hb-1")))
+      (task/tell* {:text "/land" :grants 'merge})
+      (is (= [:merge] (last (last @told))) "the person's grant is passed on as the acts it names"))))
+
+(deftest pr-land-lands-only-the-workstreams-own-pr
+  (with-tmp
+    (fn [_]
+      (let [w      (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#412"}
+                                                       {:adapter :github :id "other/repo#7"}
+                                                       {:adapter :github :id "brian-study/brian#7"}]})
+            landed (atom [])]
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian (:id w)])
+                      nido.github.client/land-pr! (fn [repo n] (swap! landed conj [repo n]) {:status :ok :via :queue})]
+          (is (= {:status :ok :via :queue :pr "brian-study/brian#412"}
+                 (task/pr-land* {:pr "brian-study/brian#412"})))
+          (is (= [["brian-study" "brian" ] ] (map #(vec (take 2 (str/split (first %) #"/"))) @landed))
+              "the repository is the ref's")
+          (is (= 412 (second (first @landed))) "and so is the number")
+          (task/pr-land* {:pr "412"})
+          (is (= 2 (count @landed)) "a bare number names the one ref that has it")
+          (doseq [pr ["7" "brian-study/brian#413" "elsewhere/brian#412" nil]]
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not one workstream"
+                                  (task/pr-land* {:pr pr}))
+                (str (pr-str pr) " is refused")))
+          (is (= 2 (count @landed)) "and nothing it refused reached gh"))
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] nil)
+                      nido.github.client/land-pr! (fn [& _] (swap! landed conj :called) {:status :ok})]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No workstream here"
+                                (task/pr-land* {:pr "412"})))
+          (is (= 2 (count @landed)) "outside every workstream, nothing lands"))))))
+
+(deftest a-blocker-answer-carries-the-grant-the-person-gave-in-words
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :blocker}
+                          (pr-str {:format :blocker :summary "s" :needs "land it?" :after "a"}))
+        (task/blocker-answer* {:project "brian" :ws-id id :answer "yes, land it" :grants 'merge})
+        (is (= [:merge] (:grants (last (ws/entries-of :brian id :blocker-answered)))))
+        (ws/append-entry! :brian id {:kind :blocker}
+                          (pr-str {:format :blocker :summary "s" :needs "close it?" :after "a"}))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"stays the person's own"
+                              (task/blocker-answer* {:project "brian" :ws-id id :answer "close" :grants [:closed]}))
+            "closing cannot be granted")
+        (task/blocker-answer* {:project "brian" :ws-id id :answer "land it, please"})
+        (is (nil? (:grants (last (ws/entries-of :brian id :blocker-answered))))
+            "words with no :grants grant nothing — the text is not read")))))

@@ -17,6 +17,7 @@
    [nido.coordinator.lane.backfill :as backfill]
    [nido.review.stages :as stages]
    [nido.coordinator.work :as work]
+   [nido.github.client :as github]
    [tasks.nido-attach :as attach]))
 
 (defn- resolve-ws-id
@@ -398,12 +399,29 @@
     (into [] (comp (filter #(= :blocker (:kind %))) (map :seq) (remove answered))
           (:entries (ws/read-ws p id)))))
 
+(defn- grants-opt
+  "The acts a `:grants` option names — one word, or a vector of them, colon or none — as keywords,
+   or nil when none is given. One no grant may hand (report/grantable-kinds) is refused: it stays
+   the person's own."
+  [v]
+  (when (some? v)
+    (let [ks (->> (if (sequential? v) v [v])
+                  (map #(keyword (str/replace (str (if (keyword? %) (name %) %)) #"^:" "")))
+                  distinct vec)]
+      (when-let [bad (seq (remove report/grantable-kinds ks))]
+        (throw (ex-info (str "Only " (str/join ", " (map name (sort report/grantable-kinds)))
+                             " may be granted; " (str/join ", " (map name bad)) " stays the person's own")
+                        {:grants ks})))
+      (not-empty ks))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   blocker-answer*
   "Record a person's answer, in their words, to a blocker — :blocker-seq, else the newest one
    nothing has answered. A :blocker-seq that names no unanswered blocker is refused: an answer
-   recorded against it would answer nothing now, or a blocker nobody has yet asked."
-  [{:keys [answer blocker-seq] :as opts}]
+   recorded against it would answer nothing now, or a blocker nobody has yet asked. :grants names
+   the acts the person's answer hands the seats (`grants-opt`), passed because they said so — the
+   words are not read for one."
+  [{:keys [answer blocker-seq grants] :as opts}]
   (let [[p id] (here opts)
         owed   (unanswered-blockers p id)
         n      (or blocker-seq (peek owed)
@@ -412,18 +430,58 @@
       (throw (ex-info "No unanswered blocker at that seq" {:ws-id id :blocker-seq n :unanswered owed})))
     (when (str/blank? (str answer))
       (throw (ex-info "An answer is the person's words — pass :answer \"…\"" {:ws-id id})))
-    (ws/append-entry! p id {:kind :blocker-answered}
-                      (pr-str {:format :blocker-answered :blocker-seq n :summary (str answer)}))))
+    (let [gs (grants-opt grants)]
+      (ws/append-entry! p id {:kind :blocker-answered}
+                        (pr-str (cond-> {:format :blocker-answered :blocker-seq n :summary (str answer)}
+                                  gs (assoc :grants gs)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   tell*
   "Pass :text on to the conductor of the workstream whose chat this runs in, and print the id of
-   the hand-back it became. Refused anywhere else."
-  [{:keys [text] :as opts}]
+   the hand-back it became. :grants names the acts the person's word hands the seats
+   (`grants-opt`), recorded as their grant before the word is passed on. Refused anywhere else."
+  [{:keys [text grants] :as opts}]
   (let [[p id] (here opts)
-        m      (conductor/tell! p id (str text))]
+        m      (conductor/tell! p id (str text) (grants-opt grants))]
     (println (str "hand-back " (:id m) " posted to " id "'s conductor"))
     m))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  pr-land*
+  "Land the pull request :pr names — `owner/repo#n`, or `n` when one ref has that number — when it
+   is the own PR (`ws/own-pr`) of the workstream of the session this runs in, through
+   github/land-pr!; answer its result. A PR that workstream does not record, or a directory in no
+   session's workstream, is refused before anything reaches gh. The workstream is read from the
+   directory and never named, so this lands no other workstream's PR."
+  [{:keys [pr]}]
+  (let [[p id] (or (stages/project+ws-from-cwd (System/getProperty "user.dir"))
+                   (throw (ex-info "No workstream here — run from a session's worktree or session home"
+                                   {:reason :no-workstream :cwd (System/getProperty "user.dir")})))
+        w      (ws/read-ws p id)
+        ref    (when (some? pr) (ws/own-pr w (str pr)))]
+    (when-not ref
+      (throw (ex-info (str "PR " (pr-str pr) " is not one workstream " id " records as its own; its PRs: "
+                           (or (some->> (filter #(= :github (:adapter %)) (:external-refs w))
+                                        (map :id) seq (str/join ", "))
+                               "none"))
+                      {:reason :not-own :pr pr :ws-id id})))
+    (let [[_ repo n] (re-find #"^(.+)#(\d+)$" (:id ref))]
+      (assoc (github/land-pr! repo (parse-long n)) :pr (:id ref)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  pr-land-cmd
+  "bb nido:workstream:pr:land :pr <owner/repo#n | n> — exits non-zero, printing why, when the PR
+   is not the workstream's own or GitHub refuses it."
+  [& args]
+  (let [[_ opts] (task-args/split-args args #{:pr})
+        r        (try (pr-land* opts)
+                      (catch clojure.lang.ExceptionInfo e {:error :refused :detail (ex-message e)}))]
+    (if (= :ok (:status r))
+      (println (str "pr:land · " (:pr r) " "
+                    (case (:via r) :auto "set to merge once its checks allow" :queue "enqueued on its merge queue")))
+      (binding [*out* *err*]
+        (println (str "pr:land · refused: " (:detail r)))
+        (System/exit 1)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   tell-cmd [& args] (run* tell* args #{:text}))

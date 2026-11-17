@@ -517,8 +517,26 @@ enqueue.
 #### Merge and watch — one PR
 
 ```bash
-gh pr merge <top-pr-number> -R "$SLUG" --auto
+bb --config ~/Code/nido/bb.edn nido:workstream:pr:land :pr "$SLUG#<top-pr-number>"
 ```
+
+**Land through nido, not through `gh`.** The verb lands only a PR the workstream
+records as its own (a `:github` ref, as `/prepare-draft-pr` stamps one per
+layer), runs `gh pr merge --auto`, and where the repository refuses auto-merge
+enqueues it on the merge queue itself — so the two paths below are what it does
+for you, and their refusals reach you in its output.
+
+**On the conductor's instruction, landing is the person's act unless they
+granted it.** A grant is theirs to give — the landing option on the gate card,
+or their word through the workstream's chat — and it hands you exactly one
+landing of this workstream's own PR. Under it the gate admits the verb; a raw
+`gh pr merge` or `enqueuePullRequest` stays refused whatever was granted.
+Without a grant the gate refuses the verb too: then, and only then, escalate —
+say the PR is ready to land and why, and end your turn. Never hand the person a
+command to paste. If the collapsed top PR carries no `:github` ref, the verb
+refuses it and adding the ref is refused while the grant stands: escalate that.
+
+Run by a person in their own turn, the verb needs no grant.
 
 **No strategy flag.** On a merge-queue branch `gh pr merge --auto` takes none and
 rejects one that is passed; the queue's own `mergeMethod` decides, and pinning a
@@ -536,7 +554,7 @@ and leaves the PR sitting at `mergeStateStatus: BLOCKED` beside a `mergeable:
 MERGEABLE` — a pair that reads like a failing gate and is really just an
 un-enqueued PR. Observed on brian, whose `main` carries the queue configuration
 quoted above with auto-merge off. The queue's own entry point takes no such
-setting:
+setting, and the verb falls back to it on that answer — this is what it runs:
 
 ```bash
 PRID=$(gh pr view <top-pr-number> -R "$SLUG" --json id --jq '.id')
@@ -553,7 +571,8 @@ question by refusing, in one line, where `--auto` only ever says `BLOCKED`:
 
     UNPROCESSABLE ... Pull request All comments must be resolved.
 
-Read the refusal, satisfy it, enqueue again.
+Read the refusal, satisfy it, run the verb again — a grant holds until the
+landing is recorded, so a refused enqueue does not spend it.
 
 **That particular one is a review gate, so satisfy it as a reviewer would.** Every
 thread on the collapsed PR must be resolved. List them, reply on each with what

@@ -706,7 +706,7 @@
 
   nido:workstream:blocker:answer
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Record a person's answer to a blocker, in their words: :answer \"…\" [:blocker-seq <n>] (default: the newest unanswered). Resolves the workstream from cwd, or :project with :ws-id/:ref."
+   :doc "Record a person's answer to a blocker, in their words: :answer \"…\" [:blocker-seq <n>] (default: the newest unanswered) [:grants merge|intent] — :grants only when the person's answer hands the seats that act. Resolves the workstream from cwd, or :project with :ws-id/:ref."
    :task (apply nido-workstream/blocker-answer-cmd *command-line-args*)}
 
   nido:status:backfill
@@ -731,8 +731,13 @@
 
   nido:workstream:tell
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "From a workstream's chat, pass word on to that workstream's conductor, which answers it with one decision: :text \"…\". Runs only in the chat's session; the workstream must be activated."
+   :doc "From a workstream's chat, pass word on to that workstream's conductor, which answers it with one decision: :text \"…\" [:grants merge|intent|[merge intent]] — :grants only when the person's word hands the seats that act. Runs only in the chat's session; the workstream must be activated."
    :task (apply nido-workstream/tell-cmd *command-line-args*)}
+
+  nido:workstream:pr:land
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Land the workstream's own PR — one its :github refs record — from its session: auto-merge, else enqueue on its merge queue. :pr <owner/repo#n | n>. A seat on the conductor's instruction may run it only under the person's :merge grant."
+   :task (apply nido-workstream/pr-land-cmd *command-line-args*)}
 
   nido:workstream:show
   {:requires ([tasks.nido-workstream :as nido-workstream])

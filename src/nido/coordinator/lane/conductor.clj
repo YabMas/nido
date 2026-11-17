@@ -199,10 +199,14 @@
          "`:options '[{:label … :summary … :consequence … :recommended? true} …]'` when it names "
          "the branches. An option that changes the goal carries `:grants [:intent]`: picking it lets "
          "the seat write that one goal amendment itself, so instruct the seat to, and do not hand "
-         "the person a command to run. An option that approves the governing design carries "
+         "the person a command to run. An option that lands the workstream's PR carries "
+         "`:grants [:merge]`: picking it — or the person saying so through the chat, which records "
+         "the same grant — lets the seat land its own PR once, with `nido:workstream:pr:land`, so "
+         "instruct the seat to land it, and never hand the person a merge command. An option that "
+         "approves the governing design carries "
          "`:approves-design <its entry>`: picking it IS the person's approval, recorded by the "
          "click, so never ask them to approve again elsewhere or hand them a command for it. "
-         "Nothing else can be granted.\n\n"
+         "Nothing else can be granted: closing and approving stay the person's.\n\n"
          "Seats: " (seats-line (rseats/seats project ws-id)) "\n"
          "Governing design: " (design-line design) "\n"
          "Position: " (name position) (when next (str ", next " (pr-str next))) "\n\n"
@@ -498,34 +502,54 @@
     (or (some-> (lifecycle/session-from-cwd cwd) :session)
         (second (lifecycle/session-home-coords-from-cwd cwd)))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string [:? [:maybe [:sequential :keyword]]]] :map]}
   tell!
   "Pass `text` on to the workstream's conductor from the workstream's chat, which this must run
    in: posted once as a hand-back naming the chat's session, which the conductor answers with one
    decision like any other. It is not marked a person's turn: an escalation decided on it waits
    for the person's answer as any blocker does, and no later chat message answers it in place.
-   Refused from any other session or from outside every session (:not-the-chat), on a
-   workstream that is not activated, which nothing conducts (:not-activated), on a closed one
-   (:closed), and for blank text (:no-text). Answers the logged message."
-  [project ws-id text]
-  (let [n (session-here)
-        s (when n (session/read-session project ws-id n))
-        w (ws/read-ws project ws-id)]
-    (cond
-      (not (:chat s))
-      (throw (ex-info (str "Only workstream " ws-id "'s chat passes word to its conductor — this runs "
-                           (if n (str "in " n) "outside every session"))
-                      {:reason :not-the-chat :session n}))
-      (ws/closure w)
-      (throw (ex-info (str "Workstream " ws-id " is closed: nothing conducts it") {:reason :closed}))
-      (not (standing/activated? w))
-      (throw (ex-info (str "Workstream " ws-id " is not activated, so it has no conductor to tell")
-                      {:reason :not-activated}))
-      (str/blank? text)
-      (throw (ex-info "Nothing to pass on: the text is blank" {:reason :no-text})))
-    (post-hand-back! project ws-id (str "chat-word:" n ":" (random-uuid))
-                     {:what "the workstream's chat has word for you, from the person talking there"
-                      :session n :word (str/trim text)})))
+   `grants`, when given, are acts the person's word hands the seats (report/grantable-kinds): the
+   word is first recorded as a :grant holding them and the text, and the hand-back is that act's,
+   so it is posted once. The chat passes them because the person said so; nothing here reads the
+   text for one. Refused from any other session or from outside every session (:not-the-chat), on
+   a workstream that is not activated, which nothing conducts (:not-activated), on a closed one
+   (:closed), for blank text (:no-text), and for a grant of an act no grant may hand
+   (:not-grantable). Answers the logged message."
+  ([project ws-id text] (tell! project ws-id text nil))
+  ([project ws-id text grants]
+   (let [n      (session-here)
+         s      (when n (session/read-session project ws-id n))
+         w      (ws/read-ws project ws-id)
+         grants (some-> (seq grants) distinct vec)]
+     (cond
+       (not (:chat s))
+       (throw (ex-info (str "Only workstream " ws-id "'s chat passes word to its conductor — this runs "
+                            (if n (str "in " n) "outside every session"))
+                       {:reason :not-the-chat :session n}))
+       (ws/closure w)
+       (throw (ex-info (str "Workstream " ws-id " is closed: nothing conducts it") {:reason :closed}))
+       (not (standing/activated? w))
+       (throw (ex-info (str "Workstream " ws-id " is not activated, so it has no conductor to tell")
+                       {:reason :not-activated}))
+       (str/blank? text)
+       (throw (ex-info "Nothing to pass on: the text is blank" {:reason :no-text}))
+       (not-every? report/grantable-kinds grants)
+       (throw (ex-info (str "Only " (str/join ", " (map name (sort report/grantable-kinds)))
+                            " may be granted; " (str/join ", " (map name (remove report/grantable-kinds grants)))
+                            " stays the person's own")
+                       {:reason :not-grantable :grants grants})))
+     (let [fields {:what "the workstream's chat has word for you, from the person talking there"
+                   :session n :word (str/trim text)}]
+       (if grants
+         (let [path (ws/append-entry! project ws-id {:kind :grant :session n}
+                                      (pr-str {:format :grant :grants grants
+                                               :words (str/trim text) :session n}))
+               seq  (parse-long (re-find #"^\d+" (str (fs/file-name path))))]
+           (post-hand-back! project ws-id (str "act:" seq)
+                            (assoc fields :what (str "the workstream's chat has word for you, from the "
+                                                     "person talking there, granting the seats "
+                                                     (str/join " and " (map name grants))))))
+         (post-hand-back! project ws-id (str "chat-word:" n ":" (random-uuid)) fields))))))
 
 ;; ── decisions ───────────────────────────────────────────────────────────────
 
@@ -1171,7 +1195,7 @@
 
 (def ^:private person-kinds
   "The ledger kinds only a person's act writes."
-  #{:intent :design-approved :triage-accepted :phase-gate :blocker-answered :merged :closed
+  #{:intent :design-approved :triage-accepted :phase-gate :blocker-answered :grant :merged :closed
     ;; a drain's: approving a recipe, and observing its exit
     :recipe :exit-observed})
 
@@ -1407,7 +1431,9 @@
     ;; a child workstream's :intent
     "nido:workstream:fork"
     ;; a drain's: starting one, approving its recipe, landing a slice, closing it
-    "nido:drain:start" "nido:drain:approve" "nido:drain:land" "nido:drain:close"})
+    "nido:drain:start" "nido:drain:approve" "nido:drain:land" "nido:drain:close"
+    ;; a landing of the workstream's own PR — a seat's only under a :merge grant (`granted?`)
+    "nido:workstream:pr:land"})
 
 (def ^:private generic-appends
   "The nido tasks that append an entry of whatever :kind their arguments name."
@@ -1425,49 +1451,142 @@
                  (some #{:opaque} pos)
                  (person-kinds (try (keyword kind) (catch Exception _ nil)))))))
 
+(def ^:private grant-acts
+  "Each act a grant may hand a seat (report/grantable-kinds), with the ledger kind whose append
+   spends it and what it admits (`granted?`): :intent is spent by the goal amendment the seat
+   appends; :merge by the landing's :merged — whoever records it, the merge poller included — so
+   one grant is one landing, however many times the seat must enqueue before the queue takes it."
+  {:intent {:spent-by :intent :admits :append}
+   :merge  {:spent-by :merged :admits :pr-land}})
+
 (defn- unspent-grants
-  "The kinds the person handed to the sessions of workstream `ws-id` by answering a blocker with
-   an option that grants them (report/BlockerOption :grants), each still unspent: no entry of the
-   kind was appended after that answer. One grant is one entry — the goal amendment the option
-   names, not a standing licence to rewrite the goal."
+  "The acts the person handed to the sessions of workstream `ws-id`, each still unspent: one an
+   answer of theirs to a blocker granted by the option it picked or the words it was recorded
+   with (report/BlockerAnswered :grants), or a grant the chat recorded from their word
+   (report/Grant), with no entry of the act's spending kind (`grant-acts`) appended after it. No
+   text is read for a grant: only a :grants a person's act carries."
   [project ws-id]
   (into #{}
-        (for [a (ws/entries-of project ws-id :blocker-answered)
+        (for [a (mapcat #(ws/entries-of project ws-id %) [:blocker-answered :grant])
               :when (persons-act? a)
               k (:grants a)
-              :when (not-any? #(> (:seq %) (:seq a)) (ws/entries-of project ws-id k))]
+              :let [spent-by (get-in grant-acts [k :spent-by])]
+              :when (and spent-by
+                         (not-any? #(> (:seq %) (:seq a)) (ws/entries-of project ws-id spent-by)))]
           k)))
 
+(defn- own-target?
+  "Whether nido task `task`'s `opts` name no project or workstream but session record `s`'s own,
+   read as that task reads them: `nido:ticket:append` writes to the workstream carrying :br in
+   :project, brian when none is named; `nido:workstream:entry:add` to :ws-id, else the one carrying
+   :ref as a Notion ticket; any other task is taken to target what :ws-id, :br or :ref names, else
+   its own."
+  [s task opts]
+  (let [project (name (:project s))
+        own     (:workstream-id s)
+        named   (some-> (:project opts) str (str/replace #"^:" ""))
+        target  (case task
+                  "nido:ticket:append"
+                  (some->> (:br opts) str (ws/find-by-ref-id (keyword (or named "brian"))) :id)
+                  "nido:workstream:entry:add"
+                  (if (:ws-id opts)
+                    (str (:ws-id opts))
+                    (some->> (:ref opts) str (ws/find-by-ref (keyword (or named project)) :notion) :id))
+                  (cond (:ws-id opts) (str (:ws-id opts))
+                        (or (:br opts) (:ref opts))
+                        (:id (ws/find-by-ref-id (keyword project) (str (or (:br opts) (:ref opts)))))
+                        :else own))]
+    (and own (= own target)
+         (= project (or named (when (= "nido:ticket:append" task) "brian") project)))))
+
+(defn- ws-at
+  "[project ws-id] of the workstream a nido task run in directory `dir` takes for its own — that of
+   the session whose worktree `dir` is in, read as the task reads it (`stages/project+ws-from-cwd`)
+   — or nil, as for a nil `dir`: one a `cd` left unknown."
+  [dir]
+  (when dir
+    (try (when-let [{:keys [project session]} (lifecycle/session-from-cwd dir)]
+           (when-let [ws-id (session/workstream-id-for (keyword project) session)]
+             [(keyword project) ws-id]))
+         (catch Throwable _ nil))))
+
 (defn- granted?
-  "Whether `act` — one of commit-gate/acts — is a generic append the person granted to session
-   record `s`: of a kind an answer of theirs still grants (`unspent-grants`), to the session's own
-   workstream, read as the appends read their arguments. An append naming another project or
-   workstream, or none the gate can read, is granted nothing, and the conductor is granted
-   nothing: a grant is the person's to a seat."
-  [s {:keys [kind task args]}]
+  "Whether `act` — one of commit-gate/acts — is one the person granted to session record `s` by a
+   grant still unspent on its own workstream (`unspent-grants`), read as its task reads its
+   arguments: under :intent, a generic append of an :intent to the session's own workstream; under
+   :merge, `nido:workstream:pr:land` of a PR `ws/own-pr` finds among that workstream's :github refs,
+   run where the task takes that workstream for its own (`ws-at` of the act's :dir) — since it lands
+   the PR of whichever workstream it runs in. An act naming another project, workstream or PR, run
+   in another workstream's directory or one the gate cannot read, or arguments the gate cannot read, is granted
+   nothing; a :gh-pr act — a raw merge — never is; and the conductor is granted nothing: a grant is
+   the person's to a seat."
+  [s {:keys [kind task args dir]}]
   (boolean
-   (when (and (= :nido-task kind) (generic-appends task) (not (:conductor s)))
+   (when (and (= :nido-task kind) (not (:conductor s)) (:workstream-id s))
      (let [[_ opts] (try (task-args/split-args args) (catch Exception _ nil))
            project  (:project s)
            own      (:workstream-id s)
-           entry    (try (keyword (:kind opts)) (catch Exception _ nil))
-           target   (cond (:ws-id opts) (str (:ws-id opts))
-                          (or (:br opts) (:ref opts))
-                          (:id (ws/find-by-ref-id project (str (or (:br opts) (:ref opts))))))]
-       (and entry own (= own target)
-            (or (nil? (:project opts)) (= (name project) (str/replace (str (:project opts)) #"^:" "")))
-            (contains? (unspent-grants project own) entry))))))
+           grants   (delay (unspent-grants project own))]
+       (cond
+         (generic-appends task)
+         (let [entry (try (keyword (:kind opts)) (catch Exception _ nil))]
+           (and (= :append (get-in grant-acts [entry :admits]))
+                (own-target? s task opts)
+                (contains? @grants entry)))
+
+         (= "nido:workstream:pr:land" task)
+         ;; :pr read raw, as the task reads it: an `owner/repo#n` or a bare number is no EDN form.
+         (let [[_ opts] (try (task-args/split-args args #{:pr}) (catch Exception _ nil))]
+           (and (string? (:pr opts))
+                (own-target? s task opts)
+                (= [(keyword (name project)) own] (ws-at dir))
+                (contains? @grants :merge)
+                (some? (ws/own-pr (ws/read-ws project own) (:pr opts)))))
+
+         :else false)))))
+
+(defn- merge-grant-held?
+  "Whether session record `s`'s workstream holds an unspent :merge grant — whoever `s` is: the
+   conductor's workstream holds the grant its seats exercise."
+  [s]
+  (boolean (and (:workstream-id s)
+                (contains? (unspent-grants (:project s) (:workstream-id s)) :merge))))
+
+(defn- refs-own-prs?
+  "Whether `act` adds an external ref to a workstream — which, under a :merge grant, would make any
+   PR the workstream's own."
+  [{:keys [kind task]}]
+  (and (= :nido-task kind) (= "nido:workstream:ref:add" task)))
+
+(defn- names-merge-grant?
+  "Whether a `nido:workstream:ref:add` with `args` adds its ref to a workstream holding an unspent
+   :merge grant, its target read as the task reads it — :project with :ws-id, or with a :notion
+   :ref — whichever session runs it. Arguments the gate cannot read may name one."
+  [args]
+  (let [[pos opts] (try (task-args/split-args args) (catch Exception _ nil))]
+    (if (or (nil? opts) (some #{:opaque} pos) (some #{:opaque} (vals opts)))
+      true
+      (let [p     (some-> (:project opts) str (str/replace #"^:" "") keyword)
+            ws-id (or (some-> (:ws-id opts) str)
+                      (when (and p (:ref opts)) (:id (ws/find-by-ref p :notion (str (:ref opts))))))]
+        (boolean (and p ws-id (contains? (unspent-grants p ws-id) :merge)))))))
 
 (defn- persons-act
   "What a person's act `act` — one of commit-gate/acts — is, as a phrase, or nil. Pushing and
-   opening or readying a PR are not a person's act; merging one is."
+   opening or readying a PR are not a person's act; merging one is, and so is passing word on
+   with a grant, which records the person's grant."
   [{:keys [kind verb task args]}]
   (case kind
     :gh-pr     (cond (= "merge" verb)   "gh pr merge"
                      (= :unread verb)   "a gh command whose verb the gate cannot read, which may merge a pull request"
                      (= "api" verb)   "a gh api write that may merge a pull request")
     :nido-task (cond (person-tasks task) task
-                     (and (generic-appends task) (appends-person-kind? args)) (str task " of a person's kind"))
+                     (and (generic-appends task) (appends-person-kind? args)) (str task " of a person's kind")
+                     ;; A tell carrying :grants records the person's grant; a word the gate cannot
+                     ;; read may be that key.
+                     (and (= "nido:workstream:tell" task)
+                          (some #(or (not (string? %)) (re-matches #"(?i):?grants" %)) args))
+                     "nido:workstream:tell with a grant")
     nil))
 
 (defn- turn-prompt
@@ -1530,20 +1649,39 @@
    acceptance, a phase gate, a blocker's answer, a landing, a PR merge or a close — run from the
    conductor's session, or from any other session's conversation in a turn whose latest prompt
    carries an instruction the conductor answers for (`answering-for-conductor?`), judged over
-   what the commit gate reads the command to do — save an append the person granted the seat by
-   the option they answered a blocker with (`granted?`). Pushing,
-   whatever the branch, and opening or readying a PR are not a person's act. Takes a Claude Code `PreToolUse` input; nil for any other session, and
-   — failing open — when the session cannot be read."
+   what the commit gate reads the command to do — save what an unspent grant of the person's hands
+   the seat (`granted?`). A raw merge is refused under any grant, its refusal naming the verb the
+   grant admits while a :merge grant stands; and adding a ref is refused too while the session's
+   workstream, or the one the ref is added to, holds one, since a ref is what makes a PR its own. Pushing, whatever the branch, and
+   opening or readying a PR are not a person's act. Takes a Claude Code `PreToolUse` input; nil
+   for any other session, and — failing open — when the session cannot be read."
   [{:keys [tool_name tool_input cwd session_id]}]
   (when-let [s (try
                  (when (and (= "Bash" tool_name) (string? (:command tool_input)) (string? cwd))
                    (record-at cwd))
                  (catch Throwable _ nil))]
     (when (answering-for-conductor? s session_id)
-      (when-let [act (some #(when-not (granted? s %) (persons-act %))
-                           (commit-gate/acts (:command tool_input) cwd))]
-        (str "Blocked: " act " is the person's to do, and this session "
-             (if (:conductor s) "is the workstream's conductor" "is working on the conductor's instruction")
-             ". Escalate instead: say what the person needs to do and why"
-             (when-not (:conductor s) ", and end your turn")
-             ".")))))
+      (let [acts (commit-gate/acts (:command tool_input) cwd)
+            held (delay (merge-grant-held? s))]
+        (if-let [[a act] (some #(when-not (granted? s %) (some->> (persons-act %) (vector %))) acts)]
+          (cond
+            (and (= :gh-pr (:kind a)) (not (:conductor s)) @held)
+            (str "Blocked: " act " is the person's to do, even under their grant. The grant they gave "
+                 "lands this workstream's own PR through `bb --config <nido>/bb.edn "
+                 "nido:workstream:pr:land :pr <owner/repo#n>` — land it with that instead.")
+
+            (and (= :gh-pr (:kind a)) @held)
+            (str "Blocked: " act " is the person's to do, even under their grant. The grant they gave "
+                 "lets a seat land this workstream's own PR through `nido:workstream:pr:land` — "
+                 "instruct the seat to land it.")
+
+            :else
+            (str "Blocked: " act " is the person's to do, and this session "
+                 (if (:conductor s) "is the workstream's conductor" "is working on the conductor's instruction")
+                 ". Escalate instead: say what the person needs to do and why"
+                 (when-not (:conductor s) ", and end your turn")
+                 "."))
+          (when (some #(and (refs-own-prs? %) (or @held (names-merge-grant? (:args %)))) acts)
+            (str "Blocked: adding a ref to this workstream while the person's grant to land its "
+                 "own PR stands would widen what that grant reaches. Land a PR the workstream "
+                 "already records, or escalate: say which PR needs recording and why, and end your turn.")))))))

@@ -59,6 +59,11 @@
            (:consequence b))
         "and after the cost where it names one")))
 
+(deftest an-option-that-hands-over-the-landing-says-so
+  (let [[a] (:options (q1 (ask/ask :answer-blocker {:report (assoc-in blocker [:options 0 :grants] [:merge])
+                                                    :actions option-actions})))]
+    (is (= "Choosing this, the seat lands the workstream's own PR itself, once." (:consequence a)))))
+
 (deftest an-option-says-it-approves-the-design-it-names
   (let [[a] (:options (q1 (ask/ask :answer-blocker {:report (assoc-in blocker [:options 0 :approves-design] 36)
                                                     :actions option-actions})))]

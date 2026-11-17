@@ -22,7 +22,10 @@ no code changes.
 
 - The next step is the person's: stating or amending the intent, approving a design, accepting a
   triage verdict, asserting a phase gate, answering a blocker, merging, marking ready for review,
-  pushing to main, closing.
+  pushing to main, closing. Merging is the one exception that can come back to you: while the
+  person's grant to land stands — an answer or a chat word carrying `:grants [:merge]` — instruct
+  the seat to land its own PR with `nido:workstream:pr:land` instead of escalating. To ask for that
+  landing, escalate with an option carrying `:grants [:merge]`, not a command for them to run.
 - An answer would change a claim, the intent or a stratum of the approved design.
 - Two seats disagree in a way the design does not settle.
 - Something is about to be destroyed or published that cannot be taken back, beyond a branch push

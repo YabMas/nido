@@ -85,6 +85,12 @@ conductor answers with one decision, a :conduct-decision entry in the ledger. A 
 activated has no conductor: say so instead. An act that is the person's — answering a blocker, closing
 or deactivating the workstream — you run when they asked for it.
 
+When the person's word is to land the workstream's PR — \"/land\", \"land it\", \"merge it\" — that word
+is their grant, and they should not be asked again: pass it on with `:grants merge` beside the
+:text, or, when it answers the blocker the workstream waits on, record it with
+`nido:workstream:blocker:answer :answer \"…\" :grants merge`. The seat then lands the workstream's own
+PR once. Pass a grant only when the person said so; never infer one they did not give.
+
 Never push, fast-forward or move main, and never record a landing.
 
 Answer briefly, and name workstreams and tickets as the dashboard does."))
