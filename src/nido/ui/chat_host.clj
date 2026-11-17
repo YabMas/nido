@@ -6,7 +6,14 @@
    HIDES how a panel is kept live — the whole log, status row and busy signal once, then one patch
    per transcript item that changed, appended or morphed by its id, and the whole log again when
    the conversation was reset — which open streams there are,
-   and how a request's path and body are read.
+   how a request's path and body are read, which images the conversation has staged for its next
+   message, and how an uploaded file becomes an image (`parse-image`, the one place that happens).
+
+   A panel whose routes carry `:attach-url` is answered three more requests: attach (POST, the
+   image's raw bytes as the body), unattach/<digest> (POST) and image/<digest> (GET, a staged or
+   sent image's bytes). Staged images are the conversation's, not a page's: held per path prefix
+   beside the streams, shown on every panel through them, taken by the next accepted send, and
+   dropped when the conversation is started over.
 
    A host is a value naming its conversation (a `nido.session.chat` chat), its panel's routes (see
    `nido.ui.components.chat`), the path segments its routes live under, and `:refs`, a function of
@@ -15,12 +22,16 @@
    may be sent; `:opening`, events a new stream gets after the log, status and busy signal. What
    the page around the panel is, and any request beyond the five it answers, stay its caller's."
   (:require [cheshire.core :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.session.chat :as chat]
             [nido.ui.components.chat :as panel]
             [nido.ui.datastar :as datastar]
-            [org.httpkit.server :as http]))
+            [org.httpkit.server :as http])
+  (:import (java.io ByteArrayOutputStream InputStream)
+           (java.security MessageDigest)
+           (java.util Arrays Base64)))
 
 (defonce ^:private stream-registries
   ;; prefix -> atom of httpkit channel -> {:unsubscribe fn :sent transcript}. Held here, outside
@@ -31,6 +42,22 @@
 (defn- streams-under [prefix]
   (get (swap! stream-registries update prefix #(or % (atom {}))) prefix))
 
+(defonce ^:private staged-registries
+  ;; prefix -> atom of the staged images, in the order they were staged. Held outside any host
+  ;; value for the same reason the streams are; in memory only, so a restart drops them.
+  (atom {}))
+
+(defn- staged-under [prefix]
+  (get (swap! staged-registries update prefix #(or % (atom []))) prefix))
+
+(def ^:private max-image-bytes
+  "The largest image accepted, decoded: the Messages API's own limit for one image."
+  (* 5 1024 1024))
+
+(def ^:private max-staged
+  "How many images one message may carry."
+  4)
+
 (defn ^{:malli/schema [:=> [:cat :map :map [:sequential :string] :any] :map]}
   host
   "A host for `chat`, whose panel has `routes`, answering under the path segments `prefix`.
@@ -38,7 +65,8 @@
    references, each `{:label :detail}`. Two hosts under one prefix share its open streams, which
    is what keeps a page's stream reached across a reload that rebuilds its host."
   [chat routes prefix refs]
-  {:chat chat :routes routes :prefix (vec prefix) :refs refs :streams (streams-under (vec prefix))})
+  {:chat chat :routes routes :prefix (vec prefix) :refs refs :streams (streams-under (vec prefix))
+   :staged (staged-under (vec prefix))})
 
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   html
@@ -65,6 +93,52 @@
   "The request's JSON body with string keys; empty when there is none or it does not parse."
   [req]
   (try (json/parse-string (slurp (:body req))) (catch Exception _ {})))
+
+(defn- starts-with? [^bytes bs offset ^String sig]
+  (let [sig (.getBytes sig "ISO-8859-1")]
+    (and (>= (alength bs) (+ offset (alength sig)))
+         (Arrays/equals (Arrays/copyOfRange bs (int offset) (int (+ offset (alength sig)))) sig))))
+
+(defn- sniff
+  "The media type `bs` are, read from their signature, or nil for none the agent accepts."
+  [^bytes bs]
+  (cond
+    (starts-with? bs 0 "\u0089PNG\r\n\u001a\n")                        "image/png"
+    (starts-with? bs 0 "\u00ff\u00d8\u00ff")                             "image/jpeg"
+    (or (starts-with? bs 0 "GIF87a") (starts-with? bs 0 "GIF89a")) "image/gif"
+    (and (starts-with? bs 0 "RIFF") (starts-with? bs 8 "WEBP"))    "image/webp"))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  parse-image
+  "An uploaded file's `:bytes` as an image `{:mime :data :digest}` — its media type read from
+   its signature, never from what the browser claimed, one of PNG, JPEG, GIF or WebP, and at most
+   5 MB — or `{:refused why}`, in words the composer shows. The only place an upload becomes an
+   image: everything the host hands on was made here."
+  [{:keys [^bytes bytes]}]
+  (let [mime (when bytes (sniff bytes))]
+    (cond
+      (or (nil? bytes) (zero? (alength bytes))) {:refused "The upload was empty."}
+      (> (alength bytes) max-image-bytes)       {:refused "The image is larger than 5 MB."}
+      (nil? mime)                               {:refused "That is not an image the agent accepts: PNG, JPEG, GIF or WebP."}
+      :else {:mime   mime
+             :data   (.encodeToString (Base64/getEncoder) bytes)
+             :digest (apply str (map #(format "%02x" %)
+                                     (.digest (MessageDigest/getInstance "SHA-256") bytes)))})))
+
+(defn- read-bounded
+  "At most `limit` + 1 bytes of `in`, so an over-size body is known as one without reading it all."
+  ^bytes [^InputStream in limit]
+  (let [out (ByteArrayOutputStream.)
+        buf (byte-array 65536)]
+    (loop []
+      (let [n (.read in buf)]
+        (when (and (pos? n) (<= (.size out) limit))
+          (.write out buf 0 n)
+          (recur))))
+    (.toByteArray out)))
+
+(defn- attachments-event [{:keys [routes staged]}]
+  (datastar/patch-elements-event (html (panel/attachments (:id routes) @staged routes))))
 
 (defn- status-event [id t]
   (datastar/patch-elements-event (html (panel/turn-status id t))))
@@ -99,7 +173,7 @@
        (when (not= (:busy? old) (:busy? new))
          [(busy-event id new)])))))
 
-(defn- stream [{:keys [chat routes streams opening]} req]
+(defn- stream [{:keys [chat routes streams opening staged] :as h} req]
   (let [id (:id routes)]
     (http/as-channel
      req
@@ -107,13 +181,17 @@
                   (http/send! ch {:status 200 :headers {"Content-Type"  "text/event-stream"
                                                         "Cache-Control" "no-cache"}} false)
                   (let [t (chat/transcript chat)]
-                    (http/send! ch (str (datastar/patch-elements-event
-                                         (html (panel/chat-log id (:items t) routes)))
-                                        (status-event id t)
-                                        (busy-event id t)
-                                        (apply str (when opening (opening))))
-                                false)
-                    (swap! streams assoc ch {:sent t})
+                    ;; Under the stage's lock, which every stage change broadcasts under: the
+                    ;; staged images this stream opens with are current until it is registered.
+                    (locking staged
+                      (http/send! ch (str (datastar/patch-elements-event
+                                           (html (panel/chat-log id (:items t) routes)))
+                                          (status-event id t)
+                                          (busy-event id t)
+                                          (when (:attach-url routes) (attachments-event h))
+                                          (apply str (when opening (opening))))
+                                  false)
+                      (swap! streams assoc ch {:sent t}))
                     (let [unsub (chat/subscribe!
                                  chat
                                  (fn [t']
@@ -127,26 +205,71 @@
                   (swap! streams dissoc ch))})))
 
 (defn- send-message
-  "Send the posted draft with its references. Sent, the draft is cleared, plus whatever
-   `:on-sent` adds (events); refused — a turn is running, `:holds?` says so, or there are no
-   words — nothing changes, so the draft is kept."
-  [{:keys [chat routes refs on-sent holds?]} req]
+  "Send the posted draft with its references and the conversation's staged images. Sent, the
+   draft is cleared, the images it took leave the stage on every panel, and whatever `:on-sent`
+   adds (events) follows; refused — a turn is running, `:holds?` says so, or there are no words —
+   nothing changes, so the draft and the staged images are kept."
+  [{:keys [chat routes refs on-sent holds? staged] :as h} req]
   (let [{:keys [text]} (panel/signals (:id routes))
-        body  (body-json req)
-        words (str/trim (str (get body text)))]
-    (if (and (seq words) (not (and holds? (holds?))) (chat/send! chat words (vec (refs body)) []))
-      (apply sse (datastar/patch-signals-event (json/generate-string {text ""}))
-             (when on-sent (on-sent)))
+        body   (body-json req)
+        words  (str/trim (str (get body text)))
+        ;; Under the stage's lock, so no attach or unattach falls between the images this
+        ;; message takes, its acceptance and their leaving the stage.
+        images (locking staged
+                 (let [images @staged]
+                   (when (and (seq words) (not (and holds? (holds?)))
+                              (chat/send! chat words (vec (refs body)) images))
+                     (reset! staged [])
+                     (when (seq images) (broadcast! h (attachments-event h)))
+                     images)))]
+    (if images
+      (do (apply sse (datastar/patch-signals-event (json/generate-string {text ""}))
+                 (when on-sent (on-sent))))
       (sse))))
+
+(defn- attach
+  "Stage the posted image for the next message, or refuse it, saying why, as plain text the
+   composer shows. An image already staged is not staged twice."
+  [{:keys [staged] :as h} req]
+  (if (>= (count @staged) max-staged)
+    {:status 409 :headers {"Content-Type" "text/plain; charset=utf-8"}
+     :body (str "A message carries at most " max-staged " images.")}
+    (let [img (parse-image {:bytes (when-let [b (:body req)] (with-open [in (io/input-stream b)]
+                                                                 (read-bounded in max-image-bytes)))})]
+      (if-let [why (:refused img)]
+        {:status 422 :headers {"Content-Type" "text/plain; charset=utf-8"} :body why}
+        ;; Checked again under the stage's lock: a concurrent attach may have filled it since.
+        (if (locking staged
+              (let [xs @staged]
+                (cond (some #(= (:digest %) (:digest img)) xs) true
+                      (>= (count xs) max-staged)              false
+                      :else (do (reset! staged (conj xs img))
+                                (broadcast! h (attachments-event h))
+                                true))))
+          {:status 204}
+          {:status 409 :headers {"Content-Type" "text/plain; charset=utf-8"}
+           :body (str "A message carries at most " max-staged " images.")})))))
+
+(defn- image
+  "A staged or sent image's bytes by digest, cacheable for good: a digest names its bytes. A sent
+   one is the chat's to answer — from its acceptance on, so none falls between the stage and it."
+  [{:keys [chat staged]} digest]
+  (if-let [{:keys [mime data]} (or (some #(when (= digest (:digest %)) %) @staged)
+                                   (chat/image chat digest))]
+    {:status 200
+     :headers {"Content-Type" mime "Cache-Control" "private, max-age=31536000, immutable"}
+     :body (java.io.ByteArrayInputStream. (.decode (Base64/getDecoder) ^String data))}
+    {:status 404}))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] [:maybe :map]]}
   handle!
   "The response to a request under the host's prefix — `stream` (GET), `send`, `cancel`, `reset`,
-   `permission/<item>/<option>` (POST) — or nil for any other request, including another verb
-   under the same prefix, which is the caller's to answer. A reset refused because a turn runs
-   changes nothing and answers the same; every open panel hears an accepted one through its
-   stream."
-  [{:keys [chat prefix] :as host} {:keys [uri request-method] :as req}]
+   `permission/<item>/<option>` (POST), and for a panel whose routes carry `:attach-url`,
+   `attach`, `unattach/<digest>` (POST) and `image/<digest>` (GET) — or nil for any other request,
+   including another verb under the same prefix, which is the caller's to answer. A reset refused
+   because a turn runs changes nothing and answers the same; every open panel hears an accepted
+   one through its stream, the images it had staged dropped with it."
+  [{:keys [chat prefix routes staged] :as host} {:keys [uri request-method] :as req}]
   (let [segs (vec (remove str/blank? (str/split (str uri) #"/")))
         n    (count prefix)]
     (when (= prefix (take n segs))
@@ -154,8 +277,22 @@
         [:get "stream"]      (stream host req)
         [:post "send"]       (send-message host req)
         [:post "cancel"]     (do (chat/cancel! chat) {:status 204})
-        [:post "reset"]      (do (chat/reset! chat) {:status 204})
+        ;; Under the stage's lock, as a send's acceptance is: no send falls between the reset's
+        ;; acceptance and the stage it discards, so the old images never reach the new conversation.
+        [:post "reset"]      (do (locking staged
+                                   (when (and (chat/reset! chat) (seq @staged))
+                                     (reset! staged [])
+                                     (broadcast! host (attachments-event host))))
+                                 {:status 204})
         [:post "permission"] (do (when (= (+ n 3) (count segs))
                                    (chat/answer-permission! chat (get segs (inc n)) (get segs (+ n 2))))
                                  {:status 204})
-        nil))))
+        (when (:attach-url routes)
+          (case [request-method (get segs n)]
+            [:post "attach"]   (attach host req)
+            [:post "unattach"] (do (locking staged
+                                     (swap! staged (fn [xs] (vec (remove #(= (get segs (inc n)) (:digest %)) xs))))
+                                     (broadcast! host (attachments-event host)))
+                                   (sse))
+            [:get "image"]     (image host (get segs (inc n)))
+            nil))))))

@@ -17,6 +17,12 @@
    from the transcript alone; the seconds it shows are counted by the browser from the turn's
    start, which the transcript carries.
 
+   A panel whose routes carry `:attach-url` also offers attaching images — a picker, paste into the
+   text box, drop onto the panel — each uploaded as it is chosen, raw, by the browser's own fetch;
+   the images staged so far are the host's, rendered by `attachments` and patched in by the stream.
+   Images, staged or sent, are only ever `<img>`s naming `(:image-url routes)` of their digest: no
+   image's bytes are in the panel's markup.
+
    The composer's page state is three signals under the panel's key — the draft, the picks (a
    JSON array, each pick `{block scene path label}` and whatever else its host keeps) and whether a
    turn is running — named by `signals`. A server reading a send reads them back by those names;
@@ -83,6 +89,16 @@
                           [:span.chat-pick-l label]])
                        refs))))
 
+(defn- sent-images
+  "The images a sent message carried, as thumbnails that open the image itself — when the panel's
+   routes say where an image is fetched from; a panel that has none shows none."
+  [images {:keys [image-url]}]
+  (when (and image-url (seq images))
+    (into [:div.chat-imgs]
+          (for [{:keys [digest]} images]
+            [:a {:href (image-url digest) :target "_blank" :rel "noopener"}
+             [:img.chat-img {:src (image-url digest) :alt "Attached image" :loading "lazy"}]]))))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   chat-item
   "One transcript item, under the DOM id the panel gives it. `routes` carries the panel's `:id`
@@ -93,6 +109,7 @@
     (case (:kind item)
       :user       [:div.chat-msg.chat-you {:id dom-id}
                    (sent-picks (:refs item))
+                   (sent-images (:images item) routes)
                    (md/render (:text item))]
       :agent      [:div.chat-msg.chat-agent {:id dom-id}
                    (md/render (:text item))
@@ -162,19 +179,93 @@
                          "✕"]])
                      ps)))
 
+(defn ^{:malli/schema [:=> [:cat :string [:sequential :map] :map] :any]}
+  attachments
+  "The composer's staged images, under the DOM id `<id>-attachments`: one chip per image, a
+   thumbnail from `(:image-url routes)` of its digest, with a control that posts to
+   `(:unattach-url routes)` of it. Empty when none are staged."
+  [id images {:keys [image-url unattach-url]}]
+  (into [:div.chat-attachments {:id (str id "-attachments")}]
+        (for [{:keys [digest]} images]
+          [:span.chat-att
+           [:img {:src (image-url digest) :alt "Image to send"}]
+           [:button.chat-att-x {:type "button" :title "Remove" :aria-label "Remove image"
+                                "data-on:click" (str "@post('" (unattach-url digest) "')")}
+            "✕"]])))
+
+(def ^:private attach-types
+  "The media types the browser offers to upload: the ones the agent accepts. The host checks the
+   bytes again; this only spares an upload that would be refused."
+  ["image/png" "image/jpeg" "image/gif" "image/webp"])
+
+(def ^:private attach-max-bytes
+  "The largest image the browser uploads; the host refuses anything larger again."
+  (* 5 1024 1024))
+
+(def ^:private attach-js
+  "How images reach the host: chosen in the picker, pasted into the text box or dropped on the
+   panel, each is checked for type and size here, then posted raw, one at a time, to the attach
+   route. A refusal — here, or the host's answer — is said in the composer's error line and
+   touches nothing else; an accepted one comes back to every page as the host's chips.
+
+   No `$` or `@` in it: Datastar would read either as a signal or an action."
+  "(function(box){
+  if (box._chatAttach) return; box._chatAttach = true;
+  var url = box.dataset.attachUrl, max = Number(box.dataset.attachMax), types = box.dataset.attachTypes.split(' ');
+  var err = box.querySelector('.chat-attach-err'), panel = box.closest('.chat') || box;
+  var input = box.querySelector('input[type=file]'), text = box.querySelector('textarea');
+  function say(t){ err.textContent = t || ''; }
+  async function upload(files){
+    say('');
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i], name = f.name || 'The image';
+      if (types.indexOf(f.type) < 0) { say(name + ' is not an image the agent accepts: PNG, JPEG, GIF or WebP.'); continue; }
+      if (f.size > max) { say(name + ' is larger than 5 MB.'); continue; }
+      try {
+        var r = await fetch(url, {method: 'POST', headers: {'Content-Type': f.type}, body: f});
+        if (!r.ok) say(await r.text());
+      } catch (e) { say(name + ' could not be uploaded.'); }
+    }
+  }
+  function files(dt){ return dt && dt.files ? Array.prototype.slice.call(dt.files) : []; }
+  box.querySelector('.chat-attach').addEventListener('click', function(){ input.click(); });
+  input.addEventListener('change', function(){ var fs = files(input); input.value = ''; upload(fs); });
+  text.addEventListener('paste', function(e){ var fs = files(e.clipboardData); if (fs.length) { e.preventDefault(); upload(fs); } });
+  panel.addEventListener('dragover', function(e){
+    if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'Files') >= 0) { e.preventDefault(); panel.classList.add('chat-drop'); } });
+  panel.addEventListener('dragleave', function(e){ if (!panel.contains(e.relatedTarget)) panel.classList.remove('chat-drop'); });
+  panel.addEventListener('drop', function(e){
+    panel.classList.remove('chat-drop');
+    var fs = files(e.dataTransfer); if (fs.length) { e.preventDefault(); upload(fs); } });
+})(el)")
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   composer
-  "The composer, under the DOM id the panel gives it: the pick chips, the text box, and Send —
-   or Stop while a turn runs, switched by the busy signal rather than by re-rendering."
-  [id {:keys [send-url cancel-url] :as routes}]
+  "The composer, under the DOM id the panel gives it: the pick chips, the staged images and the
+   attach control when `routes` carry `:attach-url`, the text box, and Send — or Stop while a turn
+   runs, switched by the busy signal rather than by re-rendering."
+  [id {:keys [send-url cancel-url attach-url] :as routes}]
   (let [{:keys [text busy]} (signals id)]
-    [:div.chat-compose {:id (str id "-compose")}
+    [:div.chat-compose (cond-> {:id (str id "-compose")}
+                         attach-url (assoc "data-attach-url" attach-url
+                                           "data-attach-max" (str attach-max-bytes)
+                                           "data-attach-types" (str/join " " attach-types)
+                                           "data-init" attach-js))
      (picks id [] routes)
+     (when attach-url
+       (list (attachments id [] routes)
+             [:p.chat-attach-err {:id (str id "-attach-err") :role "alert"}]))
      [:div.chat-field
       [:textarea {"data-bind" text :rows 3 :placeholder "Message the agent"
                   "data-on:keydown" (str "if (!$" busy " && (evt.metaKey || evt.ctrlKey) && evt.key === 'Enter') "
                                          "{ evt.preventDefault(); @post('" send-url "') }")}]
       [:div.chat-actions
+       (when attach-url
+         (list [:input {:type "file" :accept (str/join "," attach-types) :multiple true :hidden true
+                        :aria-hidden "true" :tabindex "-1"}]
+               [:button.btn.chat-attach {:type "button" :title "Attach an image — or paste or drop one"
+                                         :aria-label "Attach an image"}
+                "Image"]))
        [:button.btn.btn-primary {"data-show" (str "!$" busy)
                                  "data-on:click" (str "@post('" send-url "')")} "Send"]
        [:button.btn {"data-show" (str "$" busy)

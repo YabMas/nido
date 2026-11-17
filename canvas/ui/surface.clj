@@ -168,7 +168,8 @@
   "A conversation with an agent, as a panel.
 
    HIDES how a transcript reads — item order, what opens and what folds, the turn's status row
-   and the phase it names, the permission prompt's buttons, the composer and the pick chips on
+   and the phase it names, the permission prompt's buttons, a message's images shown by URL, the
+   composer and its attach controls, and the pick chips on
    it. Takes a transcript value plus where its controls post, so the catalog, a workstream pane
    or a question card can each host one without the panel knowing which."
   (Operation signals
@@ -192,13 +193,17 @@
   (Operation picks
     "The pick chips, numbered as the page marks them, each with a control that removes it."
     {:signature [:=> [:catn [:id :string] [:picks [:sequential :map]] [:routes :map]] :any]})
+  (Operation attachments
+    "The images staged for the next message, as thumbnails from the panel's image route, each
+     with a control that unstages it; empty when none are."
+    {:signature [:=> [:catn [:id :string] [:images [:sequential :map]] [:routes :map]] :any]})
   (Operation change-bar
     "The conversation's unlanded change and what can be done with it — Publish or Cancel, each
      confirmed in place, both withheld while a turn runs — or how the last publish ended; an
      empty element when there is neither."
     {:signature [:=> [:catn [:id :string] [:change [:maybe :map]] [:publishing :map] [:routes :map]] :any]
      :delegates [signals]})
-  (Operation composer "The composer: the pick chips, the text box, and Send or Stop."
+  (Operation composer "The composer: the pick chips, the staged images and attach control where routes offer attaching, the text box, and Send or Stop."
     {:signature [:=> [:catn [:id :string] [:routes :map]] :any]
      :delegates [signals picks]})
   (Operation chat-panel

@@ -614,6 +614,7 @@
         .chat-compose textarea { display:block; width:100%; resize:vertical; background:var(--surface-sunken);
                     color:var(--text); border:1px solid var(--border); border-radius:4px;
                     padding:6px 72px 6px 8px; font:inherit; }
+        .chat-compose[data-attach-url] textarea { padding-right:136px; }
         .chat-compose textarea:focus { outline:none; border-color:var(--accent-border); }
         .chat-actions { position:absolute; right:6px; bottom:6px; display:flex; gap:8px; }
         /* The turn's status row: a breathing mark, the phase in words, the seconds so far. The mark
@@ -672,6 +673,22 @@
         .chat-pick-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-xs);
                        padding:0 2px; }
         .chat-pick-x:hover { color:var(--text-strong); }
+        /* Images: staged ones as removable thumbnails above the text box, sent ones above the
+           message's words; a panel being dragged over with a file is outlined. */
+        .chat-attachments { display:flex; flex-wrap:wrap; gap:6px; }
+        .chat-attachments:empty { display:none; }
+        .chat-att { position:relative; display:inline-block; }
+        .chat-att img { display:block; width:56px; height:56px; object-fit:cover; border-radius:4px;
+                        border:1px solid var(--border); background:var(--surface-sunken); }
+        .chat-att-x { position:absolute; top:-6px; right:-6px; width:18px; height:18px; padding:0; border-radius:50%;
+                      border:1px solid var(--border); background:var(--surface); color:var(--text-muted);
+                      cursor:pointer; font-size:var(--fs-xs); line-height:16px; }
+        .chat-att-x:hover { color:var(--text-strong); }
+        .chat-attach-err { margin:0; font-size:var(--fs-xs); color:var(--failed-strong); }
+        .chat-attach-err:empty { display:none; }
+        .chat-imgs { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 6px; }
+        .chat-img { display:block; max-width:160px; max-height:120px; border-radius:4px; border:1px solid var(--border); }
+        .chat.chat-drop { outline:2px dashed var(--accent-border); outline-offset:-2px; }
 "))
 ;; ---------------------------------------------------------------------------
 ;; What a chrome asks for

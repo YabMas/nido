@@ -14,7 +14,8 @@
    HIDES how a panel is kept live — the whole log, status row and busy signal once, then one patch
    per transcript item that changed, appended or morphed by its id, and the whole log again when
    the transcript shrank — which streams are open, and
-   how a request's path and body are read. A host names its conversation, its panel's routes, the
+   how a request's path and body are read, which images a conversation has staged, and how an
+   untrusted upload becomes an Image. A host names its conversation, its panel's routes, the
    path its routes live under and what a sent message carries besides its words. Its caller may also
    name whether a send is accepted (`:holds?`, true while none may be), what an accepted send's
    response patches besides clearing the draft (`:on-sent`), and what a new stream gets after the
@@ -36,9 +37,14 @@
      log, status row and busy signal when the new transcript is shorter."
     {:signature [:=> [:catn [:routes :map] [:old acp/Conversation] [:new acp/Conversation]] :any]
      :delegates [chat-item chat-log log-id turn-status signals patch-elements-event patch-signals-event]})
+  (Operation parse-image
+    "An uploaded image as an Image — its media type read from its bytes' signature, one of the four
+     the agent accepts, at most 5 MB decoded — or a refusal naming why."
+    {:signature [:=> [:catn [:upload :map]] :map]})
   (Operation handle!
     "One request under the host's path — the stream, a send, a stop, a reset, a permission
-     answer — or nil for any other, which is its caller's."
+     answer, and, for a panel whose routes carry :attach-url, staging an image, unstaging one and
+     an image's bytes by digest — or nil for any other, which is its caller's."
     {:signature [:=> [:catn [:host :map] [:req :map]] [:maybe :map]]
-     :delegates [changed-events chat-log chat/transcript chat/send! chat/cancel! chat/reset! chat/answer-permission!
+     :delegates [changed-events parse-image chat-log chat/transcript chat/image chat/send! chat/cancel! chat/reset! chat/answer-permission!
                  chat/subscribe!]}))

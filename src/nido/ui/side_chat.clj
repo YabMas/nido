@@ -85,7 +85,10 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
      :reset-url  (str base "/reset")
      :stream-url (str base "/stream")
      :answer-url (fn [item option] (str base "/permission/" item "/" option))
-     :unpick-url (fn [i] (str base "/unpick/" i))}))
+     :unpick-url   (fn [i] (str base "/unpick/" i))
+     :attach-url   (str base "/attach")
+     :unattach-url (fn [digest] (str base "/unattach/" digest))
+     :image-url    (fn [digest] (str base "/image/" digest))}))
 
 (def ^:private operator-chat
   {:project "nido" :session "operator" :name "operator" :instructions instructions})

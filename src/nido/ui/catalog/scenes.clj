@@ -533,6 +533,27 @@
    :answer-url (fn [item option] (str "/_catalog/nowhere/chat/permission/" item "/" option))
    :unpick-url (fn [i] (str "/_catalog/nowhere/chat/unpick/" i))})
 
+(def ^:private scene-image
+  "A stand-in picture for the image scenes: a scene has no conversation to fetch an image from,
+   so its routes name this one, drawn here, for every digest."
+  (str "data:image/svg+xml;base64,"
+       (.encodeToString
+        (java.util.Base64/getEncoder)
+        (.getBytes
+         "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='100'><rect width='160' height='100' fill='darkslateblue'/><circle cx='50' cy='40' r='14' fill='lightsteelblue'/><path d='M0 100 L60 55 L95 80 L120 62 L160 100 Z' fill='slateblue'/></svg>"
+         "UTF-8"))))
+
+(defn- attach-routes
+  "`chat-routes` for a panel that offers attaching, its images all the stand-in picture."
+  [id]
+  (assoc (chat-routes id)
+         :attach-url   "/_catalog/nowhere/chat/attach"
+         :unattach-url (fn [d] (str "/_catalog/nowhere/chat/unattach/" d))
+         :image-url    (constantly scene-image)))
+
+(def ^:private two-images
+  [{:mime "image/png" :data "" :digest "a1"} {:mime "image/png" :data "" :digest "b2"}])
+
 (defn- transcript
   "A literal transcript of `items`, each given the id its position would give it. A running one
    carries no start time — a scene renders the same markup at any hour, so it cannot say when
@@ -698,6 +719,11 @@ for the text and keep the tint, so it still reads as **yours** without competing
     :scenes [{:title "your message with picks"
               :note "The elements it carried, numbered as they were marked, above the words."
               :render #(chat/chat-item (assoc you-two :id "i0") (chat-routes "scene-chat-18"))}
+             {:title "your message with an image"
+              :note "The image it carried, as a thumbnail that opens it, above the words."
+              :render #(chat/chat-item {:id "i0" :kind :user :text "What is wrong with this row?" :refs []
+                                        :images (subvec two-images 0 1)}
+                                       (attach-routes "scene-chat-31"))}
              {:title "your message without picks"
               :note "Words alone: no chips above them."
               :render #(chat/chat-item {:id "i0" :kind :user
@@ -740,8 +766,18 @@ for the text and keep the tint, so it still reads as **yours** without competing
              {:title "none"
               :note "Renders an empty row, which takes no space."
               :render #(chat/picks "scene-chat-27" [] (chat-routes "scene-chat-27"))}]}
+   {:name "attachments"
+    :note "The images staged for the next message, as thumbnails, each removable. The same on
+           every page showing the conversation: the host holds them, not the page."
+    :scenes [{:title "two images"
+              :render #(chat/attachments "scene-chat-32" two-images (attach-routes "scene-chat-32"))}
+             {:title "none"
+              :note "Renders an empty row, which takes no space."
+              :render #(chat/attachments "scene-chat-33" [] (attach-routes "scene-chat-33"))}]}
    {:name "composer"
-    :note "The composer alone: the pick chips, the text box, and Send — or Stop, by the busy signal."
+    :note "The composer alone: the pick chips, the text box, and Send — or Stop, by the busy signal.
+           Where its routes carry an attach route, an Image control too, and the box takes a
+           pasted image and the panel a dropped one."
     :scenes [{:title "ready" :render #(chat/composer "scene-chat-28" (chat-routes "scene-chat-28"))}
              {:title "with picks"
               :note "Two elements picked for the next message: their chips above the text box."
@@ -749,7 +785,16 @@ for the text and keep the tint, so it still reads as **yours** without competing
                          ;; The composer renders its chips empty; a pick patches them in by
                          ;; `picks`, so the same markup with that patch made, as a pick makes it.
                          (assoc (chat/composer "scene-chat-30" routes) 2
-                                (chat/picks "scene-chat-30" (:refs you-two) routes)))}]}
+                                (chat/picks "scene-chat-30" (:refs you-two) routes)))}
+             {:title "with images attached"
+              :note "Two images staged for the next message: their thumbnails above the text box,
+                     and the Image control beside Send."
+              :render #(let [routes (attach-routes "scene-chat-34")
+                             c      (vec (chat/composer "scene-chat-34" routes))]
+                         ;; The composer renders its staged images empty; the stream patches them
+                         ;; in by `attachments`, so the same markup with that patch made.
+                         (assoc c 3 (list (chat/attachments "scene-chat-34" two-images routes)
+                                          (second (nth c 3)))))}]}
    {:name "signals"
     :note "The page-state names a panel keeps its draft, its picks and its busy flag under.
            Words, not markup — but the one thing two panels on one page must not share."
