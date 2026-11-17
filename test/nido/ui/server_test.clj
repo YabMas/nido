@@ -1,6 +1,8 @@
 (ns nido.ui.server-test
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
+            [hiccup2.core]
+            [nido.session.chat]
             [nido.ui.server :as server]
             [nido.ui.views :as views]
             [nido.coordinator.control]
@@ -764,3 +766,16 @@
                               :query-string "entry=3"})
       (Thread/sleep 50)
       (is (= [["brian" "ws-old" :apply 3]] @calls)))))
+
+(deftest a-page-reached-from-another-shows-the-chat-for-the-page-being-drawn
+  ;; The panel is drawn with the page, so the conversation it shows is the page's own: the Referer
+  ;; is the page the person came from, and choosing by it would show the previous page's chat.
+  (with-redefs [nido.coordinator.work/workstream (fn [p w _] {:project p :ws-id w :label w :stage :design})
+                nido.coordinator.work/chat-place (fn [_ w] {:session (str w "--chat")})
+                nido.session.chat/transcript     (constantly {:items [] :busy? false})]
+    (let [ctx  (#'server/rail-ctx {:uri "/workstreams" :query-string "sel=brian:ws-drawn"
+                                   :headers {"referer" "http://localhost:8800/workstreams/brian/ws-before"}}
+                                  :workstreams "brian" {:needs-count 0})
+          html (str (hiccup2.core/html (:side-chat ctx)))]
+      (is (clojure.string/includes? html "/_chat/ws/brian/ws-drawn/stream"))
+      (is (not (clojure.string/includes? html "ws-before"))))))

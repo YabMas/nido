@@ -6,6 +6,7 @@
             [canvas.coordinator.work :as work]
             [canvas.session.chat :as chat]
             [canvas.ui.chat-host :as host]
+            [canvas.ui.place :as place]
             [canvas.ui.surface :refer [side signals]]
             [fukan.common.typing.malli]))
 
@@ -18,8 +19,7 @@
    session on it that holds no seat; anywhere else nido's operator session, made on the first
    send), what each agent is told — operate nido, or talk about one workstream and pass word to
    its conductor, through nido's own verbs and changing no code — the paths each conversation is
-   served under, how a message says which page it was sent from, and that open or closed is kept
-   in a cookie so the next page renders it the same."
+   served under, and that open or closed is kept in a cookie so the next page renders it the same."
   (Operation open? "Whether a request's page renders the chat open: what the person last left it as."
     {:signature [:=> [:catn [:req :map]] :boolean]})
   (Operation panel
@@ -31,4 +31,4 @@
     "One request under /_chat, of the conversation its path names, or nil for any other path and
      for a workstream's chat path that names no open workstream."
     {:signature [:=> [:catn [:req :map]] [:maybe :map]]
-     :delegates [host/host host/handle! work/chat-place work/open-chat!]}))
+     :delegates [host/host host/handle! work/chat-place work/open-chat! place/place place/references]}))

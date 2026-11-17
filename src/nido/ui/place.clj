@@ -11,9 +11,9 @@
    with no subject. It is derived, never stored: read from the page's location and the work plane
    at the moment it is asked for, so it is never older than the message it rides on.
 
-   The location is the request's Referer, which the browser states on every same-origin fetch. It
-   is untrusted shape, read here into a path and query and then by `view-state/parse` alone; a
-   location that does not read is the unknown place, not an error."
+   A send's location is its Referer, which the browser states on every same-origin fetch; a page's
+   is its own path and query. Either is untrusted shape, read here into a path and query and then
+   by `view-state/parse` alone; a location that does not read is the unknown place, not an error."
   (:require [clojure.string :as str]
             [nido.coordinator.work :as work]
             [nido.ui.view-state :as view-state]))
@@ -65,7 +65,7 @@
    :development   {:title "Development"   :subject nil}
    :other         {:title "A page the dashboard does not name" :subject nil}})
 
-(defn- location
+(defn- referer-location
   "The Referer as {:uri :query-string}, or nil when there is none or it does not read as a URL
    with a path."
   [req]
@@ -76,14 +76,13 @@
           {:uri path :query-string (.getRawQuery u)}))
       (catch Exception _ nil))))
 
-(defn ^{:malli/schema [:=> [:cat :map] :Place]}
-  place
-  "The place of the page the request `req` was sent from: read from the location it states (its
-   Referer) through view-state/parse — with the request's own cookies, so the focus reads as the
-   page's did — and from the work plane now. Unknown when the request states no location."
-  [req]
-  (if-let [{:keys [uri] :as loc} (location req)]
-    (let [vs (view-state/parse (assoc loc :headers (:headers req)))
+(defn- place-at
+  "The place at location `loc` ({:uri :query-string}, or nil for none) as read with the request
+   headers `headers` — their cookies, so the focus reads as the page's did — and the work plane
+   now. The one reading both `place` and `page-place` are."
+  [loc headers]
+  (if-let [{:keys [uri]} loc]
+    (let [vs (view-state/parse (assoc loc :headers headers))
           {:keys [title subject]} (get table (:surface vs) (:other table))]
       {:known?  true
        :page    {:surface (:surface vs)
@@ -91,6 +90,20 @@
                  :path    (str uri (some->> (:query-string loc) (str "?")))}
        :subject (when subject (subject vs))})
     {:known? false}))
+
+(defn ^{:malli/schema [:=> [:cat :map] :Place]}
+  place
+  "The place of the page the request `req` was sent from — a send, whose page is the location it
+   states as its Referer. Unknown when it states none that reads."
+  [req]
+  (place-at (referer-location req) (:headers req)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :Place]}
+  page-place
+  "The place of the page the request `req` draws: its own path and query. Not its Referer, which
+   is the page it was reached from — a chat chosen by that would be the previous page's."
+  [{:keys [uri query-string headers]}]
+  (place-at (when (seq uri) {:uri uri :query-string query-string}) headers))
 
 (defn ^{:malli/schema [:=> [:cat :Place] [:sequential :map]]}
   references

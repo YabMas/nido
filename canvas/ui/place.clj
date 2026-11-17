@@ -29,6 +29,11 @@
      and the work plane now; a place saying it is unknown when the request states none."
     {:signature [:=> [:catn [:req :map]] Place]
      :delegates [parse work/workstream work/gates]})
+  (Operation page-place
+    "The place of the page a request draws, read from its own path and query and the work plane
+     now — not from the page it was reached from."
+    {:signature [:=> [:catn [:req :map]] Place]
+     :delegates [parse work/workstream work/gates]})
   (Operation references
     "A place as the references a message carries: one per thing it names — the page, then its
      subject's parts — each a label and its detail; one saying the place is unknown when it is."

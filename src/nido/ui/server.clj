@@ -10,6 +10,7 @@
             [nido.ui.dev :as dev]
             [nido.coordinator.control :as control]
             [nido.ui.catalog.chat :as catalog-chat]
+            [nido.ui.place :as place]
             [nido.ui.side-chat :as side-chat]
             [nido.ui.structure :as structure]
             [nido.ui.components.ask :as ask]
@@ -180,12 +181,12 @@
   "Chrome context: the slice or page that is `active`, the focused project, the
    Needs-you badge — the screen's needs-count, which counts every project's
    gates, so the badge and the Needs-you list always agree — and the chat's side
-   panel as the request's page last left it, for the place the page shows: the
-   workstream the screen has selected, when it is drawing one."
+   panel as the request's page last left it, for the place nido.ui.place reads
+   the page as showing: the workstream it has open, when it has one."
   [req active focus screen]
   {:side-chat   (side-chat/panel (side-chat/open? req)
-                                 (when (:ws (:selection screen))
-                                   (select-keys (:selection screen) [:project :ws-id])))
+                                 (let [{:keys [kind] :as subject} (:subject (place/page-place req))]
+                                   (when (= :workstream kind) (select-keys subject [:project :ws-id]))))
    :active      active
    :scope       focus
    :needs-count (:needs-count screen)

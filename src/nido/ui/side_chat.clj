@@ -6,9 +6,12 @@
    HIDES which conversation each place has — at an open workstream that workstream's own chat, in
    a session on it that holds no seat; anywhere else nido's operator, one session of nido's,
    which follows the person from page to page — what each agent is told, the paths each
-   conversation is served under, how a message says which page it was sent from, and that whether
-   the panel is open is kept in a cookie, so the next page renders it the same way rather than
-   flashing it open.
+   conversation is served under, and that whether the panel is open is kept in a cookie, so the
+   next page renders it the same way rather than flashing it open.
+
+   Where a message was sent from is not the panel's: every send, to either conversation, carries
+   `nido.ui.place`'s place of the send request, read on the server at that moment, so nothing the
+   page set up in the browser decides it, and a send whose page cannot be read still says so.
 
    The operator operates nido and a workstream's chat talks about its workstream; neither changes
    code. Each reads and acts through nido's own bb verbs, and is denied, like every chat, the
@@ -17,19 +20,27 @@
             [nido.coordinator.work :as work]
             [nido.session.chat :as chat]
             [nido.ui.chat-host :as host]
-            [nido.ui.components.chat :as panel]))
+            [nido.ui.components.chat :as panel]
+            [nido.ui.place :as place]))
 
 (def ^:private panel-id "nido-chat")
 (def ^:private cookie "nidoChat")
-(def ^:private page-signal "nidoPage")
 
 (def ^:private instructions
   "What the operator's agent is told, appended to its system prompt."
   "You are nido's operator: the agent in the chat panel beside every page of nido's dashboard. The
 person runs nido, the orchestrator of their development workstreams, and asks you about the work it
-holds — workstreams, tickets, runs, sessions, triggers, breakers, reviews — and to act on it. Each
-message ends with a <nido-context> block naming the dashboard page it was sent from; \"this\" and
-\"here\" usually mean what that page shows.
+holds — workstreams, tickets, runs, sessions, triggers, breakers, reviews — and to act on it.
+
+Each message ends with a <nido-context> block saying where the person was when they sent it, read
+by nido at that moment: the page (\"page · …\"), and on a workstream page the workstream by project
+and id with its stage (\"workstream · …\"), the gate open on it with its question and answers
+(\"gate · open\"), and the ledger entry open in its pane (\"entry · …\"). \"This\", \"here\", \"the
+open one\" and the like mean that subject — the workstream, its gate, its entry — so act on it
+without asking which. When the block names no subject (\"nothing is open on it\"), or the place is
+unknown (\"place · unknown\"), or what it names does not fit what was asked, do not choose one: say
+what you cannot resolve and ask. Each block is the place at that message; an earlier one says
+where the person was then, not now.
 
 Work through nido's own bb verbs, run as your session briefing shows (`bb --config <nido>/bb.edn
 ...`); `bb --config <nido>/bb.edn tasks` lists them. `nido:workstream:list :project <p>` says where
@@ -51,8 +62,11 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
   (str "You are the chat of workstream " ws-id " of project " project ": the agent in the chat panel beside
 that workstream on nido's dashboard. The person runs nido, the orchestrator of their development
 workstreams, and talks to you about this one — what it is for, where it stands, what was decided and
-why, what its code does — and to steer it. Each message ends with a <nido-context> block naming the
-dashboard page it was sent from.
+why, what its code does — and to steer it. Each message ends with a <nido-context> block saying
+where the person was when they sent it, read by nido at that moment: the page, and on a page showing
+a workstream that workstream with its stage, the gate open on it with its question, and the ledger
+entry open in its pane. When it names one, \"this entry\" or \"this gate\" means it; when it does
+not, say what you cannot resolve instead of choosing.
 
 Before you answer about the workstream's goal or its design, read them from its ledger, never from
 memory: `bb --config <nido>/bb.edn
@@ -107,15 +121,6 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
        :heading "This workstream"}
       {:chat operator-chat :prefix ["_chat"] :heading "nido"})))
 
-(defn- page-ref
-  "The page a message was sent from, as the agent reads it: the title the person sees and the path
-   that names it. None when the page did not say."
-  [body]
-  (let [page (str/trim (str (get body page-signal)))]
-    (when (seq page)
-      [{:label  (str "page · " (first (str/split page #" — ")))
-        :detail (str "Sent from nido's dashboard, on " page)}])))
-
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
   open?
   "Whether the request's page should render the chat open: what the person last left it as."
@@ -126,8 +131,9 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
 (defn ^{:malli/schema [:=> [:cat :boolean [:maybe :map]] :any]}
   panel
   "The chat's side panel for a dashboard page showing `place` (see `conversation`), open or closed
-   as `open?` says, with what keeps it honest across pages: the page it is on, for the next
-   message; the cookie that remembers it open or closed; ⌘I/Ctrl+I to open and close it."
+   as `open?` says, with what keeps it honest across pages: the cookie that remembers it open or
+   closed, and ⌘I/Ctrl+I to open and close it. It holds nothing about the page — the place a
+   message names is read from the send."
   [open? place]
   (let [{:keys [open]} (panel/signals panel-id)
         {:keys [chat prefix heading]} (conversation place)]
@@ -135,9 +141,6 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
                 {:open?   open?
                  :heading heading
                  :extra   [[:span {:hidden true
-                                   "data-signals" (str "{" page-signal ": ''}")
-                                   "data-init" (str "$" page-signal " = document.title + ' — ' + "
-                                                    "location.pathname + location.search")
                                    "data-effect" (str "document.cookie = '" cookie "=' + ($" open " ? 1 : 0)"
                                                       " + '; path=/; max-age=31536000; samesite=lax'")
                                    "data-on:keydown__window"
@@ -163,4 +166,4 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
           {:keys [chat prefix]} (conversation place)]
       ;; A workstream path whose workstream has no chat to offer would otherwise be the operator's.
       (when (= (boolean place) (not= ["_chat"] prefix))
-        (host/handle! (host/host chat (routes-under prefix) prefix (comp page-ref :json)) req)))))
+        (host/handle! (host/host chat (routes-under prefix) prefix (comp place/references place/place)) req)))))

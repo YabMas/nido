@@ -95,3 +95,11 @@
       (is (= {:known? false} p))
       (is (= ["place · unknown"] (map :label (place/references p)))
           "an unknown place is still a reference, worded apart from a page with nothing open"))))
+
+(deftest a-page-is-placed-by-its-own-address-not-the-one-it-was-reached-from
+  (with-redefs [work/workstream (fn [p w _] {:project p :ws-id w :label w :stage :design})]
+    (let [req {:uri "/workstreams" :query-string "sel=nido:ws-drawn"
+               :headers {"referer" "http://localhost:8800/workstreams?sel=nido:ws-before"}}]
+      (is (= "ws-drawn" (get-in (place/page-place req) [:subject :ws-id])) "the page being drawn")
+      (is (= "ws-before" (get-in (place/place req) [:subject :ws-id])) "a send's page is its Referer")
+      (is (= {:known? false} (place/page-place {:uri nil :headers {}}))))))

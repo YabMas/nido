@@ -1,8 +1,11 @@
 (ns nido.ui.side-chat-test
-  (:require [clojure.string :as str]
+  (:require [cheshire.core :as json]
+            [clojure.string :as str]
+            [hiccup2.core :as h]
             [clojure.test :refer [deftest is testing]]
             [nido.coordinator.work :as work]
             [nido.session.change :as change]
+            [nido.coordinator.work :as work]
             [nido.session.chat :as chat]
             [nido.ui.server :as server]
             [nido.ui.side-chat :as side-chat]
@@ -15,12 +18,37 @@
   (is (not (side-chat/open? {:headers {"cookie" "xnidoChat=1"}})) "another cookie's name is not ours")
   (is (not (side-chat/open? {:headers {}})) "no cookie: closed"))
 
-(deftest a-message-names-the-page-it-was-sent-from
-  (let [page-ref @#'side-chat/page-ref]
-    (is (= [{:label "page · Workstreams"
-             :detail "Sent from nido's dashboard, on Workstreams — nido — /workstreams/nido/ws-1"}]
-           (page-ref {"nidoPage" "Workstreams — nido — /workstreams/nido/ws-1"})))
-    (is (nil? (page-ref {})) "a page that did not say carries nothing")))
+(defn- send! [headers]
+  (let [sent (atom nil)]
+    (with-redefs [chat/send!      (fn [_ words refs & _] (reset! sent [words refs]) true)
+                  work/workstream (fn [p w _] {:project p :ws-id w
+                                               :label "Side chat knows the page" :stage :design
+                                               :gate {:ask {:question "Approve this design?"}
+                                                      :actions [{:label "Approve"}]}})]
+      (side-chat/handle! {:request-method :post :uri "/_chat/send" :headers headers
+                          :body (java.io.ByteArrayInputStream.
+                                 (.getBytes (json/generate-string {"nidochatText" "approve the open one"})))}))
+    @sent))
+
+(deftest a-message-carries-the-place-it-was-sent-from
+  (let [[words refs] (send! {"referer" "http://localhost:8800/workstreams?sel=nido:ws-1"})]
+    (is (= "approve the open one" words))
+    (is (= ["page · Workstreams" "workstream · nido/ws-1" "gate · open"] (map :label refs)))
+    (is (some #(re-find #"Approve this design\?" (:detail %)) refs))))
+
+(deftest a-message-whose-page-cannot-be-read-still-says-so
+  (let [[_ refs] (send! {})]
+    (is (= ["place · unknown"] (map :label refs)) "never a message with no place")))
+
+(deftest the-panel-holds-nothing-about-the-page
+  ;; The page used to be a signal the panel set in the browser, and Datastar applied its
+  ;; data-signals after its data-init, so it always posted empty. The place is now read from the
+  ;; send on the server: the panel must carry no page value for anything to depend on.
+  (with-redefs [chat/transcript (constantly {:items [] :busy? false})]
+    (let [p (str (h/html (side-chat/panel true nil)))]
+      (is (not (str/includes? p "nidoPage")))
+      (is (not (re-find #"document\.title|location\.(pathname|search|href)" p))
+          "nothing read from the page in the browser"))))
 
 (deftest every-page-carries-the-panel-as-the-person-left-it
   (with-redefs [chat/transcript (constantly {:items [] :busy? false})]
@@ -98,3 +126,16 @@
       (is (str/includes? (body "/_catalog") "id=\"catalog-chat-toggle\""))
       (is (not (str/includes? (body "/_catalog") "nido-chat-toggle")))
       (is (str/includes? (body "/development") "id=\"nido-chat-toggle\"")))))
+
+(deftest a-workstreams-chat-reads-the-same-place-as-the-operator
+  ;; Both conversations take the place from one reading, so a message to a workstream's chat names
+  ;; the page, the workstream, its gate and its open entry exactly as one to the operator would.
+  (let [sent (atom nil)]
+    (with-redefs [work/chat-place (fn [_ _] {:session "ws-1--chat"})
+                  work/workstream (fn [p w _] {:project p :ws-id w :label "a workstream" :stage :design
+                                               :gate {:ask {:question "Approve this design?"}}})
+                  chat/send!      (fn [_ _ refs & _] (reset! sent refs) true)]
+      (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-1/send"
+                          :headers {"referer" "http://localhost:8800/workstreams/brian/ws-1"}
+                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"nidochatText\": \"approve this\"}"))})
+      (is (= ["page · Workstreams" "workstream · brian/ws-1" "gate · open"] (map :label @sent))))))
