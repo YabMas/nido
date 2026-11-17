@@ -286,12 +286,16 @@
                  through an instruction nido gave it or holds queued for it (its :claude
                  facet's :pending or :queued), which reads :phase :answering — a reply sent
                  from the gate leaves its run parked and holding no lock, so without this the
-                 agent answering it is invisible on every surface.
+                 agent answering it is invisible on every surface. Last, a session of the work —
+                 neither the conductor's nor a chat's — stamped :mid-turn? by the caller, which
+                 reads :phase :running: a seat goes on working long after the instruction that
+                 started it ended, woken by its own subagents, holding no lock and owed nothing.
 
    The claim outranks the others because it is evidence of a process alive at the instant of
    the read. A run parked for review is deliberately not `doing`: it is a gate, and calling it
-   activity would report a workstream waiting on a person as one that is busy. `claim`, the
-   runs' liveness and the sessions arrive as ARGUMENTS, so this stays pure."
+   activity would report a workstream waiting on a person as one that is busy, and a seat stopped
+   at a person's gate is not mid-turn. `claim`, the runs' liveness, the sessions and each
+   session's :mid-turn? arrive as ARGUMENTS, so this stays pure."
   [{:keys [closed stage claim runs sessions]}]
   (cond
     (or (some? closed) (= :done stage)) nil
@@ -306,23 +310,34 @@
     :else
     (if-let [r (last (filter :live? runs))]
       {:source :session :phase (:state r) :session (:session-name r)}
-      (when-let [s (first (filter #(or (get-in % [:claude :pending]) (get-in % [:claude :queued]))
-                                  sessions))]
-        {:source :session :phase :answering :session (:name s)}))))
+      (if-let [s (first (filter #(or (get-in % [:claude :pending]) (get-in % [:claude :queued]))
+                                sessions))]
+        {:source :session :phase :answering :session (:name s)}
+        (when-let [s (first (filter #(and (:mid-turn? %) (not (:conductor %)) (not (:chat %)))
+                                    sessions))]
+          {:source :session :phase :running :session (:name s)})))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map] [:maybe :keyword]] [:maybe :map]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map] [:maybe :keyword]
+                               [:maybe [:set :string]]]
+                         [:maybe :map]]}
   doing-at
   "What is underway in workstream `ws-id` right now, given the closure and band the caller
    settled on — `doing` with the claim, the runs' liveness and the sessions read here and the
    running round's progress beside it. The board passes status's band, so what is underway and
-   where the row sits are one answer."
-  [project ws-id closed stage]
+   where the row sits are one answer.
+
+   `mid-turn` is the set of claude session ids the caller observed mid-turn (nil: none); a
+   session is stamped :mid-turn? only when its :claude facet's :session-id is in it. It is
+   passed because this namespace may not read the agent listing that observes it."
+  [project ws-id closed stage mid-turn]
   (with-progress
     (doing {:closed   closed
             :stage    stage
             :claim    (activity/read-live project ws-id)
             :runs     (mapv #(assoc % :live? (runs/live? (:id %))) (runs/runs-of project ws-id))
-            :sessions (session/list-sessions project ws-id)})))
+            :sessions (mapv #(assoc % :mid-turn? (contains? (or mid-turn #{})
+                                                            (get-in % [:claude :session-id])))
+                            (session/list-sessions project ws-id))})))
 
 (defn- standing-design
   "The design whose plan governs the workstream (`standing/governing-design` — the one

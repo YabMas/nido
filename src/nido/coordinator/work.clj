@@ -666,7 +666,9 @@
                          ;; What is underway, at status's band, so a row cannot say :done and
                          ;; running at once — and at status's liveness, so it cannot say halted
                          ;; and running at once either.
-                         :doing      (observed-doing (wsv/doing-at project ws-id closed band) st))
+                         :doing      (observed-doing (wsv/doing-at project ws-id closed band
+                                                                   (conduct/mid-turn-ids {}))
+                                                     st))
             (not (contains? unrendered-bands band))
             (assoc :phase (wsv/phase-progress project ws-id)))))))))
 
@@ -1889,16 +1891,22 @@
 (defn- liveness-probe
   "A row's liveness as status observes it, read without reading the workstream's records: a
    claim held under it, a run whose agent holds its lock, and which of its background sessions
-   the agent listing shows a process mid-turn for — read, as status reads it, only for a row
-   that has one. The registry's half is in the row's stamp."
+   the agent listing shows working or mid-turn (`conduct/mid-turn?`) — read, as status reads it,
+   only for a row that has one — and, apart, which of them are mid-turn by
+   `conduct/mid-turn-ids`, the set the row's `:doing` is read from, so a turn starting or
+   ending under an unchanged liveness still moves the probe. The registry's half is in the
+   row's stamp."
   [project ws-id {:keys [listed]}]
   (let [with-pid (when (seq listed)
-                   (into #{} (comp (filter #(and (:pid %) (= "working" (:state %))))
+                   (into #{} (comp (filter #(or (and (:pid %) (= "working" (:state %)))
+                                                (conduct/mid-turn? %)))
                                    (mapcat (juxt :sessionId :id)))
-                         (agent-states)))]
+                         (agent-states)))
+        mid-turn (when (seq listed) (conduct/mid-turn-ids {}))]
     [(boolean (activity/held? project ws-id))
      (resuming? project ws-id)
-     (into #{} (filter #(contains? with-pid %)) listed)]))
+     (into #{} (filter #(contains? with-pid %)) listed)
+     (into #{} (filter #(contains? mid-turn %)) listed)]))
 
 (defn- compute-entry
   "One held row for `ws-id`, read whole from its records, or nil when it no longer exists.

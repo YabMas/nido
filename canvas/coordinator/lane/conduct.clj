@@ -97,6 +97,16 @@
      display and liveness, never for a decision to give one an instruction."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [substrate/listing-cached]})
+  (Operation mid-turn?
+    "Whether a listing row shows its session's process in the middle of a turn — running, neither
+     waiting on a dialog nor at its prompt. The process's turn, never the task the agent's last
+     message judged."
+    {:signature [:=> [:catn [:row :map]] :boolean]})
+  (Operation mid-turn-ids
+    "The claude session ids the listing shows mid-turn, from a listing at most two seconds old —
+     for display and liveness, never for a decision to give one an instruction."
+    {:signature [:=> [:catn [:opts :map]] [:set :string]]
+     :delegates [substrate/listing-cached mid-turn?]})
   (Operation current-boot
     "This host boot — its identity and the instant it began — or nil when it cannot be read."
     {:signature [:=> [:catn] [:maybe :map]]

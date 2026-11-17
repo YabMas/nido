@@ -554,6 +554,19 @@
                  (into {} (map (juxt :sessionId :baseline-shown?))
                        (work/workstream-listing :brian (:id w))))))))))
 
+(deftest the-liveness-probe-moves-when-a-turn-starts-under-an-unchanged-state
+  ;; A row's :doing is read from `conduct/mid-turn-ids`. A session whose listing keeps
+  ;; :state "working" while its :status goes idle → busy changes that, and no file a stamp
+  ;; sees; the probe must move too, or the held row keeps its stale :doing.
+  (with-tmp
+    (fn [_]
+      (let [w      (workstream/create! :brian {:external-refs []})
+            e      {:listed #{"s-1"}}
+            probe  #(with-redefs [nido.coordinator.agent.substrate/listing-cached
+                                  (constantly [{:sessionId "s-1" :pid 1 :state "working" :status %}])]
+                      (#'work/liveness-probe :brian (:id w) e))]
+        (is (not= (probe "idle") (probe "busy")))))))
+
 (deftest a-denial-is-an-operational-notice-not-a-gate
   ;; Nothing waits on a person here: a denial needs no answer, so it is listed for Operations
   ;; and never puts the workstream in the inbox.

@@ -739,6 +739,24 @@
   [opts]
   (into {} (comp (filter :sessionId) (map (juxt :sessionId identity))) (substrate/listing-cached opts)))
 
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  mid-turn?
+  "Whether the listing `row` shows its session's process inside a turn: alive, and its :status
+   busy — neither waiting on a dialog nor idle at its prompt. Never :state, which Claude Code judges
+   from the agent's last message and which can read \"working\" long after the turn ended. A turn
+   the session's own subagents or task notifications woke records no prompt, so this, not the
+   hook log, is what sees it."
+  [row]
+  (boolean (and (:pid row) (= "busy" (:status row)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:set :string]]}
+  mid-turn-ids
+  "The claude session ids the listing shows mid-turn (`mid-turn?`), from a listing at most a few
+   seconds old — for display and liveness, never for a decision to give one an instruction. Empty
+   when the listing cannot be read."
+  [opts]
+  (into #{} (comp (filter mid-turn?) (keep :sessionId)) (substrate/listing-cached opts)))
+
 ;; ── after a reboot ──────────────────────────────────────────────────────────
 
 (defn ^{:malli/schema [:=> [:cat] [:maybe :map]]}
@@ -762,7 +780,7 @@
        (try (.isAfter (java.time.Instant/parse at) (java.time.Instant/parse boot-at))
             (catch Exception _ false))))))
 
-(defn- mid-turn?
+(defn- stopped-mid-turn?
   "Whether the boot stopped `facet`'s session inside a turn: an instruction outstanding or work of
    its own running, and the last prompt or Stop among `evs`, the session's recorded events, not a
    Stop — a Stop the daemon never consumed ended the turn all the same, and a notification after
@@ -805,7 +823,7 @@
                      (and first? (get-in facet [:policy :auto-respawn?])
                           (not= boot (:recovered-boot facet)) (:bg-id facet)
                           (let [evs (:events (events/events-since (:session-id facet) nil))]
-                            (and (mid-turn? facet evs)
+                            (and (stopped-mid-turn? facet evs)
                                  (not (outlived-boot? (last evs) boot-at))))))
         row      (fn [{:keys [facet]}] (row-for listing facet))
         ;; A listed session whose directory is gone; one the listing does not name is neither

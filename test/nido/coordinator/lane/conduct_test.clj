@@ -957,3 +957,20 @@
     (is (nil? (get-in (conduct/decide (:facet d1) (assoc dialog :status "idle") [] ctx) [:facet :waiting]))
         "blocked after its turn ended is not a dialog")
     (is (nil? (get-in (conduct/decide (:facet d1) done-row [] ctx) [:facet :waiting])))))
+
+(deftest mid-turn-is-the-process-s-turn-not-the-task-s
+  (testing "busy with a live process is mid-turn, whatever :state the last message judged"
+    (is (true? (conduct/mid-turn? {:pid 1 :status "busy" :state "working"})))
+    (is (true? (conduct/mid-turn? {:pid 1 :status "busy" :state "blocked"}))))
+  (testing "at its prompt, at a dialog, or with no process, it is not"
+    (is (false? (conduct/mid-turn? {:pid 1 :status "idle" :state "working"})))
+    (is (false? (conduct/mid-turn? {:pid 1 :status "waiting" :state "blocked"})))
+    (is (false? (conduct/mid-turn? {:status "busy" :state "done"})))))
+
+(deftest mid-turn-ids-are-the-busy-sessions-of-the-display-listing
+  (with-redefs [substrate/listing-cached
+                (constantly [{:sessionId "a" :pid 1 :status "busy"}
+                             {:sessionId "b" :pid 2 :status "idle" :state "working"}
+                             {:id "c" :pid 3 :status "busy"}])]
+    (is (= #{"a"} (conduct/mid-turn-ids {}))
+        "only rows mid-turn, by their full session id; a row naming none is skipped")))

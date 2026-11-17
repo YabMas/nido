@@ -179,3 +179,25 @@
   (is (= :running
          (:phase (wsv/doing {:runs     [(a-run :running true)]
                              :sessions [{:name "other" :claude {:pending {:token "t"}}}]})))))
+
+(deftest a-seat-mid-turn-on-an-instruction-already-ended-is-activity
+  (testing "a conductor-driven seat works on long after the instruction that started it
+            has ended — woken by its own subagents, holding no run lock, nothing pending or
+            queued — and the listing seeing its process mid-turn is what says it is at work"
+    (let [seat {:name "impl-1" :claude {:pending nil :queued nil} :mid-turn? true}]
+      (is (= {:source :session :phase :running :session "impl-1"}
+             (wsv/doing {:runs [] :sessions [seat]})))
+      (is (nil? (wsv/doing {:runs [] :sessions [(assoc seat :mid-turn? false)]}))
+          "a seat whose turn has stopped — at a person's gate, or idle between turns — is not")))
+  (testing "neither the conductor's turn nor a chat's is the work moving"
+    (is (nil? (wsv/doing {:runs [] :sessions [{:name "cond" :conductor true :mid-turn? true}]})))
+    (is (nil? (wsv/doing {:runs [] :sessions [{:name "chat" :chat true :mid-turn? true}]}))))
+  (testing "it answers last: an instruction outstanding or a run's lock says more"
+    (is (= :answering
+           (:phase (wsv/doing {:runs []
+                               :sessions [{:name "a" :mid-turn? true}
+                                          {:name "b" :claude {:pending {:token "t"}}}]}))))
+    (is (= :running
+           (:phase (wsv/doing {:runs [(a-run :running true)]
+                               :sessions [{:name "a" :mid-turn? true}]})))))
+  (is (= "agent · running" (wsv/doing-label {:source :session :phase :running}))))

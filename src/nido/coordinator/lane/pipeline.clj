@@ -1397,8 +1397,8 @@
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
    whose agent holds its lock, a session nido drives that the substrate lists with a live process
-   mid-turn (state working) — a process waiting on a dialog or idle after its Stop is not working
-   — or a person's own session, one without a :claude facet, that is up (`sstate/session-live?`)
+   working (state working) or mid-turn (`conduct/mid-turn?`) — a process waiting on a dialog or
+   idle after its Stop is not working — or a person's own session, one without a :claude facet, that is up (`sstate/session-live?`)
    — `live-names` when the caller observed them, else observed here. :paused is a person's
    standing pause — their choice not to push the workstream forward.
 
@@ -1430,7 +1430,12 @@
          facets   (keep :claude sessions)
          notes    (keep :dispatching sessions)
          states   (when (or (seq facets) (seq notes)) (vals (conduct/live-states {})))
-         working? (fn [matches?] (some #(and (:pid %) (= "working" (:state %)) (matches? %)) states))
+         ;; Working as the listing judges the task, or mid-turn as its process shows it: a seat
+         ;; its own subagents woke lists busy whatever its last message said.
+         working? (fn [matches?] (some #(and (or (and (:pid %) (= "working" (:state %)))
+                                                 (conduct/mid-turn? %))
+                                             (matches? %))
+                                       states))
          live     (boolean (or (activity/held? project ws-id)
                                (seq (runs/live-runs project ws-id))
                                (some (fn [f] (working? #(= (:session-id f) (:sessionId %)))) facets)

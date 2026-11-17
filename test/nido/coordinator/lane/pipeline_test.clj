@@ -1546,6 +1546,9 @@
         (doseq [[row live?] [[{:pid 1 :state "working" :status "busy"} true]
                              [{:pid 1 :state "working" :status "idle"} true]
                              [{:pid 1 :state "blocked" :status "idle"} false]
+                             ;; Woken by its own subagents after a turn that ended asking a person:
+                             ;; the task still reads blocked, the process is working.
+                             [{:pid 1 :state "blocked" :status "busy"} true]
                              [{:pid 1 :state "blocked" :status "waiting" :waitingFor "input needed"} false]
                              [{:state "done"} false]]]
           (with-redefs [conduct/live-states (constantly {"s-spawned" (assoc row :sessionId "s-spawned")})]
