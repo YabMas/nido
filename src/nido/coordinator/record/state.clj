@@ -48,6 +48,13 @@
   (str (fs/path (coordinator-root) "halted.edn")))
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
+  restart-owed-path
+  "The latest landing — a restart owed onto its commit, or the commit the daemon runs. Read and
+   written only through nido.coordinator.daemon.restart."
+  []
+  (str (fs/path (coordinator-root) "restart-owed.edn")))
+
+(defn ^{:malli/schema [:=> [:cat] :Path]}
   pid-path []
   (str (fs/path (coordinator-root) "coordinator.pid")))
 

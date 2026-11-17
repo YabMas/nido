@@ -83,6 +83,10 @@
   (Operation halted-path
     "The kill switch. Its PRESENCE is the halt; its contents say who and why."
     {:signature [:=> [:catn ] Path]})
+  (Operation restart-owed-path
+    "A restart owed onto a landed commit. Its PRESENCE is the debt; its contents say onto what,
+     since when and which landing owed it."
+    {:signature [:=> [:catn ] Path]})
   (Operation pid-path
     "The background daemon's pid file."
     {:signature [:=> [:catn ] Path]})

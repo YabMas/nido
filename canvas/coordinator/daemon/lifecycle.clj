@@ -1,13 +1,15 @@
 (ns canvas.coordinator.daemon.lifecycle
   "Self-spec: keeping the daemon running and saying so — `heartbeat`, `launchctl`, `reconcile`,
-   `preprocess`."
-  (:require [fukan.common.vocab.code.module :refer [Module]]
+   `restart`, `preprocess`."
+  (:require [fukan.common.vocab.code.kind :refer [Kind]]
+            [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.session :as session]
             [canvas.coordinator.record.state :as state :refer [Path]]
             [canvas.coordinator.record.workstream :as ws]
+            [canvas.platform.process :as process]
             [fukan.common.typing.malli]))
 
 (Module daemon-heartbeat
@@ -79,6 +81,58 @@
      installing it."
     {:signature [:=> [:catn [:opts :map]] :string]
      :delegates [label]}))
+
+(Kind Landing
+  "The latest landing: owed onto a commit — when, and by which landing process — or running it, in
+   which daemon process and since when. Only what nothing else can tell: what an owed restart waits
+   for is derived when it is asked, never stored."
+  [:or
+   [:map [:state [:enum :owed]] [:commit :string] [:owed-at :string] [:by-pid :int]]
+   [:map [:state [:enum :running]] [:commit :string] [:owed-at :string]
+         [:since :string] [:pid :int]]])
+
+(Module daemon-restart
+  "The latest landing, as a restart owed onto its commit or as the commit the daemon runs, and
+   what an owed restart still waits for.
+
+   A file rather than a decision made in the landing, because the landing is often the one process
+   that cannot make it — it runs inside the daemon, or runs are live — and a decision nobody holds
+   afterwards is never carried out. The landing owes; the daemon pays, on its tick, by exiting for
+   launchd to relaunch it onto the checkout that holds the landing, and the daemon that comes up
+   records that it runs it. `landing` is the one place the file's shape becomes trusted, and
+   `waits` the one reading of whether a debt is due — read from the system each time it is asked,
+   never kept — so the landing's account, the daemon's act and what the surfaces show cannot
+   disagree."
+  {:child [Landing]}
+  (Operation landing
+    "The one parsing boundary of the file: {:landing <Landing>}, {:none true} when no file exists,
+     or {:unreadable <why>} when one exists and does not parse to a Landing. Unreadable is never
+     read as none."
+    {:signature [:=> [:catn] [:or [:map [:landing Landing]] [:map [:none :boolean]] [:map [:unreadable :string]]]]
+     :delegates [state/restart-owed-path]})
+  (Operation owe!
+    "Record the latest landing as owed onto `commit` by the landing process `by-pid`, replacing
+     whatever was recorded, under the record's lock. {:landing <Landing>} as written, or
+     {:failed <why>} when the file cannot be written."
+    {:signature [:=> [:catn [:commit :string] [:by-pid :int]] [:or [:map [:landing Landing]] [:map [:failed :string]]]]
+     :delegates [state/restart-owed-path clock/now-iso]})
+  (Operation running!
+    "Record an owed landing as running in this daemon, `pid`, since now — only while the record is
+     still that owed landing, same commit and owed-at, compared and written under the lock `owe!`
+     writes under, so a landing owed meanwhile is never overwritten. {:landing <Landing>} as
+     written; {:moved true}, nothing written, when the record is no longer that owed landing; or
+     {:failed <why>} when the write fails."
+    {:signature [:=> [:catn [:owed Landing] [:pid :int]]
+                 [:or [:map [:landing Landing]] [:map [:moved :boolean]] [:map [:failed :string]]]]
+     :delegates [landing state/restart-owed-path clock/now-iso]})
+  (Operation waits
+    "What an owed landing still waits for, read when asked from what any process can read, so
+     every asker gets the same answer: runs live? reports live, runs whose record says they are
+     running, the owing landing still running, the checkout not holding the commit, the daemon not
+     running under launchd, the running daemon having started after the debt. Each wait in words;
+     empty when the restart is due."
+    {:signature [:=> [:catn [:owed Landing]] [:vector :string]]
+     :delegates [runs/list-run-ids runs/read-run runs/live? process/process-alive? loaded? state/pid-path]}))
 
 (Module daemon-reconcile
   "Startup repair: force every non-terminal Run to a terminal state, and leave each Run's own
