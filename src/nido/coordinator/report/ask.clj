@@ -97,6 +97,8 @@
      :redesign     "Sends the design back to be redesigned against the review's finding."
      :hold-design  "Accepts the design as it stands despite the finding; the work goes on."
      :assert-gate  "Records what you observed as the gate's evidence and opens the next phase."
+     :land         (str "Queues the pull request on nido's merge lane, which drives it home with "
+                        "/drive-home in its session and merges it.")
      :apply        (case answers
                      :proposal  "Accepts the proposal and files it as a ticket."
                      :questions (str "Accepts the triage verdict with the fixes you chose and writes it to "

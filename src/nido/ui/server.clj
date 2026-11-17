@@ -445,6 +445,12 @@
     :nothing-to-acknowledge (str "Nothing to answer — this design is not sitting on an "
                                  "unanswered verdict any more. Somebody may have "
                                  "answered it in another tab.")
+    :nothing-to-land        (str "Nothing to land — this workstream no longer owes a landing. "
+                                 "It may have merged already.")
+    :land-stale             (str "Not queued — the ledger moved on since this page rendered. "
+                                 "Re-read the gate.")
+    :already-landing        "Already on the merge lane — a merge Run owns this workstream."
+    :no-session             "Not queued — no live session holds this workstream's branch."
     :unresolved             (str "Couldn't resolve the ticket in Notion"
                                  (when error (str ": " (name error))))
     (:notion-failed :error) (str "Apply failed"

@@ -16,6 +16,7 @@
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.ask :as ask]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
@@ -3602,6 +3603,18 @@
   (is (empty? (work/gate-actions :in-progress false nil
                                  {:report-format :design-decision :seq 7}))
       "and with no position saying a person is owed anything, nothing is offered"))
+
+(deftest a-published-pr-is-landed-from-its-own-button
+  (is (= [{:id :land :label "Land" :kind :mutation :style :primary :seq 37}]
+         (work/gate-actions :shipping false nil {:report-format :pr-opened :seq 37 :awaiting :land}))
+      "a landing owed is one button carrying the record it was owed over — not a bare question")
+  (is (work/position-carrying-action? :land)
+      "so the click comes back with the record it answers, and a stale page is refused")
+  (is (= "Land" (-> (ask/ask :land {:report  nil
+                                    :entries [{:format :pr-opened :seq 37 :url "https://x/pull/1" :title "t"}]
+                                    :actions [{:id :land :label "Land"}]})
+                    :answer-does first :label))
+      "and the card says what the button does beside it"))
 
 (deftest reply-still-needs-an-agent-to-resume
   (is (= [:approve]

@@ -474,6 +474,7 @@
                           "the record as the evidence. Write the superseding design next.")
         :hold-design (str "✓ Held — recording a grant against the verdict, which is the "
                           "ledger saying you read it and stand by the design.")
+        :land        "Queuing the pull request on the merge lane — /drive-home takes it from here."
         :assert-gate (str "Recording the gate with your evidence and opening the next "
                           "phase — its implementation is owed next.")
         "Done."))

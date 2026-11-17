@@ -31,6 +31,7 @@
    [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.lane.resume :as resume]
+   [nido.coordinator.lane.ship :as ship]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.lane.scratch :as scratch]
@@ -164,7 +165,7 @@
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
-      (contains? #{:approve :redesign :hold-design :apply :defer} action-id)))
+      (contains? #{:approve :redesign :hold-design :apply :defer :land} action-id)))
 
 (defn- lettered-actions
   "One button per branch of an enumerated question, lettered by position. `:kind
@@ -369,6 +370,13 @@
            (= :assert-gate awaiting)
            [(cond-> {:id :assert-gate :label "Assert gate" :kind :evidence :style :primary}
               gate-criterion (assoc :criterion gate-criterion))]
+
+           ;; Landing a published PR is a person's gesture, given as one button as a grant is:
+           ;; the card's headline names the PR, and there is nothing to choose between.
+           (= :land awaiting)
+           (cond-> [(cond-> {:id :land :label "Land" :kind :mutation :style :primary}
+                      entry-seq (assoc :seq entry-seq))]
+             parked? (conj reply-action))
 
            approving?
            (cond-> [(cond-> {:id :approve :label "Approve"
@@ -3146,6 +3154,30 @@
               ;; it — see ui.server/resolve-failure-msg.
               {:decision :approved-unresumed})))))))
 
+(defn- land!
+  "Hand the published PR to the merge lane, as `nido ship` does: a :ship envelope for the
+   workstream's environment session, which the daemon drives home with /drive-home.
+
+   Refused when the position no longer owes a landing (:nothing-to-land — merged since, or
+   sent back), when the click names another record than the one owed (:land-stale), when a
+   merge Run already owns the workstream (:already-landing), and when no session holds the
+   branch (:no-session). Nothing is written on a refusal."
+  [project ws-id entry-seq]
+  (let [p (keyword (name project))]
+    (cond
+      (not= :land (awaiting-human (pipeline/of p ws-id))) {:decision :nothing-to-land}
+
+      (or (nil? entry-seq) (not= entry-seq (:seq (gate-report p ws-id))))
+      {:decision :land-stale}
+
+      (ship/merge-run-in-flight? p ws-id) {:decision :already-landing}
+
+      :else
+      (if-let [s (:name (environment p ws-id))]
+        (do (queue/enqueue! {:type :ship :project p :session s :ws-id ws-id})
+            {:decision :landing :session s})
+        {:decision :no-session}))))
+
 (defn- open-finding
   "One finding of a send-back as a grant names it: its check, the claim it is filed under when
    it names one, and what it says."
@@ -3375,6 +3407,8 @@
      :option-a … :option-f -> resume! with the blocker branch that letter names,
                               iff `payload` still names the latest report
      :assert-gate -> advance-phase! with `payload` as the gate's evidence
+     :land    -> queue the published PR on the merge lane, iff `payload` still names
+                 the record the landing is owed over
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
 
@@ -3425,6 +3459,7 @@
        :redesign     (redesign! project ws-id payload)
        :hold-design  (hold-design! project ws-id payload)
        :assert-gate  (advance-phase! project ws-id payload)
+       :land         (land! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
 (def ^:private activation-preamble
