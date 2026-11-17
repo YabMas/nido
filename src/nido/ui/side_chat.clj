@@ -82,6 +82,7 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
     {:id         panel-id
      :send-url   (str base "/send")
      :cancel-url (str base "/cancel")
+     :reset-url  (str base "/reset")
      :stream-url (str base "/stream")
      :answer-url (fn [item option] (str base "/permission/" item "/" option))
      :unpick-url (fn [i] (str base "/unpick/" i))}))
@@ -150,9 +151,9 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   handle!
-  "One request under /_chat — the stream, a send, a stop, a permission answer, of the conversation
-   its path names — or nil for any other path, and for a workstream's chat path that names no open
-   workstream."
+  "One request under /_chat — the stream, a send, a stop, a reset, a permission answer, of the
+   conversation its path names — or nil for any other path, and for a workstream's chat path that
+   names no open workstream."
   [{:keys [uri] :as req}]
   (when (str/starts-with? (str uri) "/_chat/")
     (let [place (place-of uri)

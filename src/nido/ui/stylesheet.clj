@@ -635,6 +635,10 @@
         .chat-side > .chat { flex:1; }
         .chat-side-bar { display:flex; gap:8px; align-items:center; }
         .chat-side-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
+        /* New conversation, and the ask that replaces the heading while it is confirmed. */
+        .chat-new { flex:none; font-size:var(--fs-xs); }
+        .chat-new-ask { flex:1; display:flex; gap:6px; align-items:center; font-size:var(--fs-xs); }
+        .chat-new-ask span { flex:1; color:var(--text); }
         .chat-toggle { position:relative; flex:none; width:30px; height:30px; padding:0; border-radius:6px; cursor:pointer;
                        background:none; border:1px solid transparent; color:var(--text-muted); }
         .chat-toggle:hover, .chat-side.open .chat-toggle { color:var(--text-strong); }

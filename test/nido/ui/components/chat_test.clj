@@ -87,3 +87,20 @@
 (deftest a-note-is-a-quiet-line
   (is (str/includes? (html (chat/chat-item {:id "i0" :kind :note :text "Edits thrown away."} routes))
                      "class=\"chat-note\"")))
+
+(deftest a-side-panel-offers-a-new-conversation-only-when-it-can-reset
+  (let [empty-t {:items [] :busy? false}
+        with    (html (chat/side empty-t (assoc routes :reset-url "/r") {:open? true}))
+        without (html (chat/side empty-t routes {:open? true}))]
+    (testing "routes with a reset URL put the control in the bar, and only the ask posts"
+      (is (str/includes? with "New conversation"))
+      (is (str/includes? with "pReset: false"))
+      (is (str/includes? with "data-on:click=\"$pReset = true\"") "choosing it asks first")
+      (is (str/includes? with "@post(&apos;/r&apos;)") "the ask's own button posts")
+      (is (str/includes? with "can&apos;t be brought back")))
+    (testing "both are hidden while a turn runs"
+      (is (str/includes? with "!$pReset &amp;&amp; !$pBusy"))
+      (is (str/includes? with "data-show=\"$pReset &amp;&amp; !$pBusy\"")))
+    (testing "without a reset URL there is no control"
+      (is (not (str/includes? without "New conversation")))
+      (is (not (str/includes? without "Reset"))))))

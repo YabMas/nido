@@ -529,6 +529,7 @@
   {:id         id
    :send-url   "/_catalog/nowhere/chat/send"
    :cancel-url "/_catalog/nowhere/chat/cancel"
+   :reset-url  "/_catalog/nowhere/chat/reset"
    :answer-url (fn [item option] (str "/_catalog/nowhere/chat/permission/" item "/" option))
    :unpick-url (fn [i] (str "/_catalog/nowhere/chat/unpick/" i))})
 
@@ -614,7 +615,9 @@ for the text and keep the tint, so it still reads as **yours** without competing
     :note "The panel as a side panel: a toggle that opens and closes it, leading a bar over the
            panel. Closed, the toggle is all that shows; the page gives it the width."
     :scenes [{:title "open"
-              :note "The toggle points out, the bar names the chat, and the panel is under it."
+              :note "The toggle points out, the bar names the chat and offers a new conversation,
+                     and the panel is under it. New conversation asks in the bar before it starts
+                     over, and is hidden while a turn runs."
               :render #(vector :div.cat-sidepanel
                                (chat/side (transcript false you reply) (chat-routes "scene-chat-7") {:open? true}))}
              {:title "closed"

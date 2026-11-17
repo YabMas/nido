@@ -210,7 +210,9 @@
   (Operation side
     "The panel as a side panel: a bar led by the one toggle that opens and closes it, over the
      panel. Closed, the toggle is all that shows, so it rides the panel's left edge. Declares and
-     follows the panel's open signal; how wide the panel is, open or closed, is its page's."
+     follows the panel's open signal; how wide the panel is, open or closed, is its page's. Where
+     its routes carry a reset URL the bar also offers a new conversation, confirmed in place and
+     hidden while a turn runs."
     {:signature [:=> [:catn [:transcript acp/Conversation] [:routes :map] [:opts :map]] :any]
      :delegates [chat-panel signals]}))
 

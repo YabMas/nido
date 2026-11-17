@@ -273,12 +273,20 @@
 
    Whether it is open is the panel's `:open` signal (see `signals`), declared here starting at
    `:open?`, and the aside carries class `open` while it is. How wide it is, open or closed, is
-   the page's: give the closed column room for the toggle and the bar's padding, 58px."
-  [transcript {:keys [id] :as routes} {:keys [open? heading bar top extra]}]
-  (let [{:keys [open busy]} (signals id)]
+   the page's: give the closed column room for the toggle and the bar's padding, 58px.
+
+   Routes carrying `:reset-url` put New conversation in the bar, after the heading. Choosing it
+   asks in the bar itself — the conversation cannot be brought back — and only the ask's own
+   button posts. Both are hidden while a turn runs (the busy signal); the ask's state is the
+   page's alone, one signal, `<id>Reset`."
+  [transcript {:keys [id reset-url] :as routes} {:keys [open? heading bar top extra]}]
+  (let [{:keys [open busy]} (signals id)
+        confirm (str (str/replace id #"[^A-Za-z0-9]" "") "Reset")
+        asking  (str "$" confirm " && !$" busy)]
     (-> [:aside.chat-side {:class (when open? "open")
                            :aria-label "Chat with the agent"
-                           "data-signals" (str "{" open ": " (boolean open?) "}")
+                           "data-signals" (str "{" open ": " (boolean open?)
+                                               (when reset-url (str ", " confirm ": false")) "}")
                            "data-class:open" (str "$" open)}
          (into [:div.chat-side-bar
                 [:button.chat-toggle {:id (str id "-toggle") :type "button"
@@ -290,7 +298,19 @@
                  (panel-icon "chat-i-open" "m10 15-3-3 3-3")
                  (panel-icon "chat-i-close" "m8 9 3 3-3 3")
                  [:span.chat-spin {:aria-hidden "true"}]]
-                [:h1 (or heading "Chat")]]
+                [:h1 (when reset-url {"data-show" (str "!(" asking ")")}) (or heading "Chat")]
+                (when reset-url
+                  [:button.btn.chat-new {:type "button" :title "Start a new conversation"
+                                         "data-show" (str "!$" confirm " && !$" busy)
+                                         "data-on:click" (str "$" confirm " = true")}
+                   "New conversation"])
+                (when reset-url
+                  [:div.chat-new-ask {"data-show" asking}
+                   [:span "Start over? This conversation can't be brought back."]
+                   [:button.btn {:type "button" "data-on:click" (str "$" confirm " = false")} "Back"]
+                   [:button.btn.btn-danger {:type "button"
+                                            "data-on:click" (str "$" confirm " = false; @post('" reset-url "')")}
+                    "Start over"]])]
                bar)]
         (into top)
         (conj (into (chat-panel transcript routes) extra)))))

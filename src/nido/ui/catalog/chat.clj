@@ -72,6 +72,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   {:id         panel-id
    :send-url   "/_catalog/chat/send"
    :cancel-url "/_catalog/chat/cancel"
+   :reset-url  "/_catalog/chat/reset"
    :stream-url "/_catalog/chat/stream"
    :answer-url (fn [item option] (str "/_catalog/chat/permission/" item "/" option))
    :unpick-url (fn [i] (str "/_catalog/chat/unpick/" i))
@@ -248,9 +249,10 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   handle!
-  "One request under /_catalog/chat — the stream, a send, a cancel, a permission answer, the chips
-   for the posted picks, removing one pick, a publish or a revert — or one of the frame's requests
-   while it is the preview's (`forwarded?`); nil for any other."
+  "One request under /_catalog/chat — the stream, a send, a cancel, a reset, a permission answer,
+   the chips for the posted picks, removing one pick, a publish or a revert — or one of the frame's
+   requests while it is the preview's (`forwarded?`); nil for any other. A reset leaves the design
+   session's change as it is, but until the next send the frame is this dashboard's own."
   [{:keys [uri request-method] :as req}]
   (let [segs (vec (remove str/blank? (str/split (str uri) #"/")))]
     (if (forwarded? req segs)
