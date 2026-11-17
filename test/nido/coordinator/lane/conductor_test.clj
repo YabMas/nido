@@ -332,6 +332,32 @@
               (is (not (conductor/awaiting-answer? :brian id)) "a new generation owes its predecessor's blocker no reply")
               (is (nil? (conductor/answer! :brian id "yes"))))))))))
 
+(deftest an-escalation-the-person-has-acted-since-parks-nothing
+  ;; A turn ends, the person acts, and only then does the conductor decide on the turn: its
+  ;; escalation asks about a position the act already moved, and parked it would stay owed.
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            c        (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (let [hb  (:id (hand-back! id))
+              _   (Thread/sleep 5)
+              act (add :intent {:format :intent :goal "g, restated" :done-when ["d"] :supersedes {:seq 1 :why "restated"}})]
+          (is (= [:refused :overtaken]
+                 (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate (esc "x")]}))))
+          (is (empty? (ws/entries-of :brian id :blocker)) "no blocker is parked")
+          (let [cover (seats/posted :brian id (str "act:" act))]
+            (is (some? cover) "the act's own hand-back is posted for the conductor to decide")
+            (is (= [:covered {:by (:id cover)}]
+                   (:decision (last (ws/entries-of :brian id :conduct-decision))))
+                "the overtaken hand-back is settled, so it is never escalated as unanswered")
+            (is (= [:refused :already-answered]
+                   (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate (esc "x")]}))))
+            (is (= :accepted
+                   (first (in-session c #(conductor/decide! :brian id {:hand-back (:id cover)
+                                                                         :decision [:escalate (esc "x")]}))))
+                "deciding on the act itself is not overtaken by it")))))))
+
 (defn- legacy-decide!
   "decide! as it was before an escalation at a person's move stopped parking a blocker — the
    ledgers written then still hold such blockers, and `answers!` still answers them."

@@ -510,6 +510,20 @@
                                                   :to seat :text text}))))
          entry)))))
 
+(declare person-kinds persons-act?)
+
+(defn- overtaking-act
+  "The first act of the person's recorded on the ledger after hand-back `m` was posted, or nil.
+   A conductor deciding on `m` read a position that act has since moved: an answer to the blocker
+   `m` stood on, a grant, a gate asserted."
+  [project ws-id m]
+  (let [inst #(try (java.time.Instant/parse (str %)) (catch Exception _ nil))
+        m-at (inst (:at m))]
+    (when m-at
+      (first (sort-by :seq (filter #(and (persons-act? %)
+                                         (some-> (inst (:at %)) (.isAfter ^java.time.Instant m-at)))
+                                   (mapcat (fn [k] (ws/entries-of project ws-id k)) person-kinds)))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :ConductDecision] :DecideResult]}
   decide!
   "Record the conductor's answer to a hand-back — {:hand-back <message id> :decision [:instruct
@@ -517,7 +531,13 @@
    carry it out. Refused, by name, from any session but the conductor's (:not-the-conductor), for
    an id that is no hand-back (:not-a-hand-back) or one already answered (:already-answered), and
    for an instruction to anything that is not a current seat (:not-a-seat). Answers [:accepted
-   entry] or [:refused reason]."
+   entry] or [:refused reason].
+
+   An escalation on a hand-back the person has acted since (`overtaking-act`) is refused
+   (:overtaken): it asks about a position that no longer holds, and parked as a blocker it
+   would stay owed after the work moved on. The hand-back is recorded :covered by the act's own
+   hand-back — posted now if the pass has not posted it yet — which the conductor decides
+   instead, so nothing is asked twice and nothing is left owed."
   [project ws-id {:keys [hand-back decision]}]
   (deciding
    project ws-id
@@ -525,6 +545,21 @@
       (not (conducting? project ws-id))           [:refused :not-the-conductor]
       (nil? (hand-back-message project ws-id hand-back)) [:refused :not-a-hand-back]
       (answered? project ws-id hand-back)         [:refused :already-answered]
+
+      (and (= :escalate (first decision))
+           (overtaking-act project ws-id (hand-back-message project ws-id hand-back)))
+      (let [act   (overtaking-act project ws-id (hand-back-message project ws-id hand-back))
+            cover (post-hand-back! project ws-id (str "act:" (:seq act))
+                                   {:what (str "the person's " (name (:format act)) " at entry " (:seq act))
+                                    :session (:name (conductor-of project ws-id)) :said (pr-str act)})
+            {:keys [position next owes]} (position project ws-id)]
+        (record-decision! project ws-id (cond-> {:format :conduct-decision :hand-back hand-back
+                                                 :position position :by :nido
+                                                 :decision [:covered {:by (:id cover)}]}
+                                          next (assoc :next next)
+                                          owes (assoc :owes owes)))
+        [:refused :overtaken])
+
       :else
       (let [{:keys [position next owes]} (position project ws-id)]
         (try

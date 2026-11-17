@@ -4046,7 +4046,8 @@
    naming what the person is needed for. :position and :next are what the pipeline derived when it
    was decided — a reading kept for the record, never the workstream's current position. :by is
    :nido for what nido writes when a conductor turn ends leaving its hand-back unanswered: a
-   :covered naming the later hand-back from the same session whose decision supersedes it, or an
+   :covered naming the later hand-back that supersedes it — the same session's, decided, or the
+   person's act that overtook an escalation decided on it (`conductor/decide!`) — or an
    escalation once the conductor was offered it again and still decided nothing. An escalation's :summary and :options are those of the blocker it parks on, when it
    parks one. An escalation cites the :blocker it parked the workstream on, which is appended
    before it, so no accepted escalation is ever without its blocker."
@@ -4973,8 +4974,8 @@
                         ""]
                        (case verb
                          :instruct (map #(str "- **" (addressee->text (:seat %)) "** — " (:text %)) body)
-                         :covered  [(str "The same session's later hand-back `" (:by body)
-                                         "` was decided, which supersedes this one; nothing is asked.")]
+                         :covered  [(str "The later hand-back `" (:by body)
+                                         "` supersedes this one; nothing is asked.")]
                          [(str "**Needs** — " (:needs body))
                           (when parked (str "\nParked on the blocker at entry " (:seq parked) "."))]))))))
 
