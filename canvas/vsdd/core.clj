@@ -26,7 +26,8 @@
   [:map [:exit :int] [:out :string] [:err :string]])
 
 (Module vsdd-jj
-  "Every jj interaction the sweep makes, in one place.
+  "Every jj interaction the sweep makes, and the one that reads a declaration at a revision, in
+   one place.
 
    One module so the VCS is a seam rather than a habit: a sweep that shelled to jj from six
    namespaces could not be tested without a repository, and could not be ported without finding
@@ -72,7 +73,15 @@
     {:signature [:=> [:catn [:dir Path] [:change-id :string]] ShellResult] :delegates [jj!]})
   (Operation abandon
     "Abandon a revision."
-    {:signature [:=> [:catn [:dir Path] [:change-id :string]] ShellResult] :delegates [jj!]}))
+    {:signature [:=> [:catn [:dir Path] [:change-id :string]] ShellResult] :delegates [jj!]})
+  (Operation materialize-spec-dirs!
+    "The spec dirs as they stood at a revision, written into a fresh directory the caller deletes —
+     nil when the revision names nothing. Everything else the worktree holds is linked in beside
+     them, so fukan runs there on the project's own dependency configuration. Here rather than in
+     the design seam, because a revision is a VCS question that seam's band may not reach."
+    {:signature [:=> [:catn [:worktree :string] [:rev :string] [:spec-dirs [:vector :string]]]
+                 [:maybe :string]]
+     :delegates [jj!]}))
 
 (Module vsdd-agent
   "Spawning the agents a VSDD role needs.

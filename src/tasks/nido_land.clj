@@ -271,7 +271,7 @@
    in with the rest of what fukan runs from, and nothing here reads what an element pairs with."
   [project worktree]
   (if-let [{:keys [spec-dirs]} (design/design-of project worktree)]
-    (if-let [dir (nido-design/materialize-spec-dirs! worktree "main" spec-dirs)]
+    (if-let [dir (jj/materialize-spec-dirs! worktree "main" spec-dirs)]
       (try
         (design/elements project dir)
         (finally (fs/delete-tree dir)))
