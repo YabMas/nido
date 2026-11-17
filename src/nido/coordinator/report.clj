@@ -1882,12 +1882,13 @@
    ;; identity a park keeps across runs. Absent on every other halt. It is how
    ;; the next run tells a question already standing unanswered from a new one.
    [:parks   {:optional true} [:vector string?]]
-   ;; The dialog nido observed a driven session stopped on, which this blocker asks a person
-   ;; about: the session and the instant the listing first showed it waiting. Absent on every
-   ;; other blocker. It ties one question to one dialog, so a dialog is asked about once whatever
-   ;; became of the question, and its closing answers it.
+   ;; The stop nido observed a session in, which this blocker asks a person about. :dialog — a
+   ;; driven session stopped on a dialog, :since the instant the listing first showed it waiting.
+   ;; :dead-turn — a session's process gone inside a turn, :since the instant that turn began.
+   ;; Absent on every other blocker. It ties one question to one stop, so a stop is asked about
+   ;; once whatever became of the question, and its ending answers it.
    [:stop    {:optional true} [:map {:closed true}
-                               [:kind    [:enum :dialog]]
+                               [:kind    [:enum :dialog :dead-turn]]
                                [:session string?]
                                [:since   string?]]]])
 

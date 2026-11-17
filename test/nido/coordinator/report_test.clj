@@ -568,6 +568,15 @@
     (is (str/includes? md "Steps"))
     (is (str/includes? md "fix the calc"))))
 
+(deftest a-blocker-s-stop-is-a-dialog-or-a-dead-turn
+  (doseq [kind [:dialog :dead-turn]]
+    (let [b (assoc valid-blocker :stop {:kind kind :session "worker" :since "2026-11-17T09:39:34Z"})]
+      (is (= b (report/validate-event :blocker b)) (str kind))))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :blocker (assoc valid-blocker :stop {:kind :stall :session "worker"
+                                                                           :since "2026-11-17T09:39:34Z"})))
+      "a stop of any other kind is refused"))
+
 (deftest report->markdown-completed-blocker-pr
   (is (str/includes? (report/report->markdown valid-completed) "Artifacts"))
   (is (str/includes? (report/report->markdown valid-completed) "org/repo#42"))
