@@ -130,6 +130,20 @@
   (zero? (:exit (shell {:continue true :out :string :err :string}
                        "kill" "-0" (str pid)))))
 
+(defn ^{:malli/schema [:=> [:cat :int] [:or :int [:enum :gone :unknown]]]}
+  process-started
+  "When the process now running under `pid` started, in epoch milliseconds; :gone when nothing
+   runs under it; :unknown when something does and the OS will not say when it started. A pid
+   names whatever process holds it now, so its start is what tells the process a caller recorded
+   from a later one given the same number. :unknown is not :gone: it says nothing either way."
+  [pid]
+  (let [ph (.orElse (java.lang.ProcessHandle/of pid) nil)]
+    (if (or (nil? ph) (not (.isAlive ^java.lang.ProcessHandle ph)))
+      :gone
+      (if-let [start (.orElse (.startInstant (.info ^java.lang.ProcessHandle ph)) nil)]
+        (.toEpochMilli ^java.time.Instant start)
+        :unknown))))
+
 (defn ^{:malli/schema [:=> [:cat :int] :any]}
   stop-process! [pid]
   (when (process-alive? pid)

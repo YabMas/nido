@@ -95,3 +95,13 @@
   (is (= {:exit 0 :timed-out? false}
          (sut/wait-within! (.start (ProcessBuilder. ["true"])) nil))
       "nil is no limit"))
+
+(deftest a-pid-s-start-tells-its-process-from-a-later-one
+  (let [me (.pid (java.lang.ProcessHandle/current))]
+    (testing "a running process answers when it started"
+      (is (<= (sut/process-started me) (System/currentTimeMillis))))
+    (testing "a pid nothing runs under is gone, not unknown"
+      (let [p   (.start (ProcessBuilder. ["true"]))
+            pid (.pid p)]
+        (.waitFor p)
+        (is (= :gone (sut/process-started pid)))))))

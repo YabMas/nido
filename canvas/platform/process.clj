@@ -37,6 +37,10 @@
      :delegates [run-exit-notes! stop-live-children!]})
   (Operation process-alive? "Is this pid alive?"
     {:signature [:=> [:catn [:pid :int]] :boolean]})
+  (Operation process-started
+    "When the process now running under a pid started, in epoch milliseconds; :gone when nothing
+     runs under it; :unknown when something does and the OS will not say when it started."
+    {:signature [:=> [:catn [:pid :int]] [:or :int [:enum :gone :unknown]]]})
   (Operation stop-process! "Stop one pid, if it is alive."
     {:signature [:=> [:catn [:pid :int]] :any]
      :delegates [process-alive?]})
