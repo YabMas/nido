@@ -457,6 +457,38 @@
                                                                                  :decision [:escalate (esc "Something new")]}))))
               "the hand-back stays owed, and a new question is still asked"))))))
 
+(deftest an-escalation-approving-a-superseded-design-is-refused
+  ;; Review judged design 25; the seat then wrote 28, claims unchanged. The conductor offered
+  ;; "approve 25", which the click refuses as not newest, and its blocker held the round on 28.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")
+            ask  (fn [n] [:escalate (assoc (esc "Approve the design?")
+                                           :options [{:label "Approve" :summary "as it stands" :approves-design n}
+                                                     {:label "Amend it" :summary "say what"}])])
+            entries-of ws/entries-of]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [standing/governing-design (constantly {:seq 28})
+                      ws/entries-of (fn [p w k] (if (= :design-decision k)
+                                                  [{:design-seq 25}]
+                                                  (entries-of p w k)))]
+          (let [hb (:id (hand-back! id))]
+            (is (= [:refused :stale-approval]
+                   (in-session c #(conductor/decide! :brian id {:hand-back hb :decision (ask 25)}))))
+            (is (= [:refused :stale-approval]
+                   (in-session c #(conductor/decide! :brian id {:hand-back hb :decision (ask 28)})))
+                "the governing design is not approvable before a round has judged it")
+            (is (empty? (ws/entries-of :brian id :blocker)) "no blocker holds the round")))
+        (with-redefs [standing/governing-design (constantly {:seq 28})
+                      ws/entries-of (fn [p w k] (if (= :design-decision k)
+                                                  [{:design-seq 25} {:design-seq 28}]
+                                                  (entries-of p w k)))]
+          (is (= :accepted
+                 (first (in-session c #(conductor/decide! :brian id {:hand-back (:id (hand-back! id))
+                                                                      :decision (ask 28)}))))
+              "a judged governing design is offered for approval"))))))
+
 (defn- legacy-decide!
   "decide! as it was before an escalation at a person's move stopped parking a blocker — the
    ledgers written then still hold such blockers, and `answers!` still answers them."

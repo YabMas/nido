@@ -664,6 +664,16 @@
       (last (filter #(and (span (:seq %)) (answered (:seq %)) (= q (str/trim (str (:needs %)))))
                     (ws/entries-of project ws-id :blocker))))))
 
+(defn- stale-approval
+  "The first option of escalation `ask` that approves a design nobody can approve now — not the
+   governing design, or one no decision round has judged — or nil. Picking it is refused at the
+   click, and the escalation parks the very round that would judge the governing design."
+  [project ws-id ask]
+  (let [governing (:seq (standing/governing-design project ws-id))
+        judged    (into #{} (keep :design-seq) (ws/entries-of project ws-id :design-decision))]
+    (first (filter #(when-let [n (:approves-design %)] (not (and (= n governing) (judged n))))
+                   (:options ask)))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :ConductDecision] :DecideResult]}
   decide!
   "Record the conductor's answer to a hand-back — {:hand-back <message id> :decision [:instruct
@@ -683,7 +693,12 @@
 
    An escalation asking, word for word, a question the person already answered in this
    generation is refused (:already-asked) and the hand-back stays owed: the answer is on the
-   ledger, and the decision owed is what to do with it, not asking it again."
+   ledger, and the decision owed is what to do with it, not asking it again.
+
+   An escalation offering to approve a design that is not the governing one, or that no decision
+   round has judged (`stale-approval`), is refused (:stale-approval) and the hand-back stays
+   owed: the seat amended the design after its round, so the round owed next judges the newer
+   one, and nido puts the Approve card to the person once it proceeds."
   [project ws-id {:keys [hand-back decision]}]
   (deciding
    project ws-id
@@ -695,6 +710,9 @@
 
       (and (= :escalate (first decision)) (answered-ask project ws-id (:needs (second decision))))
       [:refused :already-asked]
+
+      (and (= :escalate (first decision)) (stale-approval project ws-id (second decision)))
+      [:refused :stale-approval]
 
       (and (= :escalate (first decision))
            (overtaking-act project ws-id (hand-back-message project ws-id hand-back)))

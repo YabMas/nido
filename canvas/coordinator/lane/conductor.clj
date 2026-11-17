@@ -31,7 +31,7 @@
    reason."
   [:or [:tuple [:enum :accepted] :map]
        [:tuple [:enum :refused] [:enum :not-the-conductor :not-a-hand-back :already-answered
-                                    :not-a-seat]]])
+                                    :already-asked :overtaken :stale-approval :not-a-seat]]])
 
 (Module lane-conductor
   "Who decides what a workstream's seats do next, and what reaches the person.
