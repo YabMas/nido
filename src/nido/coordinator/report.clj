@@ -1813,8 +1813,10 @@
    [:detail  {:optional true} string?]])
 
 (def grantable-kinds
-  "The person's acts a blocker option may hand to the seat (BlockerOption :grants)."
-  #{:intent})
+  "The person's acts a grant may hand to a seat: :intent, one goal amendment the seat writes; :merge,
+   one landing of the workstream's own PR, through `nido:workstream:pr:land`. Closing, approving a
+   design and recording a landing are not here, and so stay the person's own."
+  #{:intent :merge})
 
 (def BlockerOption
   "One answerable branch of a blocker — what the human is picking BETWEEN.
@@ -1833,8 +1835,8 @@
    'amend the goal to …' grants :intent, so the seat writes the amendment the person chose instead
    of handing it back as a command to run. The card says so beside the option, the answer
    records it, and the commit gate lets the seat append one entry of each kind granted
-   (conductor/granted?). Only `grantable-kinds`: merging and closing stay the person's own, and
-   so does approving a design — which no seat is handed, because the person's pick does it.
+   (conductor/granted?). Only `grantable-kinds`: closing stays the person's own, and so does
+   approving a design — which no seat is handed, because the person's pick does it.
 
    :approves-design names the design entry picking the option approves. The pick itself is then
    the person's grant: the click records the same :design-approved the chat command does, for
@@ -1936,6 +1938,17 @@
     [:summary {:optional true} string?]]
    [:fn {:error/message "a branch answer names both its letter and its label, a worded one neither"}
     (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]])
+
+(def Grant
+  "A person's grant given in words outside any blocker: the workstream's chat passing on their word
+   with the acts it hands the seats (conductor/tell!). Written only by that verb, never by an
+   agent's generic append, which refuses the kind as a person's act. :words is what the person
+   said, kept so a reader sees what was granted on what. Spent as a blocker answer's grant is."
+  [:map {:closed true}
+   [:format  [:= :grant]]
+   [:grants  [:vector {:min 1} (into [:enum] grantable-kinds)]]
+   [:words   [:string {:min 1}]]
+   [:session {:optional true} string?]])
 
 (def BlockerAnswered
   "The human's answer to a blocker that named its branches — written by nido at
@@ -4365,6 +4378,7 @@
    :implementation-completed ImplementationCompleted
    :blocker                  Blocker
    :blocker-answered         BlockerAnswered
+   :grant                    Grant
    :triage-accepted          TriageAccepted
    :pr-opened                PrOpened
    :merged                   Merged
@@ -5185,6 +5199,13 @@
                       summary summary
                       :else   "_left open_")))
          [summary])))))
+
+(defn- grant->markdown [{:keys [grants words session]}]
+  (str/join "\n"
+    (remove nil?
+      [(str "# Granted: " (str/join ", " (map name grants)))
+       (when session (str "_through the chat, " session "_"))
+       "" words])))
 
 (defn- triage-accepted->markdown [{:keys [triage-seq] :as accepted}]
   (let [answers (accepted-answers accepted)
@@ -6015,6 +6036,7 @@
     :implementation-completed (completed->markdown report)
     :blocker                  (blocker->markdown report)
     :blocker-answered         (blocker-answered->markdown report)
+    :grant                    (grant->markdown report)
     :conduct-decision         (conduct-decision->markdown report)
     :triage-accepted          (triage-accepted->markdown report)
     :pr-opened                (pr-opened->markdown report)
@@ -6094,6 +6116,8 @@
                                                                                    (:answers report)))
                                                        " of " (count (:answers report)) " questions")
                                 :else             (str "Answered: " (first-line (:summary report))))
+    :grant                    (str "Granted " (str/join ", " (map name (:grants report)))
+                                   ": " (first-line (:words report)))
     :closed                   (str "Closed: " (name (:outcome report)))
     :reopened                 (str "Reopened" (some->> (:stage report) name (str " at ")))
     :stage-set                (str "Stage set: " (name (:stage report)))

@@ -77,3 +77,38 @@
        :issue  (let [m (json/parse-string out true)]
                  {:number (:number m) :url (:url m) :title (:title m) :body (:body m)})}
       {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))})))
+
+(def ^:private auto-merge-off
+  "What GitHub answers `gh pr merge --auto` with on a repository that disables auto-merge: the call
+   never reaches the merge queue, and an enqueue is the queue's own entry point."
+  #"(?i)auto.?merge is not allowed|enablePullRequestAutoMerge")
+
+(defn ^{:malli/schema [:=> [:cat :string :int] :map]}
+  land-pr!
+  "Put pull request `number` of `repo` on its way to its base branch: `gh pr merge --auto`, which
+   on a merge-queue branch enqueues it once its checks allow; where the repository refuses
+   auto-merge, an `enqueuePullRequest` by the node id read here. No merge strategy is passed: a
+   queue's own decides and refuses one. {:status :ok :via :auto|:queue} or
+   {:error :auth|:gh :detail}, :detail carrying gh's refusal in its own words, since a queue's
+   refusal names the protection to satisfy."
+  [repo number]
+  (let [fail (fn [{:keys [err out]}]
+               (let [msg (str/trim (str err (when (str/blank? err) out)))]
+                 {:error (if (auth-error? msg) :auth :gh) :detail msg}))
+        auto (sh! ["gh" "pr" "merge" (str number) "--repo" repo "--auto"])]
+    (cond
+      (zero? (:exit auto))
+      {:status :ok :via :auto}
+
+      (not (re-find auto-merge-off (str (:err auto) (:out auto))))
+      (fail auto)
+
+      :else
+      (let [view (sh! ["gh" "pr" "view" (str number) "--repo" repo "--json" "id" "--jq" ".id"])
+            id   (str/trim (str (:out view)))]
+        (if (or (not (zero? (:exit view))) (str/blank? id))
+          (fail view)
+          (let [q (sh! ["gh" "api" "graphql"
+                        "-f" "query=mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position state}}}"
+                        "-f" (str "id=" id)])]
+            (if (zero? (:exit q)) {:status :ok :via :queue} (fail q))))))))

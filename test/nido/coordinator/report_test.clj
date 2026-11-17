@@ -2443,3 +2443,16 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"escalation is not written in its parts"
                           (report/validate-event :conduct-decision (dissoc e :next)))
         "one that parks is the blocker's question, and is")))
+
+(deftest merge-is-grantable-and-closing-is-not
+  (is (= #{:intent :merge} report/grantable-kinds))
+  (is (report/validate-event :blocker-answered {:format :blocker-answered :blocker-seq 1 :summary "s" :grants [:merge]}))
+  (is (thrown? Exception (report/validate-event :blocker-answered {:format :blocker-answered :blocker-seq 1 :summary "s"
+                                                                   :grants [:closed]}))
+      "closing stays the person's own")
+  (is (thrown? Exception (report/validate-event :blocker-answered {:format :blocker-answered :blocker-seq 1 :summary "s"
+                                                                   :grants [:design-approved]}))
+      "and so does approving a design")
+  (is (report/validate-event :grant {:format :grant :grants [:merge] :words "/land" :session "chat"}))
+  (is (thrown? Exception (report/validate-event :grant {:format :grant :grants [:merge] :words ""}))
+      "a grant keeps the person's words"))

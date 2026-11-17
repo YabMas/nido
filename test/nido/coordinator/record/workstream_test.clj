@@ -1959,3 +1959,14 @@
                               (ws/append-entry-once! :brian (:id w) {:kind :phase-gate} (pr-str second-phase)
                                                      (constantly false))))
         (is (= n (count (:entries (ws/read-ws :brian (:id w))))))))))
+
+(deftest own-pr-is-a-github-ref-the-workstream-records
+  (let [w {:external-refs [{:adapter :github :id "Brian-Study/brian#412"}
+                           {:adapter :github :id "a/x#7"} {:adapter :github :id "b/y#7"}
+                           {:adapter :notion :id "BR-9"}]}]
+    (is (= "Brian-Study/brian#412" (:id (ws/own-pr w "brian-study/brian#412"))) "slugs compare as GitHub compares them")
+    (is (= "Brian-Study/brian#412" (:id (ws/own-pr w "412"))) "a bare number names the one ref that has it")
+    (is (nil? (ws/own-pr w "7")) "a number two repositories share names neither")
+    (is (nil? (ws/own-pr w "brian-study/brian#41")) "nor does a prefix")
+    (is (nil? (ws/own-pr w "BR-9")) "a ref of another adapter is no PR")
+    (is (nil? (ws/own-pr {:external-refs []} "412")))))

@@ -22,7 +22,12 @@
     {:signature [:=> [:catn [:repo :string] [:assignee :string] [:limit [:? :int]]] :map]
      :delegates [sh!]})
   (Operation view-issue "One issue's metadata and body."
-    {:signature [:=> [:catn [:repo :string] [:number :any]] :map] :delegates [sh!]}))
+    {:signature [:=> [:catn [:repo :string] [:number :any]] :map] :delegates [sh!]})
+  (Operation land-pr!
+    "Put one pull request on its way to the base branch: auto-merge, or — where the repository
+     refuses auto-merge — an enqueue on its merge queue by the node id it reads itself.
+     {:status :ok :via :auto|:queue} or {:error :auth|:gh :detail}, gh's refusal in :detail."
+    {:signature [:=> [:catn [:repo :string] [:number :int]] :map] :delegates [sh!]}))
 
 (Module github-config
   "Per-project GitHub configuration. Absent means the merge poller is simply off for that

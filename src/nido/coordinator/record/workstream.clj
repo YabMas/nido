@@ -2486,6 +2486,20 @@
        (keep #(read-ws project %))
        (some (fn [w] (when (some #(= external-id (:id %)) (:external-refs w)) w)))))
 
+(defn ^{:malli/schema [:=> [:cat :any :string] [:maybe :map]]}
+  own-pr
+  "The :github ref of workstream `w` naming pull request `pr`, or nil: what nido knows as the
+   workstream's own PR. `pr` is `owner/repo#n`, compared without regard to case as GitHub compares
+   slugs, or a bare `n`, which names a PR only when exactly one of the refs has that number — a
+   number two repositories share names neither."
+  [w pr]
+  (let [refs (filter #(= :github (:adapter %)) (:external-refs w))
+        pr   (str/trim (str pr))]
+    (if (re-matches #"\d+" pr)
+      (let [hits (filter #(= pr (second (re-find #"#(\d+)$" (str (:id %))))) refs)]
+        (when (= 1 (count hits)) (first hits)))
+      (some #(when (= (str/lower-case pr) (str/lower-case (str (:id %)))) %) refs))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Workstream]}
   find-or-mint-by-ref!
   "The workstream carrying `external-id` as a ref, minting a minimal one when none does — the

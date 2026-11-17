@@ -283,6 +283,10 @@
     "The workstream answering to an external ref from a named adapter, or nil."
     {:signature [:=> [:catn [:project ProjectName] [:adapter :keyword] [:external-id :string]] [:maybe Workstream]]
      :delegates [list-ids read-ws]})
+  (Operation own-pr
+    "The :github ref of a workstream naming a pull request — as `owner/repo#n`, or as `n` when
+     exactly one of its refs has that number — or nil: what nido knows as the workstream's own PR."
+    {:signature [:=> [:catn [:w :any] [:pr :string]] [:maybe :map]]})
   (Operation find-by-ref-id
     "The workstream carrying this external id, whichever adapter raised it."
     {:signature [:=> [:catn [:project ProjectName] [:external-id :string]] [:maybe Workstream]]
