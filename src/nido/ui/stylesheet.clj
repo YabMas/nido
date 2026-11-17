@@ -136,6 +136,7 @@
         .gate-card { display:block; padding:10px 16px; border-bottom:1px solid var(--border-subtle); color:inherit; }
         .gate-card:hover { background:var(--surface-hover); text-decoration:none; }
         .gate-top { display:flex; align-items:center; gap:8px; }
+        .row-st { flex:none; width:12px; display:inline-flex; align-items:center; justify-content:center; }
         .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-strong); }
         .needs { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--needs); box-shadow:0 0 6px var(--needs); }
         .gate-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:2px 0 0 26px;

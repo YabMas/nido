@@ -64,7 +64,9 @@
 
 (defn- state-scenes []
   [{:name "origin-badge"
-    :note "Where a workstream came from. One hue and one letter each."
+    :note "Where a workstream came from. One hue and one letter each. A workstream's own page
+           carries it beside its title; the overview rows do not — they lead with the status
+           mark instead."
     :scenes [{:title "every origin"
               :note "Four sources and the fallback. A scratch workstream and an unknown origin
                      both read as ·, which is deliberate — neither came from anywhere a person
@@ -196,8 +198,10 @@
 
 (defn- row-scenes []
   [{:name "board-row"
-    :note "One selectable Workstreams row. The page gives it the URL and whether it is the open
-           one; everything else is the row's value."
+    :note "One selectable Workstreams row. It leads with where the workstream stands, as one
+           icon — needs you, working, paused or stalled — and never with where it came from. The
+           page gives it the URL and whether it is the open one; everything else is the row's
+           value."
     :scenes [{:title "the ordinary row"
               :note "Nothing owes a person anything and something is running. This is most of
                      the board, and it is the one the others have to stand out against."

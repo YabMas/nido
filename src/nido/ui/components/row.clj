@@ -16,6 +16,14 @@
   (:require [clojure.string :as str]
             [nido.ui.components.state :as state]))
 
+(defn- status-slot
+  "The row's leading mark: where the workstream stands, as an icon with its words in the title —
+   the needs-you dot when the next move is the person's, else the state mark (working, paused,
+   stalled), else an empty slot of the same width so every title starts in one column. Where a
+   workstream came from is not overview information; its links are on the workstream."
+  [mark]
+  [:span.row-st mark])
+
 (defn- tag-line
   "The workstream's stable identifier (wsv/tag — ticket id, else worktree name) on
    its own line under the generated title, which is what a person cannot search
@@ -32,13 +40,16 @@
    whether it is the open one. The row builds neither — a link that carries the view-state is
    the page's business, and a row that reached for the screen to build its own could only ever
    be listed by that page."
-  [project {:keys [ws-id origin label tag needs-you open-findings position phase stage]
+  [project {:keys [ws-id label tag needs-you open-findings position phase stage]
             :as row}
    {:keys [href selected?]}]
   [:a {:class (str "gate-card" (when selected? " sel"))
        :href  href}
-   [:div.gate-top (state/origin-badge origin) [:span.lbl label]
-    (when needs-you [:span.needs {:title "needs you"}])
+   [:div.gate-top
+    (status-slot (cond needs-you                      [:span.needs {:title "needs you"}]
+                       (= :merge (:source (:doing row))) nil
+                       :else                          (state/state-mark (:status row) (:doing row))))
+    [:span.lbl label]
     (when (pos? (or open-findings 0))
       [:span.badge-findings (str "⚑ " open-findings " open findings")])]
    (tag-line tag)
@@ -46,7 +57,9 @@
    ;; next move, who owes it and what is running are the marks' titles, not words on the row.
    ;; A :shipping row's merge phase comes through state-mark, which the projection folds
    ;; ship-substate into, so it is never said twice.
-   [:div.gate-sub [:span project] (state/position-chip position) (state/state-mark (:status row) (:doing row))
+   [:div.gate-sub [:span project] (state/position-chip position)
+    ;; A merge keeps its words (state-mark's doing badge) here: a blocked merge reads red.
+    (when (= :merge (:source (:doing row))) (state/state-mark (:status row) (:doing row)))
     (state/phase-chip phase)]
    ;; What the gate waits on, where the person owing it will look. The exit
    ;; criterion is the current phase's: its exit is the gate that opens the next.
@@ -63,10 +76,10 @@
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [project origin stage label tag report ask session resume-error pending? error-msg doing denials]} href]
+  [{:keys [project stage label tag report ask session resume-error pending? error-msg doing denials]} href]
   [:a {:class "gate-card"
        :href  href}
-   [:div.gate-top (state/origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
+   [:div.gate-top (status-slot [:span.needs {:title "needs you"}]) [:span.lbl label]]
    (tag-line tag)
    [:div.gate-sub [:span project] (state/stage-chip stage)
     [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]
@@ -98,9 +111,9 @@
    :error-msg (from a failed bring-down!) renders inline AND keeps the button —
    clicking retry sets :stopping, which overwrites the :failed entry, so retry
    self-clears the error."
-  [{:keys [project origin label outcome sessions rss-str pending? error-msg]} post-url]
+  [{:keys [project label outcome sessions rss-str pending? error-msg]} post-url]
   [:div.gate-card.winddown
-   [:div.gate-top (state/origin-badge origin) [:span.lbl label]]
+   [:div.gate-top (status-slot nil) [:span.lbl label]]
    [:div.gate-sub
     [:span project]
     [:span.meta (str "closed:" (name (or outcome :done)) " · "

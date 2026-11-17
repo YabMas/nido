@@ -58,7 +58,8 @@
   (let [html (views/needs-fragment {:gates [sample-gate] :selection nil :scope "all"})]
     (is (str/includes? html "id=\"needs\""))
     (is (str/includes? html "BR-7"))
-    (is (str/includes? html ">N<"))
+    (is (str/includes? html "class=\"row-st\"><span class=\"needs\"")
+        "a needs-you row leads with the needs-you dot, not where it came from")
     ;; a row opens its workstream, where the gate is answered
     (is (str/includes? html "href=\"/workstreams/brian/ws-1\""))
     (is (not (str/includes? html "sel=brian:ws-1")))))
@@ -1751,8 +1752,12 @@
                          :grouped {:in-progress [row] :triage {:in-flight [] :queued []}
                                    :incoming [] :ready []}}]
                :selection nil :scope "all"})
-        sub  (second (re-find #"(?s)class=\"gate-sub\">(.*?)</div>" html))]
-    (is (str/includes? sub "st-mark live") "a live workstream carries the running mark")
+        sub  (second (re-find #"(?s)class=\"gate-sub\">(.*?)</div>" html))
+        top  (second (re-find #"(?s)class=\"gate-top\">(.*?)</div>" html))]
+    (is (re-find #"^<span class=\"row-st\"><span class=\"st-mark live\"" top)
+        "a live workstream leads with the running mark, where the source badge was")
+    (is (not (str/includes? top "badge b-")) "where it came from is not on the overview")
+    (is (not (str/includes? sub "st-mark")) "the mark is said once")
     (is (not (re-find #">[^<]*owed:" sub)) "who owes the move is the mark's title, not text")
     (is (not (re-find #">→ " sub)) "nor is the next move")
     (is (not (str/includes? sub "doing-badge")) "nor what runs, outside a merge"))
