@@ -127,12 +127,14 @@
      :delegates [landing state/restart-owed-path clock/now-iso]})
   (Operation waits
     "What an owed landing still waits for, read when asked from what any process can read, so
-     every asker gets the same answer: runs live? reports live, runs whose record says they are
-     running, the owing landing still running, the checkout not holding the commit, the daemon not
-     running under launchd, the running daemon having started after the debt. Each wait in words;
-     empty when the restart is due."
+     every asker gets the same answer: runs whose agent is alive under the daemon — live? reports
+     them live, or their record says running and the daemon executes them rather than a background
+     session, which outlives a restart — the owing landing still running, the checkout not holding
+     the commit, the daemon not running under launchd, the running daemon having started after the
+     debt. Each wait in words; empty when the restart is due."
     {:signature [:=> [:catn [:owed Landing]] [:vector :string]]
-     :delegates [runs/list-run-ids runs/read-run runs/live? process/process-alive? loaded? state/pid-path]}))
+     :delegates [runs/list-run-ids runs/read-run runs/live? session/read-session session/claude-facet
+                 process/process-alive? loaded? state/pid-path]}))
 
 (Module daemon-reconcile
   "Startup repair: force every non-terminal Run to a terminal state, and leave each Run's own

@@ -8,6 +8,7 @@
    [nido.coordinator.daemon.launchctl :as lc]
    [nido.coordinator.daemon.restart :as restart]
    [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.platform.core :as core]
    [nido.platform.process :as process]))
@@ -80,3 +81,29 @@
                        "settles it"))
     (is (= [] (waits-with {:daemon-start (java.time.Instant/parse "2026-11-17T11:00:00Z")}))
         "one that started before it pays it")))
+
+(defn- busy-with [runs-by-id sessions]
+  (with-redefs [runs/list-run-ids     (constantly (vec (keys runs-by-id)))
+                runs/live?            (fn [id] (boolean (:live? (get runs-by-id id))))
+                runs/read-run         (fn [id] (dissoc (get runs-by-id id) :live?))
+                session/read-session  (fn [_ _ s] (get sessions s))
+                session/claude-facet  (fn [s] (:claude s))]
+    (set (#'restart/busy-runs))))
+
+(deftest only-runs-alive-under-the-daemon-hold-the-restart
+  (let [bg      {:claude {:session-id "c1"}}
+        run     (fn [m] (merge {:project :nido :workstream-id "ws" :state :running} m))
+        busy    (busy-with
+                 {"agent"      (run {:session-name "a" :live? true})
+                  "background" (run {:session-name "b"})
+                  "merge-bg"   (run {:session-name "b" :mode :merge})
+                  "mechanical" (run {:session-name "b" :mode :mechanical})
+                  "in-process" (run {:session-name "none"})
+                  "done"       (run {:session-name "none" :state :done})}
+                 {"b" bg})]
+    (is (contains? busy "agent") "an agent holding its launch lock")
+    (is (not (contains? busy "background")) "a background session outlives the restart, whatever its record says")
+    (is (not (contains? busy "merge-bg")) "so does a :merge Run given to one")
+    (is (contains? busy "mechanical") "a :mechanical stage runs in the daemon, even on a session with a conversation")
+    (is (contains? busy "in-process") "a running Run with no background session is the daemon's own")
+    (is (not (contains? busy "done")))))

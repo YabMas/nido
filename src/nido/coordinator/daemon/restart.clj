@@ -18,6 +18,7 @@
    [nido.coordinator.daemon.launchctl :as lc]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.platform.process :as process])
   (:import
@@ -123,18 +124,36 @@
   (let [f (cstate/pid-path)]
     (when (fs/exists? f) (parse-long (str/trim (slurp f))))))
 
+(defn- background-session?
+  "Whether `run`'s conversation is a background session, which outlives a restart and whose own
+   Stop settles the Run. A :mechanical Run never is: the daemon runs its stage in-process, on the
+   workstream's session, whatever conversation that session also holds."
+  [run]
+  (boolean
+   (and (not= :mechanical (:mode run))
+        (:workstream-id run) (:session-name run)
+        (when-let [s (session/read-session (:project run) (:workstream-id run) (:session-name run))]
+          (or (session/claude-facet s) (:dispatching s))))))
+
 (defn- busy-runs
-  "Runs a restart would cut: those whose agent is alive, and those whose record says running."
+  "Runs whose agent is alive under the daemon, which a restart would cut: those live? reports
+   live — an agent holding its launch lock — and those whose record says running and that the
+   daemon executes itself rather than a background session, since a Run that takes no launch lock
+   is invisible to live?. A background-session Run's record holds nothing."
   []
-  (filterv (fn [id] (or (runs/live? id) (= :running (:state (runs/read-run id)))))
+  (filterv (fn [id]
+             (or (runs/live? id)
+                 (let [run (runs/read-run id)]
+                   (and (= :running (:state run)) (not (background-session? run))))))
            (runs/list-run-ids)))
 
 (defn ^{:malli/schema [:=> [:cat :Landing] [:vector :string]]}
   waits
-  "What `owed` still waits for, in words, read from what any process can see when asked: runs a
-   restart would cut, the owing landing still running, the daemon's checkout not holding the
-   commit, the daemon not running under launchd, or the running daemon having started after the
-   debt — which settles it rather than pays it. Empty when the daemon should restart now."
+  "What `owed` still waits for, in words, read from what any process can see when asked: runs
+   whose agent is alive under the daemon (see busy-runs), the owing landing still running, the
+   daemon's checkout not holding the commit, the daemon not running under launchd, or the running
+   daemon having started after the debt — which settles it rather than pays it. Empty when the
+   daemon should restart now."
   [{:keys [commit owed-at by-pid]}]
   (let [busy  (busy-runs)
         dir   (checkout)

@@ -29,7 +29,7 @@
   {:about [daemon-restart] :evidence "round"})
 
 (Claim daemon-pays-owed-restart
-  "A daemon loaded under launchd and running code that carries this change exits, for launchd to relaunch it, within one tick of the latest landing being owed and waits naming nothing. It never exits for a debt on a reading of waits that names anything — so never while a run is live or its record says it is running — and it decides before starting any run in that tick."
+  "A daemon loaded under launchd and running code that carries this change exits, for launchd to relaunch it, within one tick of the latest landing being owed and waits naming nothing. It never exits for a debt on a reading of waits that names anything — so never while a run whose agent is alive under the daemon is live — and it decides before starting any run in that tick."
   {:about [tick! daemon-restart live?] :evidence "round"})
 
 (Claim one-landing-one-restart
@@ -37,7 +37,7 @@
   {:about [daemon-restart boot-core] :evidence "round"})
 
 (Claim waits-said-in-one-place
-  "What an owed restart waits for is decided by waits alone, from the owed landing it is given and what any process can read when it is asked: runs live? reports live or whose record says they are running; the owing landing still running; the checkout not holding the commit; the daemon not running under launchd; and the running daemon having started after the debt was owed, which settles the debt rather than pays it. The landing, the tick and Control each give waits the owed landing alone and take what an owed restart waits for from its answer; nothing stores it."
+  "What an owed restart waits for is decided by waits alone, from the owed landing it is given and what any process can read when it is asked: runs whose agent is alive under the daemon — those live? reports live, and those whose record says they are running and that the daemon itself executes, not on a background session, since live? does not see a run that takes no launch lock; the owing landing still running; the checkout not holding the commit; the daemon not running under launchd; and the running daemon having started after the debt was owed, which settles the debt rather than pays it. A run on a background session holds nothing, whatever its record says: its conversation outlives the restart and its own Stop settles it. The landing, the tick and Control each give waits the owed landing alone and take what an owed restart waits for from its answer; nothing stores it."
   {:about [daemon-restart] :evidence "round"})
 
 (Claim landing-says-where-the-daemon-is
