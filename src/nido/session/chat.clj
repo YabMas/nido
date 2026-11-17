@@ -57,9 +57,12 @@
 
 (defonce ^:private chats
   ;; chat key -> {:transcript :conn :acp-id :owner :subs {token f} :last-used ms :loading? bool
-  ;;             :turn token :loads n}. :owner is the token of the process the chat holds, set
-  ;; before it connects; :turn is the token of the send whose turn the chat is busy with, from
-  ;; the send's acceptance to its turn's end; :loads counts the loads that replaced the transcript.
+  ;;             :turn token :loads n :held {token [Image]}}. :owner is the token of the process the
+  ;; chat holds, set before it connects; :turn is the token of the send whose turn the chat is busy
+  ;; with, from the send's acceptance to its turn's end; :loads counts the loads that replaced the
+  ;; transcript. :held keeps the images a handoff carries answerable by `image` while the
+  ;; transcript may lack them — a send's, from its acceptance to its turn's end, under its turn;
+  ;; the replaced transcript's, while a load replays it, under the loading process's owner.
   (atom {}))
 
 (defonce ^:private start-locks (atom {}))
@@ -206,11 +209,14 @@
                             ;; The replay is the whole conversation, so it is folded into an
                             ;; empty transcript, and subscribers hear once, when it is done.
                             (do (swap! chats update k #(-> %
+                                                           (assoc-in [:held owner]
+                                                                     (into [] (mapcat :images) (:items (:transcript %))))
                                                            (assoc :loading? true
                                                                   :transcript (transcript/empty-transcript))
                                                            (update :loads (fnil inc 0))))
                                 (try (acp/load-session! conn known {:cwd cwd :meta meta}) known
-                                     (finally (swap! chats update k assoc :loading? false)
+                                     (finally (swap! chats update k #(-> % (assoc :loading? false)
+                                                                         (update :held dissoc owner)))
                                               (notify! k))))
                             (doto (acp/new-session! conn {:cwd cwd :meta meta})
                               (->> (write-acp-id! k))))]
@@ -251,6 +257,17 @@
   [chat]
   (published (state (chat-key chat))))
 
+(defn ^{:malli/schema [:=> [:cat :map :string] [:maybe :map]]}
+  image
+  "The Image with `digest` the chat's transcript shows, or one a handoff holds while the transcript
+   lacks it — a send's images from its acceptance to its turn's end, and the images of a
+   transcript a load is replaying — or nil. Nothing outlives its handoff: what the conversation
+   no longer shows is answered only while that handoff runs."
+  [chat digest]
+  (let [s (state (chat-key chat))]
+    (some #(when (= digest (:digest %)) %)
+          (concat (mapcat :images (:items (:transcript s))) (mapcat val (:held s))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
   started?
   "Whether the chat's conversation has been started — here, or by an earlier process whose
@@ -258,16 +275,23 @@
   [chat]
   (boolean (or (:conn (state (chat-key chat))) (read-acp-id (chat-key chat)))))
 
-(defn ^{:malli/schema [:=> [:cat :map :string [:sequential :map]] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :string [:sequential :map] [:sequential :map]] :any]}
   send!
   "Send the person's `text`, with the references it came with — each `{:label :detail}`, in the
-   order the person numbered them, possibly none — and return at once. The message, the agent's
-   reply and the turn's end each reach subscribers as they happen. Refused — nil, and nothing
+   order the person numbered them, possibly none — and its `images`, each a trusted
+   `{:mime :data :digest}`, possibly none; return at once. The message, the agent's reply and the
+   turn's end each reach subscribers as they happen. Images go only to an agent that advertised it
+   accepts them; to any other the turn ends with an error saying so, and nothing is sent. Refused — nil, and nothing
    changes — while a turn is running or a send accepted before it has not begun its turn."
-  [chat text refs]
+  [chat text refs images]
   (let [k    (chat-key chat)
         turn (Object.)
-        [before] (swap-vals! chats (fn [m] (if (working? (get m k)) m (assoc-in m [k :turn] turn))))]
+        ;; Accepted with its images held, so they stay answerable from before the caller lets go
+        ;; of them until the turn ends, whatever the transcript holds meanwhile.
+        [before] (swap-vals! chats (fn [m] (if (working? (get m k))
+                                             m
+                                             (-> m (assoc-in [k :turn] turn)
+                                                 (assoc-in [k :held turn] (vec images))))))]
     (when-not (working? (get before k))
       ;; Everything after the send is accepted runs in the future, inside the one scope whose
       ;; `finally` ends the turn, so nothing between its start and its end can skip the end.
@@ -281,6 +305,7 @@
                            (try @reaper
                                 (swap! chats update k assoc :last-used (System/currentTimeMillis))
                                 (let [message {:local :user :text text :refs (vec refs)
+                                               :images (vec images)
                                                :at (System/currentTimeMillis)}
                                       ;; Folded between loads, never inside one; a load that
                                       ;; replaces the transcript after it — this send's own start
@@ -305,15 +330,18 @@
                                   nil))]
                   (binding [*owner* owner]
                     (try
-                      @(acp/prompt! conn acp-id (transcript/prompt-text text refs))
-                      (fold! k {:local :turn-ended})
+                      (if (and (seq images) (not (acp/accepts-images? conn)))
+                        (fold! k {:local :error :text "This agent does not accept images; nothing was sent."})
+                        (do @(acp/prompt! conn acp-id (transcript/prompt-blocks text refs images))
+                            (fold! k {:local :turn-ended})))
                       (catch Throwable e
                         (fold! k {:local :error :text (or (ex-message e) (str e))})))
                     (change! k #(assoc % :last-used (System/currentTimeMillis))))
                   owner)
                 (finally
                   (binding [*owner* ::any]
-                    (change! k #(cond-> % (identical? turn (:turn %)) (dissoc :turn))))))]
+                    (change! k #(cond-> (update % :held dissoc turn)
+                                   (identical? turn (:turn %)) (dissoc :turn))))))]
           (when owner
             (binding [*owner* owner]
               (when-let [f (:on-turn-end chat)]

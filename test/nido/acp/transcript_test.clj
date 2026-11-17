@@ -84,3 +84,29 @@
   (let [t (run {:local :user :text "hi" :refs [] :at 1} {:local :note :text "Published."})]
     (is (= {:kind :note :text "Published."} (dissoc (last (:items t)) :id)))
     (is (:busy? t) "a note does not end a turn")))
+
+(deftest a-prompt-is-its-text-block-then-its-images
+  (is (= [{:type "text" :text "plain"}] (t/prompt-blocks "plain" [] [])))
+  (is (= [{:type "text" :text "look"} {:type "image" :mimeType "image/png" :data "AA=="}
+          {:type "image" :mimeType "image/jpeg" :data "AQ=="}]
+         (t/prompt-blocks "look" [] [{:mime "image/png" :data "AA==" :digest "x"}
+                                     {:mime "image/jpeg" :data "AQ==" :digest "y"}]))))
+
+(deftest a-sent-message-carries-its-images
+  (let [img {:mime "image/png" :data "AA==" :digest "x"}]
+    (is (= [img] (:images (first (:items (run {:local :user :text "see" :refs [] :images [img]}))))))
+    (is (= [] (:images (first (:items (run {:local :user :text "plain"})))))
+        "a message without images carries none")))
+
+(deftest a-replayed-image-joins-its-message
+  (let [tr (run (upd {:sessionUpdate "user_message_chunk" :messageId "u1" :content {:type "text" :text "what is it?"}})
+                (upd {:sessionUpdate "user_message_chunk" :messageId "u1"
+                      :content {:type "image" :mimeType "image/png" :data "AA=="}})
+                (upd {:sessionUpdate "user_message_chunk" :messageId "u2"
+                      :content {:type "image" :mimeType "image/gif" :data "AQ=="}})
+                (upd {:sessionUpdate "user_message_chunk" :messageId "u2" :content {:type "text" :text "and this"}}))]
+    (is (= [[:user "what is it?" ["image/png"]] [:user "and this" ["image/gif"]]]
+           (map (juxt :kind :text #(map :mime (:images %))) (:items tr)))
+        "an image joins the user item of its message id, or starts one, and later text keeps it")
+    (is (= (#'t/digest "AA==") (:digest (first (:images (first (:items tr)))))))
+    (is (= "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d" (#'t/digest "AA==")))))

@@ -26,7 +26,8 @@
 
 (defn- agent-responder [m]
   (case (:method m)
-    "initialize"     [{:jsonrpc "2.0" :id (:id m) :result {:protocolVersion 1}}]
+    "initialize"     [{:jsonrpc "2.0" :id (:id m) :result {:protocolVersion 1
+                                                         :agentCapabilities {:promptCapabilities {:image true}}}}]
     "session/new"    [{:jsonrpc "2.0" :id (:id m) :result {:sessionId "s-1"}}]
     "session/load"   [{:jsonrpc "2.0" :method "session/update"
                        :params {:sessionId "s-1" :update {:sessionUpdate "user_message_chunk"
@@ -49,8 +50,15 @@
           (is (= "s-1" (acp/new-session! conn {:cwd "/w" :meta {:claudeCode {:options {}}}})))
           (is (= {:claudeCode {:options {}}}
                  (:_meta (:params (first (filter #(= "session/new" (:method %)) @seen)))))))
+        (testing "what the agent advertised is kept"
+          (is (true? (acp/accepts-images? conn)))
+          (is (false? (acp/accepts-images? {}))))
+        (testing "a prompt's blocks go as given"
+          @(acp/prompt! conn "s-1" [{:type "text" :text "see"} {:type "image" :mimeType "image/png" :data "AA=="}])
+          (is (= [{:type "text" :text "see"} {:type "image" :mimeType "image/png" :data "AA=="}]
+                 (:prompt (:params (last (filter #(= "session/prompt" (:method %)) @seen)))))))
         (testing "a prompt's updates reach the handler before its result"
-          (is (= "end_turn" (:stopReason @(acp/prompt! conn "s-1" "go"))))
+          (is (= "end_turn" (:stopReason @(acp/prompt! conn "s-1" [{:type "text" :text "go"}]))))
           (is (some #(= "agent_message_chunk" (get-in % [:params :update :sessionUpdate])) @got)))
         (testing "a load replays history to the handler"
           (acp/load-session! conn "s-1" {:cwd "/w"})
@@ -82,7 +90,7 @@
     (with-redefs [acp/open-process (fn [_] streams)]
       (let [conn (acp/connect! {:command ["x"]
                                 :on-message #(when (= "_nido/exited" (:method %)) (deliver exited true))})
-            turn (acp/prompt! conn "s-1" "go")]
+            turn (acp/prompt! conn "s-1" [{:type "text" :text "go"}])]
         (Thread/sleep 100)
         ((:destroy streams))
         (is (true? (deref exited 2000 nil)))

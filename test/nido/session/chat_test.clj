@@ -37,8 +37,10 @@
                                                                  :messageId "u0"
                                                                  :content {:type "text" :text "earlier"}}}}))
               #'acp/set-mode!     (fn [_ _ mode] (swap! calls conj [:mode mode]))
-              #'acp/prompt!       (fn [_ _ text]
-                                    (swap! calls conj [:prompt text])
+              #'acp/accepts-images? (fn [_] true)
+              #'acp/prompt!       (fn [_ _ blocks]
+                                    (swap! calls conj [:prompt (:text (first blocks))])
+                                    (swap! calls conj [:blocks blocks])
                                     (future (@handler {:method "session/update"
                                                        :params {:update {:sessionUpdate "agent_message_chunk"
                                                                          :content {:type "text" :text reply}}}})
@@ -65,7 +67,7 @@
         turn-ends (atom 0)]
     (with-redefs-fn redefs
       (fn []
-        (chat/send! (assoc c :on-turn-end (fn [_] (swap! turn-ends inc))) "hi" [{:label "row" :detail "block: row"}])
+        (chat/send! (assoc c :on-turn-end (fn [_] (swap! turn-ends inc))) "hi" [{:label "row" :detail "block: row"}] [])
         (await-idle c)
         (Thread/sleep 50)
         (is (= [[:user "hi"] [:agent "done"]] (map (juxt :kind :text) (:items (chat/transcript c)))))
@@ -86,9 +88,9 @@
   (let [{:keys [redefs]} (fake-acp "x")]
     (with-redefs-fn (assoc redefs #'acp/prompt! (fn [& _] (future (Thread/sleep 300) {:stopReason "end_turn"})))
       (fn []
-        (is (true? (chat/send! c "one" [])))
+        (is (true? (chat/send! c "one" [] [])))
         (Thread/sleep 50)
-        (is (nil? (chat/send! c "two" [])))
+        (is (nil? (chat/send! c "two" [] [])))
         (is (= ["one"] (map :text (filter #(= :user (:kind %)) (:items (chat/transcript c))))))))))
 
 (deftest a-conversation-from-an-earlier-process-is-loaded-not-restarted
@@ -99,7 +101,7 @@
     (with-redefs-fn redefs
       (fn []
         (is (chat/started? c))
-        (chat/send! c "and now" [])
+        (chat/send! c "and now" [] [])
         (await-idle c)
         (Thread/sleep 50)
         (is (some #(= [:load "acp-old"] %) @calls))
@@ -112,7 +114,7 @@
   (let [{:keys [calls redefs]} (fake-acp "x")]
     (with-redefs-fn redefs
       (fn []
-        (chat/send! c "go" [])
+        (chat/send! c "go" [] [])
         (await-idle c)
         ;; The agent raises a request through the handler the chat gave it.
         (from-agent
@@ -131,13 +133,13 @@
     (with-redefs-fn redefs
       (fn []
         (let [unsub (chat/subscribe! c (fn [_] (swap! heard inc)))]
-          (chat/send! c "go" [])
+          (chat/send! c "go" [] [])
           (await-idle c)
           (Thread/sleep 50)
           (is (pos? @heard))
           (unsub)
           (let [n @heard]
-            (chat/send! c "more" [])
+            (chat/send! c "more" [] [])
             (await-idle c)
             (Thread/sleep 50)
             (is (= n @heard))))))))
@@ -146,7 +148,7 @@
   (let [{:keys [redefs]} (fake-acp "x")]
     (with-redefs-fn (assoc redefs #'acp/prompt! (fn [& _] (future (Thread/sleep 200) (throw (ex-info "the agent process exited" {})))))
       (fn []
-        (chat/send! c "go" [])
+        (chat/send! c "go" [] [])
         (Thread/sleep 50)
         (from-agent {:method "_nido/exited"})
         (Thread/sleep 300)
@@ -170,7 +172,7 @@
         heard (atom nil)]
     (with-redefs-fn redefs
       (fn []
-        (chat/send! c "hi" [])
+        (chat/send! c "hi" [] [])
         (await-idle c)
         (Thread/sleep 50)
         (chat/note! c "published")
@@ -185,7 +187,7 @@
         (let [news (count (filter #(= :new (first %)) @calls))]
           (Thread/sleep 50)
           (is (= news (count (filter #(= :new (first %)) @calls))) "nothing starts before the next send")
-          (chat/send! c "again" [])
+          (chat/send! c "again" [] [])
           (await-idle c)
           (Thread/sleep 50)
           (is (= (inc news) (count (filter #(= :new (first %)) @calls))))
@@ -196,7 +198,7 @@
   (let [{:keys [calls redefs]} (fake-acp "x")]
     (with-redefs-fn (assoc redefs #'acp/prompt! (fn [& _] (future (Thread/sleep 300) {:stopReason "end_turn"})))
       (fn []
-        (chat/send! c "one" [])
+        (chat/send! c "one" [] [])
         (Thread/sleep 50)
         (is (nil? (chat/reset! c)))
         (is (fs/exists? (id-file)))
@@ -209,7 +211,7 @@
     (spit (id-file) (pr-str {:acp-session-id "acp-old"}))
     (with-redefs-fn (update redefs #'acp/load-session! (fn [f] (fn [& args] (Thread/sleep 200) (apply f args))))
       (fn []
-        (chat/send! c "and now" [])
+        (chat/send! c "and now" [] [])
         (Thread/sleep 50)
         (is (:busy? (chat/transcript c)) "the accepted send is busy while its conversation loads")
         (is (nil? (chat/reset! c)) "an accepted send is not lost under a reset")
@@ -221,12 +223,12 @@
   (let [{:keys [handler redefs]} (fake-acp "x")]
     (with-redefs-fn redefs
       (fn []
-        (chat/send! c "one" [])
+        (chat/send! c "one" [] [])
         (await-idle c)
         (Thread/sleep 50)
         (let [old @handler]
           (is (true? (chat/reset! c)))
-          (chat/send! c "two" [])
+          (chat/send! c "two" [] [])
           (await-idle c)
           (Thread/sleep 50)
           (old {:method "_nido/exited"})
@@ -241,13 +243,13 @@
                                        (future (Thread/sleep 200) (throw (ex-info "the old process exited" {})))
                                        (future (Thread/sleep 400) {:stopReason "end_turn"}))))
       (fn []
-        (chat/send! c "one" [])
+        (chat/send! c "one" [] [])
         (Thread/sleep 50)
         (from-agent {:method "_nido/exited"})
         (is (nil? (chat/reset! c)) "the old turn has not ended yet")
         (Thread/sleep 250)
         (is (true? (chat/reset! c)))
-        (chat/send! c "two" [])
+        (chat/send! c "two" [] [])
         (Thread/sleep 300)
         (let [t (chat/transcript c)]
           (is (:busy? t) "the new turn is still running")
@@ -265,11 +267,11 @@
                            #'acp/close! (fn [conn]
                                           (when (= :other (:which conn))
                                             (chat/reset! c)
-                                            (chat/send! c "two" [])
+                                            (chat/send! c "two" [] [])
                                             (await-idle c)
                                             (Thread/sleep 50))))
       (fn []
-        (chat/send! c "one" [])
+        (chat/send! c "one" [] [])
         (await-idle c)
         (Thread/sleep 50)
         (clojure.core/reset! @#'chat/chats
@@ -290,7 +292,7 @@
       (fn []
         (with-redefs [chat/ensure-agent! (let [f @#'chat/ensure-agent!]
                                            (fn [& args] (let [r (apply f args)] (Thread/sleep 150) r)))]
-          (chat/send! c "and now" [])
+          (chat/send! c "and now" [] [])
           (Thread/sleep 400)
           (is (not (:busy? (chat/transcript c))) "the chat is not left busy")
           (is (= :error (:kind (peek (:items (chat/transcript c))))))
@@ -306,12 +308,12 @@
                                        (future (Thread/sleep 100) (throw (ex-info "the old process exited" {})))
                                        (future (Thread/sleep 400) {:stopReason "end_turn"}))))
       (fn []
-        (chat/send! c' "one" [])
+        (chat/send! c' "one" [] [])
         (Thread/sleep 50)
         (from-agent {:method "_nido/exited"})
         (Thread/sleep 100)
         (is (true? (chat/reset! c')))
-        (chat/send! c' "two" [])
+        (chat/send! c' "two" [] [])
         (Thread/sleep 100)
         (deliver hooked true)
         (Thread/sleep 100)
@@ -325,10 +327,10 @@
     (spit (id-file) (pr-str {:acp-session-id "acp-old"}))
     (with-redefs-fn (update redefs #'acp/load-session! (fn [f] (fn [& args] (Thread/sleep 200) (apply f args))))
       (fn []
-        (is (true? (chat/send! c "one" [])))
+        (is (true? (chat/send! c "one" [] [])))
         (Thread/sleep 50)
         (is (:busy? (chat/transcript c)) "the accepted send is busy while its conversation loads")
-        (is (nil? (chat/send! c "two" [])) "a second send cannot start while the first is starting")
+        (is (nil? (chat/send! c "two" [] [])) "a second send cannot start while the first is starting")
         (await-idle c)
         (Thread/sleep 100)
         (is (= ["earlier" "one" "x"] (map :text (:items (chat/transcript c)))))))))
@@ -340,7 +342,7 @@
         heard   (atom nil)]
     (with-redefs-fn redefs
       (fn []
-        (chat/send! c "hi" [])
+        (chat/send! c "hi" [] [])
         (await-idle c)
         (Thread/sleep 50)
         ;; The first subscriber is slow on one delivery: the note's, made before the reset.
@@ -362,7 +364,7 @@
   (let [{:keys [redefs]} (fake-acp "x")]
     (with-redefs-fn (assoc redefs #'chat/read-acp-id (fn [_] (throw (ex-info "the id went away" {}))))
       (fn []
-        (try (chat/send! c "one" []) (catch Throwable _ nil))
+        (try (chat/send! c "one" [] []) (catch Throwable _ nil))
         (Thread/sleep 100)
         (is (not (pos? (get (#'chat/state (#'chat/chat-key c)) :starting 0))) "the count is released")
         (is (true? (chat/reset! c)) "a reset is taken")))))
@@ -376,7 +378,7 @@
                                             (future (Thread/sleep 400) {:stopReason "end_turn"})
                                             (apply f args)))))
       (fn []
-        (chat/send! c "one" [])
+        (chat/send! c "one" [] [])
         (await-idle c)
         (Thread/sleep 50)
         (clojure.core/reset! slow? true)
@@ -384,7 +386,7 @@
         ;; loads the conversation again, after the message went in.
         (with-redefs [chat/ensure-agent! (let [f @#'chat/ensure-agent!]
                                            (fn [& args] (from-agent {:method "_nido/exited"}) (apply f args)))]
-          (chat/send! c "two" [])
+          (chat/send! c "two" [] [])
           (Thread/sleep 200)
           (let [t (chat/transcript c)]
             (is (:busy? t) "the turn is running")
@@ -404,9 +406,9 @@
                                             (future (Thread/sleep 400) {:stopReason "end_turn"})
                                             (apply f args)))))
       (fn []
-        (chat/send! c' "one" [])
+        (chat/send! c' "one" [] [])
         (Thread/sleep 100)
-        (is (true? (chat/send! c' "two" [])))
+        (is (true? (chat/send! c' "two" [] [])))
         (Thread/sleep 50)
         (deliver hooked true)
         (Thread/sleep 50)
@@ -434,7 +436,79 @@
                                    (fn [k e] (when (= "the first process failed to load" (:text e))
                                                (Thread/sleep 200))
                                      (f k e)))]
-          (chat/send! c "one" [])
+          (chat/send! c "one" [] [])
           (Thread/sleep 600)
           (is (= ["earlier"] (map :text (:items (chat/transcript c))))
               "the new process's conversation does not carry the old one's failure"))))))
+
+(def ^:private png {:mime "image/png" :data "iVBORw0KGgo=" :digest "d"})
+
+(deftest a-message-s-images-go-as-image-blocks-after-its-words
+  (let [{:keys [calls redefs]} (fake-acp "a cat")]
+    (with-redefs-fn redefs
+      (fn []
+        (chat/send! c "what is this?" [] [png])
+        (await-idle c)
+        (Thread/sleep 50)
+        (is (= [{:type "text" :text "what is this?"}
+                {:type "image" :mimeType "image/png" :data "iVBORw0KGgo="}]
+               (some #(when (= :blocks (first %)) (second %)) @calls)))
+        (is (= [png] (:images (first (:items (chat/transcript c)))))
+            "the person's message carries its image")))))
+
+(deftest a-message-without-images-is-one-text-block
+  (let [{:keys [calls redefs]} (fake-acp "ok")]
+    (with-redefs-fn redefs
+      (fn []
+        (chat/send! c "plain" [] [])
+        (await-idle c)
+        (Thread/sleep 50)
+        (is (= [{:type "text" :text "plain"}] (some #(when (= :blocks (first %)) (second %)) @calls)))
+        (is (= [] (:images (first (:items (chat/transcript c))))))))))
+
+(deftest images-to-an-agent-that-cannot-see-them-are-not-sent
+  (let [{:keys [calls redefs]} (fake-acp "x")]
+    (with-redefs-fn (assoc redefs #'acp/accepts-images? (fn [_] false))
+      (fn []
+        (chat/send! c "look" [] [png])
+        (Thread/sleep 200)
+        (let [t (chat/transcript c)]
+          (is (false? (:busy? t)))
+          (is (= :error (:kind (peek (:items t)))))
+          (is (re-find #"does not accept images" (:text (peek (:items t))))))
+        (is (not (some #(= :blocks (first %)) @calls)) "nothing reached the agent")))))
+
+(deftest a-sent-image-is-answerable-before-its-message-is-folded
+  (let [{:keys [redefs]} (fake-acp "x")
+        release (promise)
+        fold    @#'chat/fold!]
+    (with-redefs-fn (assoc redefs #'chat/fold! (fn [k e] (when (= :user (:local e)) (deref release 2000 nil)) (fold k e)))
+      (fn []
+        (is (true? (chat/send! c "look" [] [png])))
+        (is (= png (chat/image c (:digest png))) "held from the send's acceptance")
+        (deliver release true)
+        (await-idle c)
+        (Thread/sleep 50)
+        (is (= png (chat/image c (:digest png))) "then answered from the transcript")
+        (is (empty? (:held (#'chat/state (#'chat/chat-key c)))) "the hold ends with the turn")))))
+
+(deftest an-image-stays-answerable-while-its-conversation-replays
+  (let [{:keys [redefs]} (fake-acp "x")
+        f        (str (fs/path *home* "chats" "nido" "catalog-design" "catalog.edn"))
+        entered  (promise)
+        release  (promise)
+        k        (#'chat/chat-key c)]
+    (fs/create-dirs (fs/parent f))
+    (spit f (pr-str {:acp-session-id "acp-old"}))
+    (#'chat/fold! k {:local :user :text "earlier" :refs [] :images [png]})
+    (with-redefs-fn (update redefs #'acp/load-session!
+                            (fn [g] (fn [& args] (deliver entered true) (deref release 2000 nil) (apply g args))))
+      (fn []
+        (chat/send! c "and now" [] [])
+        (deref entered 2000 nil)
+        (is (empty? (mapcat :images (:items (chat/transcript c)))) "the transcript is replaced for the replay")
+        (is (= png (chat/image c (:digest png))) "the image it showed is still answered")
+        (deliver release true)
+        (await-idle c)
+        (Thread/sleep 50)
+        (is (nil? (chat/image c (:digest png))) "the hold ends with the load; the replay never held it")))))

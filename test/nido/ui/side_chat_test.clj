@@ -60,7 +60,7 @@
   (let [sent (atom nil) opened (atom [])]
     (with-redefs [work/chat-place (fn [_ _] {:session "ws-1--chat"})
                   work/open-chat! (fn [p id] (swap! opened conj [p id]) {:session "ws-1--chat"})
-                  chat/send!      (fn [c text _] (reset! sent [c text]) true)]
+                  chat/send!      (fn [c text _ _] (reset! sent [c text]) true)]
       (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-1/send"
                           :body (java.io.ByteArrayInputStream. (.getBytes "{\"nidochatText\": \"where does it stand?\"}"))})
       (let [[c text] @sent]

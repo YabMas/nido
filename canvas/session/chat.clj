@@ -21,17 +21,23 @@
    the same fold."
   (Operation transcript "A chat's transcript as it stands."
     {:signature [:=> [:catn [:chat :map]] acp/Conversation]})
+  (Operation image
+    "The image with a digest the transcript shows, or one a send or a load carries while the
+     transcript lacks it — a send's from its acceptance to its turn's end, a replaced transcript's
+     while its load replays — or nil. Held only for the handoff, never stored."
+    {:signature [:=> [:catn [:chat :map] [:digest :string]] [:maybe :map]]})
   (Operation started? "Whether the conversation has been started, here or by an earlier process."
     {:signature [:=> [:catn [:chat :map]] :boolean]})
   (Operation send!
-    "Send the person's words, with the references they came with, starting or resuming the agent
-     first when needed. Answers true when accepted, or nil, changing nothing, when refused
+    "Send the person's words, with the references and images they came with, starting or resuming
+     the agent first when needed. Answers true when accepted, or nil, changing nothing, when refused
      because a turn is running or an earlier send has not yet begun its turn. Every later failure — the agent not starting, a request
-     refused, the process exiting — ends the turn as an error item in the transcript, never as
+     refused, the process exiting, images to an agent that does not accept them — ends the turn as an error item in the transcript, never as
      a throw to the caller."
-    {:signature [:=> [:catn [:chat :map] [:text :string] [:refs [:sequential :map]]] :any]
+    {:signature [:=> [:catn [:chat :map] [:text :string] [:refs [:sequential :map]]
+                            [:images [:sequential :map]]] :any]
      :delegates [acp/connect! acp/new-session! acp/load-session! acp/set-mode! acp/prompt!
-                 acp/fold acp/prompt-text]})
+                 acp/accepts-images? acp/fold acp/prompt-blocks]})
   (Operation cancel! "Cancel the running turn."
     {:signature [:=> [:catn [:chat :map]] :any] :delegates [acp/cancel!]})
   (Operation reset!

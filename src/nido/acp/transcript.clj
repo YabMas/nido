@@ -12,8 +12,9 @@
    is its position (\"i0\", \"i1\", …), so an id names the same item for the life of the
    transcript and a renderer can patch one item in place. Each item has a `:kind`:
 
-     :user        `:text`, and `:refs` — the references the words came with, each `{:label}`,
-                  in the order they were numbered
+     :user        `:text`; `:refs` — the references the words came with, each `{:label}`, in
+                  the order they were numbered; and `:images` — the images it carried, in order,
+                  each `{:mime :data :digest}` (base64 data; digest the hex SHA-256 of the bytes)
      :agent       `:text`, growing while `:streaming?`
      :thought     `:text`, growing while `:streaming?`
      :tool        `:title` `:status` (:pending :in-progress :completed :failed) `:tool-kind`
@@ -23,11 +24,16 @@
      :error       `:text`
      :note        `:text` — something done to the conversation's worktree from outside the turn
 
+   A message's images are trusted here. Those a person sends were checked where they were
+   uploaded; those a replay brings back are the agent's own history and are taken as it gives them.
+
    `fold` takes either an agent message exactly as `nido.acp.client` delivers it, or a local event
-   — `{:local :user :text … :refs [{:label :detail}] :at ms}`, `{:local :turn-ended}`,
+   — `{:local :user :text … :refs [{:label :detail}] :images [Image] :at ms}`, `{:local :turn-ended}`,
    `{:local :error :text …}`, `{:local :note :text …}`, `{:local :answered :item-id … :option-id …}`. A message it does not
    read returns the transcript unchanged."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str])
+  (:import (java.security MessageDigest)
+           (java.util Base64)))
 
 (def ^:private context-open "\n\n<nido-context>\n")
 (def ^:private context-close "\n</nido-context>")
@@ -47,6 +53,21 @@
                                         refs))
          context-close)
     text))
+
+(defn ^{:malli/schema [:=> [:cat :string [:sequential :map] [:sequential :map]] [:sequential :map]]}
+  prompt-blocks
+  "The prompt's ACP content blocks for the person's `text`, references and images: the one text
+   block `prompt-text` gives, then one image block per image, in order."
+  [text refs images]
+  (into [{:type "text" :text (prompt-text text refs)}]
+        (map (fn [{:keys [mime data]}] {:type "image" :mimeType mime :data data}))
+        images))
+
+(defn- digest
+  "The hex SHA-256 of the bytes base64 `data` encodes: an image's name."
+  [data]
+  (let [bytes (.decode (Base64/getDecoder) ^String data)]
+    (apply str (map #(format "%02x" %) (.digest (MessageDigest/getInstance "SHA-256") bytes)))))
 
 (defn- split-prompt
   "`prompt-text` read back: the words, and the references' labels in order."
@@ -121,18 +142,31 @@
   (case sessionUpdate
     "agent_message_chunk" (if-let [s (chunk-text (:content u))] (add-chunk t :agent (:messageId u) s) t)
     "agent_thought_chunk" (if-let [s (chunk-text (:content u))] (add-chunk t :thought (:messageId u) s) t)
-    "user_message_chunk"  (if-let [s (chunk-text (:content u))]
-                            (let [last-item (peek (:items t))
-                                  same?     (and (= :user (:kind last-item)) (:msg-id last-item)
-                                                 (= (:messageId u) (:msg-id last-item)))
-                                  raw       (str (when same? (:raw last-item)) s)
-                                  [words refs] (split-prompt raw)
-                                  item      {:kind :user :text words :refs refs :raw raw
-                                             :msg-id (:messageId u)}]
-                              (if same?
-                                (update-in t [:items (dec (count (:items t)))] merge item)
-                                (-> (settle-streams t) (append item))))
-                            t)
+    "user_message_chunk"  (let [content   (:content u)
+                                last-item (peek (:items t))
+                                same?     (and (= :user (:kind last-item)) (:msg-id last-item)
+                                               (= (:messageId u) (:msg-id last-item)))
+                                last-i    (dec (count (:items t)))]
+                            (cond
+                              (chunk-text content)
+                              (let [raw          (str (when same? (:raw last-item)) (chunk-text content))
+                                    [words refs] (split-prompt raw)
+                                    item         {:kind :user :text words :refs refs :raw raw
+                                                  :msg-id (:messageId u)}]
+                                (if same?
+                                  (update-in t [:items last-i] merge item)
+                                  (-> (settle-streams t) (append (assoc item :images [])))))
+
+                              (and (= "image" (:type content)) (seq (:data content)))
+                              (let [image {:mime (:mimeType content) :data (:data content)
+                                           :digest (digest (:data content))}]
+                                (if same?
+                                  (update-in t [:items last-i :images] (fnil conj []) image)
+                                  (-> (settle-streams t)
+                                      (append {:kind :user :text "" :refs [] :raw "" :images [image]
+                                               :msg-id (:messageId u)}))))
+
+                              :else t))
     "tool_call"           (-> (settle-streams t)
                               (append (merge {:kind :tool :tool-id (:toolCallId u) :title "Tool call"
                                               :status :pending :body nil :diffs []}
@@ -157,7 +191,8 @@
   (case local
     :user       (-> (settle-streams t)
                     (append {:kind :user :text (:text e)
-                             :refs (mapv #(select-keys % [:label]) (:refs e))})
+                             :refs (mapv #(select-keys % [:label]) (:refs e))
+                             :images (vec (:images e))})
                     (assoc :busy? true)
                     (cond-> (:at e) (assoc :started-at (:at e))))
     :turn-ended (-> (settle-streams t) (assoc :busy? false) (dissoc :started-at))

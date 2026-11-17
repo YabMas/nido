@@ -134,7 +134,7 @@
   (let [{:keys [text]} (panel/signals (:id routes))
         body  (body-json req)
         words (str/trim (str (get body text)))]
-    (if (and (seq words) (not (and holds? (holds?))) (chat/send! chat words (vec (refs body))))
+    (if (and (seq words) (not (and holds? (holds?))) (chat/send! chat words (vec (refs body)) []))
       (apply sse (datastar/patch-signals-event (json/generate-string {text ""}))
              (when on-sent (on-sent)))
       (sse))))

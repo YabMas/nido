@@ -10,6 +10,7 @@
 
    Speaks ACP protocol version 1, and advertises no client file-system or terminal capability: the
    agent edits and runs commands with its own tools, in the directory its session was created in.
+   What the agent advertises back is kept on the connection, and `accepts-images?` reads it.
 
    A request answers with the decoded `result`, or throws ex-info carrying the agent's `error`. When
    the process exits, every request still waiting throws, and the handler receives one
@@ -89,11 +90,18 @@
     (doto (Thread. #(read-loop conn (or on-message (fn [_]))) "acp-reader")
       (.setDaemon true)
       (.start))
-    (request conn "initialize"
-             {:protocolVersion    protocol-version
-              :clientCapabilities {:fs {:readTextFile false :writeTextFile false} :terminal false}}
-             request-timeout-ms)
-    conn))
+    (let [init (request conn "initialize"
+                        {:protocolVersion    protocol-version
+                         :clientCapabilities {:fs {:readTextFile false :writeTextFile false} :terminal false}}
+                        request-timeout-ms)]
+      (assoc conn :agent-capabilities (:agentCapabilities init)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  accepts-images?
+  "Whether the connection's agent advertised image prompts (`promptCapabilities.image`) when it
+   initialized. An agent that said nothing accepts none."
+  [conn]
+  (true? (get-in conn [:agent-capabilities :promptCapabilities :image])))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :string]}
   new-session!
@@ -119,15 +127,13 @@
   [conn session-id mode]
   (request conn "session/set_mode" {:sessionId session-id :modeId mode} request-timeout-ms))
 
-(defn ^{:malli/schema [:=> [:cat :map :string :string] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :string [:sequential :map]] :any]}
   prompt!
-  "Send `text` as a prompt. Returns a future of the turn's result (`:stopReason` among it), which
-   throws when the turn fails. Updates arrive at the handler while it runs; a turn has no time limit
-   here, and `cancel!` is how one is stopped."
-  [conn session-id text]
-  (future (request conn "session/prompt"
-                   {:sessionId session-id :prompt [{:type "text" :text text}]}
-                   nil)))
+  "Send `blocks`, ACP content blocks, as one prompt, as given. Returns a future of the turn's
+   result (`:stopReason` among it), which throws when the turn fails. Updates arrive at the handler
+   while it runs; a turn has no time limit here, and `cancel!` is how one is stopped."
+  [conn session-id blocks]
+  (future (request conn "session/prompt" {:sessionId session-id :prompt (vec blocks)} nil)))
 
 (defn ^{:malli/schema [:=> [:cat :map :string] :any]}
   cancel!

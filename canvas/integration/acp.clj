@@ -8,13 +8,19 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [fukan.common.typing.malli]))
 
+(Kind Image
+  "An image a person's message carries, trusted: its media type, one of the four the agent accepts,
+   its bytes in base64, and the hex SHA-256 of the decoded bytes, which names it."
+  [:map [:mime [:enum "image/png" "image/jpeg" "image/gif" "image/webp"]] [:data :string]
+        [:digest :string]])
+
 (Kind Item
   "One item of a conversation, tagged by `:kind`. Every item carries its `:id`, its position in
    the conversation (\"i0\", \"i1\", …), which names it for the conversation's life. Text items
    carry `:streaming?` while they grow. A person's message carries the references it was sent
-   with, by label, in the order the person numbered them."
+   with, by label, in the order the person numbered them, and the images it carried, in order."
   [:or [:map [:id :string] [:kind [:enum :user]] [:text :string]
-             [:refs [:vector [:map [:label :string]]]]]
+             [:refs [:vector [:map [:label :string]]]] [:images [:vector Image]]]
        [:map [:id :string] [:kind [:enum :agent :thought]] [:text :string]]
        [:map [:id :string] [:kind [:enum :tool]] [:title :string]
              [:status [:enum :pending :in-progress :completed :failed]]
@@ -30,6 +36,7 @@
   [:or [:map [:method :string]]
        [:map [:local [:enum :user]] [:text :string]
              [:refs [:vector [:map [:label :string] [:detail {:optional true} :string]]]]
+             [:images {:optional true} [:vector Image]]
              [:at {:optional true} :int]]
        [:map [:local [:enum :turn-ended]]]
        [:map [:local [:enum :error]] [:text :string]]
@@ -61,8 +68,10 @@
     {:signature [:=> [:catn [:conn :map] [:session-id :string] [:opts :map]] :any]})
   (Operation set-mode! "Set a session's permission mode."
     {:signature [:=> [:catn [:conn :map] [:session-id :string] [:mode :string]] :any]})
-  (Operation prompt! "Send a prompt; a promise of the turn's stop reason."
-    {:signature [:=> [:catn [:conn :map] [:session-id :string] [:text :string]] :any]})
+  (Operation accepts-images? "Whether the connection's agent advertised image prompts when it initialized."
+    {:signature [:=> [:catn [:conn :map]] :boolean]})
+  (Operation prompt! "Send a prompt — its content blocks, as given; a promise of the turn's stop reason."
+    {:signature [:=> [:catn [:conn :map] [:session-id :string] [:blocks [:sequential :map]]] :any]})
   (Operation cancel! "Cancel a session's running turn."
     {:signature [:=> [:catn [:conn :map] [:session-id :string]] :any]})
   (Operation respond! "Answer a request the agent made of the client."
@@ -75,7 +84,7 @@
 
    HIDES ACP's update vocabulary — the sessionUpdate kinds, the chunk and tool-call shapes, and
    which of them nido ignores. The one place an agent's message shape becomes trusted."
-  {:child [Item Event Conversation]}
+  {:child [Image Item Event Conversation]}
   (Operation prompt-text
     "The prompt the agent is sent for the person's words and the references they came with —
      numbered, each a label and its detail — in the form a replayed history is read back from:
@@ -83,6 +92,12 @@
     {:signature [:=> [:catn [:text :string]
                             [:refs [:sequential [:map [:label :string] [:detail {:optional true} :string]]]]]
                      :string]})
+  (Operation prompt-blocks
+    "The prompt's content blocks for the person's words, references and images: the one text block
+     prompt-text gives, then one image block per image, in order."
+    {:signature [:=> [:catn [:text :string] [:refs [:sequential :map]] [:images [:sequential :map]]]
+                     [:sequential :map]]
+     :delegates [prompt-text]})
   (Operation empty-transcript "A conversation with nothing in it."
     {:signature [:=> [:catn] Conversation]})
   (Operation fold
