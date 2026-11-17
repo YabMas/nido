@@ -28,7 +28,17 @@
       "a turn an API error ended is over all the same")
   (is (= :permission-denied (:event (hook/->event "PermissionDenied" {:tool_name "Bash"}))))
   (is (= :notification (:event (hook/->event "Notification" {:notification_type "permission_prompt"}))))
+  (is (= {:event :session-end :reason "prompt_input_exit" :cwd "/w" :permission-mode nil}
+         (hook/->event "SessionEnd" {:reason "prompt_input_exit" :cwd "/w"}))
+      "an end keeps the reason Claude Code gives")
   (is (nil? (hook/->event "PreToolUse" {})) "a hook it does not record"))
+
+(deftest a-session-s-end-lands-in-its-log-with-its-reason
+  (with-tmp
+    (fn []
+      (hook/hook* "SessionEnd" (json/generate-string {:session_id "s1" :reason "other" :cwd "/w"}))
+      (is (= [[:session-end "other"]]
+             (map (juxt :event :reason) (:events (events/events-since "s1" nil))))))))
 
 (deftest a-long-prompt-is-clipped
   (is (= 4000 (count (:prompt (hook/->event "UserPromptSubmit" {:prompt (apply str (repeat 5000 "x"))}))))))

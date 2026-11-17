@@ -932,7 +932,8 @@
             (is (= "none" (get-in once [:worktree :bgIsolation])))
             (is (= "accept" (:crossSessionInbound once)))
             (is (every? #(seq (get-in once [:hooks %]))
-                        [:SessionStart :UserPromptSubmit :Stop :PermissionDenied :Notification :PreToolUse])))
+                        [:SessionStart :UserPromptSubmit :Stop :PermissionDenied :Notification :SessionEnd
+                         :PreToolUse])))
           (testing "writing it again changes nothing"
             (launcher/ensure-worktree-baseline! wt "/home/s")
             (is (= once (json/parse-string (slurp path) true))))))

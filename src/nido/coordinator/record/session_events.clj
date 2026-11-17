@@ -3,7 +3,7 @@
    per claude session id.
 
    The entries are FACTS — a session started, a prompt was submitted, a turn stopped, a
-   permission was denied — never decisions. Whether a prompt was nido's or a person's, and what a
+   permission was denied, a session ended — never decisions. Whether a prompt was nido's or a person's, and what a
    stop means for a run, is read off them by the driver; nothing here knows."
   (:require [babashka.fs :as fs]
             [clojure.edn :as edn]
@@ -14,7 +14,7 @@
 
 (def kinds
   "The events a session reports, by the hook that reports each."
-  #{:session-start :prompt :stop :permission-denied :notification})
+  #{:session-start :prompt :stop :permission-denied :notification :session-end})
 
 (def SessionEvent
   [:map

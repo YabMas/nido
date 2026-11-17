@@ -1,7 +1,7 @@
 (ns tasks.nido-session-hook
   "`bb nido:session:hook <Event>` — the command nido's session settings install as a Claude Code
-   hook for SessionStart, UserPromptSubmit, Stop, PermissionDenied and Notification, in every
-   nido session home and worktree, whoever starts the session there.
+   hook for SessionStart, UserPromptSubmit, Stop, PermissionDenied, Notification and SessionEnd,
+   in every nido session home and worktree, whoever starts the session there.
 
    It records and lets the session proceed — always. Every path exits 0, a payload it cannot
    read records nothing, and nothing it does can block a prompt or a tool call: a nido fault may
@@ -68,6 +68,10 @@
       "Notification"     (merge base {:event             :notification
                                       :notification-type (:notification_type payload)
                                       :message           (clip (:message payload))})
+      ;; Evidence, never a turn end: Claude Code reports an end it carries out itself, and nothing
+      ;; establishes that it reports one when its process is killed. The reason is kept as given —
+      ;; `other` is the one that names no act of the person's.
+      "SessionEnd"       (merge base {:event :session-end :reason (some-> (:reason payload) str)})
       nil)))
 
 (defn ^{:malli/schema [:=> [:cat :string [:maybe :string]] [:maybe :string]]}
