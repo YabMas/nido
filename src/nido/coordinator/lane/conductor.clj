@@ -28,7 +28,10 @@
    nothing working — is one more hand-back, posted once per turn end after a grace, for the
    conductor to decide like any other. A dialog a driven session stands on is the one stop nido
    states as a question itself: only someone at that session can answer it, so it goes to the
-   person as a :blocker carrying :stop, which nido answers once the dialog closes (`stops!`).
+   person as a :blocker carrying :stop, which nido answers once the dialog closes (`stops!`). A
+   turn whose agent process is gone is the other: nobody but a person at that session can resume
+   it, and nido does not know why it exited, so it too is a :blocker carrying :stop, with the
+   command that resumes the conversation — nido starts nothing.
 
    And that a start carries its session: the first session a person's start or a Run's start
    brings up on a workstream whose generation fixes no ids becomes its whole seat's occupant.
@@ -56,6 +59,7 @@
    [nido.coordinator.source.drain :as source-drain]
    [nido.platform.core :as core]
    [nido.platform.io :as io]
+   [nido.platform.process :as process]
    [nido.platform.task-args :as task-args]
    [nido.session.commit-gate :as commit-gate]
    [nido.session.lifecycle :as lifecycle]
@@ -809,7 +813,7 @@
               :else                            (decide [:escalate (unanswered-escalation m offer)])))))
       [])))
 
-;; ── stops: a dialog nobody can answer, and work that stalled ────────────────
+;; ── stops: a dialog nobody can answer, a turn whose process is gone, and work that stalled ──
 
 (def dialog-grace-ms
   "How long a driven session may stand on a dialog before a person is asked about it: long enough
@@ -861,11 +865,12 @@
                    "reach the dialog.")
      :stop    {:kind :dialog :session session :since since}}))
 
-(defn- dialog-blockers
-  "nido's dialog blockers on a workstream, each {:seq :stop :answer <its answer entry, or nil>}."
-  [project ws-id]
+(defn- stop-blockers
+  "nido's blockers about a stop of `kind` on a workstream, each {:seq :stop :answer <its answer
+   entry, or nil>}."
+  [project ws-id kind]
   (let [answers (group-by :blocker-seq (ws/entries-of project ws-id :blocker-answered))]
-    (for [b (ws/entries-of project ws-id :blocker) :when (:stop b)]
+    (for [b (ws/entries-of project ws-id :blocker) :when (= kind (get-in b [:stop :kind]))]
       {:seq (:seq b) :stop (:stop b) :answer (first (get answers (:seq b)))})))
 
 (defn- dialogs!
@@ -873,7 +878,7 @@
    `dialog-grace-ms`, once per dialog, and answer {:by :nido} each one asked about that has closed.
    Answers [{:ws-id :session :wrote <:blocker | :blocker-answered>} …]."
   [project ws-id records now-ms rows]
-  (let [asked (dialog-blockers project ws-id)
+  (let [asked (stop-blockers project ws-id :dialog)
         waits (into {} (keep (fn [s] (when-let [w (get-in s [:claude :waiting])] [(:name s) w])) records))]
     (concat
      (for [{:keys [seq stop answer]} asked
@@ -893,6 +898,158 @@
          (ws/append-entry! project ws-id {:kind :blocker}
                            (pr-str (dialog-blocker (:name s) w (when cwd (substrate/pending-dialog id cwd)))))
          {:ws-id ws-id :session (:name s) :wrote :blocker})))))
+
+;; A dead turn: conduct holds the turn open and no witness shows its process.
+
+(defn- process-witness
+  "What this pass can say of the process of open turn `t` (one of conduct's `open-turns`), given
+   `listing` — a listing read for this check, or ::unread when it could not be read: :running,
+   :gone, or :undecided. :gone needs every witness there is to agree: the listing holds no row
+   with a process for the conversation, and the process its latest start recorded, when it
+   recorded one, is not running as a process started no later than that start was recorded — a
+   pid running as a later process was given to something else. :undecided is whatever cannot be
+   told — an unread listing, a recorded pid that does not read as one, a running process whose
+   start the OS will not give or whose recording instant does not parse — and licenses nothing."
+  [{:keys [conversation pid started-at]} listing]
+  (cond
+    (= ::unread listing) :undecided
+    (some #(and (:pid %) (= conversation (:sessionId %))) listing) :running
+    (str/blank? (str pid)) :gone
+    :else
+    (let [n        (parse-long (str/trim (str pid)))
+          started  (when n (process/process-started n))
+          recorded (ms started-at)]
+      (cond
+        (nil? n)            :undecided
+        (= :gone started)   :gone
+        (= :unknown started) :undecided
+        (nil? recorded)     :undecided
+        (<= started recorded) :running
+        :else               :gone))))
+
+(defn- recorded-end
+  "The last end Claude Code reported for `conversation` at or after `since`, as its event, or nil."
+  [conversation since]
+  (let [from (ms since)]
+    (last (filter #(and (= :session-end (:event %)) from (some-> (ms (:at %)) (>= from)))
+                  (:events (session-events/events-since conversation nil))))))
+
+(defn- reopen-command
+  "The command line that reopens `conversation` itself, run in the directory it was recorded in:
+   a resume given no flag. Claude Code continues a session in place only then — one given any
+   flag keeps the session's saved options and starts a copy under a new id, and a copy would
+   leave this conversation's turn open and its blocker standing with the person back at work."
+  [conversation]
+  (str "claude --resume " (process/quoted conversation)))
+
+(defn- dead-turn-blocker
+  "The blocker telling a person that open turn `t`'s process is gone, with what resumes it. It
+   says what nido saw and not why: nothing here knows why a process exited."
+  [{:keys [session-name conversation since cwd]} end]
+  {:format  :blocker
+   :summary (str session-name "'s agent process is gone inside a turn. Conversation " conversation
+                 " began a turn at " since " and recorded no Stop, and no process is running it. "
+                 (if end
+                   (str "Claude Code recorded the session ending at " (:at end) " with reason `"
+                        (or (:reason end) "none given") "`.")
+                   "No end of the session was recorded.")
+                 " Why it exited is not known. To continue the conversation where it stopped, run: "
+                 (when cwd (str "cd " (process/quoted cwd) " && ")) (reopen-command conversation)
+                 " — with no other flag: a resume given one starts a copy and leaves this turn open.")
+   :needs   (or (question (str "Will you resume " session-name "'s conversation, whose agent exited mid-turn?"))
+                "Will you resume the conversation whose agent exited mid-turn?")
+   :after   (str "nido starts nothing itself. It marks this answered once the conversation runs "
+                 "again or its turn has ended. A reply here is recorded, but it resumes nothing.")
+   :stop    {:kind :dead-turn :session session-name :since since}})
+
+(defn- dead-turn-asks-path [] (str (fs/path (cstate/coordinator-dir) "dead-turn-asks.edn")))
+
+(defn- dead-turn-asks
+  "The workstreams of `project` nido has asked about a dead turn on and not yet seen answered —
+   where to look, never what is true: the ledger says which blockers stand. A workstream whose
+   turn has closed appears in no reading of open turns, and this is what brings a pass back to
+   answer its blocker."
+  [project]
+  (into #{} (comp (filter #(= (name project) (first %))) (map second))
+        (io/read-edn (dead-turn-asks-path))))
+
+(defn- note-dead-turn-ask!
+  "Keep (`standing?`) or drop `ws-id` among the workstreams `dead-turn-asks` answers."
+  [project ws-id standing?]
+  (let [k   [(name project) ws-id]
+        was (set (io/read-edn (dead-turn-asks-path)))
+        now ((if standing? conj disj) was k)]
+    (when (not= was now) (io/write-edn! (dead-turn-asks-path) now))))
+
+(defn- asks-about?
+  "Whether a dead turn of `conversation` on session `record` is a person's to resume: the session
+   is neither the conductor's nor the chat's — a conductor is restarted by its own lifecycle —
+   and the conversation holds no instruction given for a Run, which its budget settles — pending
+   or lapsed, since conduct still ends a turn on a lapsed one a late prompt delivered."
+  [record conversation]
+  (boolean (and record (not (:conductor record)) (not (:chat record))
+                (not (and (= conversation (get-in record [:claude :session-id]))
+                          (some :for (cons (get-in record [:claude :pending])
+                                           (get-in record [:claude :lapsed]))))))))
+
+(defn- dead-turns!
+  "Answer {:by :nido} each dead-turn blocker of the workstream whose turn conduct no longer holds
+   open or whose process a witness shows, then — when `ask?` — append one for each of `turns`,
+   the workstream's open turns, whose process is :gone by `process-witness`, whose session
+   `asks-about?` allows, and that no blocker, answered or not, already names by session and the
+   instant the turn began. `listing` is a delay of the listing read for this check. Starts,
+   wakes and messages nothing. Answers [{:ws-id :session :wrote} …]."
+  [project ws-id turns listing ask?]
+  (let [asked   (stop-blockers project ws-id :dead-turn)
+        witness (memoize (fn [t] (process-witness t @listing)))
+        turn-of (fn [stop] (some #(when (and (= (:session stop) (:session-name %)) (= (:since stop) (:since %))) %)
+                                 turns))
+        answers (doall
+                 (for [{:keys [seq stop answer]} asked
+                       :let  [t   (turn-of stop)
+                              why (cond (nil? t) "its turn is no longer open: the conversation was resumed, or the turn ended"
+                                        (= :running (witness t)) "a process is running its conversation again")]
+                       :when (and (nil? answer) why)]
+                   (do (ws/append-entry! project ws-id {:kind :blocker-answered}
+                                         (pr-str {:format :blocker-answered :blocker-seq seq :by :nido :resumed nil
+                                                  :summary (str (:session stop) "'s dead turn no longer stands — " why ".")}))
+                       {:ws-id ws-id :session (:session stop) :wrote :blocker-answered})))
+        records (delay (into {} (map (juxt :name identity)) (session/list-sessions project ws-id)))
+        named   (atom (into #{} (map (comp (juxt :session :since) :stop)) asked))
+        asks    (doall
+                 (for [{:keys [session-name conversation since] :as t} (when ask? turns)
+                       :when (and (not (@named [session-name since]))
+                                  (asks-about? (get @records session-name) conversation)
+                                  (= :gone (witness t)))]
+                   (do (swap! named conj [session-name since])
+                       (ws/append-entry! project ws-id {:kind :blocker}
+                                         (pr-str (dead-turn-blocker t (recorded-end conversation since))))
+                       {:ws-id ws-id :session session-name :wrote :blocker})))]
+    (when (or (seq asked) (seq asks))
+      (note-dead-turn-ask! project ws-id
+                           (boolean (some (comp nil? :answer) (stop-blockers project ws-id :dead-turn)))))
+    (concat answers asks)))
+
+(def stops-gap-ms
+  "How far apart two successive stops! passes over a project may come before the later one says
+   so: the interval the five-minute bound on finding a dead turn is stated over."
+  (* 2 60 1000))
+
+(defonce ^:private !last-stops-pass (atom {}))
+
+(defn- note-pass!
+  "Remember that stops! passes over `project` now — the clock read here, never an instant taken
+   earlier in the tick, so whatever ran before this pass falls inside the interval — and print the
+   gap when the previous pass in this daemon came more than `stops-gap-ms` before: a long tick, the
+   sleep between ticks, a halt."
+  [project]
+  (let [now-ms  (System/currentTimeMillis)
+        [was _] (swap-vals! !last-stops-pass assoc project now-ms)
+        before  (get was project)]
+    (when (and before (> (- now-ms before) stops-gap-ms))
+      (binding [*out* *err*]
+        (println (str "nido conductor: stops on " (name project) " came " (quot (- now-ms before) 1000)
+                      "s after the previous pass — a dead turn may have gone unseen that long"))))))
 
 (defn- stall!
   "Hand the workstream's stall back to its conductor — once per turn end — when it is activated,
@@ -970,34 +1127,49 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :int] [:sequential :map]]}
   stops!
-  "One pass over `project`'s open workstreams with a session nido drives, at `now-ms`: answer as
-   nido each blocker it wrote that no longer asks anything (`answer-moot!`); ask a person about
-   each dialog a driven session has stood on past `dialog-grace-ms` — a :blocker nido writes,
-   worded with what the dialog asks, answered {:by :nido} once it closes — and hand an activated
-   workstream's stall back to its conductor (`stall!`), which decides it like any hand-back.
-   Nothing is sent to a session. Answers [{:ws-id :session :wrote} …]; a workstream that throws is
-   logged and skipped."
+  "One pass over `project`'s open workstreams with a session nido drives, a turn conduct holds
+   open, or a dead-turn blocker still standing, at `now-ms`: answer as nido each blocker it wrote
+   that no longer asks anything (`answer-moot!`); ask a person about each dialog a driven session
+   has stood on past `dialog-grace-ms` — a :blocker nido writes, worded with what the dialog
+   asks, answered {:by :nido} once it closes; ask a person, on an activated workstream not
+   paused, about each open turn whose process is gone (`dead-turns!`) — a :blocker carrying the
+   command that resumes the conversation, answered {:by :nido} once the turn closes or a process
+   shows — and hand an activated workstream's stall back to its conductor (`stall!`), which
+   decides it like any hand-back. Nothing is sent to a session and none is started.
+
+   The dead-turn check runs on every pass, against a listing read for it and never the display
+   cache; a listing that cannot be read decides no turn dead. A pass that comes more than
+   `stops-gap-ms` after the project's previous one prints the gap. Answers [{:ws-id :session
+   :wrote} …]; a workstream that throws is logged and skipped."
   [project now-ms]
+  (note-pass! project)
   (let [faceted ((requiring-resolve 'nido.coordinator.lane.conduct/faceted-sessions) {:projects [project]})
-        rows    (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {:projects [project]}))]
+        open    (group-by :ws-id ((requiring-resolve 'nido.coordinator.lane.conduct/open-turns) {:projects [project]}))
+        rows    (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {:projects [project]}))
+        listing (delay (try (vec (substrate/listing {:projects [project]})) (catch Exception _ ::unread)))]
     (vec
      (mapcat (fn [ws-id]
                (try
                  (let [w (ws/read-ws project ws-id)]
+                   ;; Closed, its blockers are nobody's to answer: nothing brings a pass back.
+                   (when-not (and w (nil? (ws/closure w)))
+                     (note-dead-turn-ask! project ws-id false))
                    (when (and w (nil? (ws/closure w)))
                      (let [records (filter :claude (session/list-sessions project ws-id))
                            moot    (answer-moot! project ws-id)
                            ;; An answer just written moved the ledger: the stall reads it.
-                           w       (if (seq moot) (ws/read-ws project ws-id) w)]
+                           w       (if (seq moot) (ws/read-ws project ws-id) w)
+                           worked? (and (standing/activated? w) (not (standing/paused? w)))]
                        (doall (concat moot
                                       (dialogs! project ws-id records now-ms @rows)
-                                      (when (and (standing/activated? w) (not (standing/paused? w)))
+                                      (dead-turns! project ws-id (get open ws-id) listing worked?)
+                                      (when worked?
                                         (stall! project ws-id w (remove :conductor records) now-ms)))))))
                  (catch Throwable t
                    (binding [*out* *err*]
                      (println (str "nido conductor: stops on " ws-id " skipped — " (ex-message t))))
                    nil)))
-             (distinct (map :ws-id faceted))))))
+             (distinct (concat (map :ws-id faceted) (keys open) (dead-turn-asks project)))))))
 
 ;; ── the person's acts ───────────────────────────────────────────────────────
 

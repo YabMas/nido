@@ -121,15 +121,19 @@
     {:signature [:=> [:catn [:report :map]] [:sequential :map]]
      :delegates [drive/of seats/occupants seats/post! standing/governing-design rseats/seats]})
   (Operation stops!
-    "One pass over a project's open workstreams with a session nido drives: a blocker nido wrote
+    "One pass over a project's open workstreams with a session nido drives, a turn conduct holds
+     open, or a dead-turn blocker still standing: a blocker nido wrote
      that no longer asks anything is answered by nido, saying why — a review stage's halt at a
      machinery outcome once a newer record of the kind that stage reviews is on the ledger, and
      nido's escalation of a hand-back the conductor did not decide once the conductor decides a later
      hand-back from the same session; a dialog a driven session has stood on for
      two minutes becomes a :blocker nido writes for a person, worded with what the dialog asks and
-     answered by nido once it closes; an activated workstream that has read stalled for ten minutes
+     answered by nido once it closes; on an activated workstream not paused, an open turn whose
+     process every witness says is gone becomes a :blocker for a person carrying the command that
+     resumes its conversation, answered by nido once the turn closes or a process shows; an
+     activated workstream that has read stalled for ten minutes
      since its last turn end and its ledger's newest entry is handed back to its conductor, once
-     per turn end, with why. Sends nothing to a session."
+     per turn end, with why. Sends nothing to a session and starts none."
     {:signature [:=> [:catn [:project ProjectName] [:now-ms :int]] [:sequential :map]]
      :delegates [drive/status drive/disposition seats/post! substrate/pending-dialog
                  workstream/entries-of workstream/append-entry!]})

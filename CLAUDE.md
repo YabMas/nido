@@ -436,6 +436,24 @@ The exception is a session the coordinator spawned for a Run. It is torn down wh
 
 Debug escape hatch: `bb nido:session:status` / `bb nido:session:list` stay scan-based and model-independent — they work even when the workstream model is wedged.
 
+### A session whose agent exits mid-turn
+
+A turn ends only when the session's own Stop says so. When the agent process of a session on an
+activated, un-paused workstream is gone inside a turn, the coordinator's next pass puts a blocker
+on that workstream's Needs you row: the conversation, when the turn began, any end Claude Code
+recorded with its reason, and the command that resumes it in the directory it ran in — a bare `claude --resume <id>`, since
+a resume given any flag starts a copy under a new id. nido starts
+nothing — why the process exited is not known to it — and answers the blocker itself once the
+conversation runs again or its turn has ended.
+
+It asks only on certainty: the listing read for the check holds no process for the conversation,
+and the pid its start recorded is not that process any more. A listing that cannot be read, or a
+pid whose start the OS will not give, decides nothing. Deliberately not alarmed: a turn already
+open when the daemon first read the session, one followed by a person's own exit (a `SessionEnd`
+whose reason is not `other`), a conductor's, chat's or Run's turn, and any turn on a paused
+workstream. A halted daemon checks nothing; a pass that comes more than two minutes after the
+previous one says so in `coordinator.log`.
+
 ### Failed starts recover themselves
 
 Every session start that throws — `session:up`, the TUI or dashboard, a reply re-hydrating a parked session, a Run's spawn — is kept under `~/.nido/failures/` with its error chain, its service logs and on whose behalf it ran. `bb nido:recovery:failures` shows them.
