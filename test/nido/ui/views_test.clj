@@ -1465,14 +1465,14 @@
   (let [html (views/workstream-pane
               (assoc a-pane :doing {:source :claim :kind :diff-review}
                      :arc (assoc-in an-arc [:stages 3 :now] :running)) {})]
-    (is (str/includes? html "arc-spin"))
+    (is (str/includes? html "arc-live"))
     (is (re-find #"class=\"arc-d\">· reviewing the diff<" html)
         "the running stage says what runs in it, once, on its own row"))
   (let [html (views/workstream-pane
               (assoc a-pane :arc (assoc-in an-arc [:stages 3 :now] :awaiting)) {})]
     (is (re-find #"arc-row \w+ awaiting" html))
     (is (str/includes? html "title=\"waiting on you\""))
-    (is (not (str/includes? html "arc-spin")) "a stage waiting on a person is not running"))
+    (is (not (str/includes? html "arc-live")) "a stage waiting on a person is not running"))
   (let [html (views/workstream-pane
               (assoc a-pane :doing {:source :merge :phase :queued} :arc an-arc) {})]
     (is (not (str/includes? html "doing-line")) "activity no stage carries draws no line")))

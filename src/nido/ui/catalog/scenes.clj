@@ -172,8 +172,9 @@
               :render #(rail str [:done :current :stale :skipped :ahead]
                              (fn [s] (state/arc-mark s nil)))}
              {:title "what is happening now"
-              :note "Waiting on a person, and running. Both outrank the record state beneath
-                     them, so they are what a reader scanning an arc lands on."
+              :note "Waiting on a person — the needs-you dot, yellow — and an agent working — a
+                     breathing dot, blue. Both outrank the record state beneath them, so they are
+                     what a reader scanning an arc lands on."
               :render #(rail str [:awaiting :running]
                              (fn [n] (state/arc-mark :done n)))}]}])
 

@@ -58,7 +58,6 @@
           --needs: #facc15;   --needs-dim: #c9a227;   --needs-bg: #2a2a1a;    /* a person owes a move */
           --waiting: #d4b483; --waiting-dim: #8a7a50; --waiting-bg: #3a2e14;  /* nido waits, or a record went stale */
           --working: #7dd3fc; --working-dim: #7a9ad0; --working-bg: #16304a;  /* nido is working */
-          --running: #bbf7d0; --running-dim: #6b8f78;                         /* something runs right now */
           --ok: #4ade80;      --ok-dim: #6a9a6a;      --ok-bg: #1a3a2a;       /* done, healthy, approved */
           --failed: #f87171;  --failed-dim: #d9776a;  --failed-bg: #3a1a1a;   /* failed, halted, refused */
           --failed-border: #6a3a3a; --failed-strong: #ffaeae;
@@ -138,7 +137,7 @@
         .gate-card:hover { background:var(--surface-hover); text-decoration:none; }
         .gate-top { display:flex; align-items:center; gap:8px; }
         .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-strong); }
-        .needs { width:7px; height:7px; border-radius:50%; background:var(--needs); box-shadow:0 0 6px var(--needs); }
+        .needs { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--needs); box-shadow:0 0 6px var(--needs); }
         .gate-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:2px 0 0 26px;
                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .pane-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:-6px 0 8px; user-select:all; }
@@ -233,7 +232,7 @@
         .pos .pos-at { font-size:var(--fs-xs); color:var(--text-muted); }
         .pos.pos-you .pos-at { color:var(--needs-dim); }
         .st-mark { flex:none; font-size:var(--fs-xs); line-height:1; }
-        .st-mark.live { color:var(--running); }
+        .st-mark.live { color:var(--working); }
         .st-mark.paused { color:var(--dormant); }
         .st-mark.stalled { color:var(--failed); }
         .pause-line { display:flex; align-items:center; gap:8px; margin:-4px 0 10px;
@@ -294,7 +293,7 @@
         .arc-g { width:12px; text-align:center; color:var(--text-faint); font-size:var(--fs-xs); }
         .arc-n { min-width:118px; font-size:var(--fs-sm); color:var(--text-muted); }
         .arc-m { font-size:var(--fs-xs); color:var(--text-faint); }
-        .arc-d { font-size:var(--fs-xs); color:var(--running-dim); }
+        .arc-d { font-size:var(--fs-xs); color:var(--working-dim); }
         .arc-v { font-size:var(--fs-xs); color:var(--waiting); }
         .arc-row.done .arc-g { color:var(--ok-dim); }
         .arc-row.done .arc-n { color:var(--text); }
@@ -306,14 +305,12 @@
         .arc-row.skipped .arc-n { color:var(--waiting-dim); }
         .arc-row.skipped .arc-m { color:var(--waiting-dim); }
         .arc-row.ahead .arc-n { color:var(--text-faint); }
-        /* Something running in a stage: a spinner in place of its glyph. A stage
-           whose next move is a person's has a mark of its own in the needs
-           colour instead, which outranks the spinner. */
-        .arc-spin { display:inline-block; width:8px; height:8px; border:1.5px solid var(--running);
-                    border-right-color:transparent; border-radius:50%;
-                    animation:arc-spin .8s linear infinite; }
-        @keyframes arc-spin { to { transform:rotate(360deg); } }
-        .arc-wait { color:var(--needs); font-size:var(--fs-sm); line-height:1; }
+        /* An agent working in a stage: a breathing dot in the working colour in place of its
+           glyph — activity, not a load in progress. A stage whose next move is a person's
+           carries the needs-you dot instead, which outranks it. */
+        .arc-live { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--working);
+                    animation:pulse 1.4s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .arc-live { animation:none; } }
         .arc-row.awaiting .arc-n { color:var(--needs); }
         .arc-sub { padding:2px 0 8px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); }
         .hist-head { display:inline-flex; gap:7px; align-items:baseline; cursor:pointer;
@@ -438,7 +435,7 @@
      .dot-halted { background:var(--failed); box-shadow:0 0 6px var(--failed); }
      .dot-breaker { background:var(--warning); }
      .dot-down { background:var(--text-faint); }
-     .doing-badge { color:var(--running-dim); }
+     .doing-badge { color:var(--working-dim); }
      .doing-badge::before { content:'● '; }
      .badge-findings { color:var(--warning-dim); border:1px solid var(--warning-bg); border-radius:4px; padding:1px 6px; font-size:var(--fs-xs); margin-left:6px; }
      .doing-badge.ship-blocked { color:var(--failed); font-weight:600; }
@@ -555,7 +552,7 @@
                     border-radius:6px; padding:6px 10px; color:var(--text-strong); }
         .chat-agent { color:var(--text); }
         /* The reply is still being written: a text cursor at its end, blinking like one. */
-        .chat-caret { color:var(--running); margin-left:2px; animation:caret-blink 1s steps(1) infinite; }
+        .chat-caret { color:var(--working); margin-left:2px; animation:caret-blink 1s steps(1) infinite; }
         @keyframes caret-blink { 50% { opacity:0; } }
         @media (prefers-reduced-motion: reduce) { .chat-caret { animation:none; } }
         .chat-thought summary, .chat-tool summary { cursor:pointer; color:var(--text-muted);
@@ -576,7 +573,7 @@
         .chat-diff-new { color:var(--ok-dim); }
         .chat-st { font-size:var(--fs-xs); }
         .chat-st-waiting { color:var(--waiting); }
-        .chat-st-running { color:var(--running); }
+        .chat-st-running { color:var(--working); }
         .chat-st-ok { color:var(--ok); }
         .chat-st-failed { color:var(--failed); }
         .chat-perm { border:1px solid var(--needs-dim); border-radius:6px; background:var(--needs-bg); padding:8px 10px; }
@@ -612,8 +609,9 @@
                     padding:6px 72px 6px 8px; font:inherit; }
         .chat-compose textarea:focus { outline:none; border-color:var(--accent-border); }
         .chat-actions { position:absolute; right:6px; bottom:6px; display:flex; gap:8px; }
-        /* The turn's status row: a moving mark, the phase in words, the seconds so far. Each phase
-           has its own mark colour so a glance tells thinking from running from writing. */
+        /* The turn's status row: a breathing mark, the phase in words, the seconds so far. The mark
+           is in the working colour whatever the agent is doing — the words tell thinking from
+           running from writing — and in the needs colour, still, when it waits on your answer. */
         .chat-status { display:flex; gap:8px; align-items:center; min-height:20px; font-size:var(--fs-xs);
                        color:var(--text-muted); }
         .chat-status:empty { display:none; }
@@ -645,12 +643,8 @@
                             box-shadow:-8px 0 24px var(--surface-sunken); }
         }
         @media (prefers-reduced-motion: reduce) { .chat-toggle svg { transition:none; } }
-        .chat-spin { width:8px; height:8px; border-radius:50%; background:var(--running);
+        .chat-spin { width:8px; height:8px; border-radius:50%; background:var(--working);
                      animation:pulse 1.2s ease-in-out infinite; flex:none; }
-        .chat-spin-waiting { background:var(--waiting); }
-        .chat-spin-thinking { background:var(--accent); }
-        .chat-spin-running { background:var(--running); }
-        .chat-spin-writing { background:var(--ok); }
         .chat-spin-asking { background:var(--needs); animation:none; }
         @media (prefers-reduced-motion: reduce) { .chat-spin { animation:none; } }
         .chat-thought[open] summary { margin-bottom:2px; }

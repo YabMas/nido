@@ -214,11 +214,12 @@
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   arc-mark
   "The mark for one arc stage: what is happening there right now if anything is — a person being
-   waited on, or something running — and otherwise what the stage's records amount to. `now`
+   waited on, or an agent working — and otherwise what the stage's records amount to. `now`
    outranks `state` because a stage waiting on a person is the one fact a reader scans an arc
-   for."
+   for. Both are dots, in the two hues that tell a person's move from an agent's: the needs-you
+   dot the board rows carry, and a breathing dot in the working colour."
   [state now]
   (case now
-    :awaiting [:span.arc-wait {:title "waiting on you"} "◆"]
-    :running  [:span.arc-spin]
+    :awaiting [:span.needs {:title "waiting on you"}]
+    :running  [:span.arc-live {:title "an agent is working"}]
     (get arc-glyph state "·")))

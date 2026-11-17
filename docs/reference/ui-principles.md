@@ -59,7 +59,6 @@ foreground, a dimmer foreground and a tint:
 | `--needs` | a person owes a move |
 | `--waiting` | nido waits, or a record went stale |
 | `--working` | nido is working |
-| `--running` | something is running right now |
 | `--ok` | done, healthy, approved |
 | `--failed` | failed, halted, refused |
 | `--warning` | caution: a breaker, a finding |
@@ -69,8 +68,18 @@ foreground, a dimmer foreground and a tint:
 
 Colour is never the only carrier of a meaning; a glyph or a word says it too.
 
+**Whose move it is has two hues, and only two.** Blue (`--working`) is an agent
+acting: working, thinking, running, writing. Yellow (`--needs`) is a person
+owing a move: a question, a gate, an approval. A mark that says who has the
+work draws in one of these two, everywhere — the board, the arc, the chat — so
+a glance across any page reads "the agent has it" or "I have it" the same way.
+No other hue means either; in particular `--ok` and `--accent` are not
+stand-ins for an agent at work.
+
 **Check.** A colour literal outside `:root` (`nido.ui.tokens-test` fails on
-one); a state drawn in two hues on two pages; a token named `--blue`.
+one); a state drawn in two hues on two pages; a token named `--blue`; an
+agent's activity drawn in anything but `--working`, or a person's move in
+anything but `--needs`.
 
 **From.** Primer's and Carbon's semantic colour tokens; Microsoft's guidelines
 for human-AI interaction, G2 (make clear how well the system can do what it
@@ -168,7 +177,7 @@ An open workstream is in exactly one of three resting states, and the overview s
 
 | state | mark | means |
 |---|---|---|
-| working | ● running colour | one or more agents are doing something on it |
+| working | ● working colour | one or more agents are doing something on it |
 | needs you | lit position chip | it is blocked on a question it has stated to you |
 | paused | ‖ dormant colour | you chose not to push it forward for now, with a note saying why |
 

@@ -159,7 +159,7 @@
   (is (str/includes? (html-of "gate-row" "working") "working…")))
 
 (deftest an-arc-row-scene-marks-what-waits-on-a-person
-  (is (str/includes? (html-of "arc-row" "waiting on you") "arc-wait"))
+  (is (str/includes? (html-of "arc-row" "waiting on you") "class=\"needs\""))
   (is (str/includes? (html-of "arc-row" "revisited") "3 visits"))
   (let [stale (html-of "arc-row" "stale, and skipped")]
     (is (str/includes? stale "no longer stands")
