@@ -98,7 +98,7 @@
 
 (def ^:private investigating-skills
   "The skills whose run investigates a ticket and leaves a verdict on it."
-  #{:triage-bug :triage-slack :investigate-bug :add-video-provider})
+  #{:triage-bug :triage-slack :investigate-bug})
 
 (def ^:private triage-kinds
   "The entry kinds a ticket's triage leaves: the report it arrived as, the verdict on it, a
