@@ -92,6 +92,12 @@
      its facet marked retired, so it drives no session."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:opts :map]] [:maybe :map]]
      :delegates [release! substrate/stop!]})
+  (Operation open-turns
+    "Every conversation of a session record whose turn conduct holds open — a prompt read with no
+     Stop, restart or person's exit read after it — across the projects, each with its session,
+     when the turn began, and the process and directory its latest start recorded. Reads the
+     records; observes no process."
+    {:signature [:=> [:catn [:opts :map]] [:sequential :map]]})
   (Operation live-states
     "Each listed session by claude session id, from a listing at most two seconds old — for
      display and liveness, never for a decision to give one an instruction."

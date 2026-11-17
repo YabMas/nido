@@ -974,3 +974,90 @@
                              {:id "c" :pid 3 :status "busy"}])]
     (is (= #{"a"} (conduct/mid-turn-ids {}))
         "only rows mid-turn, by their full session id; a row naming none is skipped")))
+
+;; ── open turns ──────────────────────────────────────────────────────────────
+
+(defn- open-of
+  "The conversations of session `n` conduct holds open, each with when its turn began."
+  [n]
+  (into {} (comp (filter #(= n (:session-name %))) (map (juxt :conversation :since)))
+        (conduct/open-turns {:projects [:nido]})))
+
+(deftest a-turn-is-open-from-its-prompt-until-something-closes-it
+  (with-tmp
+    (fn []
+      (session/create! :nido "ws-1" {:name "plain" :weight :light :autonomy nil})
+      (let [home (home! "plain")
+            ev   (fn [conv m] (events/append! conv (assoc m :cwd home)))
+            pass #(with-redefs [substrate/listing (constantly [])] (conduct/conduct! {:projects [:nido]}))]
+        (pass)
+        (testing "a prompt opens it, and a second prompt of the same turn does not move its beginning"
+          (ev "c" {:event :session-start :source "startup" :pid "4242" :at "2026-10-16T09:00:01Z"})
+          (ev "c" {:event :prompt :prompt "go" :at "2026-10-16T09:00:02Z"})
+          (ev "c" {:event :prompt :prompt "and this" :at "2026-10-16T09:00:03Z"})
+          (pass)
+          (is (= {"c" "2026-10-16T09:00:02Z"} (open-of "plain")))
+          (is (= [{:project :nido :ws-id "ws-1" :session-name "plain" :conversation "c"
+                   :since "2026-10-16T09:00:02Z" :pid "4242" :cwd home :started-at "2026-10-16T09:00:01Z"}]
+                 (filter #(= "plain" (:session-name %)) (conduct/open-turns {:projects [:nido]})))
+              "with the process and directory its latest start recorded"))
+        (testing "what leaves it open: a compaction's start, an end naming no act, a notification"
+          (ev "c" {:event :session-start :source "compact" :pid "4242"})
+          (ev "c" {:event :session-end :reason "other"})
+          (ev "c" {:event :notification})
+          (pass)
+          (is (= {"c" "2026-10-16T09:00:02Z"} (open-of "plain"))))
+        (testing "each closer closes it, and the next prompt opens a new one"
+          (doseq [[why closer] [["a Stop" {:event :stop :last-message "done"}]
+                                ["a restart" {:event :session-start :source "resume" :pid "4243"}]
+                                ["a person's exit" {:event :session-end :reason "prompt_input_exit"}]]]
+            (testing why
+              (ev "c" closer)
+              (pass)
+              (is (= {} (open-of "plain")))
+              (ev "c" {:event :prompt :prompt "next" :at "2026-10-16T09:10:00Z"})
+              (pass)
+              (is (= {"c" "2026-10-16T09:10:00Z"} (open-of "plain"))))))))))
+
+(deftest a-turn-open-before-conduct-read-its-prompt-is-never-held-open
+  (with-tmp
+    (fn []
+      (session/create! :nido "ws-1" {:name "plain" :weight :light :autonomy nil})
+      (let [home (home! "plain")]
+        (events/append! "c" {:event :prompt :prompt "earlier" :cwd home :at "2026-10-16T08:00:00Z"})
+        (with-redefs [substrate/listing (constantly [])]
+          (conduct/conduct! {:projects [:nido]})
+          (events/append! "c" {:event :notification :cwd home})
+          (conduct/conduct! {:projects [:nido]}))
+        (is (= {} (open-of "plain")))))))
+
+(deftest an-open-turn-is-written-with-the-position-that-read-it
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 2)))
+      (events/append! "s" {:event :prompt :prompt "go" :permission-mode "auto" :at "2026-10-16T09:00:05Z"})
+      (with-redefs [substrate/listing (constantly [done-row])]
+        (let [r (conduct/conduct! {:projects [:nido]})
+              reading (:reading (session/read-session :nido "ws-1" "kid"))]
+          (is (= 3 (get-in reading [:positions "s"])))
+          (is (= "2026-10-16T09:00:05Z" (get-in reading [:turns "s" :open-since]))
+              "the driven conversation's turn, in the same record write as its position")
+          (is (= [] (:turn-ends r)) "an open turn is no turn end, whatever became of its process")
+          (is (= {"s" "2026-10-16T09:00:05Z"} (open-of "kid"))))))))
+
+(deftest a-session-that-ended-after-its-stop-still-reads-as-stopped
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (events/append! "s" {:event :stop :last-message "done" :permission-mode "auto"})
+      (events/append! "s" {:event :session-end :reason "other"})
+      (let [shown (conduct/baseline-shown "s")]
+        (is (= :stop (:event (:latest shown))) "its Stop is still its latest event")
+        (is (= "auto" (:mode shown)) "and the end, which reports no mode, takes it off no baseline"))
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :queued "next")))
+      (let [woke (atom nil)]
+        (with-redefs [substrate/listing (constantly [(dissoc done-row :pid)])
+                      substrate/wake!   (fn [sid _ _] (reset! woke sid) {:woke? true})]
+          (conduct/conduct! {:projects [:nido]}))
+        (is (= "s" @woke) "so a queued instruction still wakes it")))))

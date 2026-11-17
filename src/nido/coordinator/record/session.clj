@@ -110,10 +110,21 @@
   "How far conduct has read the conversations of a session: the instant it began reading the
    session, and the read position (session-events/events-since's cursor) of each conversation of
    the session by its id — the one a facet drives among them. A conversation with no position is
-   read from its first event recorded at or after :since."
+   read from its first event recorded at or after :since.
+
+   :turns is what the events read so far leave standing of each conversation: the process and
+   directory its latest recorded start named with the instant that start was recorded, and
+   :open-since — when its open turn began, absent while no turn is open. It is written only
+   together with :positions, so it never says more or less than the events before the position."
   [:map {:closed true}
    [:since string?]
-   [:positions [:map-of string? int?]]])
+   [:positions [:map-of string? int?]]
+   [:turns {:optional true}
+    [:map-of string? [:map {:closed true}
+                      [:pid        {:optional true} [:maybe string?]]
+                      [:cwd        {:optional true} [:maybe string?]]
+                      [:started-at {:optional true} [:maybe string?]]
+                      [:open-since {:optional true} string?]]]]])
 
 (def Session
   [:map {:closed true}

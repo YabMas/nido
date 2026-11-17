@@ -14,7 +14,9 @@
        the instruction whose token a prompt of its turn carried, and a turn whose prompts carry
        none — a person's — ends none. A person's prompt changes nothing of who drives the
        session: nido drives it from its dispatch or adoption until release!;
-     - a turn ends when the session's own Stop says so, never when a process exits;
+     - a turn ends when the session's own Stop says so, never when a process exits — a turn
+       left open by a process that is gone is offered as a reading (`open-turns`) and ends
+       nothing here;
      - every conversation of every session on a nido workstream is read once, from the position
        its record keeps for it, so each turn end it reports is reported once."
   (:require [clojure.string :as str]
@@ -54,9 +56,11 @@
    latest event itself reports (nil when that event reports none), and that latest event.
    Notifications are not counted as its latest event: Claude Code sends one to a session sitting
    idle after its Stop, and it carries no permission mode — counted, every session idle past a
-   minute would read as off the baseline and as no longer stopped."
+   minute would read as off the baseline and as no longer stopped. Nor is a session's end, for
+   the same two reasons: recorded after a Stop it would hide that Stop, and a session that ended
+   between turns is exactly one a wake is for."
   [session-id]
-  (let [evs   (remove #(= :notification (:event %)) (:events (events/events-since session-id nil)))
+  (let [evs   (remove #(#{:notification :session-end} (:event %)) (:events (events/events-since session-id nil)))
         start (last (filter #(= :session-start (:event %)) evs))]
     {:started?  (some? start)
      :start-cwd (:cwd start)
@@ -141,6 +145,34 @@
     (let [{evs :events end :cursor} (events/events-since id nil)
           since (get-in s [:reading :since])]
       {:events (filterv #(not-before? (:at %) since) evs) :cursor end})))
+
+;; ── open turns ──────────────────────────────────────────────────────────────
+
+(defn- fold-turn
+  "What `turn` — a conversation's entry under :turns — becomes once `ev` is read. A prompt opens
+   a turn, at the first prompt's instant: one typed into a turn already open belongs to it. A
+   Stop closes it, and so does anything that says the conversation went on or ended by someone's
+   act: a start that is not a compaction's (a compaction restarts nothing mid-turn), and an end
+   whose reason is not `other`. An end of reason `other` names no act and leaves it open."
+  [turn ev]
+  (case (:event ev)
+    :session-start (cond-> (assoc turn :pid (:pid ev) :cwd (:cwd ev) :started-at (:at ev))
+                     (not= "compact" (:source ev)) (dissoc :open-since))
+    :prompt        (cond-> (update turn :cwd #(or % (:cwd ev)))
+                     (and (nil? (:open-since turn)) (:at ev)) (assoc :open-since (:at ev)))
+    :stop          (dissoc turn :open-since)
+    :session-end   (cond-> turn (not= "other" (:reason ev)) (dissoc :open-since))
+    turn))
+
+(defn- fold-turns
+  "`turns` with each conversation's events folded in, given [[conversation-id events] …]. A
+   conversation none of whose events bears on a turn gains no entry."
+  [turns read]
+  (reduce (fn [ts [id evs]]
+            (let [t (reduce fold-turn (get ts id) evs)]
+              (cond-> ts (some? t) (assoc id t))))
+          (or turns {})
+          read))
 
 ;; ── the decision ────────────────────────────────────────────────────────────
 
@@ -556,7 +588,8 @@
 (defn- read-record!
   "Read every conversation of the session record `record` past its position — its facet's driven
    one among `conversations`, decided on as `decide` says — and move each position past what was
-   read, in one write under the record's lock. Answers {:decided <decide's answer, or nil without
+   read, with what those events leave of each conversation's turn (`fold-turns`), in one write
+   under the record's lock. Answers {:decided <decide's answer, or nil without
    a facet> :row <the facet's listing row> :driven <its conversation> :others [[conversation-id
    actions] …] :reading <the reading it read under>}, or nil when there was nothing to read or
    write."
@@ -576,7 +609,7 @@
                  driven  (when f
                            (let [{evs :events end :cursor} (read-conversation (:session-id f) m)
                                  shown (baseline-shown (:session-id f))]
-                             {:end end
+                             {:end end :evs evs
                               :d   (decide f row evs {:now now :token (mint)
                                                       :hold-sends? (:hold-sends? opts)
                                                       :baseline (or (first (baseline-refusal shown row)) :shown)
@@ -584,13 +617,17 @@
                                                       :owed owed})}))
                  read    (for [id (disj others (:session-id f))]
                            (let [{evs :events end :cursor} (read-conversation id m)]
-                             [id end (vec (other-actions evs))]))
+                             [id end (vec (other-actions evs)) evs]))
                  positions (cond-> (into (:positions reading) (map (juxt first second)) read)
-                             driven (assoc (:session-id f) (:end driven)))]
+                             driven (assoc (:session-id f) (:end driven)))
+                 turns     (fold-turns (:turns reading)
+                                       (cond->> (map (juxt first #(nth % 3)) read)
+                                         driven (cons [(:session-id f) (:evs driven)])))]
              (reset! out {:decided (:d driven) :row row :reading reading
                           :driven (:session-id f)
                           :others (mapv (fn [[id _ acts]] [id acts]) read)})
-             (cond-> (assoc m :reading (assoc reading :positions positions))
+             (cond-> (assoc m :reading (cond-> (assoc reading :positions positions)
+                                         (seq turns) (assoc :turns turns)))
                driven (assoc :claude (dissoc (:facet (:d driven)) :cursor))))))
         @out))))
 
@@ -730,6 +767,24 @@
         (when-let [id (:bg-id f)] (substrate/stop! id opts))
         (:claude (session/update-claude! project ws-id session-name
                                          #(assoc % :driver :retired)))))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]}
+  open-turns
+  "Every conversation of a session record whose turn conduct holds open — a prompt read with no
+   Stop, restart or person's exit read after it — across the projects in `opts` (default: every
+   registered one), as {:project :ws-id :session-name :conversation :since :pid :cwd :started-at}:
+   :since when the turn began, and the process, directory and recording instant of the
+   conversation's latest start — :pid and :started-at nil when no start was read, :cwd then the
+   directory the turn's first prompt was recorded in. Only events conduct read past
+   the record's position open a turn, so one already open when conduct began reading is not
+   among them. Reads the records; observes no process, and says nothing of whether a turn's
+   process still runs."
+  [opts]
+  (for [{:keys [project ws-id record]} (every-record opts)
+        [id t] (get-in record [:reading :turns])
+        :when  (:open-since t)]
+    {:project project :ws-id ws-id :session-name (:name record) :conversation id
+     :since (:open-since t) :pid (:pid t) :cwd (:cwd t) :started-at (:started-at t)}))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   live-states
