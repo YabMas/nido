@@ -214,3 +214,17 @@
     (is (= {:reverted? true} @@#'catalog-chat/publishing))
     (is (= 1 (count @notes)))
     (reset! @#'catalog-chat/publishing {})))
+
+(deftest a-conversation-started-over-redraws-the-whole-log
+  (let [t0 {:items [{:id "i0" :kind :user :text "hi"} {:id "i1" :kind :agent :text "done"}] :busy? false}
+        es (changed-events t0 {:items [] :busy? false})]
+    (is (= 3 (count es)) "the log, the status row and the busy signal")
+    (is (str/includes? (first es) "id=\"catalog-chat-log\""))
+    (is (not (str/includes? (first es) "catalog-chat-i0")) "no earlier item is left on the page")
+    (is (not (str/includes? (first es) "mode append")))))
+
+(deftest a-reset-is-the-hosts-to-answer
+  (let [reset (atom 0)]
+    (with-redefs [chat/reset! (fn [_] (swap! reset inc) true)]
+      (is (= 204 (:status (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/reset"}))))
+      (is (= 1 @reset)))))

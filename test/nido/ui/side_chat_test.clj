@@ -80,7 +80,11 @@
   (is (nil? (side-chat/handle! {:request-method :get :uri "/workstreams"})))
   (is (nil? (side-chat/handle! {:request-method :get :uri "/_chat/nowhere"})))
   (with-redefs [chat/cancel! (fn [_] nil)]
-    (is (= 204 (:status (side-chat/handle! {:request-method :post :uri "/_chat/cancel"}))))))
+    (is (= 204 (:status (side-chat/handle! {:request-method :post :uri "/_chat/cancel"})))))
+  (let [reset (atom 0)]
+    (with-redefs [chat/reset! (fn [_] (swap! reset inc) nil)]
+      (is (= 204 (:status (side-chat/handle! {:request-method :post :uri "/_chat/reset"}))))
+      (is (= 1 @reset) "the host answers a reset for the dashboard's chat"))))
 
 (deftest the-catalog-carries-its-own-chat-and-not-the-dashboards
   ;; The catalog sits in the dashboard's chrome but has a chat of its own; the dashboard's would be

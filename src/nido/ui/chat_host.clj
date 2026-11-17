@@ -1,9 +1,11 @@
 (ns nido.ui.chat-host
   "One conversation served to the chat panels showing it: the stream that keeps each panel in step,
-   and the requests a panel's controls make — send, stop, answer a permission.
+   and the requests a panel's controls make — send, stop, start a new conversation, answer a
+   permission.
 
    HIDES how a panel is kept live — the whole log, status row and busy signal once, then one patch
-   per transcript item that changed, appended or morphed by its id — which open streams there are,
+   per transcript item that changed, appended or morphed by its id, and the whole log again when
+   the conversation was reset — which open streams there are,
    and how a request's path and body are read.
 
    A host is a value naming its conversation (a `nido.session.chat` chat), its panel's routes (see
@@ -11,7 +13,7 @@
    the posted body giving what a sent message carries besides its words. A caller may assoc three
    more: `:on-sent`, events to send after a message is accepted; `:holds?`, true while no message
    may be sent; `:opening`, events a new stream gets after the log, status and busy signal. What
-   the page around the panel is, and any request beyond the four it answers, stay its caller's."
+   the page around the panel is, and any request beyond the five it answers, stay its caller's."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [hiccup2.core :as h]
@@ -75,21 +77,27 @@
   "The patches that take a page from transcript `old` to `new`: an item that is new is appended to
    the log, one that changed is morphed in place by its id, the status row is re-rendered when
    what it says changes, and the busy signal is set when a turn starts or ends. Items are only
-   ever appended, so position is identity."
+   appended within a conversation, so position is identity; a `new` with fewer items than `old`
+   is a conversation started over, and re-renders the whole log, the status row and the busy
+   signal."
   [{:keys [id] :as routes} old new]
   (let [old-items (:items old)]
-    (concat
-     (for [[i item] (map-indexed vector (:items new))
-           :let [before (get old-items i)]
-           :when (not= before item)]
-       (let [markup (html (panel/chat-item item routes))]
-         (if before
-           (datastar/patch-elements-event markup)
-           (datastar/patch-elements-event markup {:selector (str "#" (panel/log-id id)) :mode "append"}))))
-     (when (not= (panel/turn-status id old) (panel/turn-status id new))
-       [(status-event id new)])
-     (when (not= (:busy? old) (:busy? new))
-       [(busy-event id new)]))))
+    (if (< (count (:items new)) (count old-items))
+      [(datastar/patch-elements-event (html (panel/chat-log id (:items new) routes)))
+       (status-event id new)
+       (busy-event id new)]
+      (concat
+       (for [[i item] (map-indexed vector (:items new))
+             :let [before (get old-items i)]
+             :when (not= before item)]
+         (let [markup (html (panel/chat-item item routes))]
+           (if before
+             (datastar/patch-elements-event markup)
+             (datastar/patch-elements-event markup {:selector (str "#" (panel/log-id id)) :mode "append"}))))
+       (when (not= (panel/turn-status id old) (panel/turn-status id new))
+         [(status-event id new)])
+       (when (not= (:busy? old) (:busy? new))
+         [(busy-event id new)])))))
 
 (defn- stream [{:keys [chat routes streams opening]} req]
   (let [id (:id routes)]
@@ -133,9 +141,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :map] [:maybe :map]]}
   handle!
-  "The response to a request under the host's prefix — `stream` (GET), `send`, `cancel`,
+  "The response to a request under the host's prefix — `stream` (GET), `send`, `cancel`, `reset`,
    `permission/<item>/<option>` (POST) — or nil for any other request, including another verb
-   under the same prefix, which is the caller's to answer."
+   under the same prefix, which is the caller's to answer. A reset refused because a turn runs
+   changes nothing and answers the same; every open panel hears an accepted one through its
+   stream."
   [{:keys [chat prefix] :as host} {:keys [uri request-method] :as req}]
   (let [segs (vec (remove str/blank? (str/split (str uri) #"/")))
         n    (count prefix)]
@@ -144,6 +154,7 @@
         [:get "stream"]      (stream host req)
         [:post "send"]       (send-message host req)
         [:post "cancel"]     (do (chat/cancel! chat) {:status 204})
+        [:post "reset"]      (do (chat/reset! chat) {:status 204})
         [:post "permission"] (do (when (= (+ n 3) (count segs))
                                    (chat/answer-permission! chat (get segs (inc n)) (get segs (+ n 2))))
                                  {:status 204})
