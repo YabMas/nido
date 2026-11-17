@@ -26,8 +26,10 @@
    both. The declaration is what forced that.
 
    The tick is the whole design: reconcile on startup, because a Run left mid-flight by a crash
-   is indistinguishable from one still going; then the brakes, because a halted daemon should not
-   even drain; then drain, route, spawn, promote, reap."
+   is indistinguishable from one still going; then a restart owed onto a landing, paid by exiting
+   before anything new starts — ahead of the brakes, because a halt holds new work, not the
+   daemon's own code; then the brakes, because a halted daemon should not even drain; then drain,
+   route, spawn, promote, reap."
   (Operation dashboard-config "Whether the dashboard runs, and on what port."
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation dashboard-status-line "The dashboard's line in the status output."
@@ -39,18 +41,18 @@
   (Operation drive-log-line "One line for a drive decision."
     {:signature [:=> [:catn [:entry :map]] :string]})
   (Operation tick!
-    "One iteration: brakes, drain, route, spawn, promote, reap. A Run is settled, timed out or
+    "One iteration: an owed restart, then brakes, drain, route, spawn, promote, reap. A Run is settled, timed out or
      charged a slot only on an instruction conduct recorded as given for it, never by which Run
      last ran on the session."
     {:signature [:=> [:catn] :any]
      :delegates [source/drain! source/route executor/tick! drive/tick! daemon/write! execute!
                  conduct/conduct! conduct/outstanding seats/owed seats/delivered! seats/traffic
                  conductor/conductors! conductor/reseat! conductor/hand-backs! conductor/answers!
-                 conductor/close-unanswered!]})
+                 conductor/close-unanswered! daemon/landing daemon/waits]})
   (Operation shutdown-grace-ms
     "How long to let in-flight work finish before exiting. A daemon that killed its own runs on
      shutdown would leave exactly the mid-flight state reconcile exists to repair."
     {:signature [:=> [:catn] :int]})
   (Operation run! "Start the loop, with a dashboard lifecycle supplied from outside."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]
-     :delegates [tick! dashboard-config daemon/reconcile! casualties/record!]}))
+     :delegates [tick! dashboard-config daemon/reconcile! casualties/record! daemon/landing daemon/running!]}))

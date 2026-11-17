@@ -291,7 +291,7 @@
 
   nido:land
   {:requires ([tasks.nido-land :as nido-land])
-   :doc "Land the worktree's arc on nido's main: fetch, rebase onto origin's main, bb nido:test and bb nido:land:check at that tip, push main, record the landing on the worktree's workstream, then rebase the daemon's checkout onto main and restart the coordinator — skipped, never forced, while a run is live or when the daemon itself runs the landing. Refuses, naming the way out, before pushing anything it cannot show green. [:cwd <dir>] [:restart false]"
+   :doc "Land the worktree's arc on nido's main: fetch, rebase onto origin's main, bb nido:test and bb nido:land:check at that tip, push main, record the landing on the worktree's workstream, then rebase the daemon's checkout onto main and owe the coordinator a restart it pays itself once no run is live. Refuses, naming the way out, before pushing anything it cannot show green. [:cwd <dir>]"
    :task (apply nido-land/land-cmd *command-line-args*)}
 
   nido:land:check

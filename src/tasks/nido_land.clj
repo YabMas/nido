@@ -18,9 +18,8 @@
    [nido.design.check :as design]
    [tasks.nido-design :as nido-design]
    [nido.coordinator.record.workstream :as cws]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.daemon.launchctl :as lc]
-   [nido.coordinator.daemon.pid :as pid]
+   [nido.coordinator.daemon.restart :as restart]
    [nido.review.layers :as layers]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
@@ -603,109 +602,72 @@
              (re-find #"<key>WorkingDirectory</key>\s*<string>([^<]+)</string>")
              second)))
 
-(defn- live-run-ids
-  "Every run whose agent is alive right now. A daemon restart kills each one: its agent is the
-   daemon's child."
-  []
-  (filterv runs/live? (runs/list-run-ids)))
-
-(defn- daemon-ancestor?
-  "Whether this process descends from the running daemon — a land the dashboard's Publish or a
-   Run started. Restarting from there kills the process doing the restart, mid-landing."
-  []
-  (when-let [daemon (pid/read)]
-    (let [me      (parse-long (str/trim (str (:out (p/sh ["sh" "-c" "echo $PPID"])))))
-          parents (into {} (keep (fn [l] (let [[a b] (str/split (str/trim l) #"\s+")]
-                                           (when b [(parse-long a) (parse-long b)]))))
-                        (str/split-lines (str (:out (p/sh ["ps" "-A" "-o" "pid=,ppid="])))))]
-      (boolean (some #{daemon} (take 64 (take-while #(and % (pos? %)) (iterate parents me))))))))
-
 (def ^:private restart-by-hand
-  "jj rebase -b @ -d main@origin in ~/Code/nido, then bb nido:coordinator:restart")
+  "jj rebase -b @ -d main@origin in ~/Code/nido, then bb nido:coordinator:restart once no run is live")
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   restart-daemon!
-  "Put the coordinator on the code that just landed at `landed`: rebase the checkout the daemon
-   loads onto origin's main, then restart the daemon. Returns {:restarted true}, {:skipped <why>}
-   or {:failed <why>}, each with the way out when there is one.
+  "Put the coordinator on the code that landed at `landed`: rebase the checkout the launchd daemon
+   loads onto origin's main now, then record the landing as owed for the daemon to pay on its own
+   tick. Returns {:owed <commit> :waits [<why>]}, {:skipped <why>} or {:failed <why>}, each with the
+   way out when there is one.
 
-   The daemon reads `src/` once at startup, so a landing it is not restarted onto changes nothing
-   it does — the fix sits on main while the daemon keeps running the old code. The rebase comes
-   FIRST because the daemon loads the root checkout, not the worktree that landed: restarting
-   before it restarts onto the pre-landing code.
-
-   Skips rather than kills. A restart SIGTERMs every live run and every process the daemon started,
-   so a landing the daemon itself runs (a Run's, the dashboard's Publish) or any live run defers
-   the restart to a person. A rebase that
-   conflicts, or leaves the checkout without the landing, is undone and restarts nothing — a daemon
-   started on a conflicted tree loads conflict markers."
+   Never restarts, starts or signals the daemon: a landing is often the one process that cannot —
+   it runs inside the daemon, or runs are live — and the daemon is the one that can see when a
+   restart cuts nothing. The rebase cannot wait for that: it kills nothing, and the daemon loads
+   whatever the checkout holds when it next starts. A rebase that fails, conflicts or leaves the
+   checkout without the landing is undone and owes nothing — a daemon started on a conflicted tree
+   loads conflict markers. A debt that cannot be written leaves the rebase in place."
   [landed]
-  (let [checkout (daemon-checkout)
-        live     (when checkout (live-run-ids))]
-    (cond
-      (nil? checkout)
-      {:skipped "the coordinator is not installed under launchd"
-       :way-out "restart it yourself if it is running: bb nido:coordinator:down, then bb nido:coordinator:up"}
-
-      (daemon-ancestor?)
-      {:skipped "this landing runs inside the daemon, which a restart would kill along with it"
-       :way-out (str "from a terminal: " restart-by-hand)}
-
-      (seq live)
-      {:skipped (str (count live) " run(s) are live and a restart would kill them: "
-                     (str/join ", " (take 5 live)) (when (> (count live) 5) ", …"))
-       :way-out (str "once they finish: " restart-by-hand)}
-
-      :else
-      (let [before (str/trim (str (:out (jj/jj! checkout "op" "log" "-n" "1" "--no-graph" "-T" "id"))))
-            {:keys [exit err]} (jj/jj! checkout "rebase" "-b" "@" "-d" "main@origin")
-            conflicted (:out (jj/jj! checkout "log" "--no-graph" "-r" "(main@origin..@) & conflicts()"
-                                     "-T" "change_id.short()"))
-            holds?     (layers/resolve-rev checkout (str landed " & ::@"))]
-        (if (or (not (zero? exit)) (not (str/blank? conflicted)) (nil? holds?))
-          (do (jj/jj! checkout "op" "restore" before)
-              {:failed (str "rebasing " checkout " onto origin's main "
-                            (cond (not (zero? exit)) (str "failed: " (str/trim (str err)))
-                                  (not (str/blank? conflicted)) "conflicts"
-                                  :else "left it without the landing")
-                            " — undone, and the daemon was not restarted")
-               :way-out (str "resolve it by hand: " restart-by-hand)})
-          (let [{:keys [exit err]} (if (lc/loaded?) (lc/kickstart!) (lc/bootstrap!))]
-            (if (zero? exit)
-              {:restarted true}
-              {:failed (str "launchctl could not restart the daemon: " (str/trim (str err)))
-               :way-out "bb nido:coordinator:restart"})))))))
+  (if-let [checkout (daemon-checkout)]
+    (let [before (str/trim (str (:out (jj/jj! checkout "op" "log" "-n" "1" "--no-graph" "-T" "id"))))
+          {:keys [exit err]} (jj/jj! checkout "rebase" "-b" "@" "-d" "main@origin")
+          conflicted (:out (jj/jj! checkout "log" "--no-graph" "-r" "(main@origin..@) & conflicts()"
+                                   "-T" "change_id.short()"))
+          holds?     (layers/resolve-rev checkout (str landed " & ::@"))]
+      (if (or (not (zero? exit)) (not (str/blank? conflicted)) (nil? holds?))
+        (do (jj/jj! checkout "op" "restore" before)
+            {:failed (str "rebasing " checkout " onto origin's main "
+                          (cond (not (zero? exit)) (str "failed: " (str/trim (str err)))
+                                (not (str/blank? conflicted)) "conflicts"
+                                :else "left it without the landing")
+                          " — undone, so no restart is owed")
+             :way-out (str "resolve it by hand: " restart-by-hand)})
+        (let [{:keys [landing failed]} (restart/owe! landed (.pid (java.lang.ProcessHandle/current)))]
+          (if failed
+            {:failed (str failed " — the checkout holds the landing, but nothing will restart onto it")
+             :way-out "bb nido:coordinator:restart once no run is live"}
+            {:owed landed :waits (restart/waits landing)}))))
+    {:skipped "the coordinator is not installed under launchd, so no restart is owed"
+     :way-out "restart it yourself if it is running: bb nido:coordinator:down, then bb nido:coordinator:up"}))
 
 (defn- report-restart!
-  "Print the restart's outcome and return the exit code it adds: only a failure is one. A skip is
-   deliberate, and the landing itself stands either way."
-  [{:keys [restarted skipped failed way-out]}]
+  "Print the landing's one `land · coordinator …` line and return the exit code it adds: only a
+   failure is one. The landing itself stands either way."
+  [{:keys [owed waits skipped failed way-out]}]
   (cond
-    restarted (do (println "land · coordinator restarted onto the landing") 0)
-    skipped   (do (println (str "land · coordinator NOT restarted · " skipped
-                                "\n  it keeps running the code from before the landing — " way-out))
-                  0)
-    :else     (do (println (str "land · coordinator restart FAILED · " failed "\n  " way-out)) 1)))
+    owed    (do (println (str "land · coordinator restart owed onto " (short-id owed)
+                              " · waits for " (str/join "; " waits)))
+                0)
+    skipped (do (println (str "land · coordinator no restart owed · " skipped "\n  " way-out)) 0)
+    :else   (do (println (str "land · coordinator no restart owed · FAILED · " failed "\n  " way-out)) 1)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
   land
   "bb nido:land — land the worktree's arc on nido's main through the gate (`gate!`), record the
-   landing on the worktree's workstream (`record`), then restart the coordinator onto it
-   (`restart-daemon!`; `:restart false` leaves it alone). A worktree no workstream owns lands
-   unrecorded, and says so. Returns an exit code: non-zero, naming the way out, whenever nothing was
-   pushed, a pushed landing could not be recorded, or the restart failed. The restart follows any
-   push, recorded or not."
+   landing on the worktree's workstream (`record`), then owe the coordinator a restart onto it
+   (`restart-daemon!`). No option skips that step: a landing the daemon is not put onto changes
+   nothing it does. A worktree no workstream owns lands unrecorded, and says so. Returns an exit
+   code: non-zero, naming the way out, whenever nothing was pushed, a pushed landing could not be
+   recorded, or the restart could not be owed. The step follows any push, recorded or not."
   [& args]
   (let [[_ opts] (task-args/split-args args)
         given (or (some-> (:cwd opts) str) (System/getProperty "user.dir"))
         cwd   (or (lifecycle/worktree-from-cwd given) given)
-        restart? (not (contains? #{false "false"} (:restart opts)))
         {:keys [landed refused way-out]} (gate! cwd)
         restart (fn [code]
-                  ;; Even when the record failed: main holds the landing, so the daemon should too.
-                  (if restart?
-                    (max code (report-restart! (restart-daemon! landed)))
-                    code))]
+                  ;; Even when the record failed: main holds the landing, so the daemon owes it too.
+                  (max code (report-restart! (restart-daemon! landed))))]
     (cond
       refused
       (do (println (str "land REFUSED · " refused))

@@ -253,7 +253,7 @@ jj bookmark set main -r <top-change-id>       # fast-forward
 jj git push -b main
 bb nido:land:record                           # close the workstream and record the landing
 (cd ~/Code/nido && jj rebase -b @ -d main@origin)  # the daemon loads the ROOT checkout
-bb nido:coordinator:restart                   # …and reads src/ only at startup
+bb nido:coordinator:restart                   # …and reads src/ only at startup — once no run is live
 ```
 
 `bb nido:land` runs those steps as one verb and refuses, naming the way out,
@@ -263,13 +263,21 @@ undone, not left for you. It is what the catalog's Publish runs, and
 
 **Restart the coordinator onto the landing.** The daemon loads `src/` once, from
 the root checkout, so a landing it is not restarted onto changes nothing it does.
-`bb nido:land` does both steps last — rebase first, or the restart loads the
-pre-landing code — and **skips rather than kills**: a restart SIGTERMs every live
-Run, so while any run is live, or when the landing is itself running inside the
-daemon (a Run's landing, the dashboard's Publish), it says it did not restart and
-prints the two commands to run later. A checkout rebase that conflicts is undone
-and restarts nothing. `:restart false` leaves the daemon alone.
-`bb nido:recovery:land` does not restart: it always runs inside a Run.
+`bb nido:land` rebases that checkout onto the landing at once — whether or not runs
+are live, or the landing runs inside the daemon (the dashboard's Publish); a rebase
+that conflicts is undone — and then **owes** the daemon a restart onto it, in
+`~/.nido/coordinator/restart-owed.edn`. It never restarts the daemon itself. The
+daemon pays the debt on its own tick, by exiting for launchd to relaunch it, as
+soon as no run is live and the landing has finished; the daemon that comes up
+records that it runs the landing. Nothing has to be run by hand, and no option
+skips the step. The landing prints one `land · coordinator …` line saying what the
+restart waits for, and the catalog's Publish bar shows the same, then which commit
+the dashboard runs once it is back. A daemon someone stopped stays stopped, and
+picks the landing up when it is brought up. `bb nido:recovery:land` owes nothing:
+it always runs inside a Run.
+
+This holds once a daemon carrying it runs. The daemon running when this change
+landed was put onto it by one `bb nido:coordinator:restart`, while no run was live.
 
 **Record the landing after the push.** `bb nido:land:record` closes the
 workstream and appends a `:merged` naming the pushed commit and the design that

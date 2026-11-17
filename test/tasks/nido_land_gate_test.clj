@@ -3,6 +3,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [nido.coordinator.daemon.launchctl :as lc]
+            [nido.coordinator.daemon.restart :as restart]
             [nido.review.layers :as layers]
             [nido.session.lifecycle :as lifecycle]
             [nido.vsdd.jj :as jj]
@@ -41,13 +42,12 @@
     (is (some #(= ["op" "restore" "op1"] %) calls) "the worktree goes back to before the rebase")
     (is (nil? pushed))))
 
-(defn- restart [{:keys [checkout live rebase-exit conflicts? holds? loaded? inside?]
-                 :or {checkout "/root" rebase-exit 0 holds? true loaded? true}}]
-  (let [calls (atom [])
+(defn- restart [{:keys [checkout rebase-exit conflicts? holds? owe-fails?]
+                 :or {checkout "/root" rebase-exit 0 holds? true}}]
+  (let [calls  (atom [])
+        owed   (atom nil)
         kicked (atom nil)]
     (with-redefs [land/daemon-checkout (fn [] checkout)
-                  land/live-run-ids    (fn [] (vec live))
-                  land/daemon-ancestor? (fn [] inside?)
                   jj/jj! (fn [_ & args]
                            (swap! calls conj (vec args))
                            (cond
@@ -56,41 +56,51 @@
                              {:exit 0 :out (if conflicts? "abc" "") :err ""}
                              :else {:exit 0 :out "op1" :err ""}))
                   layers/resolve-rev (fn [_ _] (when holds? "tip"))
-                  lc/loaded?    (fn [] loaded?)
+                  restart/owe!  (fn [commit pid]
+                                  (reset! owed [commit pid])
+                                  (if owe-fails?
+                                    {:failed "disk full"}
+                                    {:landing {:state :owed :commit commit :owed-at "t" :by-pid pid}}))
+                  restart/waits (fn [_] ["the landing that owed it to finish"])
                   lc/kickstart! (fn [] (reset! kicked :kickstart) {:exit 0})
-                  lc/bootstrap! (fn [] (reset! kicked :bootstrap) {:exit 0})]
-      {:result (#'land/restart-daemon! "tip") :calls @calls :kicked @kicked})))
+                  lc/bootstrap! (fn [] (reset! kicked :bootstrap) {:exit 0})
+                  lc/bootout!   (fn [] (reset! kicked :bootout) {:exit 0})]
+      {:result (#'land/restart-daemon! "tip") :calls @calls :owed @owed :kicked @kicked})))
 
-(deftest a-landing-restarts-the-daemon-after-rebasing-its-checkout
-  (let [{:keys [result calls kicked]} (restart {})]
-    (is (:restarted result))
-    (is (= :kickstart kicked))
+(deftest a-landing-rebases-the-checkout-and-owes-the-restart
+  (let [{:keys [result calls owed kicked]} (restart {})]
     (is (some #(= ["rebase" "-b" "@" "-d" "main@origin"] %) calls)
-        "the daemon loads the root checkout, so it moves onto the landing first")))
+        "the daemon loads the root checkout, so it moves onto the landing at once")
+    (is (= "tip" (first owed)))
+    (is (= (.pid (java.lang.ProcessHandle/current)) (second owed)) "the debt names the landing's own process")
+    (is (= {:owed "tip" :waits ["the landing that owed it to finish"]} result))
+    (is (nil? kicked) "no landing restarts, starts or signals the daemon")))
 
-(deftest a-live-run-defers-the-restart-rather-than-being-killed
-  (let [{:keys [result calls kicked]} (restart {:live ["run-1"]})]
-    (is (str/includes? (:skipped result) "run-1"))
-    (is (empty? calls) "nothing is rebased either")
-    (is (nil? kicked))))
-
-(deftest a-landing-the-daemon-runs-does-not-restart-it
-  (let [{:keys [result calls kicked]} (restart {:inside? true})]
-    (is (str/includes? (:skipped result) "inside the daemon"))
-    (is (empty? calls))
-    (is (nil? kicked))))
-
-(deftest no-launchd-daemon-is-skipped
-  (let [{:keys [result kicked]} (restart {:checkout nil})]
+(deftest no-launchd-daemon-owes-nothing
+  (let [{:keys [result owed calls]} (restart {:checkout nil})]
     (is (:skipped result))
-    (is (nil? kicked))))
+    (is (nil? owed))
+    (is (empty? calls))))
 
-(deftest a-conflicting-checkout-rebase-is-undone-and-restarts-nothing
+(deftest a-conflicting-checkout-rebase-is-undone-and-owes-nothing
   (doseq [opts [{:conflicts? true} {:rebase-exit 1} {:holds? false}]]
-    (let [{:keys [result calls kicked]} (restart opts)]
+    (let [{:keys [result calls owed kicked]} (restart opts)]
       (is (:failed result) (pr-str opts))
       (is (some #(= ["op" "restore" "op1"] %) calls) (pr-str opts))
+      (is (nil? owed) (pr-str opts))
       (is (nil? kicked) (pr-str opts)))))
 
-(deftest an-unloaded-daemon-is-bootstrapped
-  (is (= :bootstrap (:kicked (restart {:loaded? false})))))
+(deftest a-debt-that-cannot-be-written-fails-and-keeps-the-rebase
+  (let [{:keys [result calls]} (restart {:owe-fails? true})]
+    (is (str/includes? (:failed result) "disk full"))
+    (is (:way-out result))
+    (is (not-any? #(= ["op" "restore" "op1"] %) calls))))
+
+(deftest the-landing-prints-one-coordinator-line
+  (doseq [[outcome code] [[{:owed "abcdef" :waits ["x" "y"]} 0]
+                          [{:skipped "not installed" :way-out "w"} 0]
+                          [{:failed "boom" :way-out "w"} 1]]]
+    (let [ret (atom nil)
+          out (with-out-str (reset! ret (#'land/report-restart! outcome)))]
+      (is (= code @ret) (pr-str outcome))
+      (is (= 1 (count (re-seq #"(?m)^land · coordinator " out))) out))))

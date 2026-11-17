@@ -7,6 +7,7 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.daemon.lifecycle :as daemon]
             [fukan.common.typing.malli]))
 
 (Module nido-land
@@ -43,13 +44,17 @@
     {:signature [:=> [:catn [:cwd :string]] :map] :delegates [check]})
   (Operation restart-daemon!
     "Put the coordinator on the code that landed: rebase the checkout the launchd daemon loads onto
-     origin's main, then restart it. Skips rather than kills — while any run is live, or when the
-     daemon itself is running the landing — and a checkout rebase that conflicts is undone and
-     restarts nothing. {:restarted} | {:skipped :way-out} | {:failed :way-out}."
-    {:signature [:=> [:catn [:landed :string]] :map]})
+     origin's main at once, then record the landing as owed for the daemon to pay on its tick, and
+     say what it waits for. Never restarts, starts or signals the daemon. A rebase that fails,
+     conflicts or leaves the checkout without the landing is undone and owes nothing; a debt that
+     cannot be written leaves the rebase in place and is a failure.
+     {:owed <commit> :waits [<why>]} | {:skipped :way-out} | {:failed :way-out}."
+    {:signature [:=> [:catn [:landed :string]] :map]
+     :delegates [daemon/owe! daemon/waits]})
   (Operation land
     "bb nido:land: the gate, then the recording on the worktree's workstream when one owns it,
-     then the coordinator restarted onto the landing."
+     then a restart owed onto the landing for the coordinator to pay. No option of the verb skips
+     that step."
     {:signature [:=> [:catn [:args [:* :any]]] :int] :delegates [gate! record restart-daemon!]})
   (Operation land-cmd
     "bb entry point for land: exits non-zero when nothing was landed, the landing was not recorded, or the restart failed."

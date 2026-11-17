@@ -17,6 +17,7 @@
    [nido.coordinator.daemon.pid :as pid]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.daemon.reconcile :as reconcile]
+   [nido.coordinator.daemon.restart :as restart]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.conductor :as conductor]
@@ -59,6 +60,7 @@
    [nido.review.tree :as review-tree]
    [nido.session.casualties :as casualties]
    [nido.session.reclaim :as reclaim]
+   [nido.vsdd.jj :as jj]
    [nido.session.state :as sstate]
    [nido.session.profiles :as profiles]
    [nido.coordinator.work :as work]))
@@ -1398,10 +1400,46 @@
     (str "nido drive: " ws-id " at " (name at) " — skipped, " (name skipped))
     :else nil))
 
+(defn- pay-owed-restart!
+  "Restart onto the latest landing when it is owed and nothing waits: exit, for launchd to relaunch
+   the daemon onto the checkout that holds it. `restart/waits` names everything that holds it — a
+   run a restart would cut, the landing still running, this daemon having started after the debt —
+   so nothing here second-guesses it. Runs before anything starts in the tick."
+  []
+  (let [{owed :landing} (restart/landing)]
+    (when (and (= :owed (:state owed)) (empty? (restart/waits owed)))
+      (println "nido coordinator: restarting onto the landing" (:commit owed))
+      (flush)
+      (System/exit 0))))
+
+(defn- settle-owed-landing!
+  "At startup: a daemon that started after the latest landing was owed, on a checkout that holds
+   its commit, already runs it — record that, rather than restart for it again. A daemon that
+   started before the debt never settles it; its tick pays it."
+  []
+  (let [{owed :landing why :unreadable} (restart/landing)]
+    (when why
+      (println "nido coordinator: the latest landing cannot be read —" why))
+    (when (= :owed (:state owed))
+      (let [me     (java.lang.ProcessHandle/current)
+            start  (some-> me .info .startInstant (.orElse nil))
+            after? (and start (.isAfter ^java.time.Instant start (java.time.Instant/parse (:owed-at owed))))
+            holds? (let [{:keys [exit out]} (jj/jj! (System/getProperty "user.dir") "--ignore-working-copy"
+                                                    "log" "--no-graph" "-r" (str (:commit owed) " & ::@")
+                                                    "-T" "commit_id")]
+                     (and (zero? exit) (not (str/blank? out))))]
+        (when (and after? holds?)
+          (let [{:keys [landing failed]} (restart/running! owed (.pid me))]
+            (cond
+              landing (println "nido coordinator: running the landing" (:commit owed))
+              failed  (println "nido coordinator: could not record that it runs the landing —" failed))))))))
+
 (defn ^{:malli/schema [:=> [:cat] :any]}
   tick!
   "One iteration of the main loop. Public for testability."
   []
+  ;; First, ahead of the brakes: a halt holds new work, not the daemon's own code.
+  (timed "owed-restart" pay-owed-restart!)
   (let [triggers-by-project (timed "load-triggers" load-all-triggers)
         halt-info           (halt/read-halt-info)]
     ;; Before the halt branch: a halted daemon still has gates waiting on a
@@ -1571,6 +1609,9 @@
                (.println ^java.io.PrintWriter *err*
                          (str "WARN: dashboard failed to start — " (ex-message t))))))))
   (pid/write! (long (.pid (java.lang.ProcessHandle/current))))
+  (try (settle-owed-landing!)
+       (catch Throwable t
+         (println "nido coordinator: settling the latest landing failed —" (ex-message t))))
   (reset! !notify-fn desktop/notify!)
   (install-shutdown-hook!)
   (heartbeat/write! {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port})
