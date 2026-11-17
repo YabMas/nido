@@ -252,12 +252,24 @@ bb nido:land:check                            # the design stands, and the code 
 jj bookmark set main -r <top-change-id>       # fast-forward
 jj git push -b main
 bb nido:land:record                           # close the workstream and record the landing
+(cd ~/Code/nido && jj rebase -b @ -d main@origin)  # the daemon loads the ROOT checkout
+bb nido:coordinator:restart                   # …and reads src/ only at startup
 ```
 
 `bb nido:land` runs those steps as one verb and refuses, naming the way out,
 before pushing anything it could not show green — a rebase that conflicts is
 undone, not left for you. It is what the catalog's Publish runs, and
 `bb nido:recovery:land` lands through the same gate.
+
+**Restart the coordinator onto the landing.** The daemon loads `src/` once, from
+the root checkout, so a landing it is not restarted onto changes nothing it does.
+`bb nido:land` does both steps last — rebase first, or the restart loads the
+pre-landing code — and **skips rather than kills**: a restart SIGTERMs every live
+Run, so while any run is live, or when the landing is itself running inside the
+daemon (a Run's landing, the dashboard's Publish), it says it did not restart and
+prints the two commands to run later. A checkout rebase that conflicts is undone
+and restarts nothing. `:restart false` leaves the daemon alone.
+`bb nido:recovery:land` does not restart: it always runs inside a Run.
 
 **Record the landing after the push.** `bb nido:land:record` closes the
 workstream and appends a `:merged` naming the pushed commit and the design that

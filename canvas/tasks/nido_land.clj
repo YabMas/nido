@@ -41,9 +41,16 @@
      on a conflict), bb nido:test and the landing check at that tip, then push. {:landed} or
      {:refused :way-out}; it records nothing."
     {:signature [:=> [:catn [:cwd :string]] :map] :delegates [check]})
+  (Operation restart-daemon!
+    "Put the coordinator on the code that landed: rebase the checkout the launchd daemon loads onto
+     origin's main, then restart it. Skips rather than kills — while any run is live, or when the
+     daemon itself is running the landing — and a checkout rebase that conflicts is undone and
+     restarts nothing. {:restarted} | {:skipped :way-out} | {:failed :way-out}."
+    {:signature [:=> [:catn [:landed :string]] :map]})
   (Operation land
-    "bb nido:land: the gate, then the recording on the worktree's workstream when one owns it."
-    {:signature [:=> [:catn [:args [:* :any]]] :int] :delegates [gate! record]})
+    "bb nido:land: the gate, then the recording on the worktree's workstream when one owns it,
+     then the coordinator restarted onto the landing."
+    {:signature [:=> [:catn [:args [:* :any]]] :int] :delegates [gate! record restart-daemon!]})
   (Operation land-cmd
-    "bb entry point for land: exits non-zero when nothing was landed or the landing was not recorded."
+    "bb entry point for land: exits non-zero when nothing was landed, the landing was not recorded, or the restart failed."
     {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [land]}))
