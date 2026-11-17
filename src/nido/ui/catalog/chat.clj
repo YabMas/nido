@@ -154,7 +154,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
    (html (panel/picks panel-id (mapv #(select-keys (pick-ref %) [:label :title]) ps) routes))))
 
 (def ^:private chat-host
-  (assoc (host/host design-chat routes ["_catalog" "chat"] (fn [body] (mapv pick-ref (posted-picks body))))
+  (assoc (host/host design-chat routes ["_catalog" "chat"] (fn [{:keys [json]}] (mapv pick-ref (posted-picks json))))
          ;; A sent message took its picks with it.
          :on-sent (fn [] [(datastar/patch-signals-event
                            (json/generate-string {(:picks (panel/signals panel-id)) "[]"}))

@@ -17,7 +17,7 @@
 
    A host is a value naming its conversation (a `nido.session.chat` chat), its panel's routes (see
    `nido.ui.components.chat`), the path segments its routes live under, and `:refs`, a function of
-   the posted body giving what a sent message carries besides its words. A caller may assoc three
+   the send request giving what a sent message carries besides its words. A caller may assoc three
    more: `:on-sent`, events to send after a message is accepted; `:holds?`, true while no message
    may be sent; `:opening`, events a new stream gets after the log, status and busy signal. What
    the page around the panel is, and any request beyond the five it answers, stay its caller's."
@@ -61,8 +61,10 @@
 (defn ^{:malli/schema [:=> [:cat :map :map [:sequential :string] :any] :map]}
   host
   "A host for `chat`, whose panel has `routes`, answering under the path segments `prefix`.
-   `refs` is called with the posted body (string keys) when a message is sent, and returns its
-   references, each `{:label :detail}`. Two hosts under one prefix share its open streams, which
+   `refs` is called with the send request when a message is sent — its posted JSON body, string
+   keys, attached as `:json` — and returns its references, each `{:label :detail}`. What the
+   request itself states, its headers among them, is the caller's to read as well as what the
+   client posted. Two hosts under one prefix share its open streams, which
    is what keeps a page's stream reached across a reload that rebuilds its host."
   [chat routes prefix refs]
   {:chat chat :routes routes :prefix (vec prefix) :refs refs :streams (streams-under (vec prefix))
@@ -218,7 +220,7 @@
         images (locking staged
                  (let [images @staged]
                    (when (and (seq words) (not (and holds? (holds?)))
-                              (chat/send! chat words (vec (refs body)) images))
+                              (chat/send! chat words (vec (refs (assoc req :json body))) images))
                      (reset! staged [])
                      (when (seq images) (broadcast! h (attachments-event h)))
                      images)))]

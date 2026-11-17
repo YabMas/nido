@@ -163,4 +163,4 @@ Answer briefly, and name workstreams and tickets as the dashboard does."))
           {:keys [chat prefix]} (conversation place)]
       ;; A workstream path whose workstream has no chat to offer would otherwise be the operator's.
       (when (= (boolean place) (not= ["_chat"] prefix))
-        (host/handle! (host/host chat (routes-under prefix) prefix page-ref) req)))))
+        (host/handle! (host/host chat (routes-under prefix) prefix (comp page-ref :json)) req)))))
