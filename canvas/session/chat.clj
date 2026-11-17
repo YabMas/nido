@@ -3,6 +3,7 @@
 
    Both are about one session and outlive any one request, which is why they sit here rather than
    in the dashboard: a page subscribes to a chat and frames a preview, and neither dies with it."
+  (:refer-clojure :exclude [reset!])
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.integration.acp :as acp]
@@ -13,8 +14,9 @@
 
    HIDES the conversation's lifetime: which adapter command, the deny list and permission mode
    it starts under, where its ACP session id is kept, when its process is started, resumed or
-   stopped, and how a change reaches whoever is watching. Its session is brought up before each
-   agent start — by the function the chat's caller names for it, or on the project's defaults. The transcript is never stored: a
+   stopped, when the conversation is ended, and how a change reaches whoever is watching. Its
+   session is brought up before each agent start — by the function the chat's caller names for
+   it, or on the project's defaults. The transcript is never stored: a
    conversation whose process is gone is loaded again by id, and its history replays through
    the same fold."
   (Operation transcript "A chat's transcript as it stands."
@@ -24,7 +26,7 @@
   (Operation send!
     "Send the person's words, with the references they came with, starting or resuming the agent
      first when needed. Answers true when accepted, or nil, changing nothing, when refused
-     because a turn is running. Every later failure — the agent not starting, a request
+     because a turn is running or an earlier send has not yet begun its turn. Every later failure — the agent not starting, a request
      refused, the process exiting — ends the turn as an error item in the transcript, never as
      a throw to the caller."
     {:signature [:=> [:catn [:chat :map] [:text :string] [:refs [:sequential :map]]] :any]
@@ -32,6 +34,11 @@
                  acp/fold acp/prompt-text]})
   (Operation cancel! "Cancel the running turn."
     {:signature [:=> [:catn [:chat :map]] :any] :delegates [acp/cancel!]})
+  (Operation reset!
+    "End the conversation, so the next send starts a new one: stop its agent, forget its ACP
+     session id and empty its transcript, telling every subscriber. Answers true when done, or
+     nil, changing nothing, while a turn runs or a send has not yet started its turn."
+    {:signature [:=> [:catn [:chat :map]] :any] :delegates [acp/close!]})
   (Operation answer-permission!
     "Answer a permission request with one of its options. A request already answered, or one
      whose agent has gone, is left as it is."

@@ -19,9 +19,15 @@
    that push, move main or record a landing: nothing a chat sends lands. A request for permission
    the agent still raises becomes a transcript item, answered with `answer-permission!`.
 
-   One turn at a time: a send while a turn runs is refused by the transcript (`:busy?`), not
-   queued. An agent process with no turn running is stopped after `idle-ms`, and the next send
-   loads the conversation again."
+   One turn at a time: a send while a turn runs, or while an earlier send is still starting its
+   agent, is refused, not queued. An agent process with no turn running is stopped after `idle-ms`, and the next send
+   loads the conversation again.
+
+   A conversation ends with `reset!`: its process is stopped and its id forgotten, so the next send
+   starts a new one. Only the process a chat currently holds speaks for it — what an earlier
+   process says, its exit included, and what a turn on it does, its `:on-turn-end` included, is
+   ignored — so a stopped conversation cannot reach the one that replaced it."
+  (:refer-clojure :exclude [reset!])
   (:require [babashka.fs :as fs]
             [clojure.edn :as edn]
             [nido.acp.client :as acp]
@@ -50,19 +56,28 @@
   (* 30 60 1000))
 
 (defonce ^:private chats
-  ;; chat key -> {:transcript :conn :acp-id :subs {token f} :last-used ms :loading? bool}
+  ;; chat key -> {:transcript :conn :acp-id :owner :subs {token f} :last-used ms :loading? bool
+  ;;             :turn token :loads n}. :owner is the token of the process the chat holds, set
+  ;; before it connects; :turn is the token of the send whose turn the chat is busy with, from
+  ;; the send's acceptance to its turn's end; :loads counts the loads that replaced the transcript.
   (atom {}))
 
 (defonce ^:private start-locks (atom {}))
+
+(defonce ^:private notify-locks (atom {}))
 
 (defn- chat-key [chat] (select-keys chat [:project :session :name]))
 
 (defn- id-file [{:keys [project session name]}]
   (str (fs/path (core/nido-home) "chats" (str project) session (str name ".edn"))))
 
-(defn- read-acp-id [k]
-  (let [f (id-file k)]
-    (when (fs/exists? f) (:acp-session-id (edn/read-string (slurp f))))))
+(defn- read-acp-id
+  "The chat's kept ACP session id, or nil. A reset deletes the file without waiting for readers,
+   so one gone between looking and reading is no id, not a failure."
+  [k]
+  (try (:acp-session-id (edn/read-string (slurp (id-file k))))
+       (catch java.io.FileNotFoundException _ nil)
+       (catch java.nio.file.NoSuchFileException _ nil)))
 
 (defn- write-acp-id! [k id]
   (let [f (id-file k)]
@@ -71,21 +86,70 @@
 
 (defn- state [k] (get @chats k))
 
-(defn- notify! [k]
-  (let [{:keys [transcript subs loading?]} (state k)]
-    (when-not loading?
-      (doseq [f (vals subs)] (try (f transcript) (catch Throwable _ nil))))))
+(declare published)
+
+(defn- notify!
+  "Tell every subscriber the chat's transcript as it stands. Deliveries for one chat run one at a
+   time, each reading the state once it holds the chat's turn, so no subscriber is told an older
+   transcript after a newer one — a reset's empty log is never followed by the log it discarded."
+  [k]
+  (locking (get (swap! notify-locks update k #(or % (Object.))) k)
+    (let [{:keys [subs loading?] :as s} (state k)
+          transcript (published s)]
+      (when-not loading?
+        (doseq [f (vals subs)] (try (f transcript) (catch Throwable _ nil)))))))
+
+(def ^:private ^:dynamic *owner*
+  "The process on whose behalf the running code changes chat state: every change is applied only
+   while the chat still holds it. Bound for a process's messages and for everything a turn does
+   once its process is known — the caller's `:on-turn-end` included, so what that writes through
+   `note!` or `note-error!` cannot reach a conversation that replaced the turn's. `::any` outside."
+  ::any)
+
+(defn- change!
+  "Apply `f` to the chat's state — unless `*owner*` names a process the chat no longer holds,
+   decided in the same swap that applies it — and tell subscribers when the transcript changed.
+   True when applied."
+  [k f]
+  (let [owner *owner*
+        [before after] (swap-vals! chats (fn [m] (if (or (= ::any owner)
+                                                         (identical? owner (get-in m [k :owner])))
+                                                   (update m k f)
+                                                   m)))]
+    (when-not (and (identical? (get-in before [k :transcript]) (get-in after [k :transcript]))
+                   (identical? (get-in before [k :turn]) (get-in after [k :turn])))
+      (notify! k))
+    (not (identical? before after))))
 
 (defn- fold! [k event]
-  (swap! chats update-in [k :transcript] #(transcript/fold (or % (transcript/empty-transcript)) event))
-  (notify! k))
+  (change! k (fn [s] (update s :transcript #(transcript/fold (or % (transcript/empty-transcript)) event)))))
 
-(defn- on-message [k msg]
-  (case (:method msg)
-    "_nido/exited" (let [busy? (get-in (state k) [:transcript :busy?])]
-                     (swap! chats update k dissoc :conn :acp-id)
-                     (when busy? (fold! k {:local :error :text "The agent process stopped."})))
-    (fold! k msg)))
+(defn- working?
+  "Whether the chat `s` is busy with a turn: a send was accepted and its turn has not ended. Only
+   that send sets and clears it — nothing folded into the transcript does, so an error noted from
+   outside the turn cannot end it. While it is set nothing else may start or end a conversation —
+   no second send, no reset — so whatever the send writes lands on the conversation it was sent to."
+  [s]
+  (some? (:turn s)))
+
+(defn- published
+  "The chat's transcript as subscribers and readers see it: busy exactly while the chat is
+   `working?`, whatever the items folded into it last said."
+  [s]
+  (assoc (or (:transcript s) (transcript/empty-transcript)) :busy? (working? s)))
+
+(defn- on-message
+  "A message from the process `owner` started. Ignored once the chat holds another process, or
+   none — a stopped conversation never speaks for the one after it."
+  [k owner msg]
+  (binding [*owner* owner]
+    (case (:method msg)
+      "_nido/exited" (change! k (fn [s]
+                                  (cond-> (dissoc s :conn :acp-id :owner)
+                                    (working? s)
+                                    (update :transcript transcript/fold
+                                            {:local :error :text "The agent process stopped."}))))
+      (fold! k msg))))
 
 (defn- session-meta [chat]
   (cond-> {:claudeCode {:options {:disallowedTools denied-tools}}}
@@ -101,41 +165,78 @@
       (not (lifecycle/runtime-of session opts))  (lifecycle/up! session opts))
     (:wt-path (lifecycle/session-coords session opts))))
 
+(defn- start-lock [k] (get (swap! start-locks update k #(or % (Object.))) k))
+
+(defn- failed!
+  "Put the failure `e` of a start in the chat's transcript and throw it on, marked as told. Called
+   only under the chat's start lock, by the start that failed, so it lands on the conversation
+   whose process failed: no other start can come between the failure and its telling."
+  [k e]
+  (let [text (or (ex-message e) (str e))]
+    (fold! k {:local :error :text text})
+    (throw (ex-info text {::told true} e))))
+
+(defn- untold
+  "A failure for its catcher to tell, or nil when the start that failed has told it already."
+  [e]
+  (when-not (::told (ex-data e)) e))
+
 (defn- ensure-agent!
-  "The chat's connection and ACP session id, starting the agent — and loading the conversation,
-   when one was started before — if no process is running. Serialised per chat, so two sends
-   cannot start two agents."
-  [chat]
-  (let [k    (chat-key chat)
-        lock (get (swap! start-locks update k #(or % (Object.))) k)]
-    (locking lock
-      (or (when-let [{:keys [conn acp-id]} (state k)] (when conn [conn acp-id]))
-          (let [cwd    (worktree! chat)
-                conn   (acp/connect! {:command adapter-command :dir cwd
-                                      :on-message #(on-message k %)})
-                meta   (session-meta chat)
-                known  (read-acp-id k)
-                acp-id (if known
-                         ;; The replay is the whole conversation, so it is folded into an
-                         ;; empty transcript, and subscribers hear once, when it is done.
-                         (do (swap! chats update k assoc :loading? true
-                                    :transcript (transcript/empty-transcript))
-                             (try (acp/load-session! conn known {:cwd cwd :meta meta}) known
-                                  (finally (swap! chats update k assoc :loading? false)
-                                           (notify! k))))
-                         (doto (acp/new-session! conn {:cwd cwd :meta meta})
-                           (->> (write-acp-id! k))))]
-            (acp/set-mode! conn acp-id "bypassPermissions")
-            (swap! chats update k assoc :conn conn :acp-id acp-id)
-            [conn acp-id])))))
+  "The chat's connection, ACP session id and the token of the process holding them, starting the
+   agent — and loading the conversation, when one was started before — if no process is running.
+   Serialised per chat, so two sends cannot start two agents, and a reset waits for a start to
+   finish. With `load-only?`, a chat with no conversation kept by id starts nothing and answers
+   nil. A process that exits before it is held is not held, and the start throws. A start that
+   throws has already put its failure in the transcript, under the lock (`failed!`)."
+  ([chat] (ensure-agent! chat false))
+  ([chat load-only?]
+   (let [k (chat-key chat)]
+     (locking (start-lock k)
+      (try
+       (or (when-let [{:keys [conn acp-id owner]} (state k)] (when conn [conn acp-id owner]))
+           (when (or (not load-only?) (read-acp-id k))
+             (let [cwd    (worktree! chat)
+                   owner  (Object.)
+                   _      (swap! chats update k assoc :owner owner)
+                   conn   (acp/connect! {:command adapter-command :dir cwd
+                                         :on-message #(on-message k owner %)})
+                   meta   (session-meta chat)
+                   known  (read-acp-id k)
+                   acp-id (if known
+                            ;; The replay is the whole conversation, so it is folded into an
+                            ;; empty transcript, and subscribers hear once, when it is done.
+                            (do (swap! chats update k #(-> %
+                                                           (assoc :loading? true
+                                                                  :transcript (transcript/empty-transcript))
+                                                           (update :loads (fnil inc 0))))
+                                (try (acp/load-session! conn known {:cwd cwd :meta meta}) known
+                                     (finally (swap! chats update k assoc :loading? false)
+                                              (notify! k))))
+                            (doto (acp/new-session! conn {:cwd cwd :meta meta})
+                              (->> (write-acp-id! k))))]
+               (acp/set-mode! conn acp-id "bypassPermissions")
+               ;; A process that exited while it started is no longer the chat's: it is not held.
+               (let [[_ after] (swap-vals! chats (fn [m] (if (identical? owner (get-in m [k :owner]))
+                                                          (update m k assoc :conn conn :acp-id acp-id)
+                                                          m)))]
+                 (when-not (identical? conn (get-in after [k :conn]))
+                   (throw (ex-info "The agent process stopped." {}))))
+               [conn acp-id owner])))
+       (catch Throwable e (failed! k e)))))))
 
 (defn- reap-idle! []
-  (let [now (System/currentTimeMillis)]
-    (doseq [[k {:keys [conn transcript last-used]}] @chats
-            :when (and conn (not (:busy? transcript))
-                       (> (- now (or last-used now)) idle-ms))]
-      (swap! chats update k dissoc :conn :acp-id)
-      (acp/close! conn))))
+  (let [now   (System/currentTimeMillis)
+        idle? (fn [{:keys [last-used] :as s}]
+                (and (not (working? s)) (> (- now (or last-used now)) idle-ms)))]
+    (doseq [[k {:keys [conn]}] @chats
+            :when conn]
+      ;; Decided in the swap: the connection seen above may since have been reset and replaced.
+      (let [[before after] (swap-vals! chats (fn [m] (let [s (get m k)]
+                                                       (if (and (identical? conn (:conn s)) (idle? s))
+                                                         (update m k dissoc :conn :acp-id :owner)
+                                                         m))))]
+        (when-not (identical? before after)
+          (acp/close! conn))))))
 
 (defonce ^:private reaper
   (delay (doto (Thread. #(loop [] (Thread/sleep 60000) (try (reap-idle!) (catch Throwable _ nil)) (recur))
@@ -148,7 +249,7 @@
   "The chat's transcript as it stands in this process: empty for a conversation not yet opened
    here, even when one exists on disk — the first send loads it."
   [chat]
-  (or (:transcript (state (chat-key chat))) (transcript/empty-transcript)))
+  (published (state (chat-key chat))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
   started?
@@ -162,28 +263,62 @@
   "Send the person's `text`, with the references it came with — each `{:label :detail}`, in the
    order the person numbered them, possibly none — and return at once. The message, the agent's
    reply and the turn's end each reach subscribers as they happen. Refused — nil, and nothing
-   changes — while a turn is running."
+   changes — while a turn is running or a send accepted before it has not begun its turn."
   [chat text refs]
-  (let [k (chat-key chat)]
-    (when-not (:busy? (transcript chat))
-      @reaper
-      (swap! chats update k assoc :last-used (System/currentTimeMillis))
-      ;; A load replays history into a fresh transcript, so the message goes in after it.
-      (let [replays? (and (not (:conn (state k))) (read-acp-id k))
-            message  {:local :user :text text :refs (vec refs) :at (System/currentTimeMillis)}]
-        (when-not replays? (fold! k message))
-        (future
-          (try
-            (let [[conn acp-id] (ensure-agent! chat)]
-              (when replays? (fold! k message))
-              @(acp/prompt! conn acp-id (transcript/prompt-text text refs))
-              (fold! k {:local :turn-ended}))
-            (catch Throwable e
-              (fold! k {:local :error :text (or (ex-message e) (str e))})))
-          (swap! chats update k assoc :last-used (System/currentTimeMillis))
-          (when-let [f (:on-turn-end chat)]
-            (try (f chat) (catch Throwable _ nil))))
-        true))))
+  (let [k    (chat-key chat)
+        turn (Object.)
+        [before] (swap-vals! chats (fn [m] (if (working? (get m k)) m (assoc-in m [k :turn] turn))))]
+    (when-not (working? (get before k))
+      ;; Everything after the send is accepted runs in the future, inside the one scope whose
+      ;; `finally` ends the turn, so nothing between its start and its end can skip the end.
+      (future
+        ;; While the turn is the chat's no reset and no other send is taken, so a failure to start
+        ;; lands on this conversation; from the moment its process is known, everything the turn
+        ;; does — the message, its end, the caller's hook — speaks only while that process is held.
+        (let [owner
+              (try
+                (when-let [[conn acp-id owner]
+                           (try @reaper
+                                (swap! chats update k assoc :last-used (System/currentTimeMillis))
+                                (let [message {:local :user :text text :refs (vec refs)
+                                               :at (System/currentTimeMillis)}
+                                      ;; Folded between loads, never inside one; a load that
+                                      ;; replaces the transcript after it — this send's own start
+                                      ;; or anyone's — is seen by its count, and the message goes
+                                      ;; in again after the history it replayed.
+                                      loads   (locking (start-lock k)
+                                                (fold! k message)
+                                                (:loads (state k)))
+                                      [_ _ owner :as started] (ensure-agent! chat)]
+                                  (locking (start-lock k)
+                                    ;; Told as the turn's process: when another start has
+                                    ;; replaced it since, the failure is that process's, not
+                                    ;; the conversation's now.
+                                    (binding [*owner* owner]
+                                      (when (and (not= loads (:loads (state k)))
+                                                 (not (fold! k message)))
+                                        (failed! k (ex-info "The agent process stopped." {})))))
+                                  started)
+                                (catch Throwable e
+                                  (when-let [e (untold e)]
+                                    (fold! k {:local :error :text (or (ex-message e) (str e))}))
+                                  nil))]
+                  (binding [*owner* owner]
+                    (try
+                      @(acp/prompt! conn acp-id (transcript/prompt-text text refs))
+                      (fold! k {:local :turn-ended})
+                      (catch Throwable e
+                        (fold! k {:local :error :text (or (ex-message e) (str e))})))
+                    (change! k #(assoc % :last-used (System/currentTimeMillis))))
+                  owner)
+                (finally
+                  (binding [*owner* ::any]
+                    (change! k #(cond-> % (identical? turn (:turn %)) (dissoc :turn))))))]
+          (when owner
+            (binding [*owner* owner]
+              (when-let [f (:on-turn-end chat)]
+                (try (f chat) (catch Throwable _ nil)))))))
+      true)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   cancel!
@@ -192,6 +327,30 @@
   [chat]
   (let [{:keys [conn acp-id]} (state (chat-key chat))]
     (when conn (acp/cancel! conn acp-id))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  reset!
+  "End the chat's conversation, so the next send starts a new one: stop its agent, forget its ACP
+   session id, and empty its transcript — notes and errors put in from outside a turn included —
+   telling every subscriber. True when done; refused — nil, and nothing changes — while a turn
+   runs or a send accepted before it has not begun its turn. Starts nothing: no agent runs for
+   the chat again until the next send."
+  [chat]
+  (let [k (chat-key chat)]
+    (locking (start-lock k)
+      (let [[before] (swap-vals! chats (fn [m]
+                                         (if (working? (get m k))
+                                           m
+                                           (update m k #(-> %
+                                                            (dissoc :conn :acp-id :owner)
+                                                            (assoc :transcript (transcript/empty-transcript)
+                                                                   :loading? false))))))
+            {:keys [conn]} (get before k)]
+        (when-not (working? (get before k))
+          (fs/delete-if-exists (id-file k))
+          (when conn (try (acp/close! conn) (catch Throwable _ nil)))
+          (notify! k)
+          true)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :string :string] :any]}
   answer-permission!
@@ -236,6 +395,6 @@
     (when (and (not (:conn (state k))) (empty? (:items (transcript chat))) (read-acp-id k))
       @reaper
       (swap! chats update k assoc :last-used (System/currentTimeMillis))
-      (future (try (ensure-agent! chat)
-                   (catch Throwable e (fold! k {:local :error :text (or (ex-message e) (str e))})))))
+      ;; A failed load tells its failure itself, under the start lock (`failed!`).
+      (future (try (ensure-agent! chat true) (catch Throwable _ nil))))
     (fn [] (swap! chats update-in [k :subs] dissoc token))))
