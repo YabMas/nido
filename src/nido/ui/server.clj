@@ -11,6 +11,7 @@
             [nido.coordinator.control :as control]
             [nido.ui.catalog.chat :as catalog-chat]
             [nido.ui.side-chat :as side-chat]
+            [nido.ui.structure :as structure]
             [nido.ui.components.ask :as ask]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
@@ -777,9 +778,17 @@
         (page-response (:scope vs) (views/development-page
                                     (rail-ctx req :development (:scope vs) (needs-screen vs)))))
 
-      ;; GET /domain, /functionality, /structure — the focused project's slices.
+      ;; GET /structure — the focused project's declared design on main, in fukan's explorer
+      ["structure"]
+      (let [vs (view-state req)]
+        (page-response (:scope vs) (views/structure-page
+                                    (rail-ctx req :structure (:scope vs) (needs-screen vs))
+                                    (structure/ensure! (:scope vs))
+                                    structure/default-view)))
+
+      ;; GET /domain, /functionality — the focused project's other slices.
       ;; Nothing populates them yet; Scratch (/workstreams) holds the board meanwhile.
-      (["domain"] ["functionality"] ["structure"])
+      (["domain"] ["functionality"])
       (let [vs (view-state req)]
         (page-response (:scope vs) (views/slice-page
                                     (rail-ctx req (:surface vs) (:scope vs) (needs-screen vs))
@@ -851,6 +860,14 @@
 
       ;; Otherwise, dispatch on structure
       (cond
+        ;; GET /structure/explorer/:project/… — the explorer the Structure slice frames. Its
+        ;; requests are relative, so its root needs the trailing slash to resolve under it.
+        (and (<= 3 (count segments)) (= ["structure" "explorer"] (subvec segments 0 2)))
+        (let [project (nth segments 2)]
+          (if (and (= 3 (count segments)) (not (str/ends-with? uri "/")))
+            {:status 302 :headers {"Location" (str uri "/" (some->> (:query-string req) (str "?")))}}
+            (structure/forward project (str/join "/" (drop 3 segments)) (:query-string req))))
+
         ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
         (ws-pane-fragment-response (nth segments 2) (nth segments 3) (view-state req))

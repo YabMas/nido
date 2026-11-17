@@ -398,6 +398,7 @@
      .side-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
      .content { grid-area:main; padding:20px 28px; overflow:auto; }
      .content.bleed { padding:0; overflow:hidden; display:grid; }
+     .structure-frame { width:100%; height:100%; border:0; display:block; }
      /* With the chat's side panel, a third column under the top bar: room for its toggle when
         closed, the panel when open — below 1000px it covers the page instead. */
      body:has(> .chat-side) { grid-template-columns:180px 1fr 58px; grid-template-areas:'top top top' 'side main chat';

@@ -14,6 +14,7 @@
             [canvas.coordinator.work :as work :refer [Screen]]
             [canvas.integration.acp :as acp]
             [canvas.session.chat :as chat]
+            [canvas.ui.structure :as structure]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -311,6 +312,9 @@
     {:signature [:=> [:catn [:result :map] [:proposals :any]] :any] :delegates [operations-fragment]})
   (Operation slice-page "A slice nothing populates yet, pointing at Scratch."
     {:signature [:=> [:catn [:ctx :map] [:slice :keyword]] :any] :delegates [shell]})
+  (Operation structure-page
+    "The Structure slice: fukan's explorer framed edge to edge, or why there is nothing to draw."
+    {:signature [:=> [:catn [:ctx :map] [:explorer :map] [:view :string]] :any] :delegates [shell]})
   (Operation development-page "Pages for working on the dashboard itself, one tile each."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [shell]})
   (Operation not-found-page "The 404."
@@ -338,7 +342,8 @@
     {:signature [:=> [:catn [:req :map]] :map]
      :delegates [derive-screen parse-findings-lines resolve-failure-msg
                  work/session-recovery
-                 work/improvement-holds]})
+                 work/improvement-holds
+                 structure/ensure! structure/forward]})
   (Operation start! "Start the dashboard server."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [handle-request]})
   (Operation stop! "Stop it."

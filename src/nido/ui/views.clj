@@ -36,8 +36,8 @@
   "The sidebar: the focused project seen as a system, one slice per perspective.
 
    Scratch is the workstream board, standing in until the other three have
-   content — Domain, Functionality and Structure render a placeholder (see
-   `slice-page`). It comes first and stands apart from them, because it is not
+   content — Domain and Functionality render a placeholder (see
+   `slice-page`); Structure frames fukan's explorer (`structure-page`). It comes first and stands apart from them, because it is not
    a perspective on the system but the work as it was listed before there were
    any. It keeps the /workstreams path because every workstream link in the
    dashboard already points there."
@@ -273,6 +273,26 @@
      [:p.meta "Nothing populates this slice yet. "
       [:a {:href (str "/workstreams?scope=" scope)} "Scratch"]
       " holds " scope "'s workstreams meanwhile."])))
+
+(defn ^{:malli/schema [:=> [:cat :map :map :string] :any]}
+  structure-page
+  "The Structure slice: the focused project's declared design on `main`, in fukan's explorer
+   framed edge to edge. `explorer` is what `nido.ui.structure/ensure!` answered; `view` is the
+   query the frame opens on. A project with no design, or no `main`, gets a sentence instead —
+   anything the explorer itself has to say, starting or failing, it says inside the frame."
+  [{:keys [scope] :as ctx} {:keys [status]} view]
+  (case status
+    (:starting :serving :failed)
+    (shell (assoc ctx :active :structure :title "Structure" :bleed? true)
+           [:iframe.structure-frame
+            {:src   (str "/structure/explorer/" (java.net.URLEncoder/encode (str scope) "UTF-8")
+                         "/?" view)
+             :title (str scope "'s declared design")}])
+    (shell (assoc ctx :active :structure :title "Structure")
+           [:h1 "Structure"]
+           [:p.meta (if (= :no-main status)
+                      (str scope " has no main bookmark to read a design from.")
+                      (str scope " declares no design on main — nothing for fukan to draw."))])))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   development-page
