@@ -573,6 +573,13 @@
                                          :tool-name "Bash" :tool-input "{\"command\":\"rm\"}"})
         (is (empty? (filter #(= (:id w) (:ws-id %)) (work/gates :brian)))
             "the workstream is not in the inbox")
+        (with-redefs [nido.platform.project/list-projects (constantly {:brian {}})
+                      work/live-session-names             (fn [_] #{})]
+          (try
+            (work/hold! {:sweep? false})
+            (is (empty? (filter #(= (:id w) (:ws-id %)) (work/gates :brian)))
+                "nor in the inbox a holding process reads")
+            (finally (work/release!))))
         (with-redefs [nido.platform.project/list-projects (constantly {:brian {}})]
           (is (= [{:project "brian" :ws-id (:id w)
                    :denials [{:session "s" :at "2026-01-02T00:00:00Z" :tool-name "Bash"
@@ -1383,6 +1390,28 @@
               "Notion origin: Dismiss offered same as any other origin")
           (is (= :triage-report (-> g :report :format)))
           (is (= "Verdict" (-> g :report :title))))))))
+
+(deftest a-paused-workstream-is-no-gate-until-resumed
+  ;; A pause is the person's choice not to be asked: the workstream leaves the inbox and its
+  ;; row stops reading :needs-you, and lifting the pause puts both back.
+  (with-tmp
+    (fn [_]
+      (let [w        (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-8" :title "t"}]})
+            id       (:id w)
+            gate-ids #(set (map :ws-id (work/gates :brian)))
+            row      #(first (filter (fn [r] (= id (:ws-id r))) (work/list-workstreams :brian)))]
+        (tickets/open! :brian "BR-8" {:title "t"})
+        (triaged! id "BR-8" false)
+        (session/create! :brian id {:name "auto" :weight :heavy
+                                    :autonomy (assoc autonomy-running :phase :parked)})
+        (is (contains? (gate-ids) id) "owing a person a move, it is a gate")
+        (work/pause! :brian id "later")
+        (is (not (contains? (gate-ids) id)) "paused, it is not")
+        (is (false? (:needs-you (row))))
+        (is (nil? (:gate (work/workstream :brian id))) "nor does its pane carry a gate")
+        (work/resume! :brian id)
+        (is (contains? (gate-ids) id) "resumed, it is a gate again")
+        (is (true? (:needs-you (row))))))))
 
 (deftest gate-not-working-when-session-failed-not-in-flight
   ;; Regression: a live autonomous session stuck at :failed (e.g. a plan-bug spawn

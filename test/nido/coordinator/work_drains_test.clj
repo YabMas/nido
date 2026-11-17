@@ -98,3 +98,26 @@
               (is (= [d] (map :ws-id gs)) "one row, the drain's")
               (is (= [s] (:raised-by (first gs))) "naming the slice that raised it"))
             (finally (work/release!))))))))
+
+(deftest a-paused-drain-is-not-raised-by-its-slices
+  ;; A pause on the drain is the person's choice not to be asked about it — its slices'
+  ;; escalations included — held or unheld.
+  (with-tmp
+    (fn []
+      (with-redefs [project/list-projects           (constantly {:brian {}})
+                    work/live-session-names         (fn [_] #{})
+                    notion-cache/project-page-facts (constantly {})]
+        (let [d (drain/start-drain! :brian {:established-by {:commit "abcdef1"} :exit "x"})
+              v (drain/approve-recipe! :brian d (drain/propose-recipe! :brian d {:reason "r" :recipe a-recipe}))
+              c (drain/record-census! :brian d {:recipe v :remaining 3 :groups []})
+              s (drain/start-slice! :brian d (drain/plan-slice! :brian d {:sites ["a"] :rests-on [] :census c}) :nido)]
+          (drive/park! :brian s {:stage :reseat :outcome :uncarried :summary "the seat cannot start"
+                                 :needs "fix the seat" :recommendation "r" :after "a"})
+          (work/pause! :brian d nil)
+          (is (empty? (work/gates :brian)) "unheld: the paused drain is not listed")
+          (try
+            (work/hold! {:sweep? false})
+            (is (empty? (work/gates :brian)) "held: nor here")
+            (finally (work/release!)))
+          (work/resume! :brian d)
+          (is (= [d] (map :ws-id (work/gates :brian))) "resumed, its slice raises it again"))))))

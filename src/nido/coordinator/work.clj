@@ -659,7 +659,9 @@
                          :dismissed? false
                          :position   pos
                          :status     (select-keys st [:owed-by :live :stalled :paused :why])
-                         :needs-you  (= :person (:owed-by st))
+                         ;; A person's pause is their choice not to be asked: a paused workstream
+                         ;; owes them nothing until they lift it, whatever its position owes.
+                         :needs-you  (and (= :person (:owed-by st)) (not (:paused st)))
                          :engagement (engagement-of st)
                          ;; What is underway, at status's band, so a row cannot say :done and
                          ;; running at once — and at status's liveness, so it cannot say halted
@@ -1704,7 +1706,8 @@
   "A project's gates: workstreams that owe a person a move now (needs-you), each hydrated
    with its report, its follow-actions and the question it asks. A denial recorded in a
    session nido drives rides on a gate as :denials but never makes one: a denial needs no
-   answer, so it is an operational notice (`all-denials`), not a card. A SETTLED (closed) workstream is never a gate,
+   answer, so it is an operational notice (`all-denials`), not a card. A PAUSED workstream is
+   never a gate: a person's pause takes it off :needs-you until they lift it. A SETTLED (closed) workstream is never a gate,
    even if a stale stage-override still projects :needs-you.
    A DISMISSED row is never a gate either — and the filter is load-bearing, not
    cosmetic: Notion-driven rows ignore nido :closed for engagement, and the parked
@@ -1734,7 +1737,8 @@
   "The inbox's gates from `pairs` — each workstream's [row gate-or-nil], in listing order — and
    the one derivation both the held model and an unheld read take them from. A drain is one row:
    a slice is never a card of its own, and a slice that owes a person a move puts its drain on
-   the inbox, naming it in :raised-by, whether or not the drain owes one itself."
+   the inbox, naming it in :raised-by, whether or not the drain owes one itself — unless a
+   person's pause stands on the drain."
   [project pairs]
   (let [slice? #(= :slice (:origin %))
         raised (raised-by-slices project (keep (fn [[r g]] (when (and g (slice? r)) r)) pairs))]
@@ -1742,7 +1746,9 @@
           (keep (fn [[r g]]
                   (when-not (slice? r)
                     (if-let [by (get raised (:ws-id r))]
-                      (when (or g (not= :settled (:engagement r)))
+                      ;; A drain a person paused is not put back on the list by its slices.
+                      (when (and (not (get-in r [:status :paused]))
+                                 (or g (not= :settled (:engagement r))))
                         (assoc (or g (->gate project r)) :raised-by by))
                       g))))
           pairs)))
@@ -1904,9 +1910,9 @@
           row       (with-status project live-names (wsv/workstream-row project w facts))
           settled?  (= :settled (:engagement row))
           page-id   (:page-id (wsv/notion-ref w))
-          denials   (when-not settled? (driven-denials project ws-id))
+          ;; The rule gates* applies: a denial alone makes no gate (all-denials notices it).
           gate?     (and (not= :dismissed (:stage row))
-                         (or (:needs-you row) (seq denials))
+                         (:needs-you row)
                          ;; Between phases is closed, so it reads :settled — and is still owed
                          ;; a person's :assert-gate, which only a gate carries.
                          (not (and settled? (not= :awaiting-gate (:stage row)))))
@@ -1928,7 +1934,7 @@
                      :settled?  settled?
                      ;; At rest: only the sweep reaches it — settled history, or a review-loop
                      ;; analysis, read off the position status gives it, whatever its band or
-                     ;; gate. Decides nothing else; the gate and denials above read `settled?`.
+                     ;; gate. Decides nothing else; the gate above reads `settled?`.
                      :at-rest?  (or settled? (= :analysed (get-in row [:position :at])))
                      :gate      (when gate? (->gate project row))
                      ;; The winding-down band's row, less its live sessions, which are the
