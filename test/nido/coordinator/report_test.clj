@@ -2355,6 +2355,85 @@
                         (report/validate-event :blocker {:format :blocker :needs "A key?" :after "a"
                                                          :summary "the conductor escalated a hand-back"}))))
 
+(def ^:private two-question-blocker
+  {:format    :blocker
+   :summary   "The design round stopped on two things only you can decide."
+   :after     "The seat amends the design with your answers and runs the round again."
+   :questions [{:id "q1" :question "Should the card ask the general question?"
+                :context "Every question the review wrote is too long."
+                :options [{:label "General" :summary "Ask the general question."}
+                          {:label "As written" :summary "Show the long question."}]}
+               {:id "q2" :question "May alternatives show as their own questions?"
+                :recommendation "Yes, for now."}]})
+
+(deftest a-blocker-asks-in-one-form-or-the-other
+  (is (= two-question-blocker (report/validate-event :blocker two-question-blocker)))
+  (testing "never both forms, and never fewer than two :questions"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :blocker (assoc two-question-blocker :needs "Go?"))))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :blocker (update two-question-blocker :questions (comp vec butlast))))))
+  (testing "top-level :options belong to a :needs blocker only"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :blocker (assoc two-question-blocker :options
+                                                        [{:label "a" :summary "a"} {:label "b" :summary "b"}])))))
+  (testing "ids run q1, q2… in order"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"numbered q1, q2"
+                          (report/validate-event :blocker (assoc-in two-question-blocker [:questions 1 :id] "q3")))))
+  (testing "the first question that is not one question is named"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":questions q2 is not one question"
+                          (report/validate-event :blocker (assoc-in two-question-blocker [:questions 1 :question]
+                                                                    "First line?\nSecond line?"))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":questions q1 is not one question"
+                          (report/validate-event :blocker (assoc-in two-question-blocker [:questions 0 :question]
+                                                                    (str (apply str (repeat 240 "x")) "?"))))))
+  (testing "a question among several may not approve a design"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"q1 has an option that approves a design"
+                          (report/validate-event :blocker (assoc-in two-question-blocker
+                                                                    [:questions 0 :options 0 :approves-design] 7))))))
+
+(deftest blocker-questions-reads-either-form
+  (is (= [{:id "q1" :question "Can ops send the Stripe test key?" :context ["Waiting on a Stripe test key."]
+           :after "The work resumes once you answer." :options []}]
+         (report/blocker-questions valid-blocker)))
+  (let [[q1 q2] (report/blocker-questions two-question-blocker)]
+    (is (= ["The design round stopped on two things only you can decide."
+            "Every question the review wrote is too long."]
+           (:context q1))
+        "the blocker's summary leads the first question's context")
+    (is (= 2 (count (:options q1))))
+    (is (= {:id "q2" :question "May alternatives show as their own questions?" :context []
+            :options [] :recommendation "Yes, for now."}
+           q2)))
+  (is (= [] (report/blocker-questions nil)))
+  (is (= "Should the card ask the general question? (+1 more)"
+         (report/blocker-question-text two-question-blocker))))
+
+(deftest an-escalation-asks-in-a-blockers-forms
+  (let [e {:format :conduct-decision :hand-back "m" :position :design-decided :by :conductor
+           :decision [:escalate (dissoc two-question-blocker :format)]}]
+    (is (= e (report/validate-event :conduct-decision e)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"q2 is not one question"
+                          (report/validate-event :conduct-decision
+                                                 (-> e (assoc :next {:stage :approve-design :mode :human})
+                                                     (assoc-in [:decision 1 :questions 1 :question] "no question"))))
+        "a note's :questions are still questions")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :conduct-decision (assoc-in e [:decision 1 :needs] "Go?"))))))
+
+(deftest a-multi-question-answer-records-each-answer
+  (let [a {:format :blocker-answered :blocker-seq 4 :grants [:intent]
+           :answers [{:question-id "q1" :letter "A" :label "General" :summary "Ask the general question."}
+                     {:question-id "q2" :summary "Yes"}
+                     {:question-id "q3"}]}]
+    (is (= a (report/validate-event :blocker-answered a)))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :blocker-answered (assoc a :summary "all of it")))
+        ":answers stand in place of a summary derived from them")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :blocker-answered (assoc-in a [:answers 0 :label] nil))))
+    (is (str/includes? (report/report->markdown a) "**Q3** — _left open_"))))
+
 (deftest an-escalation-at-a-persons-move-is-a-note
   (let [e {:format :conduct-decision :hand-back "m" :position :design-decided :by :conductor
            :next {:stage :approve-design :mode :human}

@@ -158,6 +158,23 @@
      before is legacy, asked under a fixed line with its :needs leading the context. A summary
      that only says where the blocker came from is no context and is dropped."
     {:signature [:=> [:catn [:blocker [:maybe :map]]] :map]})
+  (Operation blocker-questions
+    "A blocker's questions, in either form and era, as a vector of parts {:id :question :context
+     :recommendation? :options} — a blocker asking in :needs is one question, read through
+     blocker-parts; one asking in :questions is each of them, the blocker's :summary leading the
+     first one's context. The one reading of what a blocker asks."
+    {:signature [:=> [:catn [:blocker [:maybe :map]]] [:vector :map]]
+     :delegates [blocker-parts]})
+  (Operation asked-questions
+    "The words of each question a blocker or an :escalate body asks, trimmed, in order — what two
+     asks are compared by; a blocker written before its parts were separated is asked by its :needs."
+    {:signature [:=> [:catn [:blocker [:maybe :map]]] [:vector :string]]
+     :delegates [blocker-questions]})
+  (Operation blocker-question-text
+    "What a blocker asks, for a heading or an index line: its one question, or its first of several
+     and how many more."
+    {:signature [:=> [:catn [:blocker [:maybe :map]]] :string]
+     :delegates [asked-questions]})
   (Operation open-answers
     "The answers of an acceptance that chose nothing: one per question of the report, each left
      open with the question's words when it has any."

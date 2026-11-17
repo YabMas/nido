@@ -176,6 +176,9 @@
    [:context        string?]
    [:recommendation {:optional true} string?]
    [:after          string?]
+   ;; At least one, and the needs-you card depends on it: a triage card's Accept reads only the
+   ;; letters chosen back, so a question with no direction could only be answered in words that
+   ;; Accept would drop. The card offers words only where its send records them (`:words?`).
    [:directions     [:vector {:min 1 :max authoring-branch-cap} Direction]]])
 
 (def ^:private triage-report-common
@@ -1845,6 +1848,25 @@
    [:grants          {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]
    [:approves-design {:optional true} pos-int?]])
 
+(def BlockerQuestion
+  "One question of a blocker that asks several (Blocker :questions), in a question's own parts:
+   the question in one sentence, the context that is this question's alone, the answer the writer
+   supports for it, and its branches when it has any. :id is its place, q1, q2… in order, by
+   which an answer names the question it answers. The blocker's :summary is the context the
+   questions share and its :after what follows the answers, so neither is repeated here."
+  [:map {:closed true}
+   [:id             [:re #"^q[1-9][0-9]*$"]]
+   [:question       string?]
+   [:context        {:optional true} string?]
+   [:recommendation {:optional true} string?]
+   [:options        {:optional true}
+    [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]])
+
+(defn- one-question-form?
+  "A question body asks in exactly one form: one question in :needs or several in :questions."
+  [body]
+  (not= (contains? body :needs) (contains? body :questions)))
+
 (def Blocker
   "A halt that needs a human, in four parts: :needs is the one-sentence question, :summary its
    context, :recommendation the answer the writer supports — present only when the writer genuinely
@@ -1857,14 +1879,22 @@
    Stripe key' has no branches. But a blocker that DOES enumerate branches must
    carry them here rather than in prose: validate-event rejects the prose form
    (enforce-blocker-options), because a choice written as an essay can only be
-   answered by typing an essay back at it."
-  [:map {:closed true}
+   answered by typing an essay back at it.
+
+   A blocker that must ask several things asks them in :questions instead — two or more, each in
+   its own parts (BlockerQuestion) — and then carries no :needs and no top-level :options: the
+   two forms are exclusive, so one decision cannot be asked twice. `blocker-questions` reads
+   either form."
+  [:and
+   [:map {:closed true}
    [:format  [:= :blocker]]
    ;; The question's CONTEXT: what the work is, where it stands, what makes this a question.
    [:summary string?]
    ;; The question itself, one sentence ending in '?'. A blocker written before the parts were
    ;; separated holds situation, reasoning and question together here — see `blocker-parts`.
-   [:needs   string?]
+   [:needs   {:optional true} string?]
+   ;; The several questions, in order, when the blocker asks more than one.
+   [:questions {:optional true} [:vector {:min 2} BlockerQuestion]]
    ;; The answer the writer's own reasoning supports, in words.
    [:recommendation {:optional true} string?]
    ;; What happens once the person answers: what runs, what waits. Its presence is what tells a
@@ -1890,12 +1920,27 @@
    [:stop    {:optional true} [:map {:closed true}
                                [:kind    [:enum :dialog :dead-turn]]
                                [:session string?]
-                               [:since   string?]]]])
+                               [:since   string?]]]]
+   [:fn {:error/message "a blocker asks in :needs or in :questions, exactly one of them, and top-level :options only beside :needs"}
+    (fn [b] (and (one-question-form? b) (not (and (:questions b) (:options b)))))]])
+
+(def BlockerAnswer
+  "The answer to one question of a multi-question blocker: the question it answers by id, and the
+   branch picked — letter, label and summary copied in — or the person's words as :summary, or
+   neither for a question left open."
+  [:and
+   [:map {:closed true}
+    [:question-id [:re #"^q[1-9][0-9]*$"]]
+    [:letter  {:optional true} string?]
+    [:label   {:optional true} string?]
+    [:summary {:optional true} string?]]
+   [:fn {:error/message "a branch answer names both its letter and its label, a worded one neither"}
+    (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]])
 
 (def BlockerAnswered
   "The human's answer to a blocker that named its branches — written by nido at
-   the moment the gate button is clicked (nido.coordinator.work/answer-blocker!), never by an
-   agent.
+   the moment the gate button is clicked (nido.coordinator.work/choose-option!), or for a person's
+   words by `bb nido:workstream:blocker:answer` — never by an agent.
 
    It exists because the QUESTION outlives the agent that asked it. A blocker is
    a durable ledger entry; the session that wrote it is not — runs fail, budgets
@@ -1914,11 +1959,15 @@
    [:format      [:= :blocker-answered]]
    [:blocker-seq int?]
    ;; A branch picked at the gate carries its letter and label. An answer a person gave in
-   ;; words — in the session's chat, recorded by `bb nido:blocker:answer` — has neither, and
+   ;; words — in the session's chat, recorded by `bb nido:workstream:blocker:answer` — has neither, and
    ;; :summary is then the answer itself, in their words.
    [:letter      {:optional true} string?]
    [:label       {:optional true} string?]
-   [:summary     string?]
+   [:summary     {:optional true} string?]
+   ;; A blocker that asked in :questions is answered one question at a time: one answer per
+   ;; question, in order, in place of the letter, label and summary above — a reader renders the
+   ;; whole answer from these rather than a stored copy of them.
+   [:answers     {:optional true} [:vector {:min 2} BlockerAnswer]]
    ;; The picked branch's :grants, copied in: what the person handed the seat by picking it.
    [:grants      {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]
    ;; The session told about it, or nil when there was none to tell — the honest
@@ -1939,7 +1988,10 @@
                                    [:conversation {:optional true} string?]
                                    [:at string?]]]]
    [:fn {:error/message "a branch answer names both its letter and its label, a worded one neither"}
-    (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]])
+    (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]
+   [:fn {:error/message "an answer carries :summary or :answers, exactly one, and :answers no letter"}
+    (fn [{:keys [summary answers letter]}]
+      (and (not= (some? summary) (some? answers)) (not (and answers letter))))]])
 
 (def TriageAnswer
   "The answer to one question of an accepted triage: the question's words when it had any, and
@@ -4077,13 +4129,19 @@
                     ;; recommended answer and what follows it. Older decisions carry :needs
                     ;; alone, so the parts are optional here and required on write
                     ;; (`enforce-escalation-parts`).
-                    [:tuple [:= :escalate] [:map {:closed true}
-                                            [:needs   [:string {:min 1}]]
-                                            [:summary {:optional true} [:string {:min 1}]]
-                                            [:recommendation {:optional true} [:string {:min 1}]]
-                                            [:after   {:optional true} [:string {:min 1}]]
-                                            [:options {:optional true}
-                                             [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]]]
+                    ;; It asks in a blocker's two forms — one :needs, or two or more :questions —
+                    ;; and never both; the blocker it parks copies whichever it holds.
+                    [:tuple [:= :escalate] [:and
+                                            [:map {:closed true}
+                                             [:needs   {:optional true} [:string {:min 1}]]
+                                             [:questions {:optional true} [:vector {:min 2} BlockerQuestion]]
+                                             [:summary {:optional true} [:string {:min 1}]]
+                                             [:recommendation {:optional true} [:string {:min 1}]]
+                                             [:after   {:optional true} [:string {:min 1}]]
+                                             [:options {:optional true}
+                                              [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]]
+                                            [:fn {:error/message "an escalation asks in :needs or in :questions, exactly one of them, and top-level :options only beside :needs"}
+                                             (fn [b] (and (one-question-form? b) (not (and (:questions b) (:options b)))))]]]
                     [:tuple [:= :covered] [:map {:closed true} [:by [:string {:min 1}]]]]]]
    [:parked    {:optional true} [:map {:closed true} [:seq int?]]]])
 
@@ -4499,10 +4557,12 @@
    than enumerating a choice.
 
    Write-contract only (validate-event, never parse-event): blockers recorded
-   before this rule existed stay readable."
-  [{:keys [needs options] :as report}]
-  (if (or (seq options)
-          (< (count (prose-option-markers needs)) 2))
+   before this rule existed stay readable. A blocker asking in :questions is held to it question by
+   question."
+  [{:keys [needs options questions] :as report}]
+  (if (and (or (seq options) (< (count (prose-option-markers needs)) 2))
+           (not-any? #(and (empty? (:options %)) (>= (count (prose-option-markers (:question %))) 2))
+                     questions))
     report
     (throw (ex-info
             (str "This blocker enumerates options in prose. Put each branch in "
@@ -4534,30 +4594,59 @@
    it presupposes belongs in :summary."
   240)
 
-(defn- blocker-part-problems
-  "What is missing or malformed in a blocker written today, each as the instruction that fixes it."
-  [{:keys [needs summary after]}]
-  (let [q (str/trim (str needs))]
+(defn- one-question?
+  "True when `q` is one question a person can be asked: one line, trimmed, of at most `needs-max`
+   characters, ending in '?'."
+  [q]
+  (let [t (str/trim (str q))]
+    (and (not (str/includes? t "\n")) (<= (count t) needs-max) (str/ends-with? t "?"))))
+
+(defn- questions-problems
+  "What is wrong with a body's :questions, each as the instruction that fixes it: ids out of
+   order, the first question that is not one question, named, and an option that approves a
+   design — which a question among several cannot, since a pick there is not the whole answer.
+   Empty for a body that asks in :needs."
+  [questions]
+  (let [ids       (mapv :id questions)
+        bad       (first (remove (comp one-question? :question) questions))
+        approving (some #(when (some :approves-design (:options %)) (:id %)) questions)]
     (cond-> []
-      (or (str/includes? q "\n") (> (count q) needs-max) (not (str/ends-with? q "?")))
-      (conj (str ":needs is the question alone — one sentence of at most " needs-max
-                 " characters ending in '?'; move the situation and your reasoning to :summary"))
-      (or (str/blank? summary) (provenance-only? summary))
+      (not= ids (mapv #(str "q" %) (range 1 (inc (count questions)))))
+      (conj (str ":questions are numbered q1, q2… in order, not " (str/join ", " ids)))
+      bad
+      (conj (str ":questions " (:id bad) " is not one question — each is one sentence of at most "
+                 needs-max " characters ending in '?'; move its situation and reasoning to its :context"))
+      approving
+      (conj (str ":questions " approving " has an option that approves a design; approving one is "
+                 "a whole answer, so ask it alone in :needs")))))
+
+(defn- blocker-part-problems
+  "What is missing or malformed in a blocker written today, each as the instruction that fixes it.
+   A blocker asks in :needs or in :questions, and each question is held to the same sentence."
+  [{:keys [needs questions summary after] :as blocker}]
+  (cond-> (if (contains? blocker :questions)
+            (questions-problems questions)
+            [])
+    (and (not (contains? blocker :questions)) (not (one-question? needs)))
+    (conj (str ":needs is the question alone — one sentence of at most " needs-max
+               " characters ending in '?'; move the situation and your reasoning to :summary"))
+    (or (str/blank? summary) (provenance-only? summary))
       (conj (str ":summary is the context the answer depends on — what the work is, where it "
                  "stands, what makes this a question — never where the blocker came from"))
-      (str/blank? after)
-      (conj ":after says what happens once the person answers: what runs next, what waits"))))
+    (str/blank? after)
+    (conj ":after says what happens once the person answers: what runs next, what waits")))
 
 (defn- enforce-escalation-parts
   "A conductor's :escalate that parks the workstream is the question its blocker will ask, so it is
    held to the same parts on write (`enforce-blocker-parts`), with the same instruction for a
    refusal. One decided while the next move is already a person's (`:next`'s :mode :human) parks
    nothing and rides on that move's card as a note, so it is a note — not held to a question's
-   parts."
+   parts; but questions it writes in :questions are still questions, each held to the sentence."
   [{[verb body] :decision :as report}]
   (if-let [problems (and (= :escalate verb)
-                         (not= :human (get-in report [:next :mode]))
-                         (seq (blocker-part-problems body)))]
+                         (seq (if (= :human (get-in report [:next :mode]))
+                                (questions-problems (:questions body))
+                                (blocker-part-problems body))))]
     (throw (ex-info (str "This escalation is not written in its parts. " (str/join "; " problems)
                          ". If you genuinely hold a view on which answer is right, put it in :recommendation. "
                          "See resources/asking/escalation.md.")
@@ -4678,6 +4767,50 @@
        :context  (vec (remove str/blank? [needs ctx]))}
       (cond-> {:question (str/trim (str needs)) :context (if ctx [ctx] []) :after after}
         (not (str/blank? recommendation)) (assoc :recommendation recommendation)))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  blocker-questions
+  "What a blocker — or a conductor's :escalate body, which asks in the same forms — asks, in
+   either form and era, as one part per question {:id :question :context [strings]
+   :recommendation? :options [branches]}. One asking in :needs is one question, q1, read through
+   `blocker-parts` (an :after it carries rides along); one asking in :questions is each of them,
+   trimmed, the blocker's :summary leading the first one's context and its :after left on the
+   blocker, since it follows every answer.
+
+   THE one reading of a blocker's questions: nothing outside the write contract takes :needs or
+   :questions off a blocker or an escalation to show, compare or match what it asks."
+  [{:keys [questions summary options] :as blocker}]
+  (if (seq questions)
+    (let [shared (when-not (or (str/blank? summary) (provenance-only? summary)) summary)]
+      (vec (map-indexed
+            (fn [i {:keys [id question context recommendation] q-options :options}]
+              (cond-> {:id       id
+                       :question (str/trim (str question))
+                       :context  (vec (remove str/blank? [(when (zero? i) shared) context]))
+                       :options  (vec q-options)}
+                (not (str/blank? recommendation)) (assoc :recommendation recommendation)))
+            questions)))
+    (if blocker
+      [(assoc (blocker-parts blocker) :id "q1" :options (vec options))]
+      [])))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :string]]}
+  asked-questions
+  "The words of each question a blocker or an :escalate body asks, trimmed, in order — what two
+   asks are compared by. One written before its parts were separated asks no question of its own,
+   so its :needs, the first of its context, stands for it."
+  [blocker]
+  (mapv (fn [{:keys [question context]}]
+          (str/trim (str (if (= legacy-blocker-question question) (first context) question))))
+        (blocker-questions blocker)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :string]}
+  blocker-question-text
+  "What a blocker asks, for a heading or an index line: its one question, or its first of several
+   followed by how many more (`asked-questions`)."
+  [blocker]
+  (let [[q & more] (asked-questions blocker)]
+    (str q (when (seq more) (str " (+" (count more) " more)")))))
 
 (defn ^{:malli/schema [:=> [:cat :EntryKind :any] :LedgerEvent]}
   parse-event
@@ -4990,11 +5123,36 @@
                   (for [d deviations] (str "- " d)))))))
      (when (seq open) (concat ["" "## Still open"] (for [o open] (str "- " o)))))))
 
-(defn- blocker->markdown [{:keys [summary needs recommendation after tried options]}]
+(defn- options->markdown
+  "A question's branches as lettered paragraphs, the recommended one marked."
+  [options]
+  (map-indexed
+   (fn [i {:keys [label consequence recommended?] :as opt}]
+     (str/join "\n"
+       (remove nil?
+         [(str "**" (option-letter i) " — " label "**"
+               (when recommended? "  · recommended"))
+          (:summary opt)
+          (when consequence (str "_" consequence "_"))
+          ""])))
+   options))
+
+(defn- blocker->markdown [{:keys [summary recommendation after tried options questions] :as blocker}]
   (str/join "\n"
     (concat
-     ["# Blocker" "" summary "" "## Needs" needs]
-     (when-not (str/blank? recommendation) ["" "## Recommended" recommendation])
+     (if (seq questions)
+       (cons (str "# Blocker" "\n\n" summary)
+             (for [{:keys [id question context recommendation options]} (blocker-questions blocker)
+                   :let [own (if (= id "q1") (rest context) context)]]
+               (str/join "\n"
+                 (concat
+                  ["" (str "## " (str/upper-case id) " — " question)]
+                  (when (seq own) (cons "" own))
+                  (when-not (str/blank? recommendation) ["" (str "_Recommended:_ " recommendation)])
+                  (when (seq options) (cons "" (options->markdown options)))))))
+       (concat
+        ["# Blocker" "" summary "" "## Needs" (blocker-question-text blocker)]
+        (when-not (str/blank? recommendation) ["" "## Recommended" recommendation])))
      (when-not (str/blank? after) ["" "## Once answered" after])
      ;; Before the options, because it is context for the choice rather than a
      ;; footnote to it — the same reason a design decision prints its trajectory
@@ -5009,26 +5167,24 @@
                          (when detail (str " — " detail))))
                   tried)))
      (when (seq options)
-       (cons "\n## Options"
-             (map-indexed
-              (fn [i {:keys [label consequence recommended?] :as opt}]
-                (str/join "\n"
-                  (remove nil?
-                    [(str "**" (option-letter i) " — " label "**"
-                          (when recommended? "  · recommended"))
-                     (:summary opt)
-                     (when consequence (str "_" consequence "_"))
-                     ""])))
-              options))))))
+       (cons "\n## Options" (options->markdown options))))))
 
-(defn- blocker-answered->markdown [{:keys [blocker-seq letter label summary resumed]}]
+(defn- blocker-answered->markdown [{:keys [blocker-seq letter label summary resumed answers]}]
   (str/join "\n"
     (remove nil?
-      [(if letter (str "# Answered: " letter " — " label) "# Answered")
-       (str "_answers the blocker at entry " blocker-seq
-            (if resumed (str "; resumed " resumed) "; no session was live to resume")
-            "_")
-       "" summary])))
+      (concat
+       [(if letter (str "# Answered: " letter " — " label) "# Answered")
+        (str "_answers the blocker at entry " blocker-seq
+             (if resumed (str "; resumed " resumed) "; no session was live to resume")
+             "_")
+        ""]
+       (if (seq answers)
+         (for [{:keys [question-id letter label summary]} answers]
+           (str "- **" (str/upper-case question-id) "** — "
+                (cond letter  (str letter " — " label (when summary (str ": " summary)))
+                      summary summary
+                      :else   "_left open_")))
+         [summary])))))
 
 (defn- triage-accepted->markdown [{:keys [triage-seq] :as accepted}]
   (let [answers (accepted-answers accepted)
@@ -5185,7 +5341,11 @@
                          :instruct (map #(str "- **" (addressee->text (:seat %)) "** — " (:text %)) body)
                          :covered  [(str "The later hand-back `" (:by body)
                                          "` supersedes this one; nothing is asked.")]
-                         [(str "**Needs** — " (:needs body))
+                         [(let [qs (blocker-questions body)]
+                            (if (next qs)
+                              (str/join "\n" (for [{:keys [id question]} qs]
+                                               (str "**" (str/upper-case id) "** — " question)))
+                              (str "**Needs** — " (blocker-question-text body))))
                           (when parked (str "\nParked on the blocker at entry " (:seq parked) "."))]))))))
 
 (defn- phase-gate->markdown [{:keys [design opens evidence]}]
@@ -5927,10 +6087,13 @@
     :design                   (first-line (:shape report))
     :implementation-plan      (:direction report)
     :implementation-completed (first-line (:summary report))
-    :blocker                  (or (:needs report) (first-line (:summary report)))
-    :blocker-answered         (if (:letter report)
-                                (str "Answered " (:letter report) " — " (:label report))
-                                (str "Answered: " (first-line (:summary report))))
+    :blocker                  (first-line (blocker-question-text report))
+    :blocker-answered         (cond
+                                (:letter report)  (str "Answered " (:letter report) " — " (:label report))
+                                (:answers report) (str "Answered " (count (filter #(or (:letter %) (:summary %))
+                                                                                   (:answers report)))
+                                                       " of " (count (:answers report)) " questions")
+                                :else             (str "Answered: " (first-line (:summary report))))
     :closed                   (str "Closed: " (name (:outcome report)))
     :reopened                 (str "Reopened" (some->> (:stage report) name (str " at ")))
     :stage-set                (str "Stage set: " (name (:stage report)))
@@ -5955,7 +6118,7 @@
                                 (case verb
                                   :instruct (str "Conductor instructs " (str/join ", " (map (comp addressee->text :seat) body)))
                                   :covered  "Hand-back covered by a later one"
-                                  (str "Conductor escalates: " (first-line (:needs body)))))
+                                  (str "Conductor escalates: " (first-line (blocker-question-text body)))))
     :issue                    (str "Issue " (:id report))
     :triage-accepted          (let [answers (accepted-answers report)
                                     chosen  (keep :direction answers)]
