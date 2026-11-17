@@ -915,11 +915,13 @@
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
         (ws-pane-fragment-response (nth segments 2) (nth segments 3) (view-state req))
 
-        ;; GET /workstreams/:project/:ws-id — legacy deep link → canonical selection
+        ;; GET /workstreams/:project/:ws-id — deep link. The workstream it shows is the
+        ;; selection view-state/parse reads off the path, the one the chat beside it reads;
+        ;; the focus follows that workstream's project.
         (and (= 3 (count segments)) (= "workstreams" (first segments)))
-        (let [project (nth segments 1)
-              vs      (assoc (view-state req) :surface :workstreams :scope project
-                             :selection {:project project :ws-id (nth segments 2)})
+        (let [parsed  (view-state req)
+              project (get-in parsed [:selection :project])
+              vs      (assoc parsed :scope project)
               screen  (derive-screen vs)]
           (page-response project (views/workstreams-page (rail-ctx req :workstreams project screen) screen)))
 

@@ -324,6 +324,27 @@
                                        :headers {"cookie" "nido-focus=brian"}})]
       (is (str/includes? (:body resp) "href=\"/domain?scope=nido\"")))))
 
+(deftest a-deep-link-page-and-its-chat-read-the-same-workstream
+  ;; A ?sel= beside a deep-link path names another workstream; the page drawn and the
+  ;; chat chosen beside it must both be the path's.
+  (let [asked (atom #{})]
+    (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+                  nido.coordinator.work/all-grouped (fn [] [])
+                  nido.coordinator.work/refresh-selected! (fn [& _] nil)
+                  nido.coordinator.work/workstream
+                  (fn [project ws-id & _]
+                    (swap! asked conj [project ws-id])
+                    {:ws-id ws-id :project project :origin :notion :stage :triage
+                     :label (str "label-" ws-id) :ledger nil :sessions []})
+                  nido.ui.dev/pending-resolve-keys (fn [] #{})
+                  nido.ui.server/read-rail-daemon (fn [] {:state :up})
+                  project/list-projects (fn [] {"brian" {:directory "/x"}})]
+      (let [resp (server/handle-request {:request-method :get :uri "/workstreams/brian/ws-1"
+                                         :query-string "sel=brian%3Aws-2"})]
+        (is (= 200 (:status resp)))
+        (is (= #{["brian" "ws-1"]} @asked)
+            "the page and the chat's place both read the path's workstream")))))
+
 ;; (view-state parsing — scope/tab/selection/entry — is tested in
 ;;  nido.ui.view-state-test. nido.coordinator.work/screen does no row filtering at all —
 ;;  see nido.coordinator.work-test's screen-does-not-filter-rows.)

@@ -392,18 +392,48 @@
 ;; reader is — and the poll, which re-renders the whole pane, lands them back
 ;; exactly where they were rather than resetting the fold under their cursor.
 
+(defn- position-params
+  "The reading position's query params, omitting whatever is at rest."
+  [{:keys [entry rounds stage history?]}]
+  (cond-> []
+    entry        (conj (str "entry=" entry))
+    (seq rounds) (conj (str "rounds=" (str/join "," (sort rounds))))
+    stage        (conj (str "stage=" (name stage)))
+    history?     (conj "history=1")))
+
 (defn- pane-fragment
   "`@get(…)` expression for the pane fragment at reading position `pos`. Omits
    whatever is at rest, so a pane nobody has opened anything in polls the bare
    URL."
-  [{:keys [project ws-id entry rounds stage history?]}]
-  (let [ps (cond-> []
-             entry        (conj (str "entry=" entry))
-             (seq rounds) (conj (str "rounds=" (str/join "," (sort rounds))))
-             stage        (conj (str "stage=" (name stage)))
-             history?     (conj "history=1"))]
+  [{:keys [project ws-id] :as pos}]
+  (let [ps (position-params pos)]
     (str "@get('/_fragment/workstream/" project "/" ws-id
          (when (seq ps) (str "?" (str/join "&" ps))) "')")))
+
+(defn- pane-location
+  "Expression replacing the page's location with the URL of reading position `pos`,
+   which view-state/parse reads back as that position. The pane runs it on every
+   render: its controls patch the pane without navigating, so without it the
+   location would keep only what the page was loaded at — and the location is what
+   the side chat reads where the person is from.
+
+   Only the position moves. The path stays: the workstream's own page
+   (/workstreams/:project/:ws-id) parses to the same selection, and rewriting it
+   would send a reload back to the board; anywhere else — the board — the selection
+   rides ?sel=. And the `?scope=` the location states stays, read from the location
+   because the pane does not know it: without it parse would focus the selection's
+   project, and a reload would draw another project's board beside the pane.
+
+   One expression, no statements: Datastar splits an expression on semicolons."
+  [{:keys [project ws-id] :as pos}]
+  (let [own   (str "/workstreams/" project "/" ws-id)
+        own?  (str "location.pathname === '" own "'")
+        scope "new URLSearchParams(location.search).get('scope')"
+        ps    (concat [(str "(" scope " ? 'scope=' + encodeURIComponent(" scope ") : '')")
+                       (str "(" own? " ? '' : 'sel=" project ":" ws-id "')")]
+                      (map #(str "'" % "'") (position-params pos)))]
+    (str "history.replaceState(history.state, '', [" own? " ? '" own "' : '/workstreams', ["
+         (str/join ", " ps) "].filter(Boolean).join('&')].filter(Boolean).join('?'))")))
 
 (defn- at-entry
   "`pos` with ledger entry `seq` open (nil closes the viewer). Clears the round
@@ -1728,7 +1758,9 @@
            (bare-pane-body {:project project :ws-id ws-id :origin origin :label label :tag tag
                             :stage stage :br-id br-id :notion-status notion-status
                             :error-msg error-msg})
-           [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)}
+           [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)
+                  ;; Re-run by Datastar whenever a patch changes it: the position moved.
+                  :data-init (pane-location pos)}
             (pane-heading origin label links tag)
             (links-row links)
 

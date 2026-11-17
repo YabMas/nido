@@ -25,11 +25,20 @@
       "development"   :development
       :other)))
 
-(defn- selection [ps]
-  (when-let [raw (some (fn [[k v]] (when (= k "sel") v)) ps)]
-    (let [[project ws-id] (str/split (decode raw) #":" 2)]
-      (when (and (seq project) (seq ws-id))
-        {:project project :ws-id ws-id}))))
+(defn- selection
+  "The workstream the request has open: the one a /workstreams/:project/:ws-id
+   deep link names — where Needs-you rows, redirects and open-the-gate links land
+   — or `?sel=project:ws-id`, so either way of reaching a workstream parses to it.
+   The path wins when both are present: it is the page, and a `?sel=` beside it
+   names no other."
+  [uri ps]
+  (or (let [[root project ws-id & more] (remove str/blank? (str/split (or uri "") #"/"))]
+        (when (and (= "workstreams" root) (seq project) (seq ws-id) (empty? more))
+          {:project (decode project) :ws-id (decode ws-id)}))
+      (when-let [raw (some (fn [[k v]] (when (= k "sel") v)) ps)]
+        (let [[project ws-id] (str/split (decode raw) #":" 2)]
+          (when (and (seq project) (seq ws-id))
+            {:project project :ws-id ws-id})))))
 
 (def focus-cookie
   "The cookie that remembers the focused project between visits."
@@ -87,7 +96,7 @@
      {:surface :needs|:workstreams|:domain|:functionality|:structure
                |:operations|:development|:other
       :scope   <project>|nil   — the focused project; see `focus`
-      :selection {:project _ :ws-id _}|nil
+      :selection {:project _ :ws-id _}|nil — from ?sel= or a deep-link path
       :entry   <long>|nil
       :rounds  #{<long>}|nil
       :stage   <arc-stage keyword>|nil
@@ -98,7 +107,7 @@
    parses cleanly and constrains nothing."
   [{:keys [uri query-string headers]}]
   (let [ps  (pairs query-string)
-        sel (selection ps)]
+        sel (selection uri ps)]
     {:surface   (surface uri)
      :scope     (focus ps sel headers)
      :selection sel

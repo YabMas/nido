@@ -57,3 +57,15 @@
   (let [v (vs/parse {:uri "/workstreams" :query-string "tab=intake&scope=brian"})]
     (is (= "brian" (:scope v)))
     (is (not (contains? v :tab)))))
+
+(deftest a-deep-link-parses-to-the-workstream-it-shows
+  (let [v (vs/parse {:uri "/workstreams/brian/ws-1" :query-string "entry=4"})]
+    (is (= :workstreams (:surface v)))
+    (is (= {:project "brian" :ws-id "ws-1"} (:selection v)))
+    (is (= "brian" (:scope v)) "the deep link's project is the focus, as ?sel='s is")
+    (is (= 4 (:entry v))))
+  (is (= {:project "brian" :ws-id "ws-1"}
+         (:selection (vs/parse {:uri "/workstreams/brian/ws-1" :query-string "sel=nido%3Aws-2"})))
+      "the path wins over ?sel=: it is the page")
+  (is (nil? (:selection (vs/parse {:uri "/workstreams/brian" :query-string nil}))))
+  (is (nil? (:selection (vs/parse {:uri "/workstreams/brian/ws-1/extra" :query-string nil})))))

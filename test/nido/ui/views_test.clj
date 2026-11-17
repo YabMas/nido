@@ -1887,3 +1887,40 @@
         "which agent runs, on what, is not overview")
     (is (str/includes? (pane {:source :claim :kind :diff-review}) "class=\"arc-d\"")
         "what a review round is doing is")))
+
+(deftest the-pane-writes-its-reading-position-into-the-location
+  ;; The pane's controls patch it without navigating, so the location only says what the pane has
+  ;; open because the pane writes it there; view-state/parse must read it back as that position.
+  (let [html  (views/workstream-pane (assoc sample-ws :selected-seq 5 :open-stage :design
+                                            :open-rounds #{3 1} :history? true)
+                                     {})
+        js    (-> (second (re-find #"data-init=\"(history\.replaceState[^\"]*)\"" html))
+                  str
+                  (str/replace #"&#39;|&apos;" "'")
+                  (str/replace "&amp;" "&"))
+        ;; The expression joins quoted `k=v` parts; the selection's is dropped on the
+        ;; workstream's own page, whose path says it.
+        parts (map second (re-seq #"'((?:sel|entry|rounds|stage|history)=[^']*)'" js))
+        vs    ((requiring-resolve 'nido.ui.view-state/parse)
+               {:uri "/workstreams" :query-string (str/join "&" parts)})]
+    (is (seq parts) "the pane carries the location of its position")
+    (is (str/includes? js "location.pathname === '/workstreams/brian/ws-1' ? '/workstreams/brian/ws-1' : '/workstreams'")
+        "on the workstream's own page the path stays, so a reload stays on that page")
+    (is (str/includes? js "(location.pathname === '/workstreams/brian/ws-1' ? '' : 'sel=brian:ws-1')")
+        "and the selection rides ?sel= only where the path does not say it")
+    (is (= ["entry=5" "rounds=1,3" "stage=design" "history=1"] (rest parts)))
+    (is (= {:project "brian" :ws-id "ws-1"} (:selection vs)))
+    (is (= 5 (:entry vs)))
+    (is (= :design (:stage vs)))
+    (is (= #{1 3} (:rounds vs)))
+    (is (:history? vs))))
+
+(deftest the-pane-location-keeps-the-scope-the-location-states
+  ;; The pane does not know the board's scope, so the write reads it off the location it
+  ;; replaces: dropping it would let a reload refocus the board on the selection's project.
+  (let [js (#'views/pane-location {:project "brian" :ws-id "ws-1" :entry 3})]
+    (is (str/includes? js "new URLSearchParams(location.search).get('scope')"))
+    (is (str/includes? js "'scope=' + encodeURIComponent("))
+    (is (str/includes? js "'sel=brian:ws-1'"))
+    (is (str/includes? js "'entry=3'"))
+    (is (not (str/includes? js ";")) "one expression: Datastar splits on semicolons")))
