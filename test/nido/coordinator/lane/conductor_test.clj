@@ -358,6 +358,26 @@
                                                                          :decision [:escalate (esc "x")]}))))
                 "deciding on the act itself is not overtaken by it")))))))
 
+(deftest an-escalation-repeating-an-answered-question-is-refused
+  ;; The person answered a question; a later turn's hand-back led the conductor to ask it again,
+  ;; word for word, and the card asked what the ledger already held the answer to.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (in-session c #(conductor/decide! :brian id {:hand-back (:id (hand-back! id))
+                                                      :decision [:escalate (esc "Do you approve it")]}))
+        (is (some? (conductor/answer! :brian id "yes")))
+        (let [hb (:id (hand-back! id))]
+          (is (= [:refused :already-asked]
+                 (in-session c #(conductor/decide! :brian id {:hand-back hb
+                                                               :decision [:escalate (esc "Do you approve it")]}))))
+          (is (= 1 (count (ws/entries-of :brian id :blocker))) "no second blocker asks it")
+          (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back hb
+                                                                                 :decision [:escalate (esc "Something new")]}))))
+              "the hand-back stays owed, and a new question is still asked"))))))
+
 (defn- legacy-decide!
   "decide! as it was before an escalation at a person's move stopped parking a blocker — the
    ledgers written then still hold such blockers, and `answers!` still answers them."

@@ -524,6 +524,16 @@
                                          (some-> (inst (:at %)) (.isAfter ^java.time.Instant m-at)))
                                    (mapcat (fn [k] (ws/entries-of project ws-id k)) person-kinds)))))))
 
+(defn- answered-ask
+  "The current generation's answered blocker that asked `needs` word for word, or nil."
+  [project ws-id needs]
+  (let [q        (str/trim (str needs))
+        span     (into #{} (map :seq) (generation/current-span (:entries (ws/read-ws project ws-id))))
+        answered (set (map :blocker-seq (ws/entries-of project ws-id :blocker-answered)))]
+    (when-not (str/blank? q)
+      (last (filter #(and (span (:seq %)) (answered (:seq %)) (= q (str/trim (str (:needs %)))))
+                    (ws/entries-of project ws-id :blocker))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :ConductDecision] :DecideResult]}
   decide!
   "Record the conductor's answer to a hand-back — {:hand-back <message id> :decision [:instruct
@@ -537,7 +547,11 @@
    (:overtaken): it asks about a position that no longer holds, and parked as a blocker it
    would stay owed after the work moved on. The hand-back is recorded :covered by the act's own
    hand-back — posted now if the pass has not posted it yet — which the conductor decides
-   instead, so nothing is asked twice and nothing is left owed."
+   instead, so nothing is asked twice and nothing is left owed.
+
+   An escalation asking, word for word, a question the person already answered in this
+   generation is refused (:already-asked) and the hand-back stays owed: the answer is on the
+   ledger, and the decision owed is what to do with it, not asking it again."
   [project ws-id {:keys [hand-back decision]}]
   (deciding
    project ws-id
@@ -545,6 +559,9 @@
       (not (conducting? project ws-id))           [:refused :not-the-conductor]
       (nil? (hand-back-message project ws-id hand-back)) [:refused :not-a-hand-back]
       (answered? project ws-id hand-back)         [:refused :already-answered]
+
+      (and (= :escalate (first decision)) (answered-ask project ws-id (:needs (second decision))))
+      [:refused :already-asked]
 
       (and (= :escalate (first decision))
            (overtaking-act project ws-id (hand-back-message project ws-id hand-back)))
