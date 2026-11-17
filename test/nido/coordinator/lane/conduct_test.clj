@@ -20,7 +20,7 @@
    :announced-blocked? false :recovered-boot nil})
 
 (def done-row {:sessionId "s" :kind "background" :state "done" :status "idle" :pid 7 :cwd "/home/kid"})
-(def ctx {:now "t1" :token "T" :baseline :shown :latest {:event :stop}})
+(def ctx {:now "t1" :token "T" :baseline :shown :turn {:event :stop}})
 
 (defn- kinds [d] (mapv first (:actions d)))
 
@@ -45,7 +45,7 @@
                            ["not listed"       (assoc driving :queued "x") nil]
                            ["nothing queued"   driving done-row]]]
     (testing why
-      (is (not-any? #{:send :wake} (kinds (conduct/decide facet row [] (assoc ctx :latest {:event :prompt}))))))))
+      (is (not-any? #{:send :wake} (kinds (conduct/decide facet row [] (assoc ctx :turn {:event :prompt}))))))))
 
 (deftest a-session-blocked-after-its-stop-is-given-the-answer-queued-for-it
   (let [blocked (assoc done-row :state "blocked")]
@@ -58,21 +58,78 @@
   (let [idle-working (assoc done-row :state "working" :status "idle")]
     (is (= [:send] (kinds (conduct/decide (assoc driving :queued "x") idle-working [] ctx))))
     (is (not-any? #{:send :wake} (kinds (conduct/decide (assoc driving :queued "x") idle-working []
-                                                        (assoc ctx :latest {:event :prompt}))))
+                                                        (assoc ctx :turn {:event :prompt}))))
         "idle with a prompt after its Stop is mid-delivery, not between turns")
     (is (not-any? #{:send :wake} (kinds (conduct/decide (assoc driving :queued "x")
                                                         (assoc idle-working :status "busy") [] ctx)))
         "a busy process is mid-turn")
     (is (= [:send] (kinds (conduct/decide (assoc driving :queued "x" :pending {:token "P" :at "2026-11-16T10:00:00Z" :via :send :seen? false})
-                                          idle-working [] (assoc ctx :latest {:event :stop :at "2026-11-16T11:00:00Z"}))))
+                                          idle-working [] (assoc ctx :turn {:event :stop :at "2026-11-16T11:00:00Z"}))))
         "an undelivered instruction lapses once the session is idle after a later Stop")))
 
 (deftest a-wake-needs-the-session-s-stop-as-its-latest-event
   (is (not-any? #{:wake} (kinds (conduct/decide (assoc driving :queued "x") (dissoc done-row :pid) []
-                                                (assoc ctx :latest {:event :prompt})))))
+                                                (assoc ctx :turn {:event :prompt})))))
   (is (= [:send] (kinds (conduct/decide (assoc driving :queued "x") done-row []
-                                        (assoc ctx :latest {:event :prompt}))))
+                                        (assoc ctx :turn {:event :prompt}))))
       "a live process the listing reports done is sent to"))
+
+(deftest an-in-flight-turn-still-waits-whatever-follows-its-prompt
+  ;; The turn is read off the latest :prompt or :stop, so an event after the prompt that starts
+  ;; no turn — a restart, a notification, a denial — leaves it in flight.
+  (let [idle (assoc done-row :state "working" :status "idle")
+        f    (assoc driving :queued "x")
+        d    (conduct/decide f idle [] (assoc ctx :turn {:event :prompt}))]
+    (is (not-any? #{:send :wake} (kinds d)) "idle at its prompt with a prompt as its turn: not ready")
+    (is (not-any? #{:wake} (kinds (conduct/decide f (dissoc idle :pid) [] (assoc ctx :turn {:event :prompt}))))))
+  (is (= [:send] (kinds (conduct/decide (assoc driving :queued "x") done-row [] (assoc ctx :turn {:event :prompt}))))
+      "a session the listing shows done is ready whatever its turn, as before"))
+
+(deftest a-session-held-at-its-prompt-is-reported-with-when-it-began
+  (let [idle  (assoc done-row :state "working" :status "idle")
+        f     (assoc driving :queued "x")
+        held  #(some (fn [[k since]] (when (= :held k) since)) (:actions %))
+        d1    (conduct/decide f idle [] (assoc ctx :now "t1" :turn {:event :prompt}))
+        d2    (conduct/decide (:facet d1) idle [] (assoc ctx :now "t2" :turn {:event :prompt}))
+        d3    (conduct/decide (:facet d2) idle [] (assoc ctx :now "t3" :turn {:event :stop}))]
+    (is (= "t1" (held d1) (get-in d1 [:facet :held-since])) "first seen held now")
+    (is (= "t1" (held d2)) "the instant is kept while it stays held")
+    (is (= [:send] (kinds d3)) "a Stop as its turn makes it ready")
+    (is (not (contains? (:facet d3) :held-since)) "and the hold is dropped")
+    (testing "an outstanding instruction keeps back delivery, not the hold"
+      (let [o  (assoc f :pending {:token "P" :at "t" :via :send :seen? true})
+            o1 (conduct/decide o idle [] (assoc ctx :now "t1" :turn {:event :prompt}))
+            o2 (conduct/decide (:facet o1) idle [] (assoc ctx :now "t2" :turn {:event :prompt}))]
+        (is (= "t1" (held o1) (held o2) (get-in o2 [:facet :held-since])))
+        (is (not-any? #{:send :wake} (kinds o2)))))
+    (testing "no hold without all of it: driven by nido, something to give, idle at its prompt"
+      (doseq [[why facet row] [["nothing to give"  driving idle]
+                               ["busy"             f (assoc idle :status "busy")]
+                               ["released"         (assoc f :driver :nobody) idle]
+                               ["not listed"       f nil]]]
+        (testing why
+          (is (nil? (held (conduct/decide facet row [] (assoc ctx :turn {:event :prompt}))))))))
+    (is (nil? (held (conduct/decide f done-row [] (assoc ctx :turn {:event :prompt}))))
+        "ready, it is given, not held")))
+
+(deftest the-turn-and-the-mode-skip-events-that-report-neither
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (doseq [[kind ev] [[:session-start {:event :session-start :source "resume" :cwd "/home/kid"}]
+                           [:notification  {:event :notification :notification-type "idle_prompt"}]
+                           [:permission-denied {:event :permission-denied :tool-name "Bash"}]]]
+          (testing (str "a " (name kind) " after a Stop")
+            (let [id (str "r-" (name kind))]
+              (events/append! id {:event :session-start :cwd "/home/kid"})
+              (events/append! id {:event :prompt :permission-mode "bypassPermissions"})
+              (events/append! id {:event :stop :permission-mode "bypassPermissions" :background-tasks 0 :crons 0})
+              (events/append! id ev)
+              (let [shown (conduct/baseline-shown id)]
+                (is (= :stop (get-in shown [:turn :event])) "hides no Stop")
+                (is (= "bypassPermissions" (:mode shown)) "and clears no mode")
+                (is (nil? (conduct/baseline-refusal shown {:cwd "/home/kid"}))))))))
+      (finally (fs/delete-tree tmp)))))
 
 (deftest nothing-is-given-while-the-baseline-does-not-show
   (let [d (conduct/decide (assoc driving :queued "x") done-row [] (assoc ctx :baseline :not-auto))]
@@ -167,7 +224,7 @@
     (is (true? (unrun (conduct/decide (given {}) blocked stop ctx)))
         "its turn on an instruction no Run gave ended: handed back to the conductor, not the person's")
     (is (false? (unrun (conduct/decide (given {:for "run-1"}) blocked stop ctx))) "a Run's turn is its Run's")
-    (is (false? (unrun (conduct/decide (given {}) blocked [] (assoc ctx :latest {:event :prompt}))))
+    (is (false? (unrun (conduct/decide (given {}) blocked [] (assoc ctx :turn {:event :prompt}))))
         "blocked mid-turn, nothing is handed back: only the person can answer it")
     (is (true? (unrun (conduct/decide driving blocked stop ctx)))
         "a person's turn ended no Run's instruction: it too went to whoever answers for the workstream")))
@@ -176,17 +233,17 @@
   (let [p     {:token "P" :at "2026-10-16T08:00:00Z" :via :send :seen? false}
         later {:event :stop :at "2026-10-16T08:30:00Z"}
         f     (assoc driving :pending p :queued "next")]
-    (is (= [:send] (kinds (conduct/decide f done-row [] (assoc ctx :latest later))))
+    (is (= [:send] (kinds (conduct/decide f done-row [] (assoc ctx :turn later))))
         "a Stop after it was given is the latest event and the listing shows it done: it keeps nothing back")
     (testing "it lapses only on all three"
-      (is (= [] (kinds (conduct/decide f (assoc done-row :state "working" :status "busy") [] (assoc ctx :latest later)))))
-      (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :latest {:event :stop :at "2026-10-16T07:00:00Z"}))))
+      (is (= [] (kinds (conduct/decide f (assoc done-row :state "working" :status "busy") [] (assoc ctx :turn later)))))
+      (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :turn {:event :stop :at "2026-10-16T07:00:00Z"}))))
           "a Stop from before it was given")
-      (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :latest {:event :prompt :at "2026-10-16T08:30:00Z"})))))
-      (is (= [] (kinds (conduct/decide (assoc f :pending (assoc p :seen? true)) done-row [] (assoc ctx :latest later))))
+      (is (= [] (kinds (conduct/decide f done-row [] (assoc ctx :turn {:event :prompt :at "2026-10-16T08:30:00Z"})))))
+      (is (= [] (kinds (conduct/decide (assoc f :pending (assoc p :seen? true)) done-row [] (assoc ctx :turn later))))
           "a recorded prompt carried its token: it is under way, not lapsed"))
     (testing "a lapsed instruction is still ended by a Stop whose turn carried its token"
-      (let [d1 (conduct/decide f done-row [] (assoc ctx :latest later))
+      (let [d1 (conduct/decide f done-row [] (assoc ctx :turn later))
             d2 (conduct/decide (:facet d1) done-row [{:event :prompt :prompt "late\n\n[nido-send P]"}
                                                      {:event :stop :background-tasks 0 :crons 0}] ctx)]
         (is (= [p] (get-in d1 [:facet :lapsed])) "kept when the next instruction replaced it")
@@ -228,9 +285,9 @@
           (events/append! "s" {:event :prompt :permission-mode "default"})
           (events/append! "s" {:event :notification})
           (is (= :not-auto (reason)) "a notification, which reports no mode, does not hide the one before it")
-          (events/append! "s" {:event :prompt :permission-mode "auto"})
-          (events/append! "s" {:event :stop})
-          (is (= :not-auto (reason)) "the latest event itself must show auto")
+          (events/append! "s" {:event :prompt :permission-mode "default"})
+          (events/append! "s" {:event :stop :permission-mode "default"})
+          (is (= :not-auto (reason)) "the latest event reporting a mode must show auto")
           (is (nil? (facet)) "a refusal writes nothing")))
       (with-redefs [substrate/listing (constantly [{:sessionId "s" :kind "interactive"}])]
         (is (= :not-background
@@ -576,6 +633,43 @@
             (is (empty? (:refused r)) "the idle notification is not read as leaving the baseline")
             (is (= 1 (count (:delivered r))))))
         (is (= "s" (first @woke)))))))
+
+(deftest a-session-resumed-after-its-stop-is-given-what-it-is-owed
+  ;; 2026-11-17: Claude Code restarted a conductor's process 18s after its Stop. The resume
+  ;; recorded a :session-start with no mode and the process waited at its prompt; conduct gave it
+  ;; nothing for hours, because readiness read the latest event and that was no longer the Stop.
+  (with-tmp
+    (fn []
+      (events/append! "s" {:event :session-start :cwd "/home/kid" :source "startup"})
+      (events/append! "s" {:event :prompt :permission-mode "bypassPermissions"})
+      (events/append! "s" {:event :stop :permission-mode "bypassPermissions" :background-tasks 0 :crons 0})
+      (events/append! "s" {:event :session-start :cwd "/home/kid" :source "resume" :pid 9})
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 4)))
+      (let [sent (atom nil)]
+        (with-redefs [substrate/listing (constantly [(assoc done-row :state "working" :status "idle" :pid 9)])
+                      substrate/send!   (fn [_ text] (reset! sent text) {:delivered? true})]
+          (let [r (conduct/conduct! {:projects [:nido]
+                                     :mail {:owed (fn [& _] [{:id "m1" :text "hand-back"}])
+                                            :delivered! (fn [& _] nil)}})]
+            (is (= 1 (count (:delivered r))))
+            (is (empty? (:refused r)) "the resume's missing mode does not read as leaving the baseline")
+            (is (empty? (:held r)))))
+        (is (str/starts-with? @sent "hand-back"))))))
+
+(deftest a-session-whose-turn-never-stopped-is-held-and-reported
+  (with-tmp
+    (fn []
+      (events/append! "s" {:event :session-start :cwd "/home/kid"})
+      (events/append! "s" {:event :prompt :permission-mode "auto"})
+      (events/append! "s" {:event :session-start :cwd "/home/kid" :source "resume"})
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 3)))
+      (with-redefs [substrate/listing (constantly [(assoc done-row :state "working" :status "idle")])
+                    substrate/send!   (fn [& _] (throw (ex-info "must not send" {})))]
+        (let [r (conduct/conduct! {:projects [:nido]
+                                   :mail {:owed (fn [& _] [{:id "m1" :text "hand-back"}])
+                                          :delivered! (fn [& _] nil)}})]
+          (is (empty? (:delivered r)))
+          (is (= [{:project :nido :ws-id "ws-1" :session "kid" :since "2026-10-16T09:00:00Z"}] (:held r))))))))
 
 (deftest a-wake-that-left-a-copy-running-is-reported-not-retried
   (with-tmp
@@ -1053,7 +1147,7 @@
       (events/append! "s" {:event :stop :last-message "done" :permission-mode "auto"})
       (events/append! "s" {:event :session-end :reason "other"})
       (let [shown (conduct/baseline-shown "s")]
-        (is (= :stop (:event (:latest shown))) "its Stop is still its latest event")
+        (is (= :stop (:event (:turn shown))) "its Stop is still its turn")
         (is (= "auto" (:mode shown)) "and the end, which reports no mode, takes it off no baseline"))
       (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :queued "next")))
       (let [woke (atom nil)]

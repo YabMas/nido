@@ -75,6 +75,19 @@
                                project ws-id address)])]
            line))))
 
+(defn- held-lines
+  "The status lines for `held` — the sessions the daemon last saw waiting idle at their prompt,
+   owed something it does not give them, past its bound — each with how long it has waited at
+   `now-ms`. Nothing when there are none."
+  [held now-ms]
+  (when (seq held)
+    (cons (format "⚠ %d session(s) owed work, idle at the prompt and not given it:" (count held))
+          (for [{:keys [project ws-id session since]} held
+                :let [at   (try (.toEpochMilli (java.time.Instant/parse (str since))) (catch Exception _ nil))
+                      mins (when at (quot (- now-ms at) 60000))]]
+            (str "  Held:      " (name project) "/" ws-id " " session
+                 (if mins (str " — waiting " mins "m, since " since) " — since an unknown time"))))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   status [& _args]
   (let [p          (cstate/status-path)
@@ -101,6 +114,7 @@
         (println "Slots:      " (:slots-in-use s))
         (when-let [until (:usage-held-until s)]
           (println "Usage hold: " "no Run starts until" until "(account usage limit)"))
+        (run! println (held-lines (:held s) (System/currentTimeMillis)))
         (let [{:keys [driving queued blocked]} (ship/merge-lane-summary)]
           (println (format "Merge lane:  %d driving · %d queued · %d blocked" driving queued blocked)))
         (when-let [dport (:dashboard-port s)]

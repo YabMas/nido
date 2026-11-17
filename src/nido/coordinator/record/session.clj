@@ -103,6 +103,10 @@
                                        [:since string?]
                                        [:for {:optional true} [:maybe string?]]]]]
    [:idle-seen {:optional true} [:maybe [:enum :stopped :listed]]]
+   ;; Since when the session has waited idle at its prompt, driven by nido with something to give
+   ;; it and nothing outstanding, while its turn shows no Stop; absent once it does not. The
+   ;; first pass to see it sets the instant.
+   [:held-since {:optional true} string?]
    ;; The host boot recover! last restarted this session in, so it restarts it at most once.
    [:recovered-boot [:maybe string?]]])
 

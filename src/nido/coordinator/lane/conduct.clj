@@ -51,21 +51,25 @@
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   baseline-shown
-  "What a session's recorded events show of the launch baseline: whether nido's hook recorded a
-   start for it and the directory its latest recorded start was in, the permission mode its
-   latest event itself reports (nil when that event reports none), and that latest event.
-   Notifications are not counted as its latest event: Claude Code sends one to a session sitting
-   idle after its Stop, and it carries no permission mode — counted, every session idle past a
-   minute would read as off the baseline and as no longer stopped. Nor is a session's end, for
-   the same two reasons: recorded after a Stop it would hide that Stop, and a session that ended
-   between turns is exactly one a wake is for."
+  "What a session's recorded events show: whether nido's hook recorded a start for it and the
+   directory its latest recorded start was in; :mode, the permission mode of the latest event
+   that reports one (nil when none does); and :turn, its latest :prompt or :stop — where its
+   turn stands.
+
+   Both readings skip what reports nothing about them. A :session-start reports no mode, and
+   Claude Code records one whenever it restarts a process, between turns as well as inside one;
+   a :notification is sent to a session idle after its Stop; a :session-end is recorded when a
+   process goes, and a session that ended between turns is exactly one a wake is for. Read off
+   the latest event of any kind, a session whose process was restarted or ended after its Stop
+   would read as off the baseline and as never having stopped, and nothing owed to it would
+   ever be given."
   [session-id]
-  (let [evs   (remove #(#{:notification :session-end} (:event %)) (:events (events/events-since session-id nil)))
+  (let [evs   (:events (events/events-since session-id nil))
         start (last (filter #(= :session-start (:event %)) evs))]
     {:started?  (some? start)
      :start-cwd (:cwd start)
-     :mode      (:permission-mode (last evs))
-     :latest    (last evs)}))
+     :mode      (some :permission-mode (rseq (vec evs)))
+     :turn      (last (filter (comp #{:prompt :stop} :event) evs))}))
 
 (def ^:private unattended-modes
   "The permission modes a session nido drives may run in: neither stops a sent turn on a prompt
@@ -221,23 +225,23 @@
       acc)))
 
 (defn- idle-after-stop?
-  "Whether the listing `row` shows the session's process at its prompt with its Stop as the
-   `latest` recorded event — its turn over, whatever :state the listing reports. Since Claude Code
+  "Whether the listing `row` shows the session's process at its prompt with a Stop as its `turn`
+   — its latest :prompt or :stop — so its turn is over, whatever :state the listing reports. Since Claude Code
    2.1.325 :state judges the task from the agent's last message (\"working\" when it said more
    was to come, \"blocked\" when it asked for a person) rather than the process, so a turn that
    ended saying what comes next lists \"working\" for as long as its process is kept; :status
    \"idle\" is what says the process waits for a prompt."
-  [row latest]
-  (boolean (and (= "idle" (:status row)) (= :stop (:event latest)))))
+  [row turn]
+  (boolean (and (= "idle" (:status row)) (= :stop (:event turn)))))
 
 (defn- lapsed?
-  "Whether the instruction `pending` has lapsed: no prompt carrying its token was recorded, a Stop
-   recorded after it was given is its conversation's `latest` event, and the listing `row` shows
-   the session done, or idle after that Stop."
-  [pending latest row]
+  "Whether the instruction `pending` has lapsed: no prompt carrying its token was recorded, the
+   conversation's `turn` — its latest :prompt or :stop — is a Stop recorded after it was given,
+   and the listing `row` shows the session done, or idle after that Stop."
+  [pending turn row]
   (boolean (and pending (not (:seen? pending))
-                (= :stop (:event latest)) (after? (:at latest) (:at pending))
-                (or (= "done" (:state row)) (idle-after-stop? row latest)))))
+                (= :stop (:event turn)) (after? (:at turn) (:at pending))
+                (or (= "done" (:state row)) (idle-after-stop? row turn)))))
 
 (defn- current
   "`facet` as this design reads it: a hold written before is ignored and dropped, and a :person
@@ -293,7 +297,7 @@
   "The next facet and the actions it calls for, given a session's :claude facet, its row in the
    substrate's listing (nil when the listing has none), the driven conversation's events past its
    read position, and {:now <iso> :token <fresh> :hold-sends? <bool> :baseline <:shown, or why the
-   session's events do not show the launch baseline> :latest <its latest recorded event> :owed
+   session's events do not show the launch baseline> :turn <its latest recorded :prompt or :stop> :owed
    <the seat messages the session is owed, oldest first, each {:id :text}>}. Pure: it gives
    nothing, it says what to give.
 
@@ -307,18 +311,22 @@
    the ids of the seat messages it was, nil for a turn whose prompts carried none — [:prompted
    event] for a prompt a person typed, [:denial event], [:notify-blocked unrun?] — unrun? when
    nothing is outstanding and its last Stop ended no instruction recorded for a Run — [:refused
-   why] when only the baseline keeps a queued instruction back, and at most one of
+   why] when only the baseline keeps a queued instruction back, [:held since] for a session nido
+   drives, outstanding instruction or not, with something to give and listed idle at its prompt, that is not ready — since
+   the instant a pass first saw it so, kept as the facet's :held-since while it stays so — and at
+   most one of
    [:send tagged-text token text message-ids] / [:wake tagged-text token text message-ids] —
    whose token the returned facet already holds as pending, so it is recorded before anything is
    delivered. What is given is the queued instruction, else the seat messages owed that
    `given-together` takes, whose ids the action carries (nil for an instruction). Only a session
-   the listing shows done, or blocked or idle with its Stop as its latest recorded event, is given
-   anything; a wake goes only to a session whose latest recorded event is its Stop."
-  [facet row evs {:keys [now token hold-sends? baseline latest owed]}]
+   the listing shows done, or blocked or idle with a Stop as its turn, is given anything; a wake
+   goes only to a session whose turn is a Stop. Its turn is its latest :prompt or :stop, so an
+   event that starts no turn and ends none — a restart's :session-start — hides no Stop."
+  [facet row evs {:keys [now token hold-sends? baseline turn owed]}]
   (let [{f :facet acts :actions} (reduce read-event {:facet (current facet) :actions []} evs)
         blocked?  (= "blocked" (:state row))
         announce? (and blocked? (not (:announced-blocked? f)))
-        lapsed    (lapsed? (:pending f) latest row)
+        lapsed    (lapsed? (:pending f) turn row)
         free?     (or (nil? (:pending f)) lapsed)
         f         (assoc f :announced-blocked? blocked?
                            ;; Blocked with its process waiting is a dialog mid-turn; its instant is
@@ -326,12 +334,16 @@
                            :waiting (when (and blocked? (= "waiting" (:status row)))
                                       (or (:waiting f) {:since now :for (:waitingFor row)})))
         via       (when row (if (:pid row) :send :wake))
-        stopped?  (= :stop (:event latest))
+        stopped?  (= :stop (:event turn))
         ;; Blocked after its Stop, a session is waiting on the answer a person queued for it;
         ;; blocked mid-turn, it is waiting on something a message would not answer.
-        ready-state? (or (= "done" (:state row)) (and blocked? stopped?) (idle-after-stop? row latest))
+        ready-state? (or (= "done" (:state row)) (and blocked? stopped?) (idle-after-stop? row turn))
         messages  (when (nil? (:queued f)) (given-together owed))
         text      (if messages (together-text messages) (:queued f))
+        ;; Waiting at its prompt with something owed, and still not ready: nothing gives it
+        ;; anything until its turn shows a Stop, so say so rather than hold it in silence.
+        held?     (and (= :nido (:driver f)) text row (= "idle" (:status row)) (not ready-state?))
+        f         (if held? (assoc f :held-since (or (:held-since f) now)) (dissoc f :held-since))
         gated?    (and (= :nido (:driver f)) free?
                        text row ready-state? (not (:own-work? f))
                        (not hold-sends?)
@@ -348,6 +360,7 @@
                 ;; turn end went to. Blocked mid-turn, nothing has gone anywhere, and only a person
                 ;; can answer it.
                 announce? (conj [:notify-blocked (boolean (and free? (:ended-unrun? f)))])
+                held?     (conj [:held (:held-since f)])
                 (and gated? (not ready?)) (conj [:refused baseline])
                 ready?    (conj [via (tagged text token) token text (some->> messages (mapv :id))]))}))
 
@@ -613,7 +626,7 @@
                               :d   (decide f row evs {:now now :token (mint)
                                                       :hold-sends? (:hold-sends? opts)
                                                       :baseline (or (first (baseline-refusal shown row)) :shown)
-                                                      :latest (:latest shown)
+                                                      :turn (:turn shown)
                                                       :owed owed})}))
                  read    (for [id (disj others (:session-id f))]
                            (let [{evs :events end :cursor} (read-conversation id m)]
@@ -647,6 +660,7 @@
          :denial         (update r :denials conj (assoc who :event a))
          :notify-blocked (update r :blocked conj (mark (assoc who :unrun? a)))
          :refused        (update r :refused conj (assoc who :because a))
+         :held           (update r :held conj (assoc who :since a))
          (:send :wake)
          (let [ok (if (= :send kind)
                     (:delivered? (substrate/send! row a))
@@ -696,7 +710,9 @@
    outstanding and its last Stop ended no Run's instruction), :delivered, :failed, :left-running
    (a delivery that failed leaving a process it started running, named by the adapter; its
    instruction stays outstanding), :refused (a queued instruction kept back because the
-   session's own events no longer show the launch baseline, naming why), and :working (sessions
+   session's own events no longer show the launch baseline, naming why), :held (a session nido
+   drives that is owed something and waits idle at its prompt, yet is not ready, with the :since
+   it was first seen so), and :working (sessions
    nido drives that the listing shows working). Each entry names its session, and each turn end
    and blocked session whether its workstream is :activated? and its session the :conductor?, for
    the caller to settle runs, hand back, show denials and notify. A listing that cannot be read
@@ -742,7 +758,7 @@
                        (and (= :nido (get-in out [:decided :facet :driver])) (= "working" (:state (:row out))))
                        (update :working conj who))))))
              {:turn-ends [] :prompts [] :denials [] :blocked [] :delivered [] :failed [] :left-running []
-              :refused [] :working [] :named named}
+              :refused [] :held [] :working [] :named named}
              records)]
         (io/write-edn! (scan-path) {:through-ms (- began-ms scan-margin-ms)})
         report))))

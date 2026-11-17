@@ -26,3 +26,18 @@
     (is (= 1 (count (sut/sweep-hold-lines [(assoc hold :state :working)]))))
     (is (str/includes? (first (sut/sweep-hold-lines [(assoc hold :state :waiting-on-you)]))
                        "parked at a gate"))))
+
+(deftest held-lines-test
+  (let [lines #(#'sut/held-lines % (.toEpochMilli (java.time.Instant/parse "2026-11-17T17:00:00Z")))]
+    (testing "nothing held: nothing is said"
+      (is (empty? (lines nil)))
+      (is (empty? (lines []))))
+    (testing "a held conductor is listed with how long it has waited"
+      (let [ls (lines [{:project :fukan :ws-id "ws-20261117-2786b5" :session "ws-20261117-2786b5--conductor"
+                        :since "2026-11-17T16:33:12Z"}])]
+        (is (str/includes? (first ls) "1 session(s)"))
+        (is (str/includes? (second ls) "fukan/ws-20261117-2786b5 ws-20261117-2786b5--conductor"))
+        (is (str/includes? (second ls) "waiting 26m"))))
+    (testing "a hold that cannot be timed is still listed"
+      (is (str/includes? (second (lines [{:project :nido :ws-id "ws-1" :session "kid" :since "?"}]))
+                         "since an unknown time")))))

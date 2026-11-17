@@ -103,7 +103,11 @@
    ;; How often the daemon looks for new things wanting a person (gates, a halt,
    ;; a tripped breaker) and posts a desktop notification for each. A full read
    ;; of every project's workstreams, so not every tick.
-   :attention-interval-ms 15000})
+   :attention-interval-ms 15000
+   ;; How long a session may wait idle at its prompt, owed something conduct does not give it,
+   ;; before coordinator status lists it. Far past the seconds a listing lags a Stop, so a turn
+   ;; ending normally never trips it; far short of the hours one such wait went unnoticed.
+   :held-bound-ms (* 10 60 1000)})
 
 (def ^:private anomaly-thresholds
   ;; spawn-threshold is a RUNAWAY rate brake, not a concurrency cap (that's
@@ -300,8 +304,19 @@
 
 (defonce ^:private !conduct
   ;; What the last conduct pass left for the rest of the tick: how many capped units are
-  ;; working in background sessions, and the denials recorded since attention last looked.
-  (atom {:working 0 :denials []}))
+  ;; working in background sessions, the denials recorded since attention last looked, and the
+  ;; sessions held past :held-bound-ms, which the heartbeat writes for coordinator status.
+  (atom {:working 0 :denials [] :held []}))
+
+(defn- held-past-bound
+  "The sessions of `held` — conduct's :held entries, each with the :since it was first seen held —
+   held at least `bound-ms` by `now-ms`, as {:project :ws-id :session :since}. One whose :since
+   does not parse is kept: a hold that cannot be timed is shown rather than lost."
+  [held now-ms bound-ms]
+  (vec (for [{:keys [since] :as h} held
+             :let [at (try (.toEpochMilli (java.time.Instant/parse (str since))) (catch Exception _ nil))]
+             :when (or (nil? at) (>= (- now-ms at) bound-ms))]
+         (select-keys h [:project :ws-id :session :since]))))
 
 (declare registered-projects settle-run!)
 
@@ -522,7 +537,8 @@
    usage limit, settle the Runs whose turns ended, hand the other turn ends to the conductor lane,
    enforce budgets, say on its record why a session's instruction is held back or that a wake left
    a copy of it running, announce sessions newly blocked and turns that ended on a workstream not
-   activated, and keep what the rest of the tick reads."
+   activated, and keep what the rest of the tick reads — among it the sessions held, owed
+   something at their prompt, past :held-bound-ms."
   [now-ms]
   (let [projects (registered-projects)
         r        (timed "conduct read" #(conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)
@@ -548,7 +564,8 @@
         (swap! !conduct
                (fn [c]
                  {:working (capped-working (:working r) pending)
-                  :denials (into (:denials c) (:denials r))}))))
+                  :denials (into (:denials c) (:denials r))
+                  :held    (held-past-bound (:held r) now-ms (:held-bound-ms defaults))}))))
     r))
 
 (defn- maybe-notify-attention!
@@ -1446,13 +1463,15 @@
     ;; person, and the halt itself is one of the things to announce.
     (timed "notify-attention" #(maybe-notify-attention! (System/currentTimeMillis) halt-info))
     (if halt-info
-      (heartbeat/write! {:status       :halted
-                         :halted-by    (:source halt-info)
-                         :halt-note    (:note halt-info)
-                         :slots-in-use 0
-                         :dashboard-port @!dashboard-port})
+      (heartbeat/write! (cond-> {:status       :halted
+                                 :halted-by    (:source halt-info)
+                                 :halt-note    (:note halt-info)
+                                 :slots-in-use 0
+                                 :dashboard-port @!dashboard-port}
+                          (seq (:held @!conduct)) (assoc :held (:held @!conduct))))
       (do
         (heartbeat/write! (cond-> {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port}
+                            (seq (:held @!conduct)) (assoc :held (:held @!conduct))
                             (usage-held? (System/currentTimeMillis))
                             (assoc :usage-held-until
                                    (str (java.time.Instant/ofEpochMilli @!usage-hold-until-ms)))))

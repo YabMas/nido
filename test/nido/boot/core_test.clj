@@ -1443,3 +1443,15 @@
       (is (= [{:type :drain :poll "30s" :project :brian}
               {:type :drain :project :nido :poll "2m"}]
              (filterv #(= :drain (:type %)) configs))))))
+
+(deftest held-past-bound-keeps-only-holds-at-least-the-bound-old
+  (let [now   (.toEpochMilli (java.time.Instant/parse "2026-11-17T17:00:00Z"))
+        bound (* 10 60 1000)
+        h     (fn [since] {:project :fukan :ws-id "ws-1" :session "c" :since since :extra 1})]
+    (is (= [] (#'core/held-past-bound [] now bound)))
+    (is (= [] (#'core/held-past-bound [(h "2026-11-17T16:55:00Z")] now bound)) "five minutes: not yet")
+    (is (= [{:project :fukan :ws-id "ws-1" :session "c" :since "2026-11-17T16:50:00Z"}]
+           (#'core/held-past-bound [(h "2026-11-17T16:50:00Z")] now bound))
+        "ten minutes: listed, and only what status prints is kept")
+    (is (= 1 (count (#'core/held-past-bound [(h "not a time")] now bound)))
+        "a hold that cannot be timed is shown rather than lost")))

@@ -21,8 +21,9 @@
     "An instruction as nido gives it: the text, then a last line carrying its token."
     {:signature [:=> [:catn [:text :string] [:token :string]] :string]})
   (Operation baseline-shown
-    "What a session's recorded events show of the launch baseline: its latest start recorded by
-     nido's hooks and where, and the permission mode its latest event itself reports."
+    "What a session's recorded events show: its latest start recorded by nido's hooks and where,
+     the permission mode of its latest event that reports one, and its turn — its latest prompt
+     or Stop, which no event that starts no turn and ends none can hide."
     {:signature [:=> [:catn [:session-id :string]] :map]
      :delegates [events/events-since]})
   (Operation baseline-refusal
@@ -72,7 +73,8 @@
      the positions in one write, then deliver — only while the session's own events still show the
      launch baseline; answer what the pass saw, each once — turn ends, each with its conversation,
      the instruction it ended and the Run that instruction was recorded for, if any, prompts a
-     person typed, denials, blocked sessions, deliveries, refusals, each turn end and blocked
+     person typed, denials, blocked sessions, deliveries, refusals, sessions held — owed
+     something, idle at their prompt and not ready — with since when, each turn end and blocked
      session marked with whether its workstream is activated — or, when the listing cannot be
      read, that the pass was skipped and decided nothing. Seat
      messages are asked of the mail its caller supplies — what each session is owed, oldest first

@@ -533,7 +533,8 @@
 
 (deftest a-listed-session-shows-the-baseline-only-by-conducts-check
   ;; The session list lists a person's own session only on the evidence conduct demands: the
-  ;; latest start recorded from where it runs, and auto mode on its LATEST event.
+  ;; latest start recorded from where it runs, and auto mode on the latest event that reports a
+  ;; mode — a restart's :session-start reports none, so it neither shows nor hides the baseline.
   (with-tmp
     (fn [_]
       (let [w    (workstream/create! :brian {:external-refs []})
@@ -543,14 +544,15 @@
         (doseq [[sid evs] {"s-ok"   [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}]
                            "s-late" [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}
                                      {:event :prompt :permission-mode "default"}]
-                           "s-none" [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}
-                                     {:event :stop}]}
+                           "s-none" [{:event :session-start :cwd home}]
+                           "s-resumed" [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}
+                                        {:event :stop} {:event :session-start :cwd home :source "resume"}]}
                 ev evs]
           (session-events/append! sid ev))
         (with-redefs [conduct/live-states
-                      (constantly (into {} (for [sid ["s-ok" "s-late" "s-none"]]
+                      (constantly (into {} (for [sid ["s-ok" "s-late" "s-none" "s-resumed"]]
                                              [sid {:sessionId sid :kind "background" :cwd home}])))]
-          (is (= {"s-ok" true "s-late" false "s-none" false}
+          (is (= {"s-ok" true "s-late" false "s-none" false "s-resumed" true}
                  (into {} (map (juxt :sessionId :baseline-shown?))
                        (work/workstream-listing :brian (:id w))))))))))
 
