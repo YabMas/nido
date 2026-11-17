@@ -141,7 +141,8 @@
         .needs { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--needs); box-shadow:0 0 6px var(--needs); }
         .gate-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:2px 0 0 26px;
                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .pane-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:-6px 0 8px; user-select:all; }
+        .pane-tag { color:var(--text-muted); font-family:var(--font-mono); font-size:var(--fs-xs); margin:-6px 0 8px; }
+        .pane-tag-id { user-select:all; }
         .gate-sub { display:flex; align-items:center; gap:8px; color:var(--text-faint); font-size:var(--fs-xs); margin:3px 0 0 26px; }
         .gate-sub span:last-child { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-prev { color:var(--text-faint); font-size:var(--fs-xs); margin:5px 0 0 26px;
@@ -227,8 +228,12 @@
         /* A rule per section, so the pane reads as areas rather than as one
            scroll. The first carries none — there is nothing above it to be
            separated from. */
-        .pane h2 { border-top:1px solid var(--border-subtle); padding-top:16px; }
-        .pane h2:first-of-type { border-top:none; padding-top:0; }
+        .pane h2, .ws-page h2 { border-top:1px solid var(--border-subtle); padding-top:16px; }
+        .pane h2:first-of-type, .ws-page h2:first-of-type { border-top:none; padding-top:0; }
+        /* A workstream's own page: the pane is the content area's only column. */
+        .ws-page-crumb { margin:0 0 10px; font-size:var(--fs-sm); }
+        .ws-page .pane-open { display:none; }
+        .pane-tag .pane-open { margin-left:10px; font-family:var(--font-prose); }
         .pos { display:inline-flex; gap:6px; align-items:baseline; margin-left:8px; }
         .pos .pos-at { font-size:var(--fs-xs); color:var(--text-muted); }
         .pos.pos-you .pos-at { color:var(--needs-dim); }

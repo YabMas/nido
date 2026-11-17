@@ -354,19 +354,29 @@
         [:span.link-k label]
         [:a {:href url :target "_blank" :title title} (or id url) " ↗"]])]))
 
+(defn- ws-page-href
+  "The path of workstream `ws-id`'s own page — where a link that names one workstream as a
+   destination goes. The board's rows link to ?sel= instead: opening a row there is glancing,
+   and keeps the board beside it."
+  [project ws-id]
+  (str "/workstreams/" project "/" ws-id))
+
 (defn- pane-heading
   "A detail pane's <h1>: origin badge + label, with the label linking out to the
-   primary (first) external ref when there is one, and the stable tag beneath it,
-   selectable in one click for pasting into a terminal. The badge stays outside
-   the anchor so only the title is clickable."
-  [origin label links tag]
+   primary (first) external ref when there is one, the stable tag beneath it,
+   selectable in one click for pasting into a terminal, and a link to the
+   workstream's own page. The badge stays outside the anchor so only the title is
+   clickable. The page link is drawn wherever the pane is; the workstream's page
+   hides it by a stylesheet rule, so the pane never needs to know which page holds it."
+  [project ws-id origin label links tag]
   (let [primary (:url (first links))]
     (list
      [:h1 (state/origin-badge origin) " "
       (if primary
         [:a {:href primary :target "_blank"} label " ↗"]
         label)]
-     (when tag [:p.pane-tag tag]))))
+     [:p.pane-tag (when tag [:span.pane-tag-id tag])
+      [:a.pane-open {:href (ws-page-href project ws-id)} "open page →"]])))
 
 (defn- screen-query
   "Query string (leading ?) rebuilding the active scope from the screen, with
@@ -498,7 +508,7 @@
      [:h1 msg]
      [:p.meta "ws " ws-id]
      [:p "Follow it: "
-      [:a {:href (str "/workstreams/" project "/" ws-id)} "open workstream →"]
+      [:a {:href (ws-page-href project ws-id)} "open workstream →"]
       " · "
       [:a {:href "/workstreams"} "workstreams →"]]])))
 
@@ -1761,7 +1771,7 @@
            [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)
                   ;; Re-run by Datastar whenever a patch changes it: the position moved.
                   :data-init (pane-location pos)}
-            (pane-heading origin label links tag)
+            (pane-heading project ws-id origin label links tag)
             (links-row links)
 
             ;; Two sections, and the split is the pane's whole claim: what is
@@ -1876,10 +1886,10 @@
          [:div
           (if continuing?
             [:p "✓ Continuing " [:strong id] " \"" title "\" → "
-             [:a {:href (str "/workstreams/" project "/" ws-id)} "workstream ↗"]
+             [:a {:href (ws-page-href project ws-id)} "workstream ↗"]
              " (session spinning up…)"]
             [:p "✓ Started " [:strong id] " \"" title "\" → "
-             [:a {:href (str "/workstreams/" project "/" ws-id)} "workstream ↗"]
+             [:a {:href (ws-page-href project ws-id)} "workstream ↗"]
              " (session spinning up…)"])]))])))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
@@ -1903,6 +1913,23 @@
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection) (:machine selection)))]])))
+
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  workstream-page
+  "One workstream's own page, rendered from the screen: its pane alone, filling the
+   content area, under a way back to the board. The pane is drawn by the same call,
+   from the same selection, as the board's pane beside its list — this page only
+   places it — so its poll and actions, which patch #ws-pane alone, work here as
+   they do there."
+  [ctx {:keys [selection] :as screen}]
+  (let [{:keys [project ws-id ws]} selection]
+    (shell
+     (assoc ctx :active :workstreams :title (or (:label ws) ws-id))
+     [:div.ws-page
+      [:p.ws-page-crumb
+       [:a {:href (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
+        "← board"]]
+      (h/raw (workstream-pane ws (:dev-states selection) (:machine selection)))])))
 
 ;; ---------------------------------------------------------------------------
 ;; Operations — session recovery
@@ -1970,8 +1997,8 @@
     (when (pos? (or runs 0)) [:span (str runs " recovery run" (when (not= 1 runs) "s"))])
     (when closed [:span (str "closed " (name (:outcome closed)) " " (ago (:at closed)))])
     (when first-at [:span (str "first " (ago first-at))])
-    (when gate-ws [:a {:href (str "/workstreams/nido/" gate-ws)} "open the gate"])
-    (when ws-id [:a {:href (str "/workstreams?sel=nido:" ws-id)} ws-id])]])
+    (when gate-ws [:a {:href (ws-page-href "nido" gate-ws)} "open the gate"])
+    (when ws-id [:a {:href (ws-page-href "nido" ws-id)} ws-id])]])
 
 (defn- feed-href
   "The recovery page at feed position `pos`; the newest page when nil."
@@ -2044,7 +2071,7 @@
 
 (defn- hold-row
   [{:keys [project ws-id title state started-at ended-at]}]
-  (let [ws-link [:a {:href (str "/workstreams?sel=" project ":" ws-id)} ws-id]]
+  (let [ws-link [:a {:href (ws-page-href project ws-id)} ws-id]]
     (case state
       :stuck
       [:div.prop
@@ -2065,7 +2092,7 @@
         [:span.prop-verdict.prop-waiting "sweep waiting on you"]
         [:span.prop-where title]]
        [:p.prop-sum ws-link " is parked at a gate, and the sweep waits until it is answered. "
-        [:a {:href (str "/workstreams/" project "/" ws-id)} "open the gate"]]]
+        [:a {:href (ws-page-href project ws-id)} "open the gate"]]]
       :working
       [:p.meta "Sweep working on " ws-link " — " title
        (when started-at (str " · started " (ago started-at)))])))
@@ -2336,7 +2363,7 @@
     :headline (str (reduce + (map (comp count :denials) denied)) " in "
                    (count denied) (if (= 1 (count denied)) " workstream" " workstreams"))
     :lines    (for [{:keys [project ws-id label denials]} denied]
-                [:a {:href (str "/workstreams/" project "/" ws-id)}
+                [:a {:href (ws-page-href project ws-id)}
                  (or label ws-id) " — latest: " (or (:tool-name (peek denials)) "?")])}))
 
 (defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]] [:maybe :map]] :any]}
@@ -2718,7 +2745,7 @@
      [:div [:strong "Escalated to you"]
       [:ul (for [e escalations] [:li (when (:slice e) [:span.mono (str (:slice e) ": ")])
                                  (or (:summary e) (:needs e))
-                                 " " [:a {:href (str "/workstreams/" project "/" (or (:slice e) ws-id))}
+                                 " " [:a {:href (ws-page-href project (or (:slice e) ws-id))}
                                       "answer"]])]])
    (for [p proposals]
      [:div.meta {:style "margin:6px 0"}

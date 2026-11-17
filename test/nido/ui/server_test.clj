@@ -779,3 +779,30 @@
           html (str (hiccup2.core/html (:side-chat ctx)))]
       (is (clojure.string/includes? html "/_chat/ws/brian/ws-drawn/stream"))
       (is (not (clojure.string/includes? html "ws-before"))))))
+
+(deftest workstream-page-is-the-pane-alone
+  ;; A workstream's own path draws its pane with no board beside it, from the same screen
+  ;; selection the board's pane is drawn from, and its side chat is the workstream's.
+  (with-redefs [nido.coordinator.work/all-grouped (fn [] [{:project "brian"
+                                                           :grouped {:in-progress [{:ws-id "other" :origin :scratch
+                                                                                    :stage :in-progress :label "Other-row"}]}}])
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/refresh-selected! (fn [& _] nil)
+                nido.coordinator.work/workstream (fn [_ _ & _] {:ws-id "ws-1" :project "brian" :origin :scratch
+                                                                :stage :in-progress :label "Page-label" :ledger nil
+                                                                :sessions []})
+                nido.coordinator.work/chat-place (fn [_ ws-id] (when (= "ws-1" ws-id) {:session "ws-1--chat"}))
+                nido.session.chat/transcript (fn [_] {:items [] :busy? false})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [body (:body (server/handle-request {:request-method :get :uri "/workstreams/brian/ws-1"}))]
+      (is (str/includes? body "Page-label"))
+      (is (str/includes? body "id=\"ws-pane\""))
+      (is (str/includes? body "class=\"ws-page\""))
+      (is (not (str/includes? body "Other-row")) "no board on the workstream's page")
+      (is (str/includes? body "/_chat/ws/brian/ws-1/stream") "the side chat is the workstream's")
+      (is (not (re-find #"[^a-z0-9]/_chat/stream" body)) "not the operator's"))
+    (let [body (:body (server/handle-request {:request-method :get :uri "/workstreams"
+                                              :query-string "sel=brian:ws-1"}))]
+      (is (str/includes? body "Other-row") "the board keeps its pane beside the list")
+      (is (str/includes? body "Page-label")))))

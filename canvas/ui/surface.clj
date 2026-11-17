@@ -270,6 +270,11 @@
   (Operation workstreams-page "The Scratch slice: the focused project's board and its ledger pane."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
      :delegates [shell workstreams-fragment workstream-pane pickup-bar]})
+  (Operation workstream-page
+    "One workstream's own page: its pane alone, at the content area's full width — the second host
+     of workstream-pane, drawn from the same selection the board's pane is."
+    {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
+     :delegates [shell workstream-pane]})
   (Operation operations-fragment "The proposal list."
     {:signature [:=> [:catn [:proposals :any]] :any]})
   (Operation recovery-fragment

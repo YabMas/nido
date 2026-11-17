@@ -28,7 +28,7 @@
   {:about [grouped all-grouped winding-down gates all-gates facet-values] :evidence "round"})
 
 (Claim detail-derives-one
-  "Once a process holds its rows, a dashboard selection request, meaning /workstreams/<project>/<id>, /workstreams?sel=<project>:<id>, or the pane fragment, refreshes no held row but its selected one's, as [refresh-paths] says, and draws the list beside the detail, other gates and the rail badge from what is held. The overview's poll, /_fragment/workstreams?sel=…, is not a selection request: it makes a list refresh. Before rows are held it waits on the first build like any page."
+  "Once a process holds its rows, a dashboard selection request, meaning /workstreams/<project>/<id>, /workstreams?sel=<project>:<id>, or the pane fragment, refreshes no held row but its selected one's, as [refresh-paths] says, and draws what it shows besides the detail — the list where it draws one, other gates and the rail badge — from what is held. The overview's poll, /_fragment/workstreams?sel=…, is not a selection request: it makes a list refresh. Before rows are held it waits on the first build like any page."
   {:about [ui-server all-gates] :evidence "round"})
 
 (Claim tui-detail-reads-one

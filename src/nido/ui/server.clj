@@ -764,7 +764,7 @@
       (html-response 404 (views/not-found-page)))))
 
 (defn- ws-redirect
-  "302 to the workstream page — where a gate is answered."
+  "302 to the workstream's own page — where a gate is answered."
   [project ws-id]
   {:status 302 :headers {"Location" (str "/workstreams/" project "/" ws-id)}})
 
@@ -916,15 +916,17 @@
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
         (ws-pane-fragment-response (nth segments 2) (nth segments 3) (view-state req))
 
-        ;; GET /workstreams/:project/:ws-id — deep link. The workstream it shows is the
-        ;; selection view-state/parse reads off the path, the one the chat beside it reads;
-        ;; the focus follows that workstream's project.
+        ;; GET /workstreams/:project/:ws-id — the workstream's own page: its pane alone. The
+        ;; workstream it shows is the selection view-state/parse reads off the path, the one
+        ;; the chat beside it reads; the focus follows that workstream's project. The screen
+        ;; is the board's with this workstream selected, so the pane is drawn from the same
+        ;; value.
         (and (= 3 (count segments)) (= "workstreams" (first segments)))
         (let [parsed  (view-state req)
               project (get-in parsed [:selection :project])
               vs      (assoc parsed :scope project)
               screen  (derive-screen vs)]
-          (page-response project (views/workstreams-page (rail-ctx req :workstreams project screen) screen)))
+          (page-response project (views/workstream-page (rail-ctx req :workstreams project screen) screen)))
 
         ;; GET /gate/:project/:ws-id — legacy deep link → the workstream it names
         (and (= 3 (count segments)) (= "gate" (first segments)))

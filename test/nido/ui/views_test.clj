@@ -7,6 +7,7 @@
             [nido.ui.components.ask :as ui-ask]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]
+            [nido.ui.stylesheet :as stylesheet]
             [nido.ui.views :as views]))
 
 (def ^:private sample-gate
@@ -1924,3 +1925,33 @@
     (is (str/includes? js "'sel=brian:ws-1'"))
     (is (str/includes? js "'entry=3'"))
     (is (not (str/includes? js ";")) "one expression: Datastar splits on semicolons")))
+
+(deftest pane-links-to-its-page
+  ;; Wherever the pane is drawn it offers its workstream's own page; it is told nothing
+  ;; about which page holds it — the page hides the link by a stylesheet rule.
+  (let [html (views/workstream-pane sample-ws {})]
+    (is (str/includes? html (str "href=\"/workstreams/" (:project sample-ws) "/" (:ws-id sample-ws) "\"")))
+    (is (str/includes? html "pane-open")))
+  (is (str/includes? (stylesheet/stylesheet) ".ws-page .pane-open { display:none; }")))
+
+(deftest workstream-page-is-the-pane-alone-at-full-width
+  (let [screen {:scope "brian"
+                :selection {:project (:project sample-ws) :ws-id (:ws-id sample-ws)
+                            :ws sample-ws :dev-states {} :machine {}}}
+        page   (str (views/workstream-page {:title "x"} screen))
+        pane   (views/workstream-pane sample-ws {} {})]
+    (is (str/includes? page pane) "the page carries the pane exactly as the board's call draws it")
+    (is (str/includes? page "class=\"ws-page\""))
+    (is (not (str/includes? page "id=\"workstreams\"")) "no board")
+    (is (not (str/includes? page "class=\"gate-wrap\"")) "no board grid")
+    (is (str/includes? page (str "/workstreams?scope=brian&amp;sel=" (:project sample-ws) ":" (:ws-id sample-ws)))
+        "a way back to the board, with this workstream selected")))
+
+(deftest links-naming-one-workstream-go-to-its-page
+  (let [holds (views/sweep-fragment [{:project "nido" :ws-id "ws-h" :title "t" :state :working}])
+        rec   (views/recovery-fragment {:causes [{:state :waiting :cause "c" :ws-id "ws-r" :gate-ws "ws-g"
+                                                 :sessions ["s"] :failures []}]})]
+    (is (str/includes? holds "href=\"/workstreams/nido/ws-h\""))
+    (is (str/includes? rec "href=\"/workstreams/nido/ws-r\""))
+    (is (str/includes? rec "href=\"/workstreams/nido/ws-g\""))
+    (is (not (str/includes? (str holds rec) "sel=")))))
