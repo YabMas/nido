@@ -137,8 +137,17 @@
    a mechanical stage with nothing on its ledger to explain the silence."
   (Operation attempt "One entry for a halt's record — what a stage did and what came of it."
     {:signature [:=> [:catn [:opts :map]] :map]})
-  (Operation halt-for "The halt record for a stage that reached an outcome."
-    {:signature [:=> [:catn [:opts :map]] :map]})
+  (Operation reviewed-kind
+    "The record kind a driven review stage judges — a baseline for verify-baseline, a design for
+     decide-design — or nil for a stage that judges none."
+    {:signature [:=> [:catn [:stage :keyword]] [:maybe [:enum :baseline :design]]]})
+  (Operation halt-for
+    "The halt record for a stage that reached an outcome. Its default :after says what moves the
+     workstream on, read off the stage of its last :tried attempt: an answer, and when that stage
+     reviews a record kind, a newer record of that kind no review loop's amender wrote, which nido
+     takes as the answer."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [reviewed-kind]})
   (Operation decision-needs
     "What a person is asked when a design round stops: the question its newest decision left them,
      the checks and claims it stopped on, any earlier ask of the same run, and — read off the judged

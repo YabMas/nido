@@ -45,6 +45,29 @@
   (let [q (str/trim (str s))]
     (and (not (str/blank? q)) (not (str/includes? q "\n")) (<= (count q) 240) (str/ends-with? q "?"))))
 
+(defn ^{:malli/schema [:=> [:cat :keyword] [:maybe [:enum :baseline :design]]]}
+  reviewed-kind
+  "The record kind the driven review stage `stage` judges, or nil for a stage that judges none. A
+   newer one on the ledger, written by anyone but a review loop's amender, is what the stage's next
+   run reads — so it is also what answers a halt of that stage (`halt-for`'s :after; the conductor
+   lane writes the answer)."
+  [stage]
+  ({:verify-baseline :baseline :decide-design :design} stage))
+
+(defn- after-for
+  "What a halt whose attempts are `tried` says moves the workstream on, read off the stage of its
+   last attempt — the stage nido's answer reads (the conductor lane's moot answering). A review
+   stage's halt is also answered by a newer record of the kind it reviews that no review loop's
+   amender wrote, which nido takes as the answer on a conduct pass over a workstream with a session
+   carrying a :claude facet. Any other halt, one with no :tried among them, is moved on by an answer
+   alone: the position stays :blocked until an answer names the blocker."
+  [tried]
+  (if-let [kind (some-> (last tried) :stage reviewed-kind)]
+    (str "The workstream stays parked until you answer or, while it has a session nido tracks, a newer "
+         (name kind) " that no review loop's amender wrote is appended: nido takes that as the answer, "
+         "and the " (name (:stage (last tried))) " stage reviews that " (name kind) ".")
+    "The workstream stays parked until you answer; only an answer to this blocker moves it on."))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   halt-for
   "The halt record for a stage that reached `outcome`, as a value: a blocker in its four parts —
@@ -84,9 +107,7 @@
                   :else         (str base " Everything derivable has been derived."))]
     (cond-> {:format  :blocker
              :summary context
-             :after   (or after
-                          (str "The workstream stays parked until you answer; the driver does not run "
-                               "this stage again until a later record moves the ledger on."))}
+             :after   (or after (after-for tried))}
       several?       (assoc :questions (mapv #(update % :question (comp str/trim str)) questions))
       (not several?) (assoc :needs (if asked?
                                      (str/trim (str needs))

@@ -9,6 +9,7 @@
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.conductor :as c]
    [nido.coordinator.lane.drive :as drive]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as sess]
@@ -130,34 +131,90 @@
 (defn- answered-by-nido [id]
   (set (map :blocker-seq (filter (comp #{:nido} :by) (ws/entries-of :brian id :blocker-answered)))))
 
-(deftest a-review-stage-s-machinery-halt-is-answered-once-a-newer-record-replaces-what-it-reviewed
-  ;; nido ws-20261116-a5116e, entries 6-8: verify-baseline timed out, the corrected baseline was
-  ;; appended next, and the timeout still asked the person how the stage should go on.
+(defn- design [baseline-seq & [sup]]
+  (cond-> {:format :design :strata [] :summary "s" :shape "sh"
+           :model {:elements [{:id "m" :sort :module}]
+                   :claims [{:id "d1" :about ["m"] :statement "p" :falsified-by "f" :evidence {:by :round}}]}
+           :standing {:relation :conforms}
+           :baseline {:seq baseline-seq :relation :within}
+           :intent {:seq 1} :effort :S}
+    sup (assoc :supersedes {:seq sup :why "repaired"})))
+
+(defn- add! [id kind record & [amended-by]]
+  (ws/append-entry! :brian id (cond-> {:kind kind} amended-by (assoc :amended-by amended-by)) (pr-str record))
+  (count (:entries (ws/read-ws :brian id))))
+
+(defn- halt! [id stage outcome]
+  (:seq (drive/park! :brian id {:stage stage :outcome outcome :tried [{:stage stage :outcome outcome}]})))
+
+(defn- seat-repairs-a-design-the-round-asked-about
+  "nido ws-20261117-df1d96 entries 41-47, replayed."
+  []
   (with-tmp
     (fn [_]
       (with-redefs [conduct/live-states (constantly {})]
         (let [id      (workstream! {} true)
-              halt    (fn [stage outcome]
-                        (:seq (drive/park! :brian id {:stage stage :outcome outcome
-                                                      :tried [{:stage stage :outcome outcome}]})))
-              _       (ws/append-entry! :brian id {:kind :baseline} (pr-str (baseline 1)))
-              timeout (halt :verify-baseline :timed-out)
-              judged  (halt :verify-baseline :disputed)]
-          (testing "while the record it reviewed is the newest, it stands"
-            (pass! 1)
-            (is (empty? (answered-by-nido id))))
-          (testing "a newer baseline answers the machinery halt, saying why"
-            (ws/append-entry! :brian id {:kind :baseline} (pr-str (assoc (baseline 1) :supersedes {:seq 3 :why "corrected"})))
+              b       (add! id :baseline (baseline 1))
+              _       (add! id :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq b :reason "it holds"})
+              d       (add! id :design (design b))
+              _       (add! id :design-decision {:format :design-decision :recommend :amend :design-seq d :reason "r"
+                                                 :checks [{:check :relation-honest :status :held :note "n"}]
+                                                 :findings [{:cites ["goal-served"] :claim "the bound does not hold"}]
+                                                 :asks "Should we build it at medium effort?"})
+              amended (add! id :design (design b d) "design-loop-x")
+              blocker (halt! id :decide-design :asked)
+              owed    #(select-keys (:next (pipeline/of :brian id)) [:stage :mode])]
+          (is (< amended blocker) "the round's amendment precedes its halt")
+          (is (= {:stage :answer-blocker :mode :human} (owed)))
+          (pass! 1)
+          (is (empty? (answered-by-nido id)) "with nothing after it, the person owes the answer")
+          (let [repaired (add! id :design (design b amended))]
             (pass! 2)
-            (is (contains? (answered-by-nido id) timeout))
-            (is (str/includes? (:summary (first (ws/entries-of :brian id :blocker-answered))) "timed-out")))
-          (testing "a halt at a round's judgement stays the person's"
-            (is (not (contains? (answered-by-nido id) judged))))
+            (is (= #{blocker} (answered-by-nido id)) "the seat's repaired design answers it")
+            (is (str/includes? (:summary (first (ws/entries-of :brian id :blocker-answered))) (str "design at entry " repaired)))
+            (is (= {:stage :decide-design :mode :mechanical} (owed)) "and the round runs on it, no person's click")
+            (is (empty? (ws/entries-of :brian id :design-approved)) "granting nothing")
+            (pass! 3)
+            (is (= 1 (count (ws/entries-of :brian id :blocker-answered))) "once")))))))
+
+(deftest a-review-stage-s-halt-is-answered-once-a-reply-replaces-what-it-reviewed
+  ;; nido ws-20261116-a5116e, entries 6-8: verify-baseline timed out, the corrected baseline was
+  ;; appended next, and the timeout still asked the person how the stage should go on.
+  ;; nido ws-20261117-df1d96, entries 41-47: decide-design stopped at asked, its amendment (42) and
+  ;; blocker (43) were appended, the seat appended the repaired design (44) — and a person was
+  ;; parked half an hour on a card that asked nothing.
+  (with-tmp
+    (fn [_]
+      (with-redefs [conduct/live-states (constantly {})]
+        (let [id (workstream! {} true)
+              b  (add! id :baseline (baseline 1))]
+          (testing "a machinery halt is answered by a newer baseline, saying why"
+            (let [timeout (halt! id :verify-baseline :timed-out)]
+              (pass! 1)
+              (is (not (contains? (answered-by-nido id) timeout)) "while what it reviewed is the newest, it stands")
+              (add! id :baseline (assoc (baseline 1) :supersedes {:seq b :why "corrected"}))
+              (pass! 2)
+              (is (contains? (answered-by-nido id) timeout))
+              (is (str/includes? (:summary (first (ws/entries-of :brian id :blocker-answered))) "timed-out"))))
+          (testing "a judgement halt: the round's own amendment is no reply, a session's newer baseline is"
+            (let [prev    (:seq (last (ws/entries-of :brian id :baseline)))
+                  judged  (halt! id :verify-baseline :disputed)
+                  _       (add! id :baseline (assoc (baseline 1) :supersedes {:seq prev :why "loop"}) "baseline-loop-x")
+                  _       (pass! 3)
+                  _       (is (not (contains? (answered-by-nido id) judged)) "an amender-stamped baseline answers nothing")
+                  reply   (add! id :baseline (assoc (baseline 1) :supersedes {:seq prev :why "the seat's"}))]
+              (pass! 4)
+              (is (contains? (answered-by-nido id) judged))
+              (is (str/includes? (:summary (some #(when (= judged (:blocker-seq %)) %) (ws/entries-of :brian id :blocker-answered)))
+                                 (str "entry " reply)))))
           (testing "a design halt is not answered by a newer baseline"
-            (let [d (halt :decide-design :usage-limited)]
-              (ws/append-entry! :brian id {:kind :baseline} (pr-str (assoc (baseline 1) :supersedes {:seq 6 :why "again"})))
-              (pass! 3)
-              (is (not (contains? (answered-by-nido id) d))))))))))
+            (let [last-b (:seq (last (ws/entries-of :brian id :baseline)))
+                  d      (halt! id :decide-design :usage-limited)]
+              (add! id :baseline (assoc (baseline 1) :supersedes {:seq last-b :why "again"}))
+              (pass! 5)
+              (is (not (contains? (answered-by-nido id) d)))))))))
+  (testing "a design round stopped at asked runs on the seat's repaired design, granting nothing"
+    (seat-repairs-a-design-the-round-asked-about)))
 
 (deftest catalog-chat-replay
   ;; catalog-chat as it stood at 15:00 on 2026-11-13: listed blocked, waiting, on an

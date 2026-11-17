@@ -123,8 +123,9 @@
   (Operation stops!
     "One pass over a project's open workstreams with a session nido drives, a turn conduct holds
      open, or a dead-turn blocker still standing: a blocker nido wrote
-     that no longer asks anything is answered by nido, saying why — a review stage's halt at a
-     machinery outcome once a newer record of the kind that stage reviews is on the ledger, and
+     that no longer asks anything is answered by nido, saying why — a review stage's halt, at any
+     outcome, once a record of the kind that stage reviews that no review loop's amender wrote is
+     on the ledger after it, and
      nido's escalation of a hand-back the conductor did not decide once the conductor decides a later
      hand-back from the same session; a dialog a driven session has stood on for
      two minutes becomes a :blocker nido writes for a person, worded with what the dialog asks and
@@ -135,8 +136,8 @@
      since its last turn end and its ledger's newest entry is handed back to its conductor, once
      per turn end, with why. Sends nothing to a session and starts none."
     {:signature [:=> [:catn [:project ProjectName] [:now-ms :int]] [:sequential :map]]
-     :delegates [drive/status drive/disposition seats/post! substrate/pending-dialog
-                 workstream/entries-of workstream/append-entry!]})
+     :delegates [drive/status drive/reviewed-kind seats/post! substrate/pending-dialog
+                 workstream/entries-of workstream/amended-seqs workstream/append-entry!]})
   (Operation answers-in-place!
     "From one conduct pass's report, answer as nido each open escalation the conductor decided on
      a hand-back marked as a person's turn, and the blocker it parked, once the person prompts that

@@ -1075,27 +1075,21 @@
                           :session (:session why) :seat (get-in s [:seat :id]) :said (:said why)})
         [{:ws-id ws-id :session (:session why) :wrote :hand-back}]))))
 
-(def ^:private machinery-outcomes
-  "Stage outcomes that say a round could not be run to an answer — not what it found. A retryable
-   outcome out of attempts is one too, read off its disposition."
-  #{:timed-out :reviewer-unavailable :usage-limited :reviewer-recently-unavailable})
-
-(def ^:private reviewed-kind
-  "The record kind each driven review stage judges: a newer one is what its next run reads."
-  {:verify-baseline :baseline :decide-design :design})
-
 (defn- moot-halt
-  "Why the open blocker `b` no longer asks anything, when it halted a review stage at a machinery
-   outcome and the ledger has since gained a newer record of the kind that stage reviews: the
-   question was whether to run the round again on the old record, and the next run reads the new
-   one. Nil for every other blocker — a halt at a round's judgement among them."
+  "Why the open blocker `b` no longer asks anything, when it halted a review stage and the ledger
+   has since gained a record of the kind that stage reviews (`drive/reviewed-kind`) that no review
+   loop's amender wrote: the stage's next run reads that record, so it is the reply to whatever the
+   halt asked — a round's question, which that run poses again if it still stands, or whether to
+   run the round again at all. The round's own amendment is appended before its halt and stamped
+   on the index, so it is never taken for a reply. Nil for every other blocker."
   [project ws-id b]
-  (let [{:keys [stage outcome]} (last (:tried b))
-        kind (reviewed-kind stage)]
-    (when (and kind (or (machinery-outcomes outcome) (= :retry (pipeline/disposition outcome))))
-      (when-let [newer (last (filter #(> (:seq %) (:seq b)) (ws/entries-of project ws-id kind)))]
-        (str "the " (name stage) " stage it halted at " (name outcome) " now reviews the newer "
-             (name kind) " at entry " (:seq newer))))))
+  (let [{:keys [stage outcome]} (last (:tried b))]
+    (when-let [kind (drive/reviewed-kind stage)]
+      (let [amended (ws/amended-seqs project ws-id)]
+        (when-let [newer (last (filter #(and (> (:seq %) (:seq b)) (not (amended (:seq %))))
+                                       (ws/entries-of project ws-id kind)))]
+          (str "the " (name stage) " stage it halted at " (name outcome) " now reviews the newer "
+               (name kind) " at entry " (:seq newer)))))))
 
 (defn- moot-escalation
   "Why the open blocker `b` no longer asks anything, when nido parked it escalating a hand-back the

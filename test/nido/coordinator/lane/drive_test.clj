@@ -3,7 +3,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.resume :as resume]
@@ -58,6 +58,30 @@
     (is (str/ends-with? (:needs h) "?") "the question is a question, in one sentence")
     (is (some? (:after h)) "and says what follows the answer")
     (is (some? (report/validate-event :blocker h)) "so it can never be refused for its parts")))
+
+(deftest a-halt-says-what-moves-it-on
+  ;; nido ws-20261117-df1d96 entry 43 promised a later record would move the ledger on; none did,
+  ;; since only an answer clears a blocker. The :after now says what does, read off the last
+  ;; attempt's stage — the one nido's answer reads.
+  (doseq [[stage kind] [[:verify-baseline "baseline"] [:decide-design "design"]]]
+    (let [after (:after (drive/halt-for {:stage stage :outcome :asked :tried [{:stage stage :outcome :asked}]}))]
+      (is (= (keyword kind) (drive/reviewed-kind stage)))
+      (is (str/includes? after (str "a newer " kind " that no review loop's amender wrote"))
+          "a review stage names the record, and the writer, that answers it")
+      (is (str/includes? after "nido takes that as the answer"))))
+  (testing "the last attempt's stage decides, not the halt's"
+    (is (str/includes? (:after (drive/halt-for {:stage :review-diff
+                                                :tried [{:stage :decide-design :outcome :asked}]}))
+                       "a newer design"))
+    (is (str/includes? (:after (drive/halt-for {:stage :decide-design}))
+                       "only an answer")
+        "a halt with no :tried is moved on by an answer alone"))
+  (let [after (:after (drive/halt-for {:stage :review-diff :outcome :disputed
+                                       :tried [{:stage :review-diff :outcome :disputed}]}))]
+    (is (nil? (drive/reviewed-kind :review-diff)))
+    (is (str/includes? after "only an answer"))
+    (is (not (str/includes? after "newer")) "no other stage is promised a record moves it on"))
+  (is (= "x" (:after (drive/halt-for {:stage :decide-design :after "x"}))) "a caller's :after stands"))
 
 (deftest a-stated-need-that-is-not-a-question-becomes-its-context
   ;; A stage's need is often a paragraph a round derived; the write contract wants one
