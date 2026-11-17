@@ -157,6 +157,17 @@
           (is (some? (:seq r)))
           (is (some? (ws/latest-entry :brian id :blocker))))))))
 
+(deftest an-escalate-at-a-persons-move-parks-nothing
+  ;; A design round that stops at :proceed leaves the grant owed, and Approve asks for it. A
+  ;; blocker parked on top read :blocked, so the card asked "how should the stage go on" instead.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (with-redefs [pipeline/of (constantly {:at :design-decided :next {:stage :approve-design :mode :human}})]
+          (is (= {:disposition :escalate :owed :approve-design}
+                 (drive/park-on-escalate! :brian id {:stage :decide-design :outcome :proceed}))))
+        (is (nil? (ws/latest-entry :brian id :blocker)) "the grant's own card asks; no blocker copies it")))))
+
 ;; ── The allow-list is the safety ────────────────────────────────────────────
 
 (deftest nobody-is-driven-by-default

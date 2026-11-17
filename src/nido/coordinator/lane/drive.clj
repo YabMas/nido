@@ -167,16 +167,25 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   park-on-escalate!
-  "Park iff this outcome's disposition is :escalate; otherwise do nothing and say
-   so.
+  "Park iff this outcome's disposition is :escalate and the position the stage left does not
+   already owe a person a move; otherwise do nothing and say so — `:owed` names the move when
+   that is why.
 
    The gate between a terminal and a halt lives here rather than at the call
    site, so every driven stage asks the question the same way and none of them
-   carries its own opinion about which statuses are a person's business."
+   carries its own opinion about which statuses are a person's business.
+
+   A position that owes a person a move has that move's card in front of them — a design round
+   that stopped at :proceed leaves one owing the grant, asked by Approve. A blocker there would be
+   a second, vaguer copy of the question, and it would cover the card it copies: the position
+   reads :blocked until the blocker is answered, so the Approve was never offered."
   [project ws-id {:keys [outcome] :as halt}]
   (let [d (pipeline/disposition outcome)]
     (if (= :escalate d)
-      (assoc (park! project ws-id halt) :disposition d)
+      (let [{:keys [stage mode]} (:next (pipeline/of project ws-id))]
+        (if (= :human mode)
+          {:disposition d :owed stage}
+          (assoc (park! project ws-id halt) :disposition d)))
       {:disposition d})))
 
 ;; ── Which workstreams the driver may advance ────────────────────────────────
