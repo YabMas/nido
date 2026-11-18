@@ -91,6 +91,36 @@
    [:map [:state [:enum :running]] [:commit :string] [:owed-at :string]
          [:since :string] [:pid :int]]])
 
+(Module daemon-supervisor
+  "Which service manager keeps the daemon alive — launchd on macOS, systemd --user on Linux. Its
+   callers ask for an outcome and never name either. The dashboard runs inside the daemon
+   process, so supervising the daemon supervises it.
+
+   The restart a landing owes is paid by the daemon exiting and the supervisor starting it
+   again, so a supervisor that does not restart on exit is not one."
+  (Operation install!
+    "Install the daemon's service and start it, saying in words what it installed and where."
+    {:signature [:=> [:catn] :map]})
+  (Operation uninstall!
+    "Stop and remove it. No-op when absent."
+    {:signature [:=> [:catn] :map]})
+  (Operation start!
+    "Start the installed service without installing it again."
+    {:signature [:=> [:catn] :map]})
+  (Operation stop!
+    "Stop the installed service, leaving it installed."
+    {:signature [:=> [:catn] :map]})
+  (Operation restart!
+    "Restart it now."
+    {:signature [:=> [:catn] :map]})
+  (Operation status
+    "Whether it is installed and running, with the manager's own words for why not."
+    {:signature [:=> [:catn] :map]})
+  (Operation checkout
+    "The checkout the installed service loads its code from — the working directory its unit file
+     names — or nil when no service is installed."
+    {:signature [:=> [:catn] [:maybe :string]]}))
+
 (Module daemon-restart
   "The latest landing, as a restart owed onto its commit or as the commit the daemon runs, and
    what an owed restart still waits for.
@@ -98,7 +128,7 @@
    A file rather than a decision made in the landing, because the landing is often the one process
    that cannot make it — it runs inside the daemon, or runs are live — and a decision nobody holds
    afterwards is never carried out. The landing owes; the daemon pays, on its tick, by exiting for
-   launchd to relaunch it onto the checkout that holds the landing, and the daemon that comes up
+   its supervisor to start it again onto the checkout that holds the landing, and the daemon that comes up
    records that it runs it. `landing` is the one place the file's shape becomes trusted, and
    `waits` the one reading of whether a debt is due — read from the system each time it is asked,
    never kept — so the landing's account, the daemon's act and what the surfaces show cannot
@@ -130,11 +160,11 @@
      every asker gets the same answer: runs whose agent is alive under the daemon — live? reports
      them live, or their record says running and the daemon executes them rather than a background
      session, which outlives a restart — the owing landing still running, the checkout not holding
-     the commit, the daemon not running under launchd, the running daemon having started after the
+     the commit, the daemon not running under its supervisor, the running daemon having started after the
      debt. Each wait in words; empty when the restart is due."
     {:signature [:=> [:catn [:owed Landing]] [:vector :string]]
      :delegates [runs/list-run-ids runs/read-run runs/live? session/read-session session/claude-facet
-                 process/process-alive? loaded? state/pid-path]}))
+                 process/process-alive? status checkout state/pid-path]}))
 
 (Module daemon-reconcile
   "Startup repair: force every non-terminal Run to a terminal state, and leave each Run's own
