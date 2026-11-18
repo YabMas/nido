@@ -103,6 +103,12 @@
   [ws-id i]
   (str "$qcard." (card-signal ws-id) ".answers.q" i))
 
+(defn- words-path
+  "The page signal path holding question `i`'s answer in words on `ws-id`'s card, for a question
+   with no options: '' while open. Kept apart from its letter so words can never read as one."
+  [ws-id i]
+  (str "qcard." (card-signal ws-id) ".words.q" i))
+
 (defn- step-signal [ws-id] (str "$qcard." (card-signal ws-id) ".step"))
 
 ;; ---------------------------------------------------------------------------
@@ -148,7 +154,8 @@
 
 (defn- question-section
   "Question `i` of `n`: its line, then its context, recommendation and what follows the answer as
-   body text, then its options. Only the shown one is visible when there are several."
+   body text, then its options — or, for a question with none on a card whose submit records
+   words, a field for the answer in words. Only the shown one is visible when there are several."
   [ctx i n {:keys [question context recommendation after options]}]
   [:section (cond-> {:class "qc-question"} (> n 1) (assoc "data-show" (str (step-signal (:ws-id ctx)) " === " i)))
    [:p.qc-q question]
@@ -156,20 +163,30 @@
    (when recommendation [:p.qc-rec [:span.qc-k "Recommended"] recommendation])
    (when after [:p.qc-after [:span.qc-k "Once answered"] after])
    (when (seq options)
-     (into [:div.qc-opts] (map #(option-choice ctx i %)) options))])
+     (into [:div.qc-opts] (map #(option-choice ctx i %)) options))
+   (when (and (:words? ctx) (empty? options) (not (:pending? ctx)))
+     [:textarea.qc-words {"data-bind" (words-path (:ws-id ctx) i)
+                          :placeholder "Your answer to this question, in your words…"}])])
+
+(defn- answered-expr
+  "Whether question `i` on `ws-id`'s card has an answer: a letter chosen, or — on a card that
+   takes words (`words?`) — words written."
+  [ws-id i words?]
+  (str (answer-signal ws-id i) " !== ''"
+       (when words? (str " || ($" (words-path ws-id i) " || '') !== ''"))))
 
 (defn- stepper-nav
   "Where the reader is among `n` questions: which is shown, one marker per question saying whether
    it is answered (● answered, ○ open — the glyph says it, not only the colour), and a jump to each."
-  [ws-id n]
+  [ws-id n words?]
   (into [:div.qc-nav
          [:span "Question " [:span {"data-text" (str (step-signal ws-id) " + 1")} "1"] " of " n]]
         (for [i (range n)]
           [:button {:type "button" :class "qc-mark"
                     :aria-label (str "Question " (inc i))
-                    "data-class:answered" (str (answer-signal ws-id i) " !== ''")
+                    "data-class:answered" (answered-expr ws-id i words?)
                     "data-class:current" (str (step-signal ws-id) " === " i)
-                    "data-text" (str (answer-signal ws-id i) " !== '' ? '●' : '○'")
+                    "data-text" (str "(" (answered-expr ws-id i words?) ") ? '●' : '○'")
                     "data-on:click" (str (step-signal ws-id) " = " i)}
            "○"])))
 
@@ -184,7 +201,9 @@
    above the first question, and `:session` the session a Reply resumes.
 
    Several questions share one card with a stepper; choices made in it are page state
-   (`qcard.<card-signal>.answers`) until the Ask's `:submit` sends them all, so a question may be left open. The
+   (`qcard.<card-signal>.answers`, and `.words` for a question answered in words when the submit's
+   descriptor says it records them, `:words?`) until the Ask's
+   `:submit` sends them all, so a question may be left open. The
    submit, or with none the recommended option, is the one primary button."
   [project ws-id {:keys [question questions submit note] :as ask} actions
    {:keys [route pending? error-msg session]}]
@@ -204,7 +223,10 @@
         boxes     (filter #(or (= :evidence (:kind %))
                                (and (= :resume (:kind %)) (not (:input %))))
                           actions)
-        ctx       {:project project :ws-id ws-id :route route :by-id by-id
+        ;; Only a submit whose resolver records words (`:words?` on its descriptor) gets a words
+        ;; field: words typed on a card whose submit ignores them would be dropped unseen.
+        words?    (boolean (:words? submit-d))
+        ctx       {:project project :ws-id ws-id :route route :by-id by-id :words? words?
                    :pending? pending? :primary-option? primary-option?}
         row       (fn [d style]
                     [:div.ans-row
@@ -213,13 +235,14 @@
     [:div (cond-> {:class "qcard"}
             (or submit (> n 1))
             (assoc "data-signals__ifmissing"
-                   (str "{qcard: {" (card-signal ws-id) ": {step: 0, answers: {"
-                        (str/join ", " (map #(str "q" % ": ''") (range n)))
-                        "}}}}")))
+                   (let [blanks (str/join ", " (map #(str "q" % ": ''") (range n)))]
+                     (str "{qcard: {" (card-signal ws-id) ": {step: 0, answers: {" blanks "}"
+                          (when words? (str ", words: {" blanks "}"))
+                          "}}}"))))
      (when (and error-msg (not pending?)) [:div.action-err "⚠ " error-msg])
      (when (and (> n 1) (not= question (:question (first questions))))
        [:p.qc-head question])
-     (when (> n 1) (stepper-nav ws-id n))
+     (when (> n 1) (stepper-nav ws-id n words?))
      (map-indexed #(question-section ctx %1 n %2) questions)
      (when (> n 1)
        [:div.qc-step
