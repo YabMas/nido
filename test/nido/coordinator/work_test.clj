@@ -4603,3 +4603,80 @@
     (is (= answering (observed answering {:live true})))
     (is (= {:source :claim :kind :design-round} (observed {:source :claim :kind :design-round} {:live false}))
         "a claim is its own evidence")))
+
+;; ── A blocker that asks several questions ───────────────────────────────────
+
+(def ^:private two-question-blocker
+  {:format    :blocker
+   :summary   "The design round stopped on two things only you can decide."
+   :after     "The seat amends the design with your answers."
+   :questions [{:id "q1" :question "Should the card ask the general question?"
+                :options [{:label "General" :summary "Ask the general question." :grants [:intent]}
+                          {:label "As written" :summary "Show the long question."}]}
+               {:id "q2" :question "May alternatives show as their own questions?"}]})
+
+(deftest a-blocker-asking-several-is-answered-together-and-never-by-reply
+  (is (= [{:id :answer-questions :label "Send answers" :kind :mutation :style :primary :seq 5 :words? true}]
+         (work/gate-actions :in-progress true nil {:report-format :blocker :several? true :seq 5
+                                                   :awaiting :answer-blocker}))
+      "parked or not, a card's per-question answers are sent together — no whole-blocker Reply")
+  (is (= [:answer-questions]
+         (mapv :id (work/gate-actions :in-progress false nil
+                                      {:report-format :blocker :several? true :seq 5 :awaiting :answer-blocker})))
+      "nor the Answer offered with nobody parked")
+  (is (not-any? #(= :answer-questions (:id %))
+                (work/gate-actions :in-progress true nil {:report-format :blocker :options sample-options}))
+      "a one-question blocker is answered as before")
+  (is (work/position-carrying-action? :answer-questions))
+  (is (work/asks-several? two-question-blocker))
+  (is (not (work/asks-several? {:format :blocker :needs "One?" :summary "s" :after "a"}))))
+
+(deftest answering-several-questions-records-one-answer-each-and-resumes-with-all
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:external-refs []})
+            got (atom nil)]
+        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
+        (workstream/append-entry! :brian (:id w) {:kind :blocker} (pr-str two-question-blocker))
+        (with-redefs [resume/resume! (fn [_ _ input & _] (reset! got input) {:decision :resumed})]
+          (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :answer-questions
+                                                         {:seq 1 :answers [{:letter "A"} {:words " Yes, for now. "}]}))))
+          (let [answer (:report (work/workstream :brian (:id w) 2))]
+            (is (= [{:question-id "q1" :letter "A" :label "General" :summary "Ask the general question."}
+                    {:question-id "q2" :summary "Yes, for now."}]
+                   (:answers answer)))
+            (is (nil? (:summary answer)) "no stored copy of the answers beside them")
+            (is (= [:intent] (:grants answer)) "the union of the picked branches' grants")
+            (is (= "run-x" (:resumed answer))))
+          (is (str/includes? @got "Q1 — Should the card ask the general question?\nAnswer: option A — General."))
+          (is (str/includes? @got "Q2 — May alternatives show as their own questions?\nAnswer, in their words: Yes, for now.")))))))
+
+(deftest a-question-left-open-is-recorded-open
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker} (pr-str two-question-blocker))
+        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian (:id w) :answer-questions
+                                                                 {:seq 1 :answers [{} {:words "Yes"}]}))))
+        (is (= [{:question-id "q1"} {:question-id "q2" :summary "Yes"}]
+               (:answers (:report (work/workstream :brian (:id w) 2)))))
+        (is (str/includes? (#'work/answers-input (report/blocker-questions two-question-blocker)
+                                               [{:question-id "q1"} {:question-id "q2"}])
+                           "Q1 — Should the card ask the general question?\nLeft open."))))))
+
+(deftest a-stale-pick-records-nothing
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker} (pr-str two-question-blocker))
+        (is (= :option-stale (:decision (work/resolve-gate! :brian (:id w) :answer-questions
+                                                           {:seq 1 :answers [{:letter "C"} {}]})))
+            "a letter the question does not offer refuses the whole answer")
+        (is (= :option-stale (:decision (work/resolve-gate! :brian (:id w) :answer-questions
+                                                           {:seq 1 :answers [{} {} {}]})))
+            "more picks than questions")
+        (is (= :option-stale (:decision (work/resolve-gate! :brian (:id w) :answer-questions
+                                                           {:seq 9 :answers [{} {}]})))
+            "a position that no longer names the blocker")
+        (is (= 1 (count (workstream/entries-of :brian (:id w) :blocker))))
+        (is (empty? (workstream/entries-of :brian (:id w) :blocker-answered)))))))

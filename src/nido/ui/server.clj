@@ -512,6 +512,17 @@
                   answers)]
     (if (empty? idx) [] (mapv idx (range (inc (apply max (keys idx))))))))
 
+(defn- card-picks
+  "A blocker card's answers — its `answers` letters and its `words` — as one pick per question in
+   question order: {:letter …}, {:words …}, or {} for one left open. Indexed like `card-answers`,
+   so a question with no answer sent stays in its place."
+  [{:keys [answers words]}]
+  (let [letters (card-answers answers)
+        said    (card-answers words)]
+    (mapv (fn [i] (let [l (get letters i) w (get said i)]
+                    (cond l {:letter l} w {:words w} :else {})))
+          (range (max (count letters) (count said))))))
+
 (defn- click-payload
   "What a gate click carries besides its action id, which depends on the action:
    the reply textarea's text for :reply, the evidence textarea's for :assert-gate,
@@ -531,9 +542,14 @@
   [{:keys [body] :as req} ws-id action-id]
   ;; Read once: the body is a stream, and a second slurp of it is empty.
   (let [signals (delay (parse-json-body body))
-        answers (delay (get-in @signals [:qcard (keyword (ask/card-signal ws-id)) :answers]))]
+        card    (delay (get-in @signals [:qcard (keyword (ask/card-signal ws-id))]))
+        answers (delay (:answers @card))]
     (cond
       (= :reply action-id)                     (:reply @signals)
+      ;; A blocker's several questions are sent together, each as its letter or its words.
+      (= :answer-questions action-id)
+      {:seq     (:entry (view-state/parse req))
+       :answers (card-picks (when (map? @card) @card))}
       (= :assert-gate action-id)               (:evidence @signals)
       ;; An Accept that submits questions also carries the card's choices — this
       ;; workstream's `qcard.<card-signal>.answers`, one `q<i>` per question — as the answers

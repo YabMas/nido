@@ -145,6 +145,12 @@
      design, never the judge's prose — the move a grant owed a person would grant."
     {:signature [:=> [:catn [:outcome :keyword] [:decisions [:sequential :map]]
                             [:design [:? [:maybe :map]]]] [:maybe :string]]})
+  (Operation decision-questions
+    "The questions a person is asked when a design round stops: the run's newest decision carrying
+     :asks, its own questions as the judge wrote them — its :questions texts, else the sentences of
+     its :asks that end in '?' — each trimmed and kept only when it fits a blocker's question.
+     Empty when no decision of the run carries :asks."
+    {:signature [:=> [:catn [:decisions [:sequential :map]]] [:vector :string]]})
   (Operation park-held!
     "park!, its blocker appended by the append a caller holding the ledger's append lock gives
      (workstream/appending!), so the park is one step with what else that caller appends."
@@ -181,7 +187,8 @@
      session of the workstream read past its conductor's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]
                             [:opts [:? :map]]] :map]
-     :delegates [park-on-escalate! decision-needs workstream/entries-of workstream/entry-at-seq]})
+     :delegates [park-on-escalate! decision-questions decision-needs workstream/entries-of
+                 workstream/entry-at-seq]})
   (Operation in-flight? "Whether a drive run already claims this workstream."
     {:signature [:=> [:catn [:ws-id WorkstreamId]] :boolean] :delegates [runs/list-run-ids runs/read-run]})
   (Operation tick!

@@ -851,32 +851,52 @@
    [:p (:summary opt)]
    (when consequence [:p.meta consequence])])
 
-(defn- blocker-card [{:keys [summary needs options]}]
-  [:div.md
-   [:h2 "Blocker"]
-   (md/render summary)
-   [:h3 "Needs"]
-   [:p needs]
-   (when (seq options)
-     [:div
-      [:h3 "Options"]
-      (into [:div.options] (map-indexed option-card options))])])
+(defn- blocker-card
+  "A blocker as it reads back on the timeline: its context, then each question it asks with its
+   own branches (report/blocker-questions) — under Needs when it asks one."
+  [{:keys [summary] :as blocker}]
+  (let [qs (report/blocker-questions blocker)]
+    (into [:div.md [:h2 "Blocker"] (md/render summary)]
+          (if (next qs)
+            (for [{:keys [id question context recommendation options]} qs
+                  :let [own (if (= "q1" id) (rest context) context)]]
+              [:div
+               [:h3 (str (str/upper-case id) " — " question)]
+               (for [c own] [:p c])
+               (when recommendation [:p.meta (str "Recommended: " recommendation)])
+               (when (seq options) (into [:div.options] (map-indexed option-card options)))])
+            [[:h3 "Needs"]
+             [:p (report/blocker-question-text blocker)]
+             (when (seq (:options (first qs)))
+               [:div
+                [:h3 "Options"]
+                (into [:div.options] (map-indexed option-card (:options (first qs))))])]))))
 
 (defn- blocker-answered-card
   "The human's answer to a blocker, as it reads back on the timeline. `:resumed`
    is stated either way — an answer nobody was live to hear is still the decision,
    and the next session to pick this workstream up is what acts on it."
-  [{:keys [blocker-seq letter label summary resumed]}]
+  [{:keys [blocker-seq letter label summary resumed answers]}]
   [:div.md
    [:h2 "Answered"]
-   (if letter
+   (cond
+     ;; One answer per question of a blocker that asked several, each the branch picked, the
+     ;; person's words, or left open.
+     (seq answers)
+     (into [:ul]
+           (for [{:keys [question-id letter label summary]} answers]
+             [:li [:strong (str/upper-case question-id)] " — "
+              (cond letter  (list [:span.option-letter letter] " " [:strong label] (when summary (str ": " summary)))
+                    summary summary
+                    :else   [:span.meta "left open"])]))
+     letter
      [:div.option
       [:div.option-head
        [:span.option-letter letter]
        [:strong label]]
       [:p summary]]
      ;; An answer a person gave in words, recorded from the session's chat.
-     [:blockquote summary])
+     :else [:blockquote summary])
    [:p.meta "answers the blocker at entry " blocker-seq
     (if resumed
       (list " · resumed " [:code resumed])
@@ -1663,15 +1683,16 @@
     (ask/action-bar project ws-id
                 ;; Rendered only for a workstream that is no gate, which owes no Ask: an action that
                 ;; answers a verdict's questions, or Defer, which accepts with every one left open,
-                ;; would accept questions nobody was shown, so neither is offered here — a gate's
-                ;; are the question card's.
+                ;; would accept questions nobody was shown, so neither is offered here, nor the send
+                ;; of a blocker's several answers — a gate's are the question card's.
                 (into []
-                 (remove (fn [{:keys [answers id]}] (or (= :questions answers) (= :defer id))))
+                 (remove (fn [{:keys [answers id]}] (or (= :questions answers) (#{:defer :answer-questions} id))))
                  (work/gate-actions stage parked? origin
                                    {:report-format (:format report)
                                     :grantable?    (work/grantable? project ws-id)
                                     :options       (:options report)
                                     :questions     (report/triage-questions report)
+                                    :several?      (work/asks-several? report)
                                     ;; The pane draws the same button the inbox
                                     ;; does, off the same reading of the same
                                     ;; position — a design decision is owed a
@@ -2761,7 +2782,7 @@
    (when (seq escalations)
      [:div [:strong "Escalated to you"]
       [:ul (for [e escalations] [:li (when (:slice e) [:span.mono (str (:slice e) ": ")])
-                                 (or (:summary e) (:needs e))
+                                 (or (:summary e) (:question e))
                                  " " [:a {:href (ws-page-href project (or (:slice e) ws-id))}
                                       "answer"]])]])
    (for [p proposals]

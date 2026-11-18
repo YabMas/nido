@@ -168,7 +168,7 @@
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
-      (contains? #{:approve :redesign :hold-design :apply :defer :land} action-id)))
+      (contains? #{:approve :redesign :hold-design :apply :defer :land :answer-questions} action-id)))
 
 (defn- lettered-actions
   "One button per branch of an enumerated question, lettered by position. `:kind
@@ -252,6 +252,9 @@
    one is mechanical and parks nobody, so `parked?` is false exactly when the
    grant is due.
 
+   `{:several? true}` says the gate's report is a blocker asking several questions: they are
+   answered together by :answer-questions, and no :reply is offered beside it.
+
    `{:reply-to :conductor}` says a Reply answers a conductor's open escalation rather than resuming
    a parked agent; the reply descriptors then carry `:answers :conductor`, as the free-text Answer
    offered with nobody parked carries `:answers :ledger`.
@@ -271,7 +274,7 @@
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
   ([stage parked? _origin {:keys [bare? report-format options questions awaiting grantable?
-                                  gate-criterion reply-to]
+                                  gate-criterion reply-to several?]
                            entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
@@ -481,7 +484,19 @@
                           parked?       [reply-action
                                          {:id :drop  :label "Drop"  :kind :mutation :style :danger}]
                           :else         [])
-           []))]
+           []))
+         ;; A blocker asking several questions is answered on its card, one answer per question,
+         ;; and sent together: no whole-blocker Reply or Answer beside it, which would record words
+         ;; no question could be told it answered.
+         actions
+         (if several?
+           (conj (filterv #(not= :reply (:id %)) actions)
+                 ;; :words? — the resolver records a question's answer in words, so the card offers a
+                 ;; words field for a question without options. No other submit reads words back.
+                 (cond-> {:id :answer-questions :label "Send answers" :kind :mutation :style :primary
+                          :words? true}
+                   entry-seq (assoc :seq entry-seq)))
+           actions)]
      (if bare?
        (filterv #(contains? workstream-less-actions (:id %)) actions)
        actions))))
@@ -1606,6 +1621,13 @@
                                             (java.time.Instant/parse driving-since)))))]
          (assoc (select-keys ev [:at :tool-name :tool-input]) :session (:name s)))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  asks-several?
+  "True when `report` is a blocker asking more than one question — answered on its card, one
+   answer per question, by :answer-questions."
+  [report]
+  (boolean (and (= :blocker (:format report)) (next (report/blocker-questions report)))))
+
 (def ^:private ask-kinds
   "The ledger kinds a person's question can live in beside the gate's report — a design decision,
    a design verdict, a triage verdict or a Slack proposal, a published PR — and the intent the
@@ -1640,7 +1662,7 @@
                             (nil? (:parked d))
                             (some? (:owes position))
                             (= (:owes d) (:owes position)))
-                   (some-> (get-in d [:decision 1 :needs]) str/trim not-empty
+                   (some-> (get-in d [:decision 1]) report/blocker-question-text str/trim not-empty
                            (->> (str "The conductor adds: "))))]
     (cond-> {:report  report
              :entries (vec (remove #(= :intent (:format %)) records))
@@ -1671,6 +1693,7 @@
                                 :grantable?     (grantable? project (:ws-id row))
                                 :options        (:options report)
                                 :questions      (report/triage-questions report)
+                                :several?       (asks-several? report)
                                 :awaiting       awaiting
                                 :gate-criterion (get-in row [:phase :exit :criterion])
                                 ;; Whom a Reply reaches, in resolve-gate!'s order: a conductor's
@@ -3050,23 +3073,28 @@
 (defn- choose-option-recorded!
   "The answer half of `choose-option!`, once any grant the option carries is written: append the
    :blocker-answered for option `i` of the blocker at `entry-seq`, then resume `parked`, the
-   session waiting on it, when there is one."
+   session waiting on it, when there is one. A blocker a conductor's escalation parked is answered
+   to the conductor instead (`conductor/answer-escalation!`), resuming no seat."
   [project ws-id entry-seq i opt parked]
-  (cws/append-entry!
-   project ws-id {:kind :blocker-answered}
-   (pr-str (cond-> {:format      :blocker-answered
-                    :blocker-seq entry-seq
-                    :letter      (report/option-letter i)
-                    :label       (:label opt)
-                    :summary     (:summary opt)
-                    :resumed     (:name parked)}
-             (seq (:grants opt)) (assoc :grants (vec (:grants opt))))))
-  (if parked
-    (assoc (resume/resume! project ws-id (option-input i opt) parked) :decision :answered)
-    ;; Nobody to tell. The answer is on the ledger and the gate has stopped
-    ;; asking; this is a real outcome, not a failure, so it must not read as
-    ;; one — see ui.server/resolve-failure-msg.
-    {:decision :answered-unresumed}))
+  (let [body (cond-> {:letter  (report/option-letter i)
+                      :label   (:label opt)
+                      :summary (:summary opt)}
+               (seq (:grants opt)) (assoc :grants (vec (:grants opt))))]
+    (case (conductor/answer-escalation! project ws-id entry-seq body)
+      ;; A conductor's escalation is answered to the conductor, as a :reply to it is: under its
+      ;; lock, resuming no seat.
+      nil     (do (cws/append-entry!
+                   project ws-id {:kind :blocker-answered}
+                   (pr-str (merge {:format :blocker-answered :blocker-seq entry-seq} body
+                                  {:resumed (:name parked)})))
+                  (if parked
+                    (assoc (resume/resume! project ws-id (option-input i opt) parked) :decision :answered)
+                    ;; Nobody to tell. The answer is on the ledger and the gate has stopped
+                    ;; asking; this is a real outcome, not a failure, so it must not read as
+                    ;; one — see ui.server/resolve-failure-msg.
+                    {:decision :answered-unresumed}))
+      :closed {:decision :option-stale}
+      {:decision :answered})))
 
 (declare grant-design!)
 
@@ -3123,6 +3151,75 @@
           granted
           (choose-option-recorded! project ws-id entry-seq i opt parked)))
       {:decision :option-stale})))
+
+(defn- answers-input
+  "What answering a blocker's several questions resumes the parked agent with: every question
+   `qs` (report/blocker-questions) in order, under it the answer `answers` (BlockerAnswer) records
+   for it — the branch picked, in full; the person's words; or that it was left open. Built
+   nido-side for option-input's reason: the agent resumes in a fresh turn that cannot see the
+   card."
+  [qs answers]
+  (str "A human answered the blocker at the gate, question by question.\n"
+       (str/join
+        (for [[{:keys [id question options]} {:keys [letter summary]}] (map vector qs answers)]
+          (str "\n" (str/upper-case id) " — " question "\n"
+               (cond
+                 letter  (let [{:keys [label consequence] :as o}
+                               (get (vec options) (.indexOf ^java.util.List report/option-letters letter))]
+                           (str "Answer: option " letter " — " label ". " (:summary o)
+                                (when consequence (str " " consequence))))
+                 summary (str "Answer, in their words: " summary)
+                 :else   "Left open."))))
+       "\n\nProceed on that basis. Do not re-open a choice or switch to another option yourself:"
+       " if one turns out not to hold once you are inside the code, record a new :blocker naming"
+       " what broke and park again."))
+
+(defn- answer-questions!
+  "ANSWER a blocker that asks several questions, one answer per question, then tell whoever is
+   listening — choose-option!'s order and its position check, for a card's submit. `picks` holds,
+   per question index, {:letter <the branch chosen>}, {:words <the person's answer>} or nothing
+   for a question left open. Each letter is resolved against the owed blocker's question at its
+   index; one that names no branch there, more picks than questions, or a position that no longer
+   names the blocker refuses the whole answer as stale, recording nothing. The answer's :grants is
+   the union of the picked branches'. A blocker a conductor's escalation parked is answered to the
+   conductor (`conductor/answer-escalation!`), resuming no seat, as a :reply to it is."
+  [project ws-id {entry-seq :seq picks :answers}]
+  (let [latest  (latest-report project ws-id)
+        report  (cond
+                  (nil? entry-seq)            nil
+                  (= entry-seq (:seq latest)) latest
+                  (= entry-seq (pipeline/owed-blocker project ws-id))
+                  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+                    (report-at base-dir entries entry-seq)))
+        qs      (when (asks-several? report) (report/blocker-questions report))
+        picks   (vec picks)
+        answer  (fn [{:keys [id options]} {:keys [letter words]}]
+                  (cond
+                    letter (when-let [o (get (vec options) (.indexOf ^java.util.List report/option-letters letter))]
+                             (cond-> {:question-id id :letter letter :label (:label o) :summary (:summary o)}
+                               (seq (:grants o)) (assoc ::grants (:grants o))))
+                    (not (str/blank? (str words))) {:question-id id :summary (str/trim (str words))}
+                    :else {:question-id id}))
+        answers (when (and qs (<= (count picks) (count qs)))
+                  (mapv #(answer %1 (get picks %2)) qs (range)))]
+    (if (or (nil? answers) (some nil? answers))
+      {:decision :option-stale}
+      (let [grants (vec (distinct (mapcat ::grants answers)))
+            stored (mapv #(dissoc % ::grants) answers)
+            body   (cond-> {:answers stored} (seq grants) (assoc :grants grants))]
+        (case (conductor/answer-escalation! project ws-id entry-seq body)
+          ;; A conductor's escalation is answered to the conductor, as a :reply to it is: under its
+          ;; lock, resuming no seat.
+          nil     (let [parked (parked-session project ws-id)]
+                    (cws/append-entry!
+                     project ws-id {:kind :blocker-answered}
+                     (pr-str (merge {:format :blocker-answered :blocker-seq entry-seq} body
+                                    {:resumed (:name parked)})))
+                    (if parked
+                      (assoc (resume/resume! project ws-id (answers-input qs stored) parked) :decision :answered)
+                      {:decision :answered-unresumed}))
+          :closed {:decision :option-stale}
+          {:decision :answered})))))
 
 (defn- answer-owed!
   "Record `text`, the person's own words, as the answer to the blocker the pipeline is halted on
@@ -3466,6 +3563,8 @@
      :hold-design -> answer one by granting the design anyway
      :option-a … :option-f -> resume! with the blocker branch that letter names,
                               iff `payload` still names the latest report
+     :answer-questions -> record one answer per question of a blocker asking several, and
+                          resume with them all, iff `payload` {:seq :answers} still names it
      :assert-gate -> advance-phase! with `payload` as the gate's evidence
      :land    -> queue the published PR on the merge lane, iff `payload` still names
                  the record the landing is owed over
@@ -3515,6 +3614,7 @@
                   (parked-session project ws-id) (resume/resume! project ws-id (reply-input payload))
                   :else (or (answer-owed! project ws-id payload)
                             (resume/resume! project ws-id (reply-input payload))))
+       :answer-questions (answer-questions! project ws-id payload)
        :approve (approve! project ws-id payload)
        :redesign     (redesign! project ws-id payload)
        :hold-design  (hold-design! project ws-id payload)

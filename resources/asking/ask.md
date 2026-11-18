@@ -21,9 +21,10 @@ The ledger refuses a blocker or escalation whose question is not one sentence en
 leaves out what follows the answer. The refusal names what is missing; write the parts and append
 again.
 
-- **Ask one question.** The thing they have to decide, as a question, in their words rather than
-  nido's. Not how it reached them ("the conductor escalated…", "the round stopped…") — that is
-  never context either.
+- **Ask each decision as its own question.** The thing they have to decide, as a question, in
+  their words rather than nido's. Never pack several into one sentence or one line: one decision
+  is `:needs`; two or more are `:questions`, one entry per decision (below). Not how it reached
+  them ("the conductor escalated…", "the round stopped…") — that is never context either.
 - **Make it self-contained.** Never cite the ledger by coordinate — no "blocker 6", "entry 19",
   "done-when 2", "the seat", "MOBILE-N". Say what each one *is*. The card shows the workstream's
   goal beside your question, so refer to the goal by what it says.
@@ -34,5 +35,13 @@ again.
   forecloses. Mark the one your own reasoning supports as recommended.
 - **Say what happens after an answer**: what runs next, what waits. Always — the person decides
   differently when they know an answer starts a build than when it only records a note.
+- **Several decisions are several questions.** A blocker or an escalation that needs more than one
+  answer asks in `:questions` instead of `:needs` — never both:
+  `[{:id "q1" :question "…?" :context "…" :recommendation "…" :options […]} {:id "q2" …}]`, ids
+  q1, q2… in order. Each `:question` is held to the same sentence; `:context`, `:recommendation`
+  and `:options` are that question's own and optional. `:summary` is the context they share, and
+  `:after` follows all the answers. The card asks them one at a time and records an answer to
+  each — a branch, the person's words, or left open. An option there cannot approve a design: that
+  is a whole answer, so ask it alone in `:needs`.
 - **Ask what is already owed only once.** If the person already owes this workstream a move, do not
   re-ask it; your words ride on that card as a note.

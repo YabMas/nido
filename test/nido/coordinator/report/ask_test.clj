@@ -242,3 +242,27 @@
                                                           :actions accept-actions}))))
                      "fixes you chose")
       "Accept says it carries the choices"))
+
+(def ^:private two-question-blocker
+  {:format    :blocker
+   :summary   "The design round stopped on two things only you can decide."
+   :after     "The seat amends the design with your answers."
+   :questions [{:id "q1" :question "Should the card ask the general question?"
+                :options [{:label "General" :summary "Ask it." :recommended? true}
+                          {:label "As written" :summary "Show it."}]}
+               {:id "q2" :question "May alternatives show as their own questions?" :recommendation "Yes."}]})
+
+(deftest a-blocker-asking-several-asks-each-and-submits-them-together
+  (let [a (ask/ask :answer-blocker {:report two-question-blocker
+                                    :actions [{:id :answer-questions :label "Send answers" :kind :mutation}]})]
+    (is (= :answer-blocker (:kind a)))
+    (is (= "Should the card ask the general question?" (:question a)) "the row previews the first question")
+    (is (= ["Should the card ask the general question?" "May alternatives show as their own questions?"]
+           (mapv :question (:questions a))))
+    (is (= :answer-questions (:submit a)))
+    (is (= [["A" "General"] ["B" "As written"]] (mapv (juxt :letter :label) (:options (q1 a)))))
+    (is (not-any? :action (mapcat :options (:questions a))) "a choice, sent by the submit")
+    (is (= [] (:options (second (:questions a)))) "an option-less question, answered in words")
+    (is (= "The seat amends the design with your answers." (:after (last (:questions a))))
+        "what follows every answer is said once, after the last question")
+    (is (str/includes? (:does (first (:answer-does a))) "answer to each question"))))

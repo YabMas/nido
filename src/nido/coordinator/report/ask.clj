@@ -2,7 +2,7 @@
   "What asking a person a question is: one Ask shape every needs-you card is built in, and one
    registry entry per kind of question saying how its record yields that Ask.
 
-   HIDES where each kind's question lives in its record. A blocker asks in `:needs`, a design
+   HIDES where each kind's question lives in its record. A blocker asks in `:needs` or `:questions`, a design
    decision in `:asks`, a design verdict in `:needs`, a phase gate in its exit criterion, and a
    triage verdict or a published PR in no field at all; the rest of nido reads an Ask and never
    which field a kind wrote. Adding a kind, or changing what one asks, is its entry here and its
@@ -104,6 +104,9 @@
                      :questions (str "Accepts the triage verdict with the fixes you chose and writes it to "
                                      "the ticket; a question you left open is left to whoever builds it.")
                      "Accepts the triage verdict and writes it to the ticket, leaving the fix's direction open.")
+     :answer-questions (str "Records your answer to each question — a choice, your words, or left open. "
+                            "A session parked on them resumes with every answer; otherwise they wait on "
+                            "the ledger for whoever takes the workstream up next.")
      :defer        (str "Accepts the triage verdict and writes it to the ticket, leaving every question "
                         "open for whoever builds it.")
      :dismiss      "Dismisses the workstream from the board; Restore brings it back."
@@ -192,11 +195,31 @@
    {:guidance  "answer-blocker"
     ;; The gate's report IS the owed blocker: the work plane hands the buried one when later
     ;; records covered it, because which blocker is owed is the position's to say.
+    ;; One question per question it asks (`report/blocker-questions`). A single one is answered
+    ;; by its own option buttons; several are answered together by :answer-questions, their
+    ;; options only choices — so the headline a row previews is the first question.
     :record    (fn [report _ _] report)
-    :question  (fn [r] (:question (report/blocker-parts r)))
-    :questions (fn [{:keys [options] :as r} actions]
-                 [(assoc (report/blocker-parts r)
-                         :options (branches "option" actions options blocker-option))])}
+    :question  (fn [r] (:question (first (report/blocker-questions r))))
+    :questions (fn [{:keys [after] :as r} actions]
+                 (let [qs (report/blocker-questions r)]
+                   (if (next qs)
+                     (vec (map-indexed
+                           (fn [i {:keys [question context recommendation options]}]
+                             (cond-> {:question question :context context
+                                      :options  (vec (keep-indexed
+                                                      (fn [j o] (when-let [l (report/option-letter j)]
+                                                                  (assoc (blocker-option o) :letter l)))
+                                                      options))}
+                               recommendation                           (assoc :recommendation recommendation)
+                               (and (= i (dec (count qs))) (not (str/blank? after))) (assoc :after after)))
+                           qs))
+                     [(-> (first qs)
+                          (dissoc :id)
+                          (assoc :options (branches "option" actions (:options (first qs)) blocker-option)))])))
+    :submit    (fn [r actions]
+                 (when (and (next (report/blocker-questions r))
+                            (some #(= :answer-questions (:id %)) actions))
+                   :answer-questions))}
 
    :approve-design
    {:guidance "approve-design"
@@ -304,14 +327,14 @@
 (defn- answers-coherent?
   "Every action an Ask names is one its gate offers, and an Ask answers in one mode: without
    `:submit` every option carries its own action; with one, no option does and `:submit` sends the
-   choices, so there is at least one to choose. An option nothing can send is not on offer, and a
+   choices — a question without options answered on the card in words. An option nothing can send is not on offer, and a
    mix would leave a reader to work out which buttons answer and which only choose."
   [{:keys [questions submit]} actions]
   (let [offered (into #{} (map :id) actions)
         options (mapcat :options questions)]
     (and (every? offered (keep :action options))
          (if submit
-           (and (seq options) (not-any? :action options) (offered submit))
+           (and (not-any? :action options) (offered submit))
            (every? :action options)))))
 
 (defn- build

@@ -12,6 +12,7 @@
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.report :as report]
    [nido.coordinator.source.drain :as source-drain]))
 
 (defn- phase
@@ -49,14 +50,19 @@
   (let [answered (set (map :blocker-seq (ws/entries-of project ws-id :blocker-answered)))]
     (vec (remove #(answered (:seq %)) (ws/entries-of project ws-id :blocker)))))
 
+(defn- escalation
+  "An open escalation as the drain shows it: its seq, its context and what it asks."
+  [b]
+  (assoc (select-keys b [:seq :summary]) :question (report/blocker-question-text b)))
+
 (defn- escalations
   "The drain's open escalations and those its slices raise on their own ledgers (a failed
    reseat, say), each slice's tagged `:slice` with the workstream it is answered on."
   [project drain-id slices]
-  (into (mapv #(select-keys % [:seq :needs :summary]) (open-blockers project drain-id))
+  (into (mapv escalation (open-blockers project drain-id))
         (for [{:keys [ws-id]} slices
               b (open-blockers project ws-id)]
-          (assoc (select-keys b [:seq :needs :summary]) :slice ws-id))))
+          (assoc (escalation b) :slice ws-id))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   drain

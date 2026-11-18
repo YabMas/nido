@@ -164,6 +164,14 @@
      as that blocker's answer; nil, recording nothing, when the open blocker is no conductor's."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:reply :string]] [:maybe :map]]
      :delegates [workstream/entries-of workstream/append-entry!]})
+  (Operation answer-escalation!
+    "Record a person's answer given on the card — a picked branch, or one answer per question — to
+     the blocker at a position when a conductor's escalation parked it, for the conductor, resuming
+     no seat; :closed, recording nothing, when that blocker is answered already; nil when no
+     conductor's escalation parked it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:blocker-seq :int] [:answer :map]]
+                 [:or :nil :map :keyword]]
+     :delegates [workstream/entries-of workstream/append-entry!]})
   (Operation answers!
     "On every conduct pass, for each open workstream of a project: record the person's act at the
      step a conductor's escalation at a person's step named as that escalation's blocker's answer,

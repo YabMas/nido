@@ -60,6 +60,10 @@
   (Operation gate-actions "The follow-actions for a gate, from its stage and halt."
     {:signature [:=> [:catn [:stage :keyword] [:parked? :boolean] [:origin [:? :any]]
                             [:opts [:? :map]]] :any]})
+  (Operation asks-several?
+    "Whether a report is a blocker asking more than one question — answered on its card, one answer
+     per question, by :answer-questions."
+    {:signature [:=> [:catn [:report [:maybe :map]]] :boolean]})
   (Operation classify-origin "Where a workstream came from, from its raw record."
     {:signature [:=> [:catn [:ws Workstream]] :keyword]})
   (Operation with-shared-rows
@@ -175,10 +179,12 @@
      is what makes two people clicking the same button safe. A reply to a workstream a
      conductor's escalation parked is recorded as that blocker's answer, for the conductor. A
      picked option that approves a design records the person's grant of it (grant-design!)
-     before the answer, or is refused whole when that grant is."
+     before the answer, or is refused whole when that grant is. A picked option or answers per
+     question given to a blocker a conductor's escalation parked are recorded for the conductor
+     (conductor/answer-escalation!), resuming no seat."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
-     :delegates [option-input set-stage! conductor/answer! grant-design!]})
+     :delegates [option-input set-stage! conductor/answer! conductor/answer-escalation! grant-design!]})
   (Operation new! "Birth a scratch workstream and bring its session up."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [lanes/birth! lifecycle/up!]})

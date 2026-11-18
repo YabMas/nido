@@ -638,13 +638,15 @@
    decision still owed."
   [blocker standing]
   (let [labels (comp (partial mapv :label) :options)
+        ;; What a blocker asks, in either form: its context and each question with its branches.
+        asks   (fn [b] [(:summary b) (creport/asked-questions b)
+                        (mapv :options (creport/blocker-questions b))])
         covers (fn [b]
                  (if-let [prior (seq (:parks b))]
                    (and (seq (:parks blocker))
                         (every? (set prior) (:parks blocker))
                         (= (labels b) (labels blocker)))
-                   (= (select-keys b [:summary :needs :options])
-                      (select-keys blocker [:summary :needs :options]))))]
+                   (= (asks b) (asks blocker))))]
     (some #(when (covers %) %) (reverse standing))))
 
 (defn- unanswered-blockers

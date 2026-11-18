@@ -38,6 +38,7 @@
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.report :as report]
    [nido.coordinator.source.drain :as source-drain]
    [nido.coordinator.source.queue :as queue]
    [nido.platform.project :as project]
@@ -181,7 +182,7 @@
          "Residue:\n" (if-let [rs (seq (drain/residue w))]
                         (bullet-list (map #(str "#" (:seq %) " " (:site %) " → " (pr-str (:disposition %))) rs))
                         "- none") "\n"
-         "Open escalations: " (if (seq bl) (str/join "; " (map :needs bl)) "none") "\n\n"
+         "Open escalations: " (if (seq bl) (str/join "; " (map report/blocker-question-text bl)) "none") "\n\n"
          "Your levers, each run from this session:\n"
          "- bb nido:drain:propose :reason \"…\" :recipe '{:steps […] :ready-gates […] :standing-orders […] :counter {:command \"…\"}}'\n"
          "- bb nido:drain:plan :sites '[…]' :rests-on '[<plan seq> …]' :start on-top|after-landing :census <seq> [:replaces <seq>] [:note \"…\"]\n"

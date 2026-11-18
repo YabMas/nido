@@ -12,6 +12,8 @@
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.pipeline :as pipeline]
+   [nido.coordinator.lane.resume :as resume]
+   [nido.coordinator.work :as work]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.seats :as rseats]
    [nido.coordinator.lane.seats :as seats]
@@ -551,6 +553,76 @@
             (let [b (last (ws/entries-of :brian id :blocker))]
               (is (= "The teacher side is built." (:summary b)))
               (is (= opts (:options b)) "the choice reaches the blocker as options"))))))))
+
+(deftest an-escalation-asking-several-questions-parks-a-blocker-asking-them
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")
+            qs   [{:id "q1" :question "Where should students see it?"
+                   :options [{:label "Web only" :summary "In the browser."}
+                             {:label "App too" :summary "In the app as well."}]}
+                  {:id "q2" :question "Should teachers be told?"}]]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [pipeline/of (constantly {:at :intake :next {:stage :establish-intent :mode :authoring}})]
+          (let [body (-> (esc "unused?" :summary "The teacher side is built.") (dissoc :needs) (assoc :questions qs))
+                hb   (:id (hand-back! id))
+                r    (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate body]}))]
+            (is (= :accepted (first r)))
+            (let [b (last (ws/entries-of :brian id :blocker))]
+              (is (= (mapv :question qs) (mapv :question (:questions b)))
+                  "the blocker asks exactly the questions the escalation asked")
+              (is (not (contains? b :needs))))
+            (testing "asking the same questions again, once answered, is refused"
+              (ws/append-entry! :brian id {:kind :blocker-answered}
+                                (pr-str {:format :blocker-answered
+                                         :blocker-seq (:seq (last (ws/entries-of :brian id :blocker)))
+                                         :answers [{:question-id "q1" :letter "A" :label "Web only"
+                                                    :summary "In the browser."}
+                                                   {:question-id "q2"}]}))
+              (is (= [:refused :already-asked]
+                     (in-session c #(conductor/decide! :brian id {:hand-back (:id (hand-back! id))
+                                                                   :decision [:escalate body]})))))))))))
+
+(deftest an-answer-on-the-card-to-an-escalation-reaches-the-conductor-and-resumes-no-seat
+  ;; As a :reply to it does: a seat waiting under the workstream handed back to the conductor, so
+  ;; the answer to the conductor's question is the conductor's, whichever form it was asked in.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")
+            opts [{:label "Web only" :summary "In the browser."}
+                  {:label "App too" :summary "In the app as well."}]
+            qs   [{:id "q1" :question "Where should students see it?" :options opts}
+                  {:id "q2" :question "Should teachers be told?"}]
+            resumed (atom [])]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [pipeline/of            (constantly {:at :intake :next {:stage :establish-intent :mode :authoring}})
+                      resume/waiting-session (constantly {:name "seat"})
+                      resume/resume!         (fn [& args] (swap! resumed conj args) {:decision :resumed})]
+          (testing "several questions, answered through :answer-questions"
+            (let [body (-> (esc "unused?" :summary "The teacher side is built.") (dissoc :needs) (assoc :questions qs))]
+              (in-session c #(conductor/decide! :brian id {:hand-back (:id (hand-back! id)) :decision [:escalate body]})))
+            (let [b (last (ws/entries-of :brian id :blocker))]
+              (is (= {:decision :answered}
+                     (work/resolve-gate! :brian id :answer-questions {:seq (:seq b) :answers [{:letter "A"} {:words "Yes"}]})))
+              (let [a (last (ws/entries-of :brian id :blocker-answered))]
+                (is (= (:seq b) (:blocker-seq a)))
+                (is (= [{:question-id "q1" :letter "A" :label "Web only" :summary "In the browser."}
+                        {:question-id "q2" :summary "Yes"}]
+                       (:answers a)))
+                (is (nil? (:resumed a)) "no seat is named resumed"))
+              (is (= {:decision :option-stale}
+                     (work/resolve-gate! :brian id :answer-questions {:seq (:seq b) :answers [{:letter "B"} {}]}))
+                  "answered, a second submit records nothing")))
+          (testing "one question with options, answered by picking one"
+            (in-session c #(conductor/decide! :brian id {:hand-back (:id (hand-back! id))
+                                                         :decision [:escalate (esc "Which way?" :options opts)]}))
+            (let [b (last (ws/entries-of :brian id :blocker))]
+              (is (= {:decision :answered} (work/resolve-gate! :brian id :option-b (:seq b))))
+              (let [a (last (ws/entries-of :brian id :blocker-answered))]
+                (is (= [(:seq b) "B" nil] ((juxt :blocker-seq :letter :resumed) a))))))
+          (is (= [] @resumed) "no seat is resumed"))))))
 
 (deftest an-escalation-parks-and-a-reply-answers-it
   (with-tmp

@@ -48,9 +48,9 @@
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   halt-for
   "The halt record for a stage that reached `outcome`, as a value: a blocker in its four parts —
-   the one-sentence question, its context, what follows the answer, and a recommendation only
-   when the caller holds a genuine one — this module has no view of its own on what a stopped
-   stage should do, so it never supplies one.
+   the question, its context, what follows the answer, and a recommendation only when the caller
+   holds a genuine one — this module has no view of its own on what a stopped stage should do,
+   so it never supplies one.
 
    Pure, and separate from writing it, because what a halt SAYS is the part worth
    testing and the part a reader will argue with. The prose is deliberately thin:
@@ -58,34 +58,42 @@
    fuller explanation here would be this module guessing at a judgement the round
    already made and recorded.
 
-   `needs` is the caller's, because only the stage that ran knows what it could
-   not settle. When it is a question it is asked as written; when it says what is needed rather
-   than asking — a phrase, or a paragraph a round derived — it moves into the context under an
-   honest general question about the stage, so a halt can never be refused for its wording: a
-   lane park that fails to append parks nothing. Absent, the question is that general one, and
-   the context says everything derivable has been derived."
-  [{:keys [stage outcome needs summary recommendation after tried options]}]
-  (let [base    (or summary
-                    (str "The " (name stage) " stage stopped"
-                         (when outcome (str " at " (name outcome)))
-                         " and the driver cannot take it further."))
-        asked?  (question? needs)
-        stopped (if outcome (str ", now that it stopped at " (name outcome)) "")
-        context (cond
-                  asked?             base
-                  (str/blank? needs) (str base " Everything derivable has been derived.")
-                  :else              (str base "\n\nIt needs " (str/trim (str needs))))]
+   The question is the caller's, because only the stage that ran knows what it could not settle:
+   its `:questions` (report/BlockerQuestion maps), each trimmed, when it gives two or more that
+   are all questions; else its `:needs`, trimmed, when that is one. Anything else — a phrase, a
+   paragraph a round derived, questions the contract would refuse — moves into the context under
+   an honest general question about the stage, so a halt can never be refused for its wording: a
+   lane park that fails to append parks nothing. Nothing here derives a question from what a
+   caller wrote. With no :summary and nothing asked, the context says everything derivable has
+   been derived."
+  [{:keys [stage outcome needs questions summary recommendation after tried options]}]
+  (let [base     (or summary
+                     (str "The " (name stage) " stage stopped"
+                          (when outcome (str " at " (name outcome)))
+                          " and the driver cannot take it further."))
+        several? (and (next questions) (every? (comp question? :question) questions))
+        asked?   (and (not several?) (question? needs))
+        unasked  (if several?
+                   []
+                   (remove str/blank? (cons (when-not asked? (str/trim (str needs)))
+                                            (map (comp str/trim str :question) questions))))
+        stopped  (if outcome (str ", now that it stopped at " (name outcome)) "")
+        context  (cond
+                  (seq unasked) (str base "\n\nIt needs " (str/join "\n" unasked))
+                  (or several? asked? summary) base
+                  :else         (str base " Everything derivable has been derived."))]
     (cond-> {:format  :blocker
              :summary context
-             :needs   (if asked?
-                        (str/trim (str needs))
-                        (str "How should the " (name stage) " stage go on" stopped "?"))
              :after   (or after
                           (str "The workstream stays parked until you answer; the driver does not run "
                                "this stage again until a later record moves the ledger on."))}
+      several?       (assoc :questions (mapv #(update % :question (comp str/trim str)) questions))
+      (not several?) (assoc :needs (if asked?
+                                     (str/trim (str needs))
+                                     (str "How should the " (name stage) " stage go on" stopped "?")))
       (not (str/blank? recommendation)) (assoc :recommendation recommendation)
       (seq tried)   (assoc :tried (mapv attempt tried))
-      (seq options) (assoc :options (vec options)))))
+      (and (seq options) (not several?)) (assoc :options (vec options)))))
 
 (defn- declared-move
   "The move `design` declares that a person must grant (`report/owes-a-person?`) — its stance
@@ -141,6 +149,35 @@
             (when (seq earlier)
               (str "\nAsked earlier in the same run: " (str/join " / " earlier)))
             (when (#{:proceed :asked} outcome) (declared-move design)))))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:vector :string]]}
+  decision-questions
+  "The questions a person is asked when a design round stops: the run's newest decision carrying
+   :asks, its own questions as the judge wrote them — its :questions texts, else the sentences of
+   its :asks that end in '?' — each trimmed and kept only when it fits a blocker's question.
+   Empty when no decision of `decisions` (oldest first) carries :asks, or none of its questions
+   fits: then the park asks the general stage question and the :asks reach the person in its
+   context, verbatim (`decision-needs`).
+
+   A decision's :questions holds its alternatives beside its questions, so an alternative written
+   as a question is asked as one of its own."
+  [decisions]
+  (if-let [{:keys [asks questions]} (last (filter #(not (str/blank? (str (:asks %)))) decisions))]
+    (->> (if (seq questions)
+           (map :text questions)
+           (filter #(str/ends-with? % "?") (str/split (str/trim (str asks)) #"(?<=[.?!])\s+")))
+         (map (comp str/trim str))
+         (filterv question?))
+    []))
+
+(defn- with-questions
+  "`halt` asking `qs`: one as its :needs, two or more as its :questions, none leaving it to ask
+   the general stage question."
+  [halt qs]
+  (case (count qs)
+    0 halt
+    1 (assoc halt :needs (first qs))
+    (assoc halt :questions (vec (map-indexed (fn [i q] {:id (str "q" (inc i)) :question q}) qs)))))
 
 (defn ^{:malli/schema [:=> [:cat :map [:=> [:cat :map :string] :string]] :map]}
   park-held!
@@ -487,10 +524,15 @@
                      project ws-id
                      (cond-> {:stage stage :outcome outcome :tried tried}
                        (= :decide-design stage)
-                       (assoc :needs (let [ds (decisions-since project ws-id since)]
-                                       (decision-needs outcome ds
-                                                       (some->> (:design-seq (last ds))
-                                                                (ws/entry-at-seq project ws-id)))))))
+                       (as-> h (let [ds  (decisions-since project ws-id since)
+                                     ctx (decision-needs outcome ds
+                                                         (some->> (:design-seq (last ds))
+                                                                  (ws/entry-at-seq project ws-id)))]
+                                 (-> (cond-> h
+                                       ctx (assoc :summary (str "The " (name stage) " stage stopped at "
+                                                                (name outcome) " and the driver cannot take "
+                                                                "it further.\n\nIt needs " ctx)))
+                                     (with-questions (decision-questions ds)))))))
                     :outcome outcome :attempts attempt)
 
              (< attempt max-attempts)

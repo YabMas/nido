@@ -614,3 +614,70 @@
         (let [needs (:summary (ws/latest-entry :brian id :blocker))]
           (is (str/includes? needs "For you to decide: is the pool in scope?"))
           (is (not (str/includes? needs "a stale question"))))))))
+
+;; ── Whose questions a stopped design round asks ─────────────────────────────
+
+(deftest a-stopped-design-round-asks-the-judges-own-questions
+  (is (= ["Is the pool in scope?" "Or should it wait for the migration?"]
+         (drive/decision-questions
+          [(a-decision 3 :ask "An older question?")
+           (a-decision 8 :ask "Is the pool in scope? Or should it wait for the migration?"
+                       :questions [{:id "q1" :text " Is the pool in scope? "}
+                                   {:id "q2" :text "Or should it wait for the migration?"}])]))
+      "the newest asking decision's :questions, trimmed, in order — an alternative among them")
+  (is (= ["Is the pool in scope?" "Should it wait?"]
+         (drive/decision-questions [(a-decision 8 :ask "The pool is new. Is the pool in scope? Should it wait?")]))
+      "without :questions, the sentences of :asks that end in '?'")
+  (is (= ["Is the pool in scope?"]
+         (drive/decision-questions
+          [(a-decision 8 :ask "x" :questions [{:id "q1" :text "Is the pool in scope?"}
+                                             {:id "q2" :text (str (apply str (repeat 250 "y")) "?")}
+                                             {:id "q3" :text "two\nlines?"}])]))
+      "a question the contract would refuse is dropped, never rewritten")
+  (is (= [] (drive/decision-questions [(a-decision 8 :proceed "")])) "no :asks, no question")
+  (is (= [] (drive/decision-questions []))))
+
+(deftest a-halt-asks-a-callers-several-questions
+  (let [qs [{:id "q1" :question " One? "} {:id "q2" :question "Two?" :context "c"}]
+        h  (drive/halt-for {:stage :conduct :outcome :escalated :summary "s" :after "a" :questions qs})]
+    (is (= [{:id "q1" :question "One?"} {:id "q2" :question "Two?" :context "c"}] (:questions h)))
+    (is (not (contains? h :needs)))
+    (is (= h (report/validate-event :blocker h))))
+  (let [h (drive/halt-for {:stage :conduct :outcome :escalated :summary "s"
+                           :questions [{:id "q1" :question "One?"} {:id "q2" :question "not a question"}]})]
+    (is (= "How should the conduct stage go on, now that it stopped at escalated?" (:needs h))
+        "questions the contract would refuse are not asked")
+    (is (str/includes? (:summary h) "not a question") "they reach the person as context")))
+
+(defn- park-design-round
+  "Run a :decide-design stage that stops :asked on `decision`, and answer the blocker it parks."
+  [decision]
+  (with-tmp
+    (fn []
+      (let [id      (a-ws)
+            ran?    (atom false)
+            entries ws/entries-of]
+        (with-redefs [drive/mechanical-stages {:decide-design {:task ::fake :label "design"}}
+                      requiring-resolve (fn [_] (fn [_] (reset! ran? true) :asked))
+                      ws/entries-of (fn [p w k]
+                                      (if (= :design-decision k)
+                                        (cond-> [] @ran? (conj decision))
+                                        (entries p w k)))]
+          (drive/run-stage! :brian id :decide-design {:cwd "/tmp" :sleep-fn (fn [_])}))
+        (ws/latest-entry :brian id :blocker)))))
+
+(deftest a-parked-design-round-asks-its-question-over-the-paragraph
+  (let [b (park-design-round (a-decision 8 :ask "Is the pool in scope?" :findings []))]
+    (is (= "Is the pool in scope?" (:needs b)))
+    (is (str/includes? (:summary b) "For you to decide: Is the pool in scope?")
+        "decision-needs' paragraph is the context, never the question"))
+  (let [b (park-design-round (a-decision 8 :ask "Is the pool in scope? Should it wait?" :findings []))]
+    (is (= ["Is the pool in scope?" "Should it wait?"] (mapv :question (:questions b))))
+    (is (not (contains? b :needs)))))
+
+(deftest a-parked-design-round-with-no-question-that-fits-asks-the-general-one
+  (let [long-q (str "Should " (apply str (repeat 250 "x")) "?")
+        b      (park-design-round (a-decision 8 :ask long-q :findings []))]
+    (is (= "How should the decide-design stage go on, now that it stopped at asked?" (:needs b)))
+    (is (str/includes? (:summary b) (str "For you to decide: " long-q))
+        "the review's own words reach the person beneath the general question, verbatim")))

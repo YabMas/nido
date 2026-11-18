@@ -47,6 +47,7 @@
    [nido.coordinator.lane.embodied-strata :as embodied]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
+   [nido.coordinator.report :as report]
    [nido.coordinator.report.ask :as ask]
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.generation :as generation]
@@ -335,7 +336,7 @@
    #(vec (for [b (open-blockers project ws-id)
                ;; Both wordings: blockers written before questions were one sentence still stand.
                :when (re-matches #"(?:seat .+ could not be started|How should seats? .+ be carried, now that (?:it|they) could not be started\?)"
-                                 (str (:needs b)))]
+                                 (report/blocker-question-text b))]
            (do (ws/append-entry! project ws-id {:kind :blocker-answered}
                                  (pr-str {:format :blocker-answered :blocker-seq (:seq b) :resumed nil :by :nido
                                           :summary "the seat it named has since been occupied"}))
@@ -374,7 +375,7 @@
           escalate (fn [needs ^Throwable e]
                      (deciding
                       project ws-id
-                      #(when-not (some (fn [b] (= needs (:needs b))) (open-blockers project ws-id))
+                      #(when-not (some (fn [b] (= [needs] (report/asked-questions b))) (open-blockers project ws-id))
                          (drive/park! project ws-id
                                       {:stage   :reseat :outcome :uncarried
                                        :summary (str "The seats of this generation cannot be occupied: " (ex-message e))
@@ -604,14 +605,14 @@
         ;; A person who already owes a move has that move's card in front of them; a second
         ;; blocker re-asking it is a second copy of one question, and answering the card would
         ;; leave the copy owed. So an escalation at a person's move parks nothing: the decision is
-        ;; its record, and the card shows its :needs as a note.
+        ;; its record, and the card shows its question as a note.
+        ;; The question form is copied whole — one :needs or several :questions — since the
+        ;; blocker asks exactly what the escalation asked.
         halt        (when (and (= :escalate verb) (parks? next))
-                      (cond-> {:stage :conduct :outcome :escalated
-                               :summary (:summary body)
-                               :needs   (:needs body)
-                               :after   (:after body)}
-                        (:recommendation body) (assoc :recommendation (:recommendation body))
-                        (:options body)        (assoc :options (:options body))))]
+                      (merge {:stage :conduct :outcome :escalated
+                              :summary (:summary body)
+                              :after   (:after body)}
+                             (select-keys body [:needs :questions :recommendation :options])))]
     (ws/appending!
      project ws-id
      (fn [{:keys [check! append!]}]
@@ -659,13 +660,14 @@
                                    (mapcat (fn [k] (ws/entries-of project ws-id k)) person-kinds)))))))
 
 (defn- answered-ask
-  "The current generation's answered blocker that asked `needs` word for word, or nil."
-  [project ws-id needs]
-  (let [q        (str/trim (str needs))
+  "The current generation's answered blocker that asked what escalation `body` asks, every
+   question word for word, or nil."
+  [project ws-id body]
+  (let [qs       (report/asked-questions body)
         span     (into #{} (map :seq) (generation/current-span (:entries (ws/read-ws project ws-id))))
         answered (set (map :blocker-seq (ws/entries-of project ws-id :blocker-answered)))]
-    (when-not (str/blank? q)
-      (last (filter #(and (span (:seq %)) (answered (:seq %)) (= q (str/trim (str (:needs %)))))
+    (when-not (every? str/blank? qs)
+      (last (filter #(and (span (:seq %)) (answered (:seq %)) (= qs (report/asked-questions %)))
                     (ws/entries-of project ws-id :blocker))))))
 
 (defn- stale-approval
@@ -676,7 +678,7 @@
   (let [governing (:seq (standing/governing-design project ws-id))
         judged    (into #{} (keep :design-seq) (ws/entries-of project ws-id :design-decision))]
     (first (filter #(when-let [n (:approves-design %)] (not (and (= n governing) (judged n))))
-                   (:options ask)))))
+                   (mapcat :options (report/blocker-questions ask))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :ConductDecision] :DecideResult]}
   decide!
@@ -712,7 +714,7 @@
       (answered? project ws-id hand-back)         [:refused :already-answered]
       (open-misfit? project ws-id (hand-back-message project ws-id hand-back)) [:refused :open-misfit]
 
-      (and (= :escalate (first decision)) (answered-ask project ws-id (:needs (second decision))))
+      (and (= :escalate (first decision)) (answered-ask project ws-id (second decision)))
       [:refused :already-asked]
 
       (and (= :escalate (first decision)) (stale-approval project ws-id (second decision)))
@@ -1221,6 +1223,24 @@
       (let [entry {:format :blocker-answered :blocker-seq (:seq blocker) :summary reply :resumed nil}]
         (ws/append-entry! project ws-id {:kind :blocker-answered} (pr-str entry))
         entry))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map] [:or :nil :map :keyword]]}
+  answer-escalation!
+  "Record `answer` — a :blocker-answered body: a picked branch, the person's words, or one answer
+   per question in :answers — as the answer to the blocker at `blocker-seq` when a conductor's
+   escalation parked it, under the conductor's lock and resuming no seat: the conductor reads the
+   answer on its next pass, as it reads `answer!`'s. Answers the entry written; :closed, writing
+   nothing, when an escalation parked that blocker and it is no longer open; nil when no
+   conductor's escalation parked it, so the caller answers it as any other blocker."
+  [project ws-id blocker-seq answer]
+  (when (some #(= blocker-seq (get-in % [:parked :seq])) (ws/entries-of project ws-id :conduct-decision))
+    (deciding
+     project ws-id
+     #(if (some (fn [{:keys [blocker]}] (= blocker-seq (:seq blocker))) (open-escalations project ws-id))
+        (let [entry (assoc answer :format :blocker-answered :blocker-seq blocker-seq :resumed nil)]
+          (ws/append-entry! project ws-id {:kind :blocker-answered} (pr-str entry))
+          entry)
+        :closed))))
 
 (defn- earlier?
   "Whether ISO instant `a` falls before `b`; false when either does not parse."
