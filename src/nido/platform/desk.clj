@@ -147,27 +147,49 @@
       {:effects (filterv #(>= (:seq %) cursor) effects)
        :cursor  next-seq})))
 
+(defn- forward-line
+  "The stream's own line announcing the ports the desk should forward now."
+  [ports]
+  (str ";; forward" (apply str (map #(str " " %) (sort ports)))))
+
+(defn- read-forward-line
+  "The port set a `forward-line` announces, or nil for any other line."
+  [line]
+  (when-let [[_ ps] (re-matches #";; forward((?: \d+)*)" (str/trim line))]
+    (into #{} (map parse-long) (remove str/blank? (str/split ps #" ")))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   stream!
   "Run on nido's host, under the desk's ssh connection: print every effect
    recorded from now on, one EDN map per line, until stdout closes. Starts at
    the log's current end — what was asked while no desk listened is not
    replayed — and prints a heartbeat comment every 15s so a dead connection is
-   noticed from either side."
-  [& _]
-  (loop [cursor (:cursor (requests-since nil))
-         beat   (System/currentTimeMillis)]
+   noticed from either side.
+
+   With `{:ports f}`, `f` answers the set of this host's loopback ports the
+   person's browser should reach — a session's app, say, whose URL names
+   localhost. It is asked every 5s, and the set announced as a `;; forward`
+   line whenever it differs from the last one announced; a throw keeps the
+   last set. Comment lines are the stream's own, so an older desk skips them."
+  [& [{:keys [ports]}]]
+  (loop [cursor    (:cursor (requests-since nil))
+         beat      (System/currentTimeMillis)
+         announced nil
+         asked     0]
     (let [{:keys [effects cursor]} (requests-since cursor)
-          now (System/currentTimeMillis)]
+          now  (System/currentTimeMillis)
+          ask? (and ports (>= (- now asked) 5000))
+          want (if ask? (try (set (ports)) (catch Exception _ announced)) announced)]
       ;; A write to a closed connection throws; the desk is gone, so is this.
       (try
         (doseq [{:keys [effect]} effects]
           (println (pr-str effect)))
+        (when (and want (not= want announced)) (println (forward-line want)))
         (when (>= (- now beat) 15000) (println ";; beat"))
         (flush)
         (catch java.io.IOException _ (System/exit 0)))
       (Thread/sleep 500)
-      (recur cursor (if (>= (- now beat) 15000) now beat)))))
+      (recur cursor (if (>= (- now beat) 15000) now beat) want (if ask? now asked)))))
 
 (defn- sh-quote [s]
   (str "'" (str/replace (str s) "'" "'\\''") "'"))
@@ -200,14 +222,41 @@
       (or (parse (try (edn/read-string s) (catch Exception _ ::unreadable)))
           (do (log! "dropped a line that is not an Effect: " s) nil)))))
 
+(defn- forward!
+  "Add (`op` \"forward\") or remove (\"cancel\") a forward of `port` on this
+   machine's loopback to the same port on the host's, over the connection whose
+   control socket is `ctl`. Answers whether ssh accepted it — false when the
+   port is taken here."
+  [ctl host op port]
+  (let [spec (str "127.0.0.1:" port ":127.0.0.1:" port)]
+    (zero? (:exit (p/shell {:continue true :out :string :err :string :in ""}
+                           "ssh" "-S" ctl "-O" op "-L" spec host)))))
+
+(defn- apply-forwards!
+  "Make the connection forward exactly `want` (less `keep-out`, the ports the
+   connection holds for itself), from `have`; answers what is forwarded now. A
+   port that cannot be forwarded is logged and asked for again at the next
+   announcement."
+  [ctl host have want keep-out]
+  (let [want (apply disj want keep-out)
+        have (reduce (fn [h p] (if (forward! ctl host "cancel" p) (disj h p) h))
+                     have (remove want have))]
+    (reduce (fn [h p]
+              (if (forward! ctl host "forward" p)
+                (do (log! "forwarding localhost:" p) (conj h p))
+                (do (log! "could not forward localhost:" p " — is it in use here?") h)))
+            have (remove have want))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   run!
   "Run the desk on the person's machine: hold an ssh connection to nido's
    `:host`, read the effects `stream!` prints there and perform each here, and
    forward `:dashboard-port` of the host's loopback (default 8800) to
-   `:local-port` here (default the same). `:remote-dir` is nido's checkout on
-   the host (default ~/Code/nido) and `:remote-home` its NIDO_HOME when not the
-   default. Reconnects after a lost connection, waiting up to 30s between
+   `:local-port` here (default the same). Every port set the stream announces
+   is forwarded too, each to the same port here, so a localhost URL of the
+   host's opens in a browser on this machine. `:remote-dir` is nido's checkout
+   on the host (default ~/Code/nido) and `:remote-home` its NIDO_HOME when not
+   the default. Reconnects after a lost connection, waiting up to 30s between
    attempts; returns only when interrupted."
   [{:keys [host remote-dir remote-home dashboard-port local-port]
     :or   {remote-dir "~/Code/nido" dashboard-port 8800}}]
@@ -215,21 +264,29 @@
                     (when remote-home (str "NIDO_HOME=" (sh-quote remote-home) " "))
                     "bash -lc 'bb nido:desk:stream'")
         local  (or local-port dashboard-port)
+        ;; A control socket, so forwards can be added to the live connection.
+        ;; Short and under the home: macOS caps a socket path near 104 bytes.
+        ctl    (str (fs/path (fs/home) ".nido" "desk" (str "ctl-" (subs (str (random-uuid)) 0 8))))
         cmd    ["ssh" "-o" "ServerAliveInterval=15" "-o" "ServerAliveCountMax=2"
                 "-o" "ExitOnForwardFailure=no"
+                "-o" "ControlMaster=yes" "-o" (str "ControlPath=" ctl)
                 "-L" (str "127.0.0.1:" local ":127.0.0.1:" dashboard-port)
                 host remote]]
+    (fs/create-dirs (fs/parent ctl))
     (loop [wait 1000]
       (log! "connecting to " host " (dashboard on http://localhost:" local ")")
       (let [started (System/currentTimeMillis)
             ;; :shutdown, so a desk that is stopped takes its connection and the
             ;; port it forwards down with it instead of leaving an orphan holding both.
-            proc    (p/process cmd {:err :inherit :in :inherit :shutdown p/destroy-tree})]
+            proc    (p/process cmd {:err :inherit :in :inherit :shutdown p/destroy-tree})
+            fwd     (atom #{})]
         (with-open [r (jio/reader (:out proc))]
           (doseq [line (line-seq r)]
-            (when-let [e (read-line-effect line)]
-              (log! (if (perform! (localize host e)) "performed " "refused by this machine: ")
-                    (name (:kind e))))))
+            (if-let [want (read-forward-line line)]
+              (swap! fwd #(apply-forwards! ctl host % want #{local}))
+              (when-let [e (read-line-effect line)]
+                (log! (if (perform! (localize host e)) "performed " "refused by this machine: ")
+                      (name (:kind e)))))))
         (let [exit (:exit @proc)
               wait (if (> (- (System/currentTimeMillis) started) 60000) 1000 (min 30000 (* 2 wait)))]
           (log! "connection to " host " ended (exit " exit "); retrying in " (quot wait 1000) "s")

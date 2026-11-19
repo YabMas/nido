@@ -126,3 +126,28 @@
     (is (nil? (read-line-effect "#=(eval (System/exit 1))")))
     (is (nil? (read-line-effect "{:kind :shell :command \"rm -rf ~\"}")))
     (is (nil? (read-line-effect "not edn {")))))
+
+(deftest a-forward-announcement-round-trips
+  (let [forward-line      @#'desk/forward-line
+        read-forward-line @#'desk/read-forward-line]
+    (is (= #{4866 3234} (read-forward-line (forward-line #{3234 4866}))))
+    (is (= #{} (read-forward-line (forward-line #{})))
+        "an empty set is an announcement too: forward nothing")
+    (is (nil? (read-forward-line ";; beat")))
+    (is (nil? (read-forward-line ";; forward 12a")))
+    (is (nil? (@#'desk/read-line-effect (forward-line #{4866})))
+        "a desk that predates forwards skips the line as the stream's own")))
+
+(deftest the-desk-forwards-exactly-the-announced-ports
+  (let [calls (atom [])
+        taken #{3471}]
+    (with-redefs [desk/forward! (fn [_ _ op port]
+                                  (swap! calls conj [op port])
+                                  (not (and (= op "forward") (taken port))))]
+      (let [apply-forwards! @#'desk/apply-forwards!]
+        (is (= #{4866 3234} (apply-forwards! "ctl" "h" #{} #{4866 3234 3471 8800} #{8800}))
+            "a port taken here is left out, and the connection's own port is never asked for")
+        (reset! calls [])
+        (is (= #{3234 4242} (apply-forwards! "ctl" "h" #{4866 3234} #{3234 4242} #{8800})))
+        (is (= #{["cancel" 4866] ["forward" 4242]} (set @calls))
+            "a gone port is cancelled, a new one added, a kept one left alone")))))

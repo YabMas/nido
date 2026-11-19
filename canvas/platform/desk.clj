@@ -59,7 +59,8 @@
   (Operation stream!
     "On nido's host, under a desk's ssh connection: print every effect recorded from now on, one
      per line, until the connection closes. Starts at the log's current end, so nothing asked
-     before the desk connected is performed."
+     before the desk connected is performed. Given a source of loopback ports, it also announces
+     the set the desk should forward whenever it changes."
     {:signature [:=> [:catn [:args [:* :any]]] :any]
      :delegates [requests-since]})
   (Operation localize
@@ -68,8 +69,8 @@
     {:signature [:=> [:catn [:host :string] [:effect Effect]] Effect]})
   (Operation run!
     "On the person's machine: hold an ssh connection to nido's host that streams its effects and
-     forwards the dashboard's loopback port; perform each effect that parses, here. Reconnects
-     after a lost connection."
+     forwards the dashboard's loopback port and every port the stream announces; perform each
+     effect that parses, here. Reconnects after a lost connection."
     {:signature [:=> [:catn [:opts :map]] :any]
      :delegates [parse localize perform!]})
   (Operation perform!
