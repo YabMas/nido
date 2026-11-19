@@ -345,12 +345,20 @@
     (throw (ex-info (str "claude " verb " " id " was refused")
                     {:reason (keyword (str verb "-refused")) :id id :exit exit :out out :err err}))))
 
+(defn- unknown-session?
+  "Whether Claude Code answered that it knows no session by the id it was given."
+  [{:keys [out err]}]
+  (str/includes? (str out err) "No session matching"))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :boolean]}
   stop!
-  "Stop a session's process; its conversation is kept. Answers true once Claude Code said so;
-   throws :reason :stop-refused when it did not."
+  "Stop a session's process; its conversation is kept. Answers true once Claude Code said so,
+   and true too when Claude Code knows no session by `id`: nothing of it runs on this host —
+   the case for every id a record carries from another host — so it is already stopped.
+   Throws :reason :stop-refused on any other refusal."
   [id {:keys [claude-bin] :or {claude-bin "claude"}}]
-  (confirmed! "stop" id (claude! [claude-bin "stop" id])))
+  (let [r (claude! [claude-bin "stop" id])]
+    (or (unknown-session? r) (confirmed! "stop" id r))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :boolean]}
   respawn!

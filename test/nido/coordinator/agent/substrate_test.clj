@@ -201,6 +201,12 @@
     (is (true? (sub/stop! "b" {})))
     (is (true? (sub/respawn! "b" {})))))
 
+(deftest stopping-a-session-claude-code-does-not-know-is-already-done
+  (stubbing [#'sub/claude! (fake-claude (atom []) {"stop" {:exit 1 :out ""
+                                                           :err "No session matching 'f62f98ee'. Run 'claude agents' to list running sessions.\n"}})]
+    (is (true? (sub/stop! "f62f98ee" {}))
+        "a session that runs nowhere on this host — one a record carried from another — is stopped")))
+
 (deftest wake-surfaces-a-copy-it-could-not-remove
   (stubbing [#'sub/claude! (fake-claude (atom []) {"--resume" {:exit 0 :out "note: session a56cda8b is already running in the background, so this started a copy as 074ff0e1.\n"}
                                                    "rm"       {:exit 1 :out "" :err "still running"}})]
