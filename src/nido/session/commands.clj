@@ -36,7 +36,8 @@
 
    Resolution order:
      1. $JAVA_HOME, if already set and valid (respect the caller's choice).
-     2. `/usr/libexec/java_home` (works when a JDK is registered with macOS).
+     2. `/usr/libexec/java_home` (works when a JDK is registered with macOS; skipped on a host
+        without it, such as Linux).
      3. Canonicalize `which java` and walk up two levels — recovers keg-only
         Homebrew JDKs that the java_home stub can't see.
    Returns the home path string, or nil if no JDK can be found."
@@ -44,10 +45,11 @@
   (let [env-home (System/getenv "JAVA_HOME")]
     (if (valid-java-home? env-home)
       env-home
-      (or (let [{:keys [exit out]} (process/sh ["/usr/libexec/java_home"])]
+      (or (when (fs/executable? "/usr/libexec/java_home")
+            (let [{:keys [exit out]} (process/sh ["/usr/libexec/java_home"])]
             (when (zero? exit)
               (let [home (str/trim out)]
-                (when (valid-java-home? home) home))))
+                (when (valid-java-home? home) home)))))
           (let [{:keys [exit out]} (process/sh ["which" "java"])]
             (when (zero? exit)
               ;; canonical path is <home>/bin/java → home is its grandparent

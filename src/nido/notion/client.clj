@@ -7,9 +7,9 @@
    `http-request` is a redef seam so tests can stub HTTP calls."
   (:require
    [babashka.http-client :as http]
-   [babashka.process :as p]
    [cheshire.core :as json]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [nido.platform.secrets :as secrets]))
 
 (defn- dash-uuid [hex]
   (str (subs hex 0 8) "-" (subs hex 8 12) "-" (subs hex 12 16) "-"
@@ -50,34 +50,17 @@
                          (last-id s))]
         (-> hex (str/replace "-" "") str/lower-case dash-uuid)))))
 
-(defn ^{:malli/schema [:=> [:cat :any] :map]}
-  sh!
-  "Wrapped shell-out so tests can stub `security` calls."
-  [args]
-  (p/sh args))
-
-(defn- whoami
-  "Resolve the current username via `whoami`. Called at invocation time.
-   Uses p/sh directly (not sh!) — not a security call, not a test seam."
-  []
-  (str/trim (:out (p/sh ["whoami"]))))
-
 (defn ^{:malli/schema [:=> [:cat] [:maybe :NotionToken]]}
   keychain-token
-  "Read the Notion integration token from the user's macOS Keychain.
-   Returns the trimmed token string, or nil if the entry isn't present."
+  "The Notion integration token as stored by nido.platform.secrets, or nil when none is stored."
   []
-  (let [{:keys [exit out]} (sh! ["security" "find-generic-password"
-                                 "-s" "nido-notion" "-a" (whoami) "-w"])]
-    (when (zero? exit) (str/trim out))))
+  (secrets/read-secret "nido-notion"))
 
 (defn ^{:malli/schema [:=> [:cat :NotionToken] :any]}
   keychain-set!
-  "Upsert the Notion integration token into the user's macOS Keychain.
-   `-U` upserts if an entry with the same service+account already exists."
+  "Store the Notion integration token through nido.platform.secrets, replacing any already there."
   [token]
-  (sh! ["security" "add-generic-password"
-        "-s" "nido-notion" "-a" (whoami) "-U" "-w" token]))
+  (secrets/store-secret! "nido-notion" token))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :string :map] :map]}
   http-request

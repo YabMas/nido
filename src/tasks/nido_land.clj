@@ -18,7 +18,7 @@
    [nido.design.check :as design]
    [tasks.nido-design :as nido-design]
    [nido.coordinator.record.workstream :as cws]
-   [nido.coordinator.daemon.launchctl :as lc]
+   [nido.coordinator.daemon.supervisor :as sup]
    [nido.coordinator.daemon.restart :as restart]
    [nido.review.layers :as layers]
    [nido.review.stages :as stages]
@@ -594,20 +594,17 @@
                    :way-out "main probably moved: run it again, which rebases onto the new main"})))))))))
 
 (defn- daemon-checkout
-  "The checkout the launchd daemon loads its code from — the plist's WorkingDirectory — or nil when
-   the daemon is not installed under launchd."
+  "The checkout the supervised daemon loads its code from, or nil when its service is not
+   installed."
   []
-  (when (lc/installed?)
-    (some->> (slurp (lc/plist-path))
-             (re-find #"<key>WorkingDirectory</key>\s*<string>([^<]+)</string>")
-             second)))
+  (sup/checkout))
 
 (def ^:private restart-by-hand
   "jj rebase -b @ -d main@origin in ~/Code/nido, then bb nido:coordinator:restart once no run is live")
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   restart-daemon!
-  "Put the coordinator on the code that landed at `landed`: rebase the checkout the launchd daemon
+  "Put the coordinator on the code that landed at `landed`: rebase the checkout the supervised daemon
    loads onto origin's main now, then record the landing as owed for the daemon to pay on its own
    tick. Returns {:owed <commit> :waits [<why>]}, {:skipped <why>} or {:failed <why>}, each with the
    way out when there is one.
@@ -638,7 +635,7 @@
             {:failed (str failed " — the checkout holds the landing, but nothing will restart onto it")
              :way-out "bb nido:coordinator:restart once no run is live"}
             {:owed landed :waits (restart/waits landing)}))))
-    {:skipped "the coordinator is not installed under launchd, so no restart is owed"
+    {:skipped "the coordinator is not installed under a supervisor, so no restart is owed"
      :way-out "restart it yourself if it is running: bb nido:coordinator:down, then bb nido:coordinator:up"}))
 
 (defn- report-restart!

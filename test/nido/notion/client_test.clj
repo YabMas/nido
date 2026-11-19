@@ -2,22 +2,26 @@
   (:require
    [cheshire.core]
    [clojure.test :refer [deftest is]]
-   [nido.notion.client :as notion]))
+   [nido.notion.client :as notion]
+   [nido.platform.secrets :as secrets]))
 
 (defn- stub-sh [result]
   (fn [_args] result))
 
 (deftest keychain-token-returns-trimmed-secret-on-success
-  (with-redefs [notion/sh! (stub-sh {:exit 0 :out "secret_token\n" :err ""})]
+  (with-redefs [secrets/keychain? (constantly true)
+                secrets/sh! (stub-sh {:exit 0 :out "secret_token\n" :err ""})]
     (is (= "secret_token" (notion/keychain-token)))))
 
 (deftest keychain-token-returns-nil-on-non-zero-exit
-  (with-redefs [notion/sh! (stub-sh {:exit 44 :out "" :err "not found"})]
+  (with-redefs [secrets/keychain? (constantly true)
+                secrets/sh! (stub-sh {:exit 44 :out "" :err "not found"})]
     (is (nil? (notion/keychain-token)))))
 
 (deftest keychain-set-shells-security-add-with--U-and--w
   (let [calls (atom [])]
-    (with-redefs [notion/sh! (fn [args] (swap! calls conj args)
+    (with-redefs [secrets/keychain? (constantly true)
+                secrets/sh! (fn [args] (swap! calls conj args)
                                         {:exit 0 :out "" :err ""})]
       (notion/keychain-set! "my-token")
       (let [[args] @calls]

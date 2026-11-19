@@ -28,17 +28,15 @@
   [:map [:database :string] [:filter :map]])
 
 (Module notion-client
-  "The Notion REST client, and the Keychain the token comes from.
+  "The Notion REST client, and the token it reads through platform-secrets.
 
-   Two redef seams — `sh!` and `http-request` — so every call above them is testable without a
-   network or a Keychain. That is why they are public despite being wrappers."
+   One redef seam — `http-request` — so every call above it is testable without a network.
+   That is why it is public despite being a wrapper."
   {:child [NotionToken]}
-  (Operation sh! "Shell out, wrapped so tests can stub the Keychain."
-    {:signature [:=> [:catn [:args :any]] :map]})
   (Operation keychain-token "The Notion token, or nil when none is stored."
-    {:signature [:=> [:catn] [:maybe NotionToken]] :delegates [sh!]})
+    {:signature [:=> [:catn] [:maybe NotionToken]]})
   (Operation keychain-set! "Store or replace the Notion token."
-    {:signature [:=> [:catn [:token NotionToken]] :any] :delegates [sh!]})
+    {:signature [:=> [:catn [:token NotionToken]] :any]})
   (Operation http-request "One HTTP call, wrapped so tests can stub the network."
     {:signature [:=> [:catn [:method :keyword] [:url :string] [:opts :map]] :map]})
   (Operation clear-data-source-cache! "Drop the cached database-to-data-source mapping."

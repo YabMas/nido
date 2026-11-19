@@ -297,10 +297,17 @@
       (when (zero? exit)
         (some-> out str/trim parse-long (* 1024))))))
 
+(defn- read-proc
+  "The contents of a /proc file, or nil where the host has none (macOS) or it cannot be read.
+   Read as bytes, not with slurp: a /proc file reports size 0, and the stream slurp opens on it
+   throws \"Invalid argument\" under babashka."
+  [path]
+  (try (when (fs/exists? path) (String. (fs/read-all-bytes path) "UTF-8")) (catch Exception _ nil)))
+
 (defn ^{:malli/schema [:=> [:cat] [:maybe :double]]}
   load-average
-  "The machine's 1-minute load average, via `sysctl -n vm.loadavg`. Returns nil
-   if sysctl is missing or its output does not parse.
+  "The machine's 1-minute load average — from /proc/loadavg on Linux, `sysctl -n vm.loadavg`
+   elsewhere. Returns nil when neither reads or parses.
 
    Shelled out rather than read from the JVM: babashka does not expose
    java.lang.management, so the ManagementFactory route the same code would take
@@ -316,11 +323,14 @@
   ;; must degrade to "unknown", never propagate: every caller is observability,
   ;; and instrumentation that can break its caller is worse than no reading.
   (try
-    (let [{:keys [exit out]} (shell {:continue true :out :string :err :string}
-                                    "/usr/sbin/sysctl" "-n" "vm.loadavg")]
-      (when (zero? exit)
-        ;; `{ 1.83 2.05 2.11 }` — braces and all, so take the first numeric field.
-        (some-> (re-find #"\d+\.\d+" (str out)) parse-double)))
+    (if-let [proc (read-proc "/proc/loadavg")]
+      ;; `0.52 0.58 0.59 1/1234 5678` — the first field.
+      (some-> (re-find #"^\d+\.\d+" (str/trim proc)) parse-double)
+      (let [{:keys [exit out]} (shell {:continue true :out :string :err :string}
+                                      "/usr/sbin/sysctl" "-n" "vm.loadavg")]
+        (when (zero? exit)
+          ;; `{ 1.83 2.05 2.11 }` — braces and all, so take the first numeric field.
+          (some-> (re-find #"\d+\.\d+" (str out)) parse-double))))
     (catch Throwable _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :int]] :string]}
@@ -338,19 +348,26 @@
 
 (defn ^{:malli/schema [:=> [:cat] [:maybe :map]]}
   host-boot
-  "This host boot: its identity — the session UUID the kernel gives the boot — and the instant
-   it began, from the kernel's boot time; nil when either cannot be read.
+  "This host boot: its identity — the id the kernel gives the boot — and the instant it began,
+   from the kernel's boot time; nil when either cannot be read. On Linux the id is
+   /proc/sys/kernel/random/boot_id and the instant /proc/stat's btime; on macOS the
+   kern.bootsessionuuid and kern.boottime sysctls.
 
    Not the boot time as identity: macOS moves kern.boottime when it corrects the clock, so its
    seconds can change within one boot. On 2026-10-27 one boot read as 1792861351 and then
    1792861352, and a daemon restart took the second for a new boot and restarted 51 sessions."
   []
   (try
-    ;; By absolute path: the daemon runs under launchd, whose PATH has no /usr/sbin, and a bare
-    ;; `sysctl` there reads as an unknown boot — every reboot then went unrecorded.
-    (let [sysctl (fn [k] (:out (shell {:out :string :err :string} "/usr/sbin/sysctl" "-n" k)))
-          sec    (second (re-find #"sec = (\d+)" (sysctl "kern.boottime")))
-          id     (str/trim (str (sysctl "kern.bootsessionuuid")))]
-      (when (and sec (seq id))
-        {:id id :began-at (str (java.time.Instant/ofEpochSecond (parse-long sec)))}))
+    (if-let [boot-id (read-proc "/proc/sys/kernel/random/boot_id")]
+      (let [id  (str/trim boot-id)
+            sec (some->> (read-proc "/proc/stat") (re-find #"(?m)^btime (\d+)") second)]
+        (when (and sec (seq id))
+          {:id id :began-at (str (java.time.Instant/ofEpochSecond (parse-long sec)))}))
+      ;; By absolute path: the daemon runs under launchd, whose PATH has no /usr/sbin, and a
+      ;; bare `sysctl` there reads as an unknown boot — every reboot then went unrecorded.
+      (let [sysctl (fn [k] (:out (shell {:out :string :err :string} "/usr/sbin/sysctl" "-n" k)))
+            sec    (second (re-find #"sec = (\d+)" (sysctl "kern.boottime")))
+            id     (str/trim (str (sysctl "kern.bootsessionuuid")))]
+        (when (and sec (seq id))
+          {:id id :began-at (str (java.time.Instant/ofEpochSecond (parse-long sec)))})))
     (catch Exception _ nil)))

@@ -1,6 +1,6 @@
 (ns nido.session.shared-pg
   "Per-project shared Postgres cluster. One long-lived RUNNING cluster at
-   ~/.nido/shared/<project>/pg-data, seeded once by APFS-cloning the (stopped)
+   ~/.nido/shared/<project>/pg-data, seeded once by cloning (copy-on-write) the (stopped)
    template. All :shared-mode sessions connect to it instead of cloning their
    own PGDATA.
 
@@ -112,7 +112,7 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   ensure-up!
   "Ensure the project's shared cluster exists and is running. Seeds it by
-   APFS-cloning the template on first call. Concurrency-safe. Returns {:port p}."
+   cloning the template (copy-on-write) on first call. Concurrency-safe. Returns {:port p}."
   [project-name]
   (with-lock (state/shared-lock-file project-name)
     (fn []
@@ -121,7 +121,7 @@
         (when-not seeded?
           (assert-template-ready! project-name)
           (fs/create-dirs (state/project-shared-dir project-name))
-          (core/log-step "Seeding shared cluster: APFS-cloning template…")
+          (core/log-step "Seeding shared cluster: cloning template…")
           (pg/clone-pgdata! (template-data-dir project-name) data-dir)
           (state/write-shared-meta! project-name
                                     {:project-name project-name

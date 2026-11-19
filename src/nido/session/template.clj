@@ -1,6 +1,6 @@
 (ns nido.session.template
   "Per-project Postgres template cluster. Lives at
-   ~/.nido/templates/<project-name>/pg-data/ and acts as the source for APFS
+   ~/.nido/templates/<project-name>/pg-data/ and acts as the source for copy-on-write
    clones when a session starts with :clone-from-template on its :postgresql
    service.
 
@@ -73,7 +73,7 @@
   (fs/move (state/refresh-snapshot-dir data-dir) data-dir))
 
 (defn- with-template-rollback
-  "Protect the template from a failed refresh. APFS-clone the (stopped) template
+  "Protect the template from a failed refresh. Clone (copy-on-write) the (stopped) template
    at `data-dir` to its refresh snapshot, run `thunk`, and on success discard
    the snapshot. On ANY throw, restore `data-dir` from the snapshot and
    rethrow — so a failed fetch or a half-completed restore can never leave the
@@ -85,7 +85,7 @@
    `data-dir` would lose the last good copy.
 
    The protective snapshot is taken BEFORE `thunk` runs anything destructive,
-   so if it can't be made (uninitialized template, cross-volume PGDATA),
+   so if it can't be made (an uninitialized or running template),
    `clone-pgdata!` throws here and `thunk` never runs — the template is left
    untouched. The caller must have already stopped the cluster (cloning a
    running cluster is refused)."
@@ -128,7 +128,7 @@
    destructive runs.
 
    A refresh needs about a whole template's worth of FREE space, not the
-   difference between old and new: the pre-refresh snapshot is an APFS clone
+   difference between old and new: the pre-refresh snapshot is a copy-on-write clone
    that keeps every block of the old template alive until the refresh ends,
    so dropping the old database frees nothing and the restore writes every
    block anew. Space a refresh step itself uses (a fetched dump, say) is not
@@ -230,7 +230,7 @@
   refresh!
   "Start the template cluster and run project-declared :refresh-steps against
    it (e.g. :db/get-dump then :db/restore). Stops the cluster cleanly at the
-   end so the result is APFS-clone-ready."
+   end so the result is ready to clone."
   [project-name]
   (let [session-edn (engine/load-session-edn project-name)
         template-cfg (load-template-config session-edn)

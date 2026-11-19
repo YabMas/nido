@@ -1,5 +1,6 @@
 (ns nido.platform.process-test
   (:require
+   [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.process :as sut]))
 
@@ -66,17 +67,30 @@
               {:out (case (last args)
                       "kern.boottime"        (str "{ sec = " @sec ", usec = 971631 } Sat Oct 24 19:02:31 2026")
                       "kern.bootsessionuuid" "7C20755B-EE3A-4A46-B5BB-FA3BD0F0FFA1\n")})]
-    (with-redefs [babashka.process/shell out]
+    (with-redefs [babashka.process/shell out
+                  fs/exists?             (constantly false)] ; a host without /proc
       (let [a (sut/host-boot)]
         (swap! sec inc)
         (let [b (sut/host-boot)]
           (is (= "7C20755B-EE3A-4A46-B5BB-FA3BD0F0FFA1" (:id a) (:id b)))
           (is (= "2026-10-24T17:02:31Z" (:began-at a))))))
     (testing "an unreadable boot session is an unknown boot, not one named by its time"
-      (with-redefs [babashka.process/shell (fn [_ & args]
+      (with-redefs [fs/exists?             (constantly false)
+                    babashka.process/shell (fn [_ & args]
                                              {:out (if (= "kern.boottime" (last args))
                                                      "{ sec = 1792861351, usec = 0 }" "")})]
         (is (nil? (sut/host-boot)))))))
+
+(deftest on-linux-the-boot-and-load-come-from-proc
+  (let [files {"/proc/sys/kernel/random/boot_id" "a8233b50-fb6b-48ed-8221-ab61a7310362\n"
+               "/proc/stat"                      "cpu  1 2 3\nbtime 1795023206\nprocesses 9\n"
+               "/proc/loadavg"                   "0.52 0.58 0.59 1/563 98271\n"}]
+    (with-redefs [fs/exists?         (fn [p] (contains? files (str p)))
+                  fs/read-all-bytes  (fn [p] (.getBytes ^String (get files (str p)) "UTF-8"))
+                  babashka.process/shell (fn [& _] (throw (ex-info "no sysctl on Linux" {})))]
+      (is (= {:id "a8233b50-fb6b-48ed-8221-ab61a7310362" :began-at "2026-11-18T17:33:26Z"}
+             (sut/host-boot)))
+      (is (= 0.52 (sut/load-average))))))
 
 ;; ---------------------------------------------------------------------------
 ;; wait-within! — a wall clock on a launched process

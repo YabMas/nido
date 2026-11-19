@@ -8,34 +8,26 @@
    connection drops or Slack asks for a refresh, and stops on an auth refusal rather than retry
    a token that will never work. Its caller sees reaction events and connection states only.
 
-   `sh!`/`http-request` (from the client) and `open-websocket` are the redef seams."
+   `http-request` (from the client), `nido.platform.secrets/sh!` and `open-websocket` are the redef seams."
   (:require
    [babashka.http-client.websocket :as ws]
-   [babashka.process :as p]
    [cheshire.core :as json]
-   [clojure.string :as str]
+   [nido.platform.secrets :as secrets]
    [nido.slack.client :as client]))
 
-(def ^:private keychain-service "nido-slack-app")
-
-(defn- whoami []
-  (str/trim (:out (p/sh ["whoami"]))))
+(def ^:private secret-service "nido-slack-app")
 
 (defn ^{:malli/schema [:=> [:cat] [:maybe :AppToken]]}
   app-token
-  "The Slack app-level token from the user's macOS Keychain, or nil when it is not stored."
+  "The Slack app-level token as stored by nido.platform.secrets, or nil when it is not stored."
   []
-  (let [{:keys [exit out]} (client/sh! ["security" "find-generic-password"
-                                        "-s" keychain-service "-a" (whoami) "-w"])]
-    (when (zero? exit)
-      (let [t (str/trim out)] (when-not (str/blank? t) t)))))
+  (secrets/read-secret secret-service))
 
 (defn ^{:malli/schema [:=> [:cat :AppToken] :any]}
   app-token-set!
-  "Upsert the Slack app-level token into the user's macOS Keychain."
+  "Store the Slack app-level token through nido.platform.secrets."
   [token]
-  (client/sh! ["security" "add-generic-password"
-               "-s" keychain-service "-a" (whoami) "-U" "-w" token]))
+  (secrets/store-secret! secret-service token))
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   normalise-envelope

@@ -3,7 +3,7 @@
 
    The landing owes; the daemon pays. A landing is often the one process that cannot restart the
    daemon — it runs inside it (the dashboard's Publish), or runs are live — so it records the debt
-   here and the daemon pays it on its tick by exiting for launchd to relaunch it onto the checkout
+   here and the daemon pays it on its tick by exiting for its supervisor to relaunch it onto the checkout
    that holds the landing. The daemon that comes up records that it runs it.
 
    `landing` is the one place the file's shape becomes trusted. `waits` is the one reading of
@@ -15,7 +15,7 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [malli.core :as m]
-   [nido.coordinator.daemon.launchctl :as lc]
+   [nido.coordinator.daemon.supervisor :as sup]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
@@ -100,12 +100,9 @@
     (catch Exception e {:failed (str "the running landing could not be written: " (ex-message e))})))
 
 (defn- checkout
-  "The checkout the launchd daemon loads its code from — the plist's WorkingDirectory — or nil."
+  "The checkout the supervised daemon loads its code from, or nil when its service is not installed."
   []
-  (when (lc/installed?)
-    (some->> (slurp (lc/plist-path))
-             (re-find #"<key>WorkingDirectory</key>\s*<string>([^<]+)</string>")
-             second)))
+  (sup/checkout))
 
 (defn- holds?
   "Whether `dir`'s working-copy commit descends from `commit`. Reads the repository without
@@ -151,7 +148,7 @@
   waits
   "What `owed` still waits for, in words, read from what any process can see when asked: runs
    whose agent is alive under the daemon (see busy-runs), the owing landing still running, the
-   daemon's checkout not holding the commit, the daemon not running under launchd, or the running
+   daemon's checkout not holding the commit, the daemon not running under its supervisor, or the running
    daemon having started after the debt — which settles it rather than pays it. Empty when the
    daemon should restart now."
   [{:keys [commit owed-at by-pid]}]
@@ -170,8 +167,8 @@
       (and dir (not (holds? dir commit)))
       (conj (str dir " to hold " commit))
 
-      (not (lc/loaded?))
-      (conj "the coordinator to be brought up under launchd — it starts on the landing")
+      (not (:running? (sup/status)))
+      (conj "the coordinator to be brought up under its supervisor — it starts on the landing")
 
       (and start (.isAfter ^java.time.Instant start (java.time.Instant/parse owed-at)))
       (conj "nothing: the running coordinator started after it and settles it"))))

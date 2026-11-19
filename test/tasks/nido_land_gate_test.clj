@@ -2,7 +2,7 @@
   "The landing gate refuses before it pushes anything it cannot show."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [nido.coordinator.daemon.launchctl :as lc]
+            [nido.coordinator.daemon.supervisor :as sup]
             [nido.coordinator.daemon.restart :as restart]
             [nido.review.layers :as layers]
             [nido.session.lifecycle :as lifecycle]
@@ -62,9 +62,9 @@
                                     {:failed "disk full"}
                                     {:landing {:state :owed :commit commit :owed-at "t" :by-pid pid}}))
                   restart/waits (fn [_] ["the landing that owed it to finish"])
-                  lc/kickstart! (fn [] (reset! kicked :kickstart) {:exit 0})
-                  lc/bootstrap! (fn [] (reset! kicked :bootstrap) {:exit 0})
-                  lc/bootout!   (fn [] (reset! kicked :bootout) {:exit 0})]
+                  sup/restart! (fn [] (reset! kicked :restart) {:ok? true})
+                  sup/start!   (fn [] (reset! kicked :start) {:ok? true})
+                  sup/stop!    (fn [] (reset! kicked :stop) {:ok? true})]
       {:result (#'land/restart-daemon! "tip") :calls @calls :owed @owed :kicked @kicked})))
 
 (deftest a-landing-rebases-the-checkout-and-owes-the-restart

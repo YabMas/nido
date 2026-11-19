@@ -10,37 +10,21 @@
    a JSON \"ok\": false field — so we inspect `ok`, not just the status."
   (:require
    [babashka.http-client :as http]
-   [babashka.process :as p]
    [cheshire.core :as json]
-   [clojure.string :as str]))
-
-(defn ^{:malli/schema [:=> [:cat :any] :map]}
-  sh!
-  "Wrapped shell-out so tests can stub `security` calls."
-  [args]
-  (p/sh args))
-
-(defn- whoami
-  "Resolve the current username via `whoami`. Called at invocation time.
-   Uses p/sh directly (not sh!) — not a security call, not a test seam."
-  []
-  (str/trim (:out (p/sh ["whoami"]))))
+   [clojure.string :as str]
+   [nido.platform.secrets :as secrets]))
 
 (defn ^{:malli/schema [:=> [:cat] [:maybe :SlackToken]]}
   keychain-token
-  "Read the Slack bot token from the user's macOS Keychain. Returns the trimmed
-   token string, or nil if the entry isn't present."
+  "The Slack bot token as stored by nido.platform.secrets, or nil when none is stored."
   []
-  (let [{:keys [exit out]} (sh! ["security" "find-generic-password"
-                                 "-s" "nido-slack" "-a" (whoami) "-w"])]
-    (when (zero? exit) (str/trim out))))
+  (secrets/read-secret "nido-slack"))
 
 (defn ^{:malli/schema [:=> [:cat :SlackToken] :any]}
   keychain-set!
-  "Upsert the Slack bot token into the user's macOS Keychain. `-U` upserts."
+  "Store the Slack bot token through nido.platform.secrets, replacing any already there."
   [token]
-  (sh! ["security" "add-generic-password"
-        "-s" "nido-slack" "-a" (whoami) "-U" "-w" token]))
+  (secrets/store-secret! "nido-slack" token))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :string :map] :map]}
   http-request

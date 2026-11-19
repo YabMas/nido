@@ -10,24 +10,39 @@
   (:import
    [java.util.zip CRC32]))
 
+(defn- keg-bin-dirs
+  "The bin directories of Homebrew postgresql kegs under `opt-dir`."
+  [opt-dir]
+  (when (fs/exists? opt-dir)
+    (->> (fs/list-dir opt-dir)
+         (filter #(str/starts-with? (str (fs/file-name %)) "postgresql"))
+         (map #(str (fs/path % "bin"))))))
+
+(defn- debian-bin-dirs
+  "The bin directories of Debian-layout installs under `root` (/usr/lib/postgresql/<major>/bin),
+   highest major first — Debian keeps initdb off PATH, one directory per major."
+  [root]
+  (when (fs/exists? root)
+    (->> (fs/list-dir root)
+         (keep #(when-let [major (parse-long (str (fs/file-name %)))] [major %]))
+         (sort-by first >)
+         (map #(str (fs/path (second %) "bin"))))))
+
 (defn ^{:malli/schema [:=> [:cat] [:maybe :Path]]}
-  find-pg-bin-dir []
+  find-pg-bin-dir
+  "The directory holding initdb: from PATH, else a Homebrew keg, else a Debian-layout
+   /usr/lib/postgresql/<major>/bin with the highest major first. Throws when there is none."
+  []
   (let [result (shell {:continue true :out :string :err :string} "which" "initdb")]
     (if (zero? (:exit result))
       (str (fs/parent (str/trim (:out result))))
-      (let [candidates (concat
-                        (when (fs/exists? "/opt/homebrew/opt")
-                          (->> (fs/list-dir "/opt/homebrew/opt")
-                               (filter #(str/starts-with? (str (fs/file-name %)) "postgresql"))
-                               (map #(str (fs/path % "bin")))))
-                        (when (fs/exists? "/usr/local/opt")
-                          (->> (fs/list-dir "/usr/local/opt")
-                               (filter #(str/starts-with? (str (fs/file-name %)) "postgresql"))
-                               (map #(str (fs/path % "bin"))))))
+      (let [candidates (concat (keg-bin-dirs "/opt/homebrew/opt")
+                               (keg-bin-dirs "/usr/local/opt")
+                               (debian-bin-dirs "/usr/lib/postgresql"))
             found (first (filter #(fs/exists? (str (fs/path % "initdb"))) candidates))]
         (when-not found
-          (throw (ex-info "PostgreSQL not found. Install with: brew install postgresql"
-                          {:hint "Ensure initdb is on PATH or install PostgreSQL via Homebrew."})))
+          (throw (ex-info "PostgreSQL not found. Install with: brew install postgresql (macOS) or apt install postgresql-<major> (Debian/Ubuntu)"
+                          {:hint "Ensure initdb is on PATH, or install PostgreSQL via Homebrew or apt."})))
         found))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :string] :string]}
@@ -124,12 +139,38 @@
   [data-dir]
   (not (fs/exists? (str (fs/path data-dir "postmaster.pid")))))
 
+(defn- cow-copy-args
+  "cp's arguments for a copy-on-write clone on this OS: clonefile on macOS, reflink elsewhere."
+  []
+  (if (str/starts-with? (str/lower-case (System/getProperty "os.name" "")) "mac")
+    ["cp" "-cR"]
+    ["cp" "-a" "--reflink=always"]))
+
+(defn- copy-tree-cheaply!
+  "Copy directory `source` to `target` (which must not exist) with copy-on-write where the
+   filesystem has it, else a full copy that the log names as one. Throws only when even the
+   full copy fails."
+  [source target]
+  (core/log-step "Cloning template PGDATA (copy-on-write)")
+  (let [cow (apply shell {:continue true :out :string :err :string}
+                   (conj (cow-copy-args) (str source) (str target)))]
+    (when-not (zero? (:exit cow))
+      (when (fs/exists? target) (fs/delete-tree target))
+      (core/log-step (str "Copy-on-write clone unavailable here (" (str/trim (str (:err cow)))
+                          "); taking a full copy of PGDATA instead"))
+      (let [full (shell {:continue true :out :string :err :string}
+                        "cp" "-R" (str source) (str target))]
+        (when-not (zero? (:exit full))
+          (throw (ex-info "Failed to clone PGDATA"
+                          {:source source :target target :error (:err full)})))))))
+
 (defn ^{:malli/schema [:=> [:cat :Path :Path] :any]}
   clone-pgdata!
-  "APFS-clone source-data-dir to target-data-dir using `cp -cR`. Source must be
-   stopped (no postmaster.pid) and have no refresh snapshot beside it. Target
-   must not yet exist. The clone is
-   essentially free on APFS — blocks are shared until either side mutates."
+  "Clone source-data-dir to target-data-dir with the filesystem's copy-on-write — clonefile on
+   macOS, reflink on Linux — so the clone is essentially free: blocks are shared until either
+   side mutates. Where the filesystem has no copy-on-write it takes a full copy and says so in
+   the log; it never fails for want of one. Source must be stopped (no postmaster.pid) and have
+   no refresh snapshot beside it. Target must not yet exist."
   [source-data-dir target-data-dir]
   (when-not (fs/exists? (str (fs/path source-data-dir "PG_VERSION")))
     (throw (ex-info "Template PGDATA does not exist or is not initialized"
@@ -154,16 +195,7 @@
                     {:target target-data-dir})))
   (when-let [parent (fs/parent target-data-dir)]
     (fs/create-dirs parent))
-  (core/log-step "Cloning template PGDATA via cp -cR (APFS)")
-  (let [result (shell {:continue true :out :string :err :string}
-                      "cp" "-cR" source-data-dir target-data-dir)]
-    (when-not (zero? (:exit result))
-      (throw (ex-info (str "Failed to clone PGDATA. "
-                           "If the template and target are on different APFS volumes "
-                           "(or non-APFS), use a single volume under ~/.nido/.")
-                      {:source source-data-dir
-                       :target target-data-dir
-                       :error (:err result)})))))
+  (copy-tree-cheaply! source-data-dir target-data-dir))
 
 (defn ^{:malli/schema [:=> [:cat :Path :Path :int :Path [:? :any]] :any]}
   pg-ctl-start!
@@ -381,7 +413,7 @@
           (core/log-step (str "WARNING: psql schema setup had issues: " (:err result))))))))
 
 ;; ---------------------------------------------------------------------------
-;; Service implementation — every session gets its own PGDATA, APFS-cloned
+;; Service implementation — every session gets its own PGDATA, cloned copy-on-write
 ;; from the project's template cluster.
 ;; ---------------------------------------------------------------------------
 
@@ -389,7 +421,7 @@
   resolve-pg-mode
   "Resolve the effective PG provisioning mode from a service-def.
      :shared             — connect to the project's shared cluster (no clone).
-     :isolated / :clone  — private per-session PGDATA (APFS clone of template).
+     :isolated / :clone  — private per-session PGDATA (copy-on-write clone of template).
    Back-compat: :clone-from-template true (no :mode) resolves to :clone."
   [service-def]
   (let [{:keys [mode]} service-def]

@@ -8,6 +8,12 @@
 
 (Module platform-secrets
   "Where a credential is kept."
+  (Operation sh!
+    "Shell out — a redef seam, so the Keychain verbs can be tested without a Keychain."
+    {:signature [:=> [:catn [:args :any]] :map]})
+  (Operation keychain?
+    "Whether this host keeps credentials in the macOS Keychain. Wrapped so a test can pick."
+    {:signature [:=> [:catn] :boolean]})
   (Operation read-secret
     "The credential stored under `service`, or nil when there is none."
     {:signature [:=> [:catn [:service :string]] [:maybe :string]]})

@@ -10,19 +10,17 @@
             [fukan.common.typing.malli]))
 
 (Kind SlackToken
-  "The Slack bot token, read from the user's macOS Keychain. Passed explicitly to every call
+  "The Slack bot token, read through platform-secrets. Passed explicitly to every call
    rather than held in a var, for the same reason the Notion one is."
   :string)
 
 (Module slack-client
-  "The Slack Web API client, its Keychain token, the message and thread normalisers, slack id making and parsing, and the stubbable HTTP and shell primitives the socket module shares."
+  "The Slack Web API client, its token (read through platform-secrets), the message and thread normalisers, slack id making and parsing, and the stubbable HTTP primitive the socket module shares."
   {:child [SlackToken]}
-  (Operation sh! "Shell out, wrapped so tests can stub the Keychain."
-    {:signature [:=> [:catn [:args :any]] :map]})
   (Operation keychain-token "The Slack bot token, or nil."
-    {:signature [:=> [:catn] [:maybe SlackToken]] :delegates [sh!]})
+    {:signature [:=> [:catn] [:maybe SlackToken]]})
   (Operation keychain-set! "Store or replace the Slack bot token."
-    {:signature [:=> [:catn [:token SlackToken]] :any] :delegates [sh!]})
+    {:signature [:=> [:catn [:token SlackToken]] :any]})
   (Operation http-request "One HTTP call, wrapped so tests can stub the network."
     {:signature [:=> [:catn [:method :keyword] [:url :string] [:opts :map]] :map]})
   (Operation conversations-history "A channel's recent messages."
@@ -62,7 +60,7 @@
 
 (Kind AppToken
   "The Slack app-level token (xapp-) that opens a Socket Mode connection, read from the
-   Keychain beside the bot token. A different credential from SlackToken: it can open a
+   secrets beside the bot token. A different credential from SlackToken: it can open a
    connection and do nothing else."
   :string)
 
@@ -72,9 +70,9 @@
    needs — and hands its caller only the reaction events it carried."
   {:child [AppToken]}
   (Operation app-token "The app-level token, or nil."
-    {:signature [:=> [:catn] [:maybe AppToken]] :delegates [sh!]})
+    {:signature [:=> [:catn] [:maybe AppToken]]})
   (Operation app-token-set! "Store or replace the app-level token."
-    {:signature [:=> [:catn [:token AppToken]] :any] :delegates [sh!]})
+    {:signature [:=> [:catn [:token AppToken]] :any]})
   (Operation normalise-envelope
     "One Socket Mode frame as {:ack <envelope id or nil> :event <a kept reaction or nil>
      :control <:hello | :disconnect | nil>} — the one place a frame's shape is read."

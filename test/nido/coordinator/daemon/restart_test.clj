@@ -5,7 +5,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [nido.coordinator.daemon.launchctl :as lc]
+   [nido.coordinator.daemon.supervisor :as sup]
    [nido.coordinator.daemon.restart :as restart]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
@@ -60,9 +60,7 @@
                 runs/live?               (fn [id] (= :live (get busy id)))
                 runs/read-run            (fn [id] {:state (if (= :record (get busy id)) :running :done)})
                 process/process-alive?   (fn [pid] (if (= 4242 pid) (boolean owner-alive?) (some? daemon-start)))
-                lc/installed?            (constantly true)
-                lc/plist-path            (constantly "/nonexistent")
-                lc/loaded?               (constantly loaded?)
+                sup/status               (constantly {:manager :launchd :installed? true :running? loaded?})
                 restart/checkout         (constantly "/root")
                 restart/holds?           (fn [_ _] holds?)
                 restart/daemon-pid       (constantly (when daemon-start 5151))
@@ -75,7 +73,7 @@
   (is (str/includes? (first (waits-with {:busy {"r2" :record}})) "r2") "a run whose record says running")
   (is (str/includes? (first (waits-with {:owner-alive? true})) "landing that owed it"))
   (is (str/includes? (first (waits-with {:holds? false})) "to hold abc"))
-  (is (str/includes? (first (waits-with {:loaded? false})) "launchd"))
+  (is (str/includes? (first (waits-with {:loaded? false})) "supervisor"))
   (testing "a daemon that started after the debt settles it rather than pays it"
     (is (str/includes? (first (waits-with {:daemon-start (java.time.Instant/parse "2026-11-17T12:05:00Z")}))
                        "settles it"))

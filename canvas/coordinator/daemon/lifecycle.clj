@@ -1,6 +1,6 @@
 (ns canvas.coordinator.daemon.lifecycle
-  "Self-spec: keeping the daemon running and saying so — `heartbeat`, `launchctl`, `reconcile`,
-   `restart`, `preprocess`."
+  "Self-spec: keeping the daemon running and saying so — `heartbeat`, `launchctl`, `supervisor`,
+   `reconcile`, `restart`, `preprocess`."
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
@@ -80,7 +80,11 @@
     "The plist XML for this machine's paths. Pure — what gets installed can be asserted without
      installing it."
     {:signature [:=> [:catn [:opts :map]] :string]
-     :delegates [label]}))
+     :delegates [label]})
+  (Operation working-directory
+    "The checkout the installed plist runs the daemon from, or nil when none is installed."
+    {:signature [:=> [:catn] [:maybe :string]]
+     :delegates [installed? plist-path]}))
 
 (Kind Landing
   "The latest landing: owed onto a commit — when, and by which landing process — or running it, in
@@ -98,9 +102,12 @@
 
    The restart a landing owes is paid by the daemon exiting and the supervisor starting it
    again, so a supervisor that does not restart on exit is not one."
+  (Operation manager
+    "The service manager on this host — :launchd or :systemd. Wrapped so a test can pick one."
+    {:signature [:=> [:catn] [:enum :launchd :systemd]]})
   (Operation install!
     "Install the daemon's service and start it, saying in words what it installed and where."
-    {:signature [:=> [:catn] :map]})
+    {:signature [:=> [:catn [:spec :map]] :map]})
   (Operation uninstall!
     "Stop and remove it. No-op when absent."
     {:signature [:=> [:catn] :map]})

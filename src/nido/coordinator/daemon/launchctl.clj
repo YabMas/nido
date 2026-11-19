@@ -1,6 +1,7 @@
 (ns nido.coordinator.daemon.launchctl
-  "macOS LaunchAgent plist for the nido coordinator. Pure rendering plus
-   thin shell wrappers around launchctl. No nio2 watchers, no state."
+  "macOS LaunchAgent plist for the nido coordinator — the macOS half daemon-supervisor composes,
+   and called by it alone. Pure rendering plus thin shell wrappers around launchctl. No nio2
+   watchers, no state."
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
@@ -45,6 +46,16 @@
   []
   (when (installed?)
     (fs/delete (plist-path))))
+
+(defn ^{:malli/schema [:=> [:cat] [:maybe :string]]}
+  working-directory
+  "The checkout the installed plist runs the daemon from — its WorkingDirectory — or nil when no
+   plist is installed."
+  []
+  (when (installed?)
+    (some->> (slurp (plist-path))
+             (re-find #"<key>WorkingDirectory</key>\s*<string>([^<]+)</string>")
+             second)))
 
 (defn ^{:malli/schema [:=> [:cat] :string]}
   current-uid
@@ -102,12 +113,13 @@
    - :nido-dir  — absolute path to the nido checkout (becomes WorkingDirectory)
    - :log-path  — absolute path for StandardOutPath + StandardErrorPath
    - :path-env  — PATH value injected into the daemon's environment
+   - :nido-home — optional; set as the daemon's NIDO_HOME when present
 
    ProcessType Interactive, because the daemon serves the dashboard a person is
    waiting on. Left unset, launchd applies its light resource limits — throttled
    CPU and I/O — and on a loaded machine (load 23 on 14 cores) the same page
    rendered in 0.3s standalone took 1.2–1.4s from the daemon."
-  [{:keys [bb-path nido-dir log-path path-env]}]
+  [{:keys [bb-path nido-dir log-path path-env nido-home]}]
   (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
        "<plist version=\"1.0\">\n"
@@ -137,6 +149,9 @@
        "    <dict>\n"
        "        <key>PATH</key>\n"
        "        <string>" path-env "</string>\n"
+       (when nido-home
+         (str "        <key>NIDO_HOME</key>\n"
+              "        <string>" nido-home "</string>\n"))
        "    </dict>\n"
        "</dict>\n"
        "</plist>\n"))

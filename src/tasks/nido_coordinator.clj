@@ -14,7 +14,7 @@
    [nido.coordinator.lane.ship :as ship]
    [nido.coordinator.work :as work]
    [nido.coordinator.record.state :as cstate]
-   [nido.coordinator.daemon.launchctl :as lc]
+   [nido.coordinator.daemon.supervisor :as sup]
    [nido.coordinator.source.state :as sst]
    [nido.platform.io :as io]
    [nido.ui.server :as ui-server]
@@ -94,14 +94,14 @@
         h          (halt/read-halt-info)
         pid        (pid/read)
         proc-alive (pid/alive?)
-        installed  (lc/installed?)
-        loaded     (when installed (lc/loaded?))]
-    (println "Launchd:     "
-             (cond
-               (and installed loaded)        "installed (loaded)"
-               installed                     "installed (not loaded)"
-               :else                         "not installed"))
-    (println "Managed by:  " (if installed "launchd" "none"))
+        {:keys [manager installed? running?]} (sup/status)]
+    (println "Supervisor:  "
+             (str (name manager) ": "
+                  (cond
+                    (and installed? running?) "installed (running)"
+                    installed?                "installed (not running)"
+                    :else                     "not installed")))
+    (println "Managed by:  " (if installed? (name manager) "none"))
     (println "Process:     "
              (cond
                (and pid proc-alive) (str "alive (pid " pid ")")
@@ -155,26 +155,32 @@
   (halt/resume!)
   (println "Coordinator: resumed (halted.edn removed)."))
 
+(defn- fail!
+  "Report a supervisor verb that failed, in the manager's words, and exit with its code."
+  [did exit err]
+  (println "Coordinator:" did "failed (exit" exit "). stderr:")
+  (println err)
+  (System/exit exit))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   up
   "bb nido:coordinator:up [:poll-ms <int>] — start the daemon.
-   If the LaunchAgent plist is installed (bb nido:coordinator:install),
-   delegates to launchctl. Otherwise spawns a bare background daemon
-   that writes a PID file at ~/.nido/coordinator/coordinator.pid."
+   If its service is installed (bb nido:coordinator:install), the supervisor starts it.
+   Otherwise spawns a bare background daemon that writes a PID file at
+   ~/.nido/coordinator/coordinator.pid."
   [& args]
-  (let [[_ opts] (task-args/split-args args)]
+  (let [[_ opts] (task-args/split-args args)
+        {:keys [manager installed? running?]} (sup/status)]
     (cond
-      (and (lc/installed?) (lc/loaded?) (pid/alive?))
-      (println "Coordinator: already managed by launchd (pid" (pid/read) ").")
+      (and installed? running? (pid/alive?))
+      (println "Coordinator: already managed by" (name manager) "(pid" (pid/read) ").")
 
-      (lc/installed?)
-      (let [{:keys [exit err]} (lc/bootstrap!)]
-        (if (zero? exit)
+      installed?
+      (let [{:keys [ok? exit err did]} (sup/start!)]
+        (if ok?
           (do (Thread/sleep 500) ; give the daemon a moment to write its PID
-              (println "Coordinator: started via launchd (pid" (or (pid/read) "pending") ")."))
-          (do (println "Coordinator: launchctl bootstrap failed (exit" exit "). stderr:")
-              (println err)
-              (System/exit exit))))
+              (println "Coordinator: started via" (name manager) "(pid" (or (pid/read) "pending") ")."))
+          (fail! did exit err)))
 
       (pid/alive?)
       (do (println "Coordinator: already running (pid" (pid/read) "). Use `bb nido:coordinator:down` to stop.")
@@ -203,8 +209,8 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   down
   "bb nido:coordinator:down [:force true] — stop the background daemon.
-   If the LaunchAgent plist is installed, runs `launchctl bootout` so
-   the daemon stops AND does not respawn until reinstalled or `up`'d.
+   If its service is installed, the supervisor stops it, so it does not
+   respawn until `up`'d (or the next boot).
    Otherwise sends SIGTERM (or SIGKILL with :force true) to the bare daemon.
    Also accepts :force? (zsh users: quote it as ':force?')."
   [& args]
@@ -212,13 +218,11 @@
         force?    (or (= true (:force opts)) (= true (:force? opts)))
         pid       (pid/read)]
     (cond
-      (lc/installed?)
-      (let [{:keys [exit err]} (lc/bootout!)]
-        (if (zero? exit)
-          (println "Coordinator: stopped via launchctl bootout.")
-          (do (println "Coordinator: launchctl bootout failed (exit" exit "). stderr:")
-              (println err)
-              (System/exit exit))))
+      (:installed? (sup/status))
+      (let [{:keys [ok? exit err did]} (sup/stop!)]
+        (if ok?
+          (println "Coordinator: stopped via" (str did "."))
+          (fail! did exit err)))
 
       (nil? pid)
       (do (println "Coordinator: not running (no PID file).") (System/exit 0))
@@ -262,7 +266,7 @@
     (when (zero? exit) (str/trim out))))
 
 (defn- java-bin-dir
-  "Resolve the directory containing `java` for the plist PATH.
+  "Resolve the directory containing `java` for the daemon service's PATH.
    Prefers $JAVA_HOME/bin (if set + non-empty); otherwise the parent of `which java`.
    Returns nil if neither is available."
   []
@@ -278,11 +282,12 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   install
-  "bb nido:coordinator:install — write the LaunchAgent plist and start
-   the daemon. Auto-starts at every subsequent login."
+  "bb nido:coordinator:install — install the daemon's service with the host's supervisor
+   (a LaunchAgent on macOS, a systemd --user unit on Linux) and start it. From then on it is
+   started again when it exits and at every login (macOS) or boot (Linux, with lingering)."
   [& _args]
   (cond
-    (and (pid/alive?) (not (lc/installed?)))
+    (and (pid/alive?) (not (:installed? (sup/status))))
     (do (println "Coordinator: bare daemon already running (pid" (pid/read) "). Run `bb nido:coordinator:down`, then re-install.")
         (System/exit 1))
 
@@ -299,70 +304,48 @@
         (System/exit 1))
 
     :else
-    (let [bb-path  (which-bb)
-          nido-dir (git-toplevel)
-          log-path (cstate/log-path)
-          plist    (lc/render-plist
-                    {:bb-path  bb-path
-                     :nido-dir nido-dir
-                     :log-path log-path
-                     :path-env (str (java-bin-dir)
-                                    ":" (System/getProperty "user.home") "/.local/bin"
-                                    ":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")})]
-      ;; If already loaded (e.g., re-install), bootout first so bootstrap
-      ;; picks up the new plist contents.
-      (when (lc/loaded?)
-        (lc/bootout!))
-      (lc/write-plist! plist)
-      (let [{:keys [exit err]} (lc/bootstrap!)]
-        (if (zero? exit)
-          (println "Coordinator: installed. Plist at" (lc/plist-path)
-                   "— daemon will auto-start at login.")
-          (do (println "Coordinator: launchctl bootstrap failed (exit" exit "). stderr:")
-              (println err)
-              (System/exit exit)))))))
+    (let [_ (cstate/ensure-dirs!) ; the manager opens the log before the daemon runs
+          {:keys [ok? exit err did manager]}
+          (sup/install! (cond-> {:bb-path  (which-bb)
+                                 :nido-dir (git-toplevel)
+                                 :log-path (cstate/log-path)
+                                 :path-env (str (java-bin-dir)
+                                                ":" (System/getProperty "user.home") "/.local/bin"
+                                                ":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")}
+                          ;; A daemon installed from a shell with NIDO_HOME set runs against that home.
+                          (System/getenv "NIDO_HOME") (assoc :nido-home (System/getenv "NIDO_HOME"))))]
+      (if ok?
+        (println "Coordinator: installed under" (name manager)
+                 "— the daemon is started again when it exits, and at login or boot.")
+        (fail! did exit err)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   uninstall
-  "bb nido:coordinator:uninstall — bootout and remove the plist. Idempotent."
+  "bb nido:coordinator:uninstall — stop the daemon's service and remove it. Idempotent."
   [& _args]
   (cond
-    (not (lc/installed?))
+    (not (:installed? (sup/status)))
     (do (println "Coordinator: not installed. Nothing to do.")
         (System/exit 0))
 
     :else
-    (do
-      (when (lc/loaded?)
-        (lc/bootout!))
-      (lc/remove-plist!)
-      (println "Coordinator: uninstalled. Run `bb nido:coordinator:up` to start manually."))))
+    (let [{:keys [ok? exit err did]} (sup/uninstall!)]
+      (if ok?
+        (println "Coordinator: uninstalled. Run `bb nido:coordinator:up` to start manually.")
+        (fail! did exit err)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   restart
-  "bb nido:coordinator:restart — restart the daemon via launchctl.
-   Errors when the plist is not installed (use down + up instead)."
+  "bb nido:coordinator:restart — restart the daemon through its supervisor.
+   Errors when its service is not installed (use down + up instead)."
   [& _args]
-  (cond
-    (not (lc/installed?))
+  (if-not (:installed? (sup/status))
     (do (println "Coordinator: not installed. Use `bb nido:coordinator:down` then `bb nido:coordinator:up`.")
         (System/exit 1))
-
-    (not (lc/loaded?))
-    (let [{:keys [exit err]} (lc/bootstrap!)]
-      (if (zero? exit)
-        (println "Coordinator: was not loaded; bootstrapped via launchctl.")
-        (do (println "Coordinator: launchctl bootstrap failed (exit" exit "). stderr:")
-            (println err)
-            (System/exit exit))))
-
-    :else
-    (let [{:keys [exit err]} (lc/kickstart!)]
-      (if (zero? exit)
-        (println "Coordinator: restarted via launchctl kickstart -k.")
-        (do (println "Coordinator: launchctl kickstart failed (exit" exit "). stderr:")
-            (println err)
-            (System/exit exit))))))
+    (let [{:keys [ok? exit err did]} (sup/restart!)]
+      (if ok?
+        (println "Coordinator: restarted via" (str did "."))
+        (fail! did exit err)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   logs

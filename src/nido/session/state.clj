@@ -163,7 +163,7 @@
   (str (fs/path (sessions-root) project-name session-name)))
 
 ;; ---------------------------------------------------------------------------
-;; Template paths — long-lived, per-project, source for APFS clones
+;; Template paths — long-lived, per-project, source for copy-on-write clones
 ;; ---------------------------------------------------------------------------
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
