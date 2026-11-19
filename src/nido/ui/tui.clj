@@ -16,7 +16,6 @@
    normal terminal, and re-enters the TUI."
   (:require
    [babashka.fs :as fs]
-   [babashka.process :as bp]
    [charm.components.list :as item-list]
    [charm.components.spinner :as spinner]
    [charm.components.text-input :as text-input]
@@ -30,6 +29,7 @@
    [nido.coordinator.view.runs :as runs-view]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.notion.client :as client]
+   [nido.platform.desk :as desk]
    [nido.platform.project :as project]
    [nido.coordinator.work :as work]
    [nido.ui.dev :as dev]
@@ -1145,10 +1145,10 @@
     [(assoc state :status "(no runnable version yet)") nil]))
 
 (defn- open-browser!
-  "Open `url` in the default browser (macOS `open`), fire-and-forget. No-op on blank."
+  "Ask the person's desk to open `url` in their browser. No-op on blank."
   [url]
   (when (seq url)
-    (try (bp/process ["open" url]) (catch Exception _ nil))))
+    (desk/request! {:kind :url :url url})))
 
 (defn- update-workstream
   "Workstream detail = the environment panel for one workstream. Keys act on the

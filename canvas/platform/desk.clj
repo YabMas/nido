@@ -30,16 +30,50 @@
    On another machine than nido's host, the desk's ssh connection to it also forwards the
    dashboard's loopback port."
   {:child [Effect]}
+  (Operation parse
+    "The value as an Effect, or nil when it is not one. The only door from an untrusted value — a
+     line off the wire, a caller's map — to something performed."
+    {:signature [:=> [:catn [:x :any]] [:maybe Effect]]})
+  (Operation person-elsewhere?
+    "Whether the person sits at another machine than this host, as this host's desk config
+     declares. Absent config means they are here, and effects are performed in place as always."
+    {:signature [:=> [:catn] :boolean]})
+  (Operation set-person!
+    "Declare where the person sits relative to this host from now on."
+    {:signature [:=> [:catn [:where [:enum :here :elsewhere]]] :any]})
+  (Operation opens-terminals?
+    "Whether a terminal effect will open a tab for the person: always when they are elsewhere,
+     and here only inside Warp."
+    {:signature [:=> [:catn] :boolean]
+     :delegates [person-elsewhere?]})
   (Operation request!
     "Ask for one effect. Performed in place when the person is on this host, recorded for a desk
-     otherwise. Never throws: an effect is never worth failing its caller over."
-    {:signature [:=> [:catn [:effect Effect]] :any]})
+     otherwise; dropped, logged, when it does not parse. Never throws: an effect is never worth
+     failing its caller over."
+    {:signature [:=> [:catn [:effect :map]] :any]
+     :delegates [parse person-elsewhere? perform!]})
   (Operation requests-since
     "The effects recorded after `cursor`, oldest first, with the cursor to read from next — what
      a desk on another machine reads."
-    {:signature [:=> [:catn [:cursor :any]] :map]})
+    {:signature [:=> [:catn [:cursor [:maybe :int]]] :map]})
+  (Operation stream!
+    "On nido's host, under a desk's ssh connection: print every effect recorded from now on, one
+     per line, until the connection closes. Starts at the log's current end, so nothing asked
+     before the desk connected is performed."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]
+     :delegates [requests-since]})
+  (Operation localize
+    "An effect as the person's machine performs it when nido runs on `host`: a terminal effect
+     becomes a local tab running `ssh -t host` into the requested directory and command."
+    {:signature [:=> [:catn [:host :string] [:effect Effect]] Effect]})
+  (Operation run!
+    "On the person's machine: hold an ssh connection to nido's host that streams its effects and
+     forwards the dashboard's loopback port; perform each effect that parses, here. Reconnects
+     after a lost connection."
+    {:signature [:=> [:catn [:opts :map]] :any]
+     :delegates [parse localize perform!]})
   (Operation perform!
-    "Parse one effect and carry it out on this machine; false when it does not parse. A terminal
-     effect whose directory is on another host opens a local tab running `ssh -t <host>` into
-     that directory and command."
-    {:signature [:=> [:catn [:effect :map]] :boolean]}))
+    "Parse one effect and carry it out on this machine, through platform-desktop; false when it
+     does not parse or the machine refused it. An effect from another host reaches it localized."
+    {:signature [:=> [:catn [:effect :map]] :boolean]
+     :delegates [parse]}))

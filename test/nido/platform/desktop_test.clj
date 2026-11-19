@@ -18,3 +18,8 @@
          (desktop/notifier-args {:message "m" :title "t" :subtitle "s" :sound "Glass"})))
   (is (= ["-message" "\\-1 failing" "-title" "\\[x]"]
          (desktop/notifier-args {:message "-1 failing" :title "[x]"}))))
+
+(deftest a-tab-command-is-a-valid-toml-string-whatever-it-holds
+  (let [toml-str @#'desktop/toml-str]
+    (is (= "\"a\\nb\\tc \\\"q\\\" \\\\\"" (toml-str "a\nb\tc \"q\" \\")))
+    (is (not (re-find #"[\n\r\t]" (toml-str "printf '%s\n'\r\t"))))))

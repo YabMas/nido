@@ -32,6 +32,7 @@
    [clojure.string :as str]
    [nido.platform.config :as config]
    [nido.platform.core :as core]
+   [nido.platform.desk :as desk]
    [nido.platform.lock :as lock]
    [nido.platform.process :as proc]
    [nido.session.engine :as engine]
@@ -1256,67 +1257,33 @@
 
 (defn ^{:malli/schema [:=> [:cat] :boolean]}
   warp?
-  "True when running inside Warp. Warp is the only terminal whose URI scheme
-   can open a tab in the *current* window, so it's the only one that gets the
-   in-app spawn; every other terminal falls back to the `cd-target-file`
-   handoff (`enter!`)."
+  "True when a spawned session opens as a tab for the person: inside Warp on
+   this machine, or always when their desk is on another machine. Every other
+   case falls back to the `cd-target-file` handoff (`enter!`)."
   []
-  (= "WarpTerminal" (System/getenv "TERM_PROGRAM")))
-
-(defn- warp-new-tab-uri
-  "`warp://action/new_tab` URI that lands a fresh tab at `path`. The path is
-   URL-encoded (slashes kept literal — Warp accepts them and they're the common
-   case) so spaces or specials in a session path don't break the URI."
-  [path]
-  (str "warp://action/new_tab?path="
-       (-> (java.net.URLEncoder/encode (str path) "UTF-8")
-           (str/replace "+" "%20")
-           (str/replace "%2F" "/"))))
+  (desk/opens-terminals?))
 
 (defn- sh-quote [s]
   (str "'" (str/replace (str s) "'" "'\\''") "'"))
 
-(defn- toml-str [s]
-  (str "\"" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) "\""))
-
-(defn- warp-tab-config-uri!
-  "Write a Warp tab config that opens at `path` and runs `command` as though typed
-   at its prompt, and return the `warp://tab_config/` URI that opens it. The
-   config is for this one opening: its command deletes it first, so it never
-   lingers in Warp's tab-config menu."
-  [path command]
-  (let [id  (str "nido-" (subs (str (random-uuid)) 0 8))
-        cfg (fs/path (System/getProperty "user.home") ".warp" "tab_configs" (str id ".toml"))]
-    (fs/create-dirs (fs/parent cfg))
-    (spit (str cfg)
-          (str "name = " (toml-str id) "\n\n"
-               "[[panes]]\n"
-               "id = \"main\"\n"
-               "type = \"terminal\"\n"
-               "directory = " (toml-str path) "\n"
-               "commands = [" (toml-str (str "rm -f " (sh-quote cfg) "; " command)) "]\n"))
-    (str "warp://tab_config/" id)))
-
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   spawn-tab!
-  "Open a new Warp tab in the *current* window at the session's `:enter` cwd and
-   return that path. The title is set by the zsh precmd hook (see CLAUDE.md)
-   from $PWD. The TUI calls this in Warp so nido stays put; other terminals use
+  "Ask the person's desk for a new tab at the session's `:enter` cwd and return
+   that path. The title is set by the zsh precmd hook (see CLAUDE.md) from $PWD.
+   The TUI calls this when `warp?` so nido stays put; otherwise it uses
    `enter!` + the parent-shell handoff instead.
 
-   `:command`, when given, runs in the tab as though typed at its prompt. It
-   has to: Warp hands the keyboard only to a program started that way, so one
-   a shell hook starts runs deaf to its own tab. Warp's new-tab URI cannot
-   carry a command, so a command goes through a tab config instead.
+   `:command`, when given, runs in the tab as though typed at its prompt — on
+   nido's host, wherever the person's tab is.
 
    `:dir`, when given, is where the tab opens instead — a resumed conversation reopens in the cwd
    it ran in, which may lie below the home or the worktree. Otherwise `:cd` / `:auto-up?` behave
    as in `enter!`."
   [name {:keys [command dir] :as opts}]
   (when (:auto-up? opts) (up! name opts))
-  (let [path (or dir (resolve-cd-target name opts))]
-    (shell {:out :string :err :string} "open"
-           (if command (warp-tab-config-uri! path command) (warp-new-tab-uri path)))
+  (let [path (str (or dir (resolve-cd-target name opts)))]
+    (desk/request! (cond-> {:kind :terminal :dir path}
+                     command (assoc :command command)))
     path))
 
 (def ^:private kickoff-file
@@ -1352,7 +1319,8 @@
     (let [tmp (str (fs/path home (str kickoff-file ".tmp")))]
       (spit tmp script)
       (fs/move tmp (fs/path home kickoff-file) {:replace-existing true :atomic-move true}))
-    (str "cd " (sh-quote home) " && zsh " kickoff-file)))
+    ;; `sh`, not the person's shell: the script is POSIX, and nido's host need not have zsh.
+    (str "cd " (sh-quote home) " && sh " kickoff-file)))
 
 (defn- worktree-dir?
   "True if `dir` is a session worktree root. A git worktree's root has a

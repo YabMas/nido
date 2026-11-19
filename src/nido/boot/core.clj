@@ -54,7 +54,7 @@
    [nido.notion.views :as views]
    [nido.coordinator.record.triggers :as triggers]
    [nido.platform.core :as nido-core]
-   [nido.platform.desktop :as desktop]
+   [nido.platform.desk :as desk]
    [nido.platform.project :as project]
    [nido.review.reconcile :as review-reconcile]
    [nido.review.tree :as review-tree]
@@ -186,7 +186,7 @@
 ;; that project's notion-sync.edn :poll interval.
 (defonce ^:private !last-notion-sync-ms (atom {}))
 
-;; The desktop notifier, armed by run! and nil otherwise. Held rather than
+;; The notifier (a request to the person's desk), armed by run! and nil otherwise. Held rather than
 ;; called directly so that tick! driven by a test posts nothing on the machine
 ;; running it.
 (defonce ^:private !notify-fn (atom nil))
@@ -1631,7 +1631,7 @@
   (try (settle-owed-landing!)
        (catch Throwable t
          (println "nido coordinator: settling the latest landing failed —" (ex-message t))))
-  (reset! !notify-fn desktop/notify!)
+  (reset! !notify-fn #(desk/request! (assoc % :kind :notify)))
   (install-shutdown-hook!)
   (heartbeat/write! {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port})
   (executor/configure! {:global-cap (:global-parallel-cap defaults)})

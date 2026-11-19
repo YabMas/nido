@@ -4,6 +4,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [Path]]
+            [canvas.platform.desk :as desk]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.session.state :as sstate :refer [InstanceId]]
             [canvas.session.test-pg :as tpg]
@@ -112,12 +113,14 @@
     {:signature [:=> [:catn [:name :string] [:opts :map]] [:maybe Path]]})
   (Operation enter! "Hand a directory to the parent shell."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any] :delegates [resolve-cd-target cd-target-file]})
-  (Operation warp? "Whether this is running inside Warp — the one terminal that can open a tab where we want it."
-    {:signature [:=> [:catn] :boolean]})
-  (Operation spawn-tab! "Open a terminal tab at a session's cd target — its home unless :cd says
-     worktree. Given :command, the tab runs it as though typed at its prompt, through a one-shot
-     Warp tab config that deletes itself; given none, the tab is a bare shell."
-    {:signature [:=> [:catn [:name :string] [:opts :map]] :any] :delegates [resolve-cd-target]})
+  (Operation warp? "Whether a spawned session opens as a tab for the person — inside Warp here, or
+     always when their desk is on another machine."
+    {:signature [:=> [:catn] :boolean] :delegates [desk/opens-terminals?]})
+  (Operation spawn-tab! "Ask the person's desk for a terminal tab at a session's cd target — its
+     home unless :cd says worktree. Given :command, the tab runs it, on nido's host, as though
+     typed at its prompt; given none, the tab is a bare shell."
+    {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
+     :delegates [resolve-cd-target desk/request!]})
   (Operation stage-kickoff!
     "Leave a one-shot kickoff in a session's home that starts its agent with a name and a first
      prompt, through `nido work` in the worktree, and return the command that runs it — what a

@@ -339,6 +339,21 @@
    :doc "Show what this branch changes about the project's declared design, rendered by fukan at both ends. A reading, not a gate: exits 0 whatever it finds. [:from main] [:cwd <dir>] [:scope <selection>]"
    :task (apply nido-design/diff-cmd *command-line-args*)}
 
+  nido:desk
+  {:requires ([tasks.nido-desk :as nido-desk])
+   :doc "Run the desk on the person's machine: hold an ssh connection to nido's host, perform the terminal tabs, URLs and notifications it asks for here, and forward its dashboard. :host <ssh-host> [:remote-dir ~/Code/nido] [:remote-home <NIDO_HOME>] [:dashboard-port 8800] [:local-port <port, default the dashboard's>]"
+   :task (apply nido-desk/run-cmd *command-line-args*)}
+
+  nido:desk:stream
+  {:requires ([tasks.nido-desk :as nido-desk])
+   :doc "On nido's host, run by a desk over ssh: print the effects requested from now on, one EDN map per line."
+   :task (apply nido-desk/stream-cmd *command-line-args*)}
+
+  nido:desk:person
+  {:requires ([tasks.nido-desk :as nido-desk])
+   :doc "Declare where the person sits relative to this host. :here (default) performs effects in place; :elsewhere records them for a desk on their machine."
+   :task (apply nido-desk/person-cmd *command-line-args*)}
+
   nido:notify:install
   {:requires ([tasks.nido-notify :as nido-notify])
    :doc "Install the nido notifier app (~/Applications/nido-notifier.app), so the daemon's desktop notifications carry nido's icon. Needs `brew install terminal-notifier`."

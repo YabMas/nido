@@ -1,6 +1,13 @@
 (ns nido.platform.desktop
-  "Native desktop notifications. macOS only: elsewhere `notify!` posts nothing
-   and returns false, so a caller never branches on the platform.
+  "This machine's desktop: a terminal tab, a browser, a notification. Callers
+   reach it through nido.platform.desk, which decides whether the person is at
+   this machine at all.
+
+   Terminal tabs are Warp's: its URI scheme is the only one that opens a tab in
+   the current window. URLs open with `open` on macOS and `xdg-open` elsewhere.
+
+   Notifications are macOS only: elsewhere `notify!` posts nothing and returns
+   false, so a caller never branches on the platform.
 
    Two senders, because macOS takes a notification's icon from the app that
    posts it and offers no way to override it:
@@ -17,7 +24,7 @@
    Notifications, so its permission is asked for, and granted, separately."
   (:require
    [babashka.fs :as fs]
-   [babashka.process :refer [shell]]
+   [babashka.process :as p :refer [shell]]
    [clojure.string :as str]))
 
 (defn- mac? []
@@ -153,3 +160,71 @@
             :else
             (do (ok? lsregister "-f" app)
                 {:app app})))))))
+
+(defn- sh-quote [s]
+  (str "'" (str/replace (str s) "'" "'\\''") "'"))
+
+(defn- toml-str
+  "`s` as a TOML basic string. Control characters must be escaped there — a raw
+   newline makes the whole tab config unparseable, and Warp then opens nothing."
+  [s]
+  (str "\""
+       (-> (str s)
+           (str/replace "\\" "\\\\")
+           (str/replace "\"" "\\\"")
+           (str/replace "\n" "\\n")
+           (str/replace "\r" "\\r")
+           (str/replace "\t" "\\t"))
+       "\""))
+
+(defn- warp-new-tab-uri
+  "`warp://action/new_tab` URI that lands a fresh tab at `path`. The path is
+   URL-encoded (slashes kept literal — Warp accepts them and they're the common
+   case) so spaces or specials in a path don't break the URI."
+  [path]
+  (str "warp://action/new_tab?path="
+       (-> (java.net.URLEncoder/encode (str path) "UTF-8")
+           (str/replace "+" "%20")
+           (str/replace "%2F" "/"))))
+
+(defn- warp-tab-config-uri!
+  "Write a Warp tab config that opens at `path` and runs `command` as though typed
+   at its prompt, and return the `warp://tab_config/` URI that opens it. The
+   config is for this one opening: its command deletes it first, so it never
+   lingers in Warp's tab-config menu.
+
+   A command goes through a tab config because Warp's new-tab URI cannot carry
+   one, and because Warp hands the keyboard only to a program started as though
+   typed — one a shell hook starts runs deaf to its own tab."
+  [path command]
+  (let [id  (str "nido-" (subs (str (random-uuid)) 0 8))
+        cfg (fs/path (System/getProperty "user.home") ".warp" "tab_configs" (str id ".toml"))]
+    (fs/create-dirs (fs/parent cfg))
+    (spit (str cfg)
+          (str "name = " (toml-str id) "\n\n"
+               "[[panes]]\n"
+               "id = \"main\"\n"
+               "type = \"terminal\"\n"
+               "directory = " (toml-str path) "\n"
+               "commands = [" (toml-str (str "rm -f " (sh-quote cfg) "; " command)) "]\n"))
+    (str "warp://tab_config/" id)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  open-terminal!
+  "Open a Warp tab in the current window at `:dir`, running `:command` when
+   given. Returns whether `open` accepted it."
+  [{:keys [dir command]}]
+  (ok? "open" (if (str/blank? command)
+                (warp-new-tab-uri dir)
+                (warp-tab-config-uri! dir command))))
+
+(defn ^{:malli/schema [:=> [:cat :string] :boolean]}
+  open-url!
+  "Open `url` in the default browser, without waiting for it. Returns whether a
+   browser opener was found and started."
+  [url]
+  (let [opener (if (mac?) "open" (some-> (fs/which "xdg-open") str))]
+    (boolean
+     (when opener
+       (p/process [opener url] {:out :discard :err :discard})
+       true))))

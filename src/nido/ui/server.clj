@@ -1018,13 +1018,15 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   start!
-  "Start the dashboard server."
+  "Start the dashboard server on `:port` of the loopback interface only. From
+   another machine it is reached through the port a desk forwards over its ssh
+   connection, never over the network directly."
   [{:keys [port] :or {port 8800}}]
   (when-let [old @server-atom]
     (old))
   ;; The dashboard renders the board on every poll, so it holds its rows (`work/hold!`).
   (work/hold!)
-  (let [stop-fn (http/run-server (wrap-slow-request-log handle-request) {:port port})]
+  (let [stop-fn (http/run-server (wrap-slow-request-log handle-request) {:ip "127.0.0.1" :port port})]
     (reset! server-atom stop-fn)
     (println (str "[nido] Dashboard running at http://localhost:" port))
     stop-fn))

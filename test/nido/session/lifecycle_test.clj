@@ -578,7 +578,7 @@
         (is (not (str/includes? script ":permission-mode"))
             "a kickoff never overrides the worktree's launch baseline")
         (is (= "Go.\n" (slurp (str (fs/path home ".nido-kickoff-prompt.md")))))
-        (is (= (str "cd '" home "' && zsh " @#'lifecycle/kickoff-file) by-hand))))))
+        (is (= (str "cd '" home "' && sh " @#'lifecycle/kickoff-file) by-hand))))))
 
 ;; destroy! used to delete the instance state dir whatever its stop left behind,
 ;; so a REPL that survived the stop, or could not be shown to be the session's,
