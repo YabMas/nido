@@ -2169,6 +2169,40 @@
     (is (= "impl-new" (:name (work/environment :brian "ws-1")))
         "an archived heavy session is excluded even if newer")))
 
+(def ^:private impl-and-newer-chat
+  "A workstream whose impl session predates its chat: both heavy and live, the chat newer — the
+   shape fukan ws-20261117-2786b5 was in when every Land shipped its chat."
+  [{:name "view-on-the-fly"        :weight :heavy :substrate :live :created-at "2026-11-17T10:00:00Z"}
+   {:name "ws-1--conductor"        :weight :heavy :substrate :live :created-at "2026-11-17T11:00:00Z" :conductor true}
+   {:name "ws-1--chat"             :weight :heavy :substrate :live :created-at "2026-11-17T12:00:00Z" :chat true}])
+
+(deftest env-is-latest-live-work-heavy
+  (with-redefs [nido.coordinator.record.session/list-sessions (fn [_ _] impl-and-newer-chat)]
+    (is (= "view-on-the-fly" (:name (work/environment :fukan "ws-1")))
+        "a newer heavy chat record (and the conductor's) is never the environment"))
+  (with-redefs [nido.coordinator.record.session/list-sessions
+                (fn [_ _] (filterv #(or (:chat %) (:conductor %)) impl-and-newer-chat))]
+    (is (nil? (work/environment :fukan "ws-1"))
+        "a workstream holding only its chat and conductor records has no environment")))
+
+(deftest work-session-excludes-chat-and-conductor
+  (is (session/work-session? {:name "impl" :weight :heavy}))
+  (is (not (session/work-session? {:name "c" :conductor true})))
+  (is (not (session/work-session? {:name "ch" :chat true}))))
+
+(deftest land-ships-work-session
+  (let [enqueued (atom [])]
+    (with-redefs [nido.coordinator.record.session/list-sessions (fn [_ _] impl-and-newer-chat)
+                  nido.coordinator.lane.pipeline/of           (fn [_ _] {:at :pr-opened})
+                  nido.coordinator.work/awaiting-human        (fn [_] :land)
+                  nido.coordinator.work/gate-report           (fn [_ _] {:seq 115})
+                  nido.coordinator.lane.ship/merge-run-in-flight? (fn [_ _] false)
+                  nido.coordinator.source.queue/enqueue!      (fn [env] (swap! enqueued conj env) "/tmp/x.edn")]
+      (is (= {:decision :landing :session "view-on-the-fly"}
+             (#'work/land! :fukan "ws-1" 115)))
+      (is (= ["view-on-the-fly"] (mapv :session @enqueued))
+          "the :ship envelope names the impl session, never ws-1--chat"))))
+
 (deftest screen-needs-count-equals-gate-count
   (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "brian"}]
         s (work/screen {:surface :needs :scope "all" :source :notion :facets {}}

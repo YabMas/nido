@@ -59,6 +59,11 @@
   (Operation live?
     "Whether the session's substrate is still there."
     {:signature [:=> [:catn [:s Session]] :boolean]})
+  (Operation work-session?
+    "Whether `s` is a session of its workstream's work: marked neither the conductor's nor the
+     chat's. The one statement of which records a reading that picks a workstream's working
+     session may choose."
+    {:signature [:=> [:catn [:s Session]] :boolean]})
   (Operation autonomous?
     "Whether an agent is driving this episode rather than a person."
     {:signature [:=> [:catn [:s Session]] :boolean]})

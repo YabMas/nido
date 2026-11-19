@@ -1088,7 +1088,7 @@
              {:keys [ws-id address open?]} (proposal/attempts pk)
              :when open?
              :let  [w        (cws/read-ws pk ws-id)
-                    sessions (remove :conductor (csession/list-sessions pk ws-id))
+                    sessions (filter csession/work-session? (csession/list-sessions pk ws-id))
                     state    (hold-state (engagement-of (pipeline/status pk ws-id)))]]
          (cond-> {:project    pname
                   :ws-id      ws-id
@@ -1278,13 +1278,15 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   environment
   "The workstream's single current environment: its latest live HEAVY (impl)
-   session record, or nil when none exists yet (still triage, or a light-only
+   work session record, or nil when none exists yet (still triage, or a light-only
    scratch). Resolved by weight + recency, NOT by liveness — a down-but-provisioned
    impl session is still the environment (you Start it). :archived (torn-down)
-   sessions are excluded. Callers use (:name env) to resolve dev-state/facts."
+   sessions are excluded, and so are the conductor's and the chat's records
+   (`csession/work-session?`): both are heavy and live, often newer than the impl
+   session, and hold no branch — the gate's Land ships whatever this answers.
+   Callers use (:name env) to resolve dev-state/facts."
   [project ws-id]
-  ;; Read past the conductor's record: it is heavy and live, and no environment of the work.
-  (->> (remove :conductor (csession/list-sessions project ws-id))
+  (->> (filter csession/work-session? (csession/list-sessions project ws-id))
        (filter #(= :heavy (:weight %)))
        (filter csession/live?)
        (sort-by :created-at)
@@ -3745,16 +3747,15 @@
   open-target
   "Where `open` lands for a workstream: the most-recently-active LIVE session,
    else the most-recently-active session, else nil. Returns {:project :session}.
-   Ordering reuses wsv/session-rows (newest-active first); only rows a nido session
-   record other than the conductor's backs are candidates — a listed session no record names is
-   not one to open."
+   Ordering reuses wsv/session-rows (newest-active first); only rows a work session's record
+   backs are candidates (`csession/work-session?`) — open lands on the work, never on the
+   conductor's or the chat's record, and a listed session no record names is not one to open."
   [project ws-id]
-  (let [sessions   (csession/list-sessions project ws-id)
-        ;; Never the conductor's record: open lands on the work, not on who conducts it.
-        conductors (set (map :name (filter :conductor sessions)))
-        rows       (filter #(and (:recorded? %) (not (conductors (:name %))))
+  (let [work       (filter csession/work-session? (csession/list-sessions project ws-id))
+        work-names (set (map :name work))
+        rows       (filter #(and (:recorded? %) (work-names (:name %)))
                            (wsv/session-rows project ws-id (workstream-listing project ws-id)))
-        live-names (->> (remove :conductor sessions)
+        live-names (->> work
                         (filter csession/live?)
                         (map :name)
                         set)

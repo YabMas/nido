@@ -10,6 +10,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.work :as work]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]))
 
@@ -18,6 +19,23 @@
   "Write a :ship envelope. Returns the envelope path."
   [{:keys [project session ws-id]}]
   (queue/enqueue! {:type :ship :project project :session session :ws-id ws-id}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:maybe [:vector :string]]]}
+  non-work-refusal
+  "The lines refusing to ship `session-name`, or nil when it may ship. Its workstream's conductor's
+   and chat's records hold no branch of the work (`session/work-session?`), so a ship of either
+   would hand /drive-home nothing to land; the refusal names the workstream's environment — the
+   session the gate's Land ships — as the one to ship, or says there is none. A session with no
+   record on the workstream is not refused here."
+  [project ws-id session-name]
+  (let [s (session/read-session project ws-id session-name)]
+    (when (and s (not (session/work-session? s)))
+      (let [env (:name (work/environment project ws-id))]
+        [(str "nido ship: " session-name " is " ws-id "'s "
+              (if (:chat s) "chat" "conductor") " session — it holds no branch of the work.")
+         (if env
+           (str "  Ship the workstream's environment instead: bb nido:ship :project " (name project) " " env)
+           (str "  " ws-id " has no work session to ship."))]))))
 
 (defn- resolve-coords
   "Resolve [project session] from explicit args or the home-aware cwd union
@@ -54,6 +72,9 @@
       (when (some-> (ws/read-ws project ws-id) drain/slice?)
         (println (str "nido ship: " ws-id " is a drain's slice — it lands by its own landing Run, not"
                       " the merge lane. Ask for it with `bb nido:drain:land :slice " ws-id "`."))
+        (System/exit 1))
+      (when-let [lines (non-work-refusal project ws-id session-name)]
+        (run! println lines)
         (System/exit 1))
       (enqueue-ship! {:project project :session session-name :ws-id ws-id})
       (println (str "Queued for shipping: " project-name "/" session-name))

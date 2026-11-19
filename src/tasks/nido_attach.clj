@@ -134,7 +134,7 @@
   (let [at    (name (:at position))
         stage (:stage (:next position))
         mode  (:mode (:next position))
-        sname (:name (first (remove :conductor (csession/list-sessions project ws-id))))]
+        sname (:name (first (filter csession/work-session? (csession/list-sessions project ws-id))))]
     (into
      (into [(str "at " at (when stage (str " · next is " (name stage)
                                            (when mode (str " (" (name mode) ")")))))]

@@ -430,7 +430,7 @@
    ledger — from it. The session HOME is what answers that, and it is what
    resume.clj already uses for the same reason."
   [project ws-id]
-  (when-let [s (first (remove #(or (:conductor %) (:chat %)) (session/list-sessions project ws-id)))]
+  (when-let [s (first (filter session/work-session? (session/list-sessions project ws-id)))]
     (let [home (str (session-state/session-home-dir (name project) (:name s)))]
       (when (fs/exists? home) home))))
 
@@ -674,9 +674,7 @@
                {:ws-id ws-id :at (:at position) :skipped :already-running}
 
                :else
-               ;; Read past the conductor's record and the chat's: a stage runs in a session doing
-               ;; the work.
-               (if-let [sname (:name (first (remove #(or (:conductor %) (:chat %)) (session/list-sessions project ws-id))))]
+               (if-let [sname (:name (first (filter session/work-session? (session/list-sessions project ws-id))))]
                  (let [run (drive-run project ws-id (:fire decision) sname)]
                    (fs/create-dirs (cstate/run-dir (:id run)))
                    (runs/write-run! run)

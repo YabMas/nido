@@ -286,6 +286,14 @@
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   autonomous? [s] (some? (:autonomy s)))
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
+  work-session?
+  "Whether `s` is a session of its workstream's work: neither its conductor's record nor its
+   chat's. Both are heavy and live like an impl session, and neither holds the work's branch — so a
+   reading that picks the session a stage runs in, a landing ships or a person is sent to chooses
+   among these and nothing else. A reading that accounts for what RUNS counts every record instead."
+  [s]
+  (not (or (:conductor s) (:chat s))))
+(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   person?
   "Whether `s` is a session a person works in: neither its workstream's conductor, nor a Run's,
    nor an occupant nido created to fill a seat. A seat not marked :carried is how such an occupant

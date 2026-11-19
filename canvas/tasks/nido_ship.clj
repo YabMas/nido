@@ -7,6 +7,8 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.record.state :refer [WorkstreamId SessionName]]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Module nido-ship
@@ -14,6 +16,11 @@
   (Operation enqueue-ship!
     "Write a :ship envelope. Returns the envelope path."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation non-work-refusal
+    "The lines refusing to ship a workstream's conductor or chat session, naming its environment
+     session instead; nil when the session may ship."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]]
+                 [:maybe [:vector :string]]]})
   (Operation ship
     "`nido ship [:project <p> <session>]` — enqueue the resolved session's branch"
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

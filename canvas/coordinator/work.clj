@@ -117,9 +117,9 @@
      :delegates [owed-revivals]})
   (Operation latest-report "The workstream's most recent ledger entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
-  (Operation environment "The workstream's current environment — its latest live session past its conductor's record."
+  (Operation environment "The workstream's current environment — its latest live heavy work session, never its conductor's or its chat's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [session/list-sessions]})
+     :delegates [session/list-sessions session/work-session?]})
   (Operation holds
     "The three records that CURRENTLY hold for a workstream — what it is standing on right now,
      as against everything its ledger ever said. The design is the governing one."
@@ -193,7 +193,7 @@
      session started in its homes or the worktrees they link to."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]
      :delegates [session/list-sessions]})
-  (Operation open-target "Where opening a workstream lands — never on its conductor's record."
+  (Operation open-target "Where opening a workstream lands — on a work session, never its conductor's or its chat's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
      :delegates [session/list-sessions workstream-listing view/session-rows]})
   (Operation driven-conversation
