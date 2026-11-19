@@ -1919,7 +1919,11 @@
    [:stop    {:optional true} [:map {:closed true}
                                [:kind    [:enum :dialog :dead-turn]]
                                [:session string?]
-                               [:since   string?]]]]
+                               [:since   string?]]]
+   ;; The conductor's instruction this blocker raises because no session nido drives is owed it,
+   ;; by its id in the workstream's seat-message log — the seat and generation are that row's,
+   ;; read from it. Absent on every other blocker. One blocker per instruction is read by it.
+   [:seat-message {:optional true} [:map {:closed true} [:id string?]]]]
    [:fn {:error/message "a blocker asks in :needs or in :questions, exactly one of them, and top-level :options only beside :needs"}
     (fn [b] (and (one-question-form? b) (not (and (:questions b) (:options b)))))]])
 

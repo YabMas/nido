@@ -3229,20 +3229,25 @@
        "baseline, design — from your understanding of this session so far, as /design says; the "
        "review loops exist to check that understanding, so do not re-derive it from scratch. Then:\n\n"))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:? [:map [:carry? {:optional true} :boolean]]]] :map]}
   activate!
   "Activate nido's recipe on `ws-id` for a person: append its :activated entry (once — activating
-   twice changes nothing), from `session` when the person gave it from one. From then the conduct
-   pass starts its conductor once a person works in it, and a person's start on it is carried.
-   Answers {:ws-id :already? :instruction}, the instruction being what the session's agent is to
-   do now — the surface delivers it, since nido drives no conversation of a plain session."
-  [project ws-id session]
+   twice changes nothing), from `session` when the person gave it from one, and carry that session
+   into the workstream's free whole seat (`conductor/carry!` as :activation) without starting a
+   conversation on it — unless `:carry?` is false, as it is for a start activating the session it
+   is itself bringing up, whose own carry! carries it. From then the conduct pass starts its
+   conductor once a person works in it, and a person's start on it is carried. Answers {:ws-id
+   :already? :instruction :carried}, the instruction being what the session's agent is to do now
+   — the surface delivers it, since nido drives no conversation of a plain session — and :carried
+   carry!'s answer, nil when nothing was asked of it."
+  [project ws-id session & [{:keys [carry?] :or {carry? true}}]]
   (let [p        (keyword (name project))
         already? (boolean (some-> (cws/read-ws p ws-id) standing/activated?))]
     (cws/activate! p ws-id session)
     {:ws-id       ws-id
      :already?    already?
-     :instruction (str activation-preamble (:practice (seats/default-embodiment)))}))
+     :instruction (str activation-preamble (:practice (seats/default-embodiment)))
+     :carried     (when (and session carry?) (conductor/carry! p ws-id session nil nil :activation))}))
 
 (defn- pause-of
   "The standing pause on workstream `w` as {:at :note}, or nil when none stands."

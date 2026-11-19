@@ -543,7 +543,10 @@
                #(logged (str "waking " (name p) "'s drain coordinators") (fn [] (drain-lane/wakes! p))))
         (timed (str "conductor reseat " (name p))
                #(doseq [ws-id (ws/list-ids p)]
-                  (logged (str "re-seating " ws-id) (fn [] (conductor/reseat! p ws-id typed-in)))))))))
+                  (logged (str "re-seating " ws-id) (fn [] (conductor/reseat! p ws-id typed-in)))
+                  ;; Whatever reseat! decided: an instruction no driven session can take is raised.
+                  (logged (str "raising " ws-id "'s undelivered instructions")
+                          (fn [] (conductor/undelivered! p ws-id)))))))))
 
 (defn- capped-working
   "How many of the `working` sessions ({:project :ws-id :session} each) hold a global slot, given

@@ -172,7 +172,7 @@
                                                           (swap! calls conj [:carry s b m])
                                                           {:carried carried})
                   seats/drive!                          (fn [_p _w s b & [m]] (swap! calls conj [:drive s b m]))
-                  work/activate!                        (fn [p w s] (swap! calls conj [:activate p w s]) {})
+                  work/activate!                        (fn [p w s & _] (swap! calls conj [:activate p w s]) {})
                   csession/workstream-id-for            (fn [_ _] (when (some #(= :birth (first %)) @calls) "ws-child"))
                   csession/read-session                 (fn [_ _ _] {:claude {:session-id "sid-1"}})
                   lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o) (:command o)]))
@@ -266,7 +266,7 @@
                   conductor/carry!                      (fn [_p _w s & [b m]]
                                                           (swap! calls conj [:carry s b m])
                                                           {:carried carried})
-                  work/activate!                        (fn [p w s] (swap! calls conj [:activate p w s]) {})
+                  work/activate!                        (fn [p w s & _] (swap! calls conj [:activate p w s]) {})
                   csession/workstream-id-for            (fn [_ _] (or held
                                                                       (when (some #(= :birth (first %)) @calls) "ws-new")))
                   state/session-home-dir                (fn [_ _] "/tmp/home")

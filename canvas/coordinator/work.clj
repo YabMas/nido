@@ -234,9 +234,10 @@
   (Operation activate!
     "Activate nido's recipe on a workstream for a person — its :activated entry, once — and answer
      the instruction its session's agent is to follow now: write the owed records from what the
-     session already understands, then work the recipe as the whole seat's occupant would."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] :map]
-     :delegates [workstream/activate! standing/activated? seats/default-embodiment]})
+     session already understands, then work the recipe as the whole seat's occupant would — and
+     carry the session it was given from into the free whole seat, starting no conversation on it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]] [:opts [:? [:map [:carry? {:optional true} :boolean]]]]] :map]
+     :delegates [workstream/activate! standing/activated? seats/default-embodiment conductor/carry!]})
   (Operation pause!
     "Pause a workstream for a person, with their note: no conductor drives it while the pause
      stands, and every surface reads it paused rather than stalled."

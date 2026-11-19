@@ -154,11 +154,14 @@
    ;; The seat of its workstream this session occupies, and the generation it occupies it in —
    ;; its id an element's, or the generation's number for its whole seat. A seat is never occupied
    ;; across generations: a new generation's seats get new sessions. :carried marks a session a
-   ;; person's or a Run's start brought, which re-seating releases rather than archives.
+   ;; person's or a Run's start brought, which re-seating releases rather than archives. :by
+   ;; :activation marks one a person's activation carried, on which nido starts a conversation
+   ;; only once a seat message is owed to it.
    [:seat              {:optional true} [:map {:closed true}
                                          [:id [:or [:string {:min 1}] pos-int?]]
                                          [:generation pos-int?]
-                                         [:carried {:optional true} [:= true]]]]
+                                         [:carried {:optional true} [:= true]]
+                                         [:by {:optional true} [:enum :activation]]]]
    ;; A carried session whose seat re-seating took away: it occupies none, and keeps saying its
    ;; workstream was carried.
    [:released          {:optional true} [:= true]]

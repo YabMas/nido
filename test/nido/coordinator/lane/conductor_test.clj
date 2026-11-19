@@ -1624,3 +1624,91 @@
             "and that a person's answer to a design question feeds the next decision round")
         (is (not (str/includes? b ":approves-design"))
             "it is never told to mark an option as approving one")))))
+
+(defn- instruct-whole-seat!
+  "Have the conductor answer one hand-back of `id` with an instruction to its whole seat, as it
+   decides one, and answer the logged instruction message."
+  [id text]
+  (let [c  (str id "--conductor")
+        hb (:id (hand-back! id))]
+    (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:instruct [{:seat 1 :text text}]]})))))
+    (first (filter #(= :instruction (:kind %)) (seats/traffic :brian id 1)))))
+
+(deftest a-plain-start-activated-from-its-session-is-given-the-conductors-instruction
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (typed! "fix-it")
+        (launching [launched]
+          (is (= {:carried nil :why :not-activated} (conductor/carry! :brian id "fix-it" nil nil :start))
+              "the plain start stays plain")
+          (is (= {:seat 1 :session "fix-it"} (:carried (:carried (work/activate! :brian id "fix-it"))))
+              "activating from it carries it into the whole seat")
+          (is (= :activation (get-in (session/read-session :brian id "fix-it") [:seat :by])))
+          (is (= [] @launched) "and starts no conversation: the person's is running there")
+          (is (= #{1} (seats/held :brian id)) "the seat is held")
+          (seats/conductor! :brian id "conduct it")
+          (let [m (instruct-whole-seat! id "build entry 27")]
+            (is (some? m))
+            (let [r (conductor/reseat! :brian id)]
+              (is (= ["fix-it"] (:started r)) "the pass starts the occupant on what it is owed"))
+            (is (= ["fix-it"] (mapv first (remove #(str/includes? (first %) "conductor") @launched))))
+            (is (str/includes? (second (last @launched)) "build entry 27") "its first instruction carries the instruction")
+            (is (:delivered? (first (filter #(= (:id m) (:id %)) (seats/traffic :brian id 1))))
+                "and the instruction is recorded delivered")
+            (is (= [] (seats/owed :brian id "fix-it")))
+            (is (= [] (conductor/undelivered! :brian id)) "nothing is left to raise")
+            (is (nil? (:started (conductor/reseat! :brian id)))
+                "a second pass starts nothing again")))))))
+
+(deftest an-activation-from-a-start-carries-nothing-itself
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (launching [launched]
+          (is (nil? (:carried (work/activate! :brian id "fix-it" {:carry? false}))))
+          (is (empty? (seats/occupants :brian id)))
+          (is (nil? (:carried (work/activate! :brian id nil))) "nor does one from no session")
+          (is (= [] @launched)))))))
+
+(deftest an-instruction-no-driven-session-can-take-is-raised-until-it-is
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (typed! "fix-it")
+        (launching [_]
+          (work/activate! :brian id nil)
+          (seats/conductor! :brian id "conduct it")
+          (let [m (instruct-whole-seat! id "build it")]
+            (is (= {} (conductor/reseat! :brian id)) "never carried, so the pass fills nothing")
+            (is (= [{:ws-id id :seat-message (:id m) :wrote :blocker}] (vec (conductor/undelivered! :brian id))))
+            (let [b (last (ws/entries-of :brian id :blocker))]
+              (is (= {:id (:id m)} (:seat-message b)))
+              (is (str/includes? (:summary b) "the seat has no occupant")))
+            (is (= [] (vec (conductor/undelivered! :brian id))) "raised once")
+            (driving id "fix-it" "conv-1" nil)
+            (session/write! (assoc (session/read-session :brian id "fix-it") :seat {:id 1 :generation 1}))
+            (is (= [{:ws-id id :seat-message (:id m) :wrote :blocker-answered}] (vec (conductor/undelivered! :brian id)))
+                "answered once a session nido drives is owed it")
+            (is (= [] (vec (conductor/undelivered! :brian id))) "and once")))))))
+
+(deftest an-undriven-occupant-reseat-does-not-start-leaves-its-instruction-raised
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (launching [launched]
+          (with-redefs [clock/now-iso (constantly "2020-01-01T00:00:00Z")] (work/activate! :brian id "fix-it"))
+          (seats/conductor! :brian id "conduct it")
+          (let [m (instruct-whole-seat! id "build it")]
+            ;; Nobody typed and the activation is long ago: the workstream is not worked.
+            (is (= {} (conductor/reseat! :brian id #{})) "an unworked workstream is not reseated")
+            (is (= [] (remove #(str/includes? (first %) "conductor") @launched)))
+            (is (= [:blocker] (mapv :wrote (conductor/undelivered! :brian id))))
+            (is (str/includes? (:summary (last (ws/entries-of :brian id :blocker))) "is not a session nido drives"))
+            (session/update-substrate! :brian id "fix-it" #(assoc % :dispatching {:token "t" :at "now"}))
+            (seats/delivered! :brian id (:id m) "t")
+            (is (= [:blocker-answered] (mapv :wrote (conductor/undelivered! :brian id))) "answered once delivered")))))))

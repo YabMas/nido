@@ -138,12 +138,23 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]})
   (Operation held
     "The current generation's seats whose occupant holds a session — started, or a start in
-     flight — not those whose occupant's record is all a failed launch left."
+     flight, or carried by activation while no conversation is started on it —
+     not those whose occupant's record is all a failed launch left."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:set SeatId]]})
   (Operation traffic
     "A generation's seat messages, oldest first, each delivered one with the token it was given
      under."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:generation :int]] [:sequential :map]]})
+  (Operation traffic-all
+    "Every generation's seat messages, oldest first, as traffic gives one — read from the
+     seat-message log alone."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]})
+  (Operation start-owed!
+    "Start a driven conversation on an occupant a person's activation carried, once a seat message
+     is owed to it and nido drives nothing on it: its first instruction the occupant's brief and
+     every message then owed to it, each recorded delivered under that start's token."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:embodiment :map] [:occupant :map]] [:maybe :map]]
+     :delegates [conduct/start!]})
   (Operation hand-backs
     "Every hand-back posted to the workstream's conductor, in any generation, oldest first — read
      from the seat-message log alone."

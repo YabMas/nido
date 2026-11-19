@@ -56,9 +56,10 @@
    the last day, or owes its conductor a hand-back, and its session is not running; retired by a
    pass once it owes none and is closed or no longer worked — and
    what it is briefed with: the records at its start and an escalation guidance document edited
-   without changing code. And that a workstream a person or a Run starts its first session on is
-   carried: that session occupies its whole seat, and whenever the seats change the embodiment that carries them
-   occupies them. Which commands are a person's act is its own; how a command is read for what it
+   without changing code. And that a workstream a person or a Run starts its first session on, or a
+   person activates from a session, is carried: that session occupies its whole seat, and whenever
+   the seats change the embodiment that carries them occupies them; and when an undelivered
+   instruction no occupant nido drives can take is raised to the person. Which commands are a person's act is its own; how a command is read for what it
    does is the commit gate's."
   {:child [ConductDecision DecideResult]}
   (Operation carry!
@@ -69,10 +70,12 @@
      was, given by the start when its caller says the start was not made on the conductor's
      instruction (starter); otherwise nothing changes. Called by
      the session-up verb, spawn, the work plane's start and the daemon's start of a Run's
-     conversation, never by birth or the orphan sweep."
+     conversation, and by a person's activation from a session — which marks the occupant carried
+     by activation and starts no conversation on it — never by birth, the orphan sweep or the
+     activation a start makes of the session it is itself starting."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session SessionName]
                       [:brief [:? [:maybe :string]]] [:model [:? [:maybe :string]]]
-                      [:given-by [:? [:maybe [:enum :start]]]]] :map]
+                      [:given-by [:? [:maybe [:enum :start :activation]]]]] :map]
      :delegates [seats/default-embodiment seats/occupy!]})
   (Operation prompted
     "The sessions a person typed a prompt in within the last day, as #{[project session-name]} —
@@ -98,14 +101,25 @@
                  drive/settled-in-notion]})
   (Operation reseat!
     "On every conduct pass, for a carried workstream that is worked — as conductors! reads it, so a
-     workstream nobody types into is left as it is: retire each occupant whose seat the current
-     seats do not include, and occupy each current seat with the embodiment that carries it — the
-     default embodiment while the generation fixes no ids, the strata embodiment while it fixes
-     strata — escalating, by name, seats no embodiment carries and a seat whose start failed, and
-     answering the latter once every seat is held."
+     workstream nobody types into is left as it is: retire each occupant whose seat the
+     current seats do not include, and occupy each current seat with the embodiment that carries
+     it — the default embodiment while the generation fixes no ids, the strata embodiment while it
+     fixes strata — starting an occupant activation carried once a seat message is owed to it, on
+     those messages; escalating, by name, seats no embodiment carries and a seat whose start
+     failed, and answering the latter once every seat is held. Then, whatever it decided, name by
+     a blocker each undelivered instruction to a current seat no occupant nido drives can take,
+     answering it once the instruction is delivered or its seat is no longer current."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
                       [:prompted [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]]] :map]
      :delegates [prompted seats/reseat! seats/held seats/default-embodiment seats/occupy! embodied-strata/carry! embodied-strata/refused? drive/park!]})
+  (Operation undelivered!
+    "After a pass's reseat! of a workstream, whatever it decided and whatever the workstream's
+     activation, pause or closure: name, by a blocker carrying the seat-message's id, each
+     undelivered instruction to one of its current seats that no live session nido drives is owed
+     — once per instruction — and answer, as nido, each such blocker once its instruction is
+     delivered, is owed to a live session nido drives, or its seat is no longer current."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]
+     :delegates [seats/traffic-all seats/occupants seats/owed rseats/seats workstream/read-ws]})
   (Operation tell!
     "Pass word on to the workstream's conductor from the workstream's chat, which it must run in:
      posted once as a hand-back naming the chat's session — and, when the person's word grants the

@@ -83,12 +83,20 @@
   [s]
   (boolean (or (and (:claude s) (not= :retired (:driver (:claude s)))) (:dispatching s))))
 
+(defn- by-activation?
+  "Whether record `s` occupies its seat because a person activated the workstream from it."
+  [s]
+  (= :activation (get-in s [:seat :by])))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:set :SeatId]]}
   held
-  "The current generation's seats whose occupant holds a session (`started?`) — not those whose
-   occupant's record is all a failed launch left, which occupying again starts."
+  "The current generation's seats whose occupant holds a session (`started?`), or was carried by
+   a person's activation, whose conversation nido starts only once something is owed to it
+   (`start-owed!`) — not those whose occupant's record is all a failed launch left, which
+   occupying again starts."
   [project ws-id]
-  (into #{} (keep #(when (started? (session/read-session project ws-id (:session %))) (:seat %)))
+  (into #{} (keep #(let [s (session/read-session project ws-id (:session %))]
+                     (when (or (started? s) (by-activation? s)) (:seat %))))
         (occupants project ws-id)))
 
 (defn- conductor-name [ws-id] (str ws-id "--conductor"))
@@ -206,6 +214,13 @@
    given under."
   [project ws-id generation]
   (filterv #(= generation (:generation %)) (with-deliveries (log-rows project ws-id))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
+  traffic-all
+  "Every generation's seat messages, oldest first, as `traffic` gives one. Reads the seat-message
+   log alone — none there, none."
+  [project ws-id]
+  (with-deliveries (log-rows project ws-id)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
   hand-backs
@@ -533,7 +548,9 @@
    names; or, when the caller names `session-name` — a live session record of the workstream that
    occupies no seat and is not its conductor — that record, which then occupies the seat as one
    carried from its start, started on the brief — given by the embodiment's :given-by, as launch!
-   takes it — unless nido already drives it. Refused as the
+   takes it — unless nido already drives it, or the embodiment says `:by :activation`: the
+   record then occupies the seat marked so and nothing is started, its conversation being the
+   person's until something is owed to it (`start-owed!`). Refused as the
    embodiment refuses the workstream (`:refuse`, read against the generation it seats), for an id
    that is not a seat and for a seat already occupied — a session started on its record, or a
    start in flight; a record left by a launch that failed is started on again. Answers {:seat
@@ -553,13 +570,14 @@
            (let [s (session/read-session project ws-id session-name)]
              (when o
                (throw (ex-info (str "Seat " seat-id " is occupied by " (:session o)) {:reason :occupied :occupant o})))
-             (when-not (and s (session/live? s) (not (:seat s)) (not (:conductor s)))
+             (when-not (and s (session/live? s) (not (:seat s)) (not (:conductor s)) (not (:chat s)))
                (throw (ex-info (str session-name " is no live session of " ws-id " free to occupy a seat")
                                {:reason :not-free :session session-name})))
-             (session/write! (assoc s :seat {:id seat-id :generation g :carried true}))
+             (session/write! (assoc s :seat (cond-> {:id seat-id :generation g :carried true}
+                                              (= :activation (:by embodiment)) (assoc :by :activation))))
              ;; Its own start brought it up — perhaps still booting its services — so only the
-             ;; conversation is started here.
-             (when-not (driven? s)
+             ;; conversation is started here; an activation's conversation is the person's.
+             (when-not (or (driven? s) (= :activation (:by embodiment)))
                (launch! project ws-id session-name (brief project ws-id embodiment seat-id)
                         {:up? false :model (:model embodiment) :given-by (:given-by embodiment)}))
              {:seat seat-id :session session-name})
@@ -579,6 +597,37 @@
                  (launch! project ws-id n (brief project ws-id embodiment seat-id)
                           {:up? true :model (:model embodiment)})))
              {:seat seat-id :session n})))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :map] [:maybe :map]]}
+  start-owed!
+  "Start a conversation nido drives on the current-generation occupant a person's activation
+   carried, `occupant` ({:seat :session} as `occupants` gives one), once a seat message is owed to
+   it and nido drives nothing on it: its first instruction the occupant's brief under `embodiment`
+   followed by every message then owed to it, each recorded delivered under that start's token.
+   Answers {:seat :session :given [message-id …]}, or nil when there is nothing to start — the
+   occupant is driven, not activation's, or owed nothing. A start that throws records no delivery."
+  [project ws-id embodiment occupant]
+  (serially
+   project ws-id
+   (fn []
+     (let [{:keys [seat session]} occupant
+           s    (session/read-session project ws-id session)
+           owes (when (and s (by-activation? s) (not (driven? s))
+                           (= seat (get-in s [:seat :id]))
+                           (= (current-generation project ws-id) (get-in s [:seat :generation])))
+                  (owed project ws-id session))]
+       (when (seq owes)
+         (refuse-closed! project ws-id)
+         (let [facet (launch! project ws-id session
+                              (str (brief project ws-id embodiment seat) "\n\n"
+                                   "Owed to you since you took the seat:\n\n"
+                                   (str/join "\n\n" (map :text owes)))
+                              {:up? false :model (:model embodiment)})
+               s'    (session/read-session project ws-id session)
+               token (or (get-in facet [:pending :token]) (get-in s' [:claude :pending :token])
+                         (get-in s' [:dispatching :token]))]
+           (when token (doseq [{:keys [id]} owes] (delivered! project ws-id id token)))
+           {:seat seat :session session :given (mapv :id owes)}))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :SeatId] :map]}
   replace!

@@ -119,7 +119,7 @@
 
 ;; ── carrying a start ────────────────────────────────────────────────────────
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:? [:maybe :string]] [:? [:maybe :string]] [:? [:maybe [:enum :start]]]] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:? [:maybe :string]] [:? [:maybe :string]] [:? [:maybe [:enum :start :activation]]]] :map]}
   carry!
   "Carry the workstream a start just brought `session-name` up on: when its current generation fixes
    no ids and its whole seat has no occupant, that session becomes the whole seat's occupant,
@@ -128,7 +128,9 @@
    conductor's instruction, `starter`; nil: the conductor answers for it) — and otherwise
    nothing changes. A person's start (:start) on a workstream not activated is not carried
    (:not-activated): it stays a plain session, and only activation hands the recipe to nido. Called by the session-up verb, spawn, the work plane's start and the daemon's
-   start of a Run's conversation, never by birth! or the orphan sweep. Answers {:carried {:seat
+   start of a Run's conversation, never by birth! or the orphan sweep — and by a person's
+   activation from the session (:activation), which carries it as the person's without starting
+   a conversation on it: a pass's reseat! starts one once something is owed to it. Answers {:carried {:seat
    :session}} or {:carried nil :why <reason>}; never throws for a seat it does not take."
   [project ws-id session-name & [brief model given-by]]
   (let [whole (first (filter :whole (rseats/seats project ws-id)))]
@@ -136,7 +138,7 @@
       (nil? whole)
       {:carried nil :why :fixes-ids}
 
-      (and (= :start given-by) (not (some-> (ws/read-ws project ws-id) standing/activated?)))
+      (and (#{:start :activation} given-by) (not (some-> (ws/read-ws project ws-id) standing/activated?)))
       {:carried nil :why :not-activated}
 
       (seq (seats/occupants project ws-id))
@@ -148,7 +150,8 @@
                                  (cond-> (seats/default-embodiment)
                                    brief    (update :practice str "\n\nYour first instruction:\n\n" brief)
                                    model    (assoc :model model)
-                                   given-by (assoc :given-by given-by))
+                                   (= :start given-by)      (assoc :given-by :start)
+                                   (= :activation given-by) (assoc :by :activation))
                                  (:id whole) session-name)}
         (catch clojure.lang.ExceptionInfo e
           (if (#{:occupied :not-free :fixes-ids :closed} (:reason (ex-data e)))
@@ -345,6 +348,20 @@
                                           :summary "the seat it named has since been occupied"}))
                (:seq b))))))
 
+(defn- start-owed-occupants!
+  "Start, through lane-seats, each current occupant a person's activation carried that is owed a
+   seat message and on which nido drives nothing (`seats/start-owed!`). A start that throws is
+   logged and left for a later pass; what it leaves undelivered `undelivered!` raises. Answers
+   the sessions started."
+  [project ws-id]
+  (vec (keep (fn [o]
+               (try (:session (seats/start-owed! project ws-id (seats/default-embodiment) o))
+                    (catch Exception e
+                      (binding [*out* *err*]
+                        (println (str "nido conductor: starting " (:session o) " on what it is owed failed — " (ex-message e))))
+                      nil)))
+             (seats/occupants project ws-id))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]] :map]}
   reseat!
   "On every conduct pass, for a carried workstream that is worked as conductors! reads it, over
@@ -352,12 +369,13 @@
    left as it is: retire each occupant whose seat
    the current seats do not include, and occupy each current seat with the embodiment that carries it — the
    default embodiment while the generation fixes no ids, the strata embodiment while it fixes
-   strata — escalating, by name, seats no embodiment carries and a seat whose start failed in this
-   pass, and answering that escalation as nido once every seat is held. A closed workstream, and
+   strata — and start, on what it is owed, an occupant a person's activation carried once a seat
+   message is owed to it (`start-owed-occupants!`) — escalating, by name, seats no embodiment
+   carries and a seat whose start failed in this pass, and answering that escalation as nido once every seat is held. A closed workstream, and
    one not activated, is left as it is. A slice is reseated while its drain is open, worked or
    not and carried or not — a start whose seat failed after the slice was made has never been
    carried — its whole seat carried by a session briefed from its drain's recipe. Answers {:retired
-   :occupied :escalated}."
+   :occupied :escalated :started}."
   [project ws-id & [prompted-sessions]]
   (let [w      (delay (ws/read-ws project ws-id))
         slice? (delay (and @w (drain/slice? @w) (not (ws/closure @w))
@@ -390,7 +408,9 @@
                      {:retired retired :escalated ids})]
       (cond
         (empty? empty)
-        (do (answer-filled! project ws-id) {:retired retired})
+        (let [started (start-owed-occupants! project ws-id)]
+          (answer-filled! project ws-id)
+          (cond-> {:retired retired} (seq started) (assoc :started started)))
 
         ;; A launch that fails is named by an escalation in the pass it failed in, and tried again
         ;; on the next; once one succeeds, that escalation is answered.
@@ -416,6 +436,85 @@
                         (str "Which embodiment should carry seats " (str/join ", " ids) ", which none carries now?")
                         (str "How should seats " (str/join ", " ids) " be carried, now that they could not be started?"))
                       e))))))))
+
+;; ── instructions no one can take ────────────────────────────────────────────
+
+(declare excerpt)
+
+(defn- driven-session?
+  "Whether nido drives a conversation on record `s`, or a start of one is in flight."
+  [s]
+  (boolean (and s (or (:dispatching s) (= :nido (get-in s [:claude :driver]))))))
+
+(defn- taken?
+  "Whether a live session nido drives is owed seat message `m` of the workstream."
+  [project ws-id m]
+  (boolean (some (fn [{:keys [session]}]
+                   (and (driven-session? (session/read-session project ws-id session))
+                        (some #(= (:id m) (:id %)) (seats/owed project ws-id session))))
+                 (seats/occupants project ws-id))))
+
+(defn- undelivered-blocker
+  "The blocker telling a person that the conductor's instruction `m` reaches no one: no session
+   nido drives occupies its seat, so nothing is owed it to a session that would be given it."
+  [ws-id m occupant]
+  (let [seat (if (int? (:to m)) "the whole seat" (str "seat " (:to m)))]
+    {:format       :blocker
+     :summary      (str "The conductor's instruction to " seat " of " ws-id ", posted at " (:at m)
+                        ", has reached no one: "
+                        (if occupant
+                          (str "its occupant " occupant " is not a session nido drives")
+                          "the seat has no occupant")
+                        ". It reads: “" (excerpt (:text m) 600) "”")
+     :needs        (str "Will you give " seat " a session nido drives, so the conductor's instruction reaches it?")
+     :recommendation (str "Run `nido activate` from the session you work this workstream in — it carries "
+                          "that session into the seat — or start one on it with `bb nido:session:up`.")
+     :after        (str "nido answers this itself once the instruction is delivered, once a session nido "
+                        "drives is owed it, or once its seat is no longer current.")
+     :seat-message {:id (:id m)}}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
+  undelivered!
+  "After a pass's reseat! of a workstream, whatever it decided and whatever the workstream's
+   activation, pause or closure: name, by a :blocker carrying :seat-message {:id}, each undelivered
+   :instruction addressed to one of its current seats that no live session nido drives is owed —
+   once per instruction, whether or not that blocker was since answered — and answer, as nido,
+   each such blocker whose instruction is delivered, is owed to a live session nido drives, or
+   whose seat in its generation is no longer current. The ledger is read only when the
+   seat-message log holds an instruction — a workstream whose conductor posted one has
+   hand-backs, whose ledger conductors! reads on the same pass anyway.
+   Answers [{:ws-id :seat-message :wrote <:blocker | :blocker-answered>} …]."
+  [project ws-id]
+  (let [rows    (seats/traffic-all project ws-id)
+        pending (filter #(and (= :instruction (:kind %)) (not (:delivered? %))) rows)]
+    (if-not (some #(= :instruction (:kind %)) rows)
+      []
+      (let [w        (ws/read-ws project ws-id)
+            g        (generation/current (:entries w))
+            current  (set (map :id (rseats/seats project ws-id)))
+            by-id    (into {} (map (juxt :id identity)) rows)
+            standing (fn [m] (and (= g (:generation m)) (current (:to m))))
+            answers  (into #{} (map :blocker-seq) (ws/entries-of project ws-id :blocker-answered))
+            raised   (filter :seat-message (ws/entries-of project ws-id :blocker))
+            named    (into #{} (map #(get-in % [:seat-message :id])) raised)
+            answered (doall
+                      (for [b raised
+                            :let [m   (by-id (get-in b [:seat-message :id]))
+                                  why (cond (or (nil? m) (not (standing m))) "its seat is no longer current"
+                                            (:delivered? m) "it was delivered"
+                                            (taken? project ws-id m) "a session nido drives is owed it")]
+                            :when (and why (not (answers (:seq b))))]
+                        (do (ws/append-entry! project ws-id {:kind :blocker-answered}
+                                              (pr-str {:format :blocker-answered :blocker-seq (:seq b) :by :nido :resumed nil
+                                                       :summary (str "The conductor's instruction no longer waits on a person — " why ".")}))
+                            {:ws-id ws-id :seat-message (get-in b [:seat-message :id]) :wrote :blocker-answered})))
+            asks     (doall
+                      (for [m pending
+                            :when (and (standing m) (not (named (:id m))) (not (taken? project ws-id m)))]
+                        (let [o (:session (first (filter #(= (:to m) (:seat %)) (seats/occupants project ws-id))))]
+                          (ws/append-entry! project ws-id {:kind :blocker} (pr-str (undelivered-blocker ws-id m o)))
+                          {:ws-id ws-id :seat-message (:id m) :wrote :blocker})))]
+        (concat answered asks)))))
 
 ;; ── hand-backs ──────────────────────────────────────────────────────────────
 

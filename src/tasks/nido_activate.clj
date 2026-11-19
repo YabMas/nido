@@ -22,7 +22,7 @@
     (if-not id
       (do (println (str given " resolves to no workstream — pass :project <p> :ws <ws-id>"))
           (System/exit 1))
-      (let [{:keys [already? instruction]}
+      (let [{:keys [already? instruction carried]}
             (try (work/activate! p id session)
                  (catch clojure.lang.ExceptionInfo e
                    (println (str "Refused — " (ex-message e)))
@@ -31,6 +31,9 @@
                    (str id " was already activated.")
                    (str "Activated nido's recipe on " id
                         ". Its conductor starts on the next conduct pass.")))
+        (when (:carried carried)
+          (println (str session " occupies the workstream's whole seat: the conductor's instructions "
+                        "reach it, in a conversation nido starts once one is owed to it.")))
         (println)
         (println instruction)))))
 
