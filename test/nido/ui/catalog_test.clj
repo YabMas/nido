@@ -169,7 +169,7 @@
 (deftest a-question-card-scene-asks-its-question-and-offers-every-answer
   (let [one (html-of "question-card" "one question")]
     (is (str/includes? one "class=\"qcard\""))
-    (is (str/includes? one "Approve the component-catalog design?"))
+    (is (str/includes? one "Should the component catalog replace the pages as the interface?"))
     ;; With no submit, the recommended OPTION is the primary — it is the control that gives the
     ;; answer, so it carries the emphasis — and the reply's send button is demoted from
     ;; btn-primary to btn, because two primaries on one decision is the thing ui-principles §4
@@ -207,7 +207,7 @@
   (is (= "chat" (:id (first (scenes/groups))))))
 
 (deftest the-page-selects-by-query-string-and-survives-a-bad-one
-  (is (str/includes? (catalog/catalog-page "block=ask") "Approve the component-catalog design?"))
+  (is (str/includes? (catalog/catalog-page "block=ask") "Should the component catalog replace the pages as the interface?"))
   (is (str/includes? (catalog/catalog-page "block=row") "class=\"gate-card\""))
   (testing "an unknown value falls back to the first option rather than rendering nothing"
     (doseq [q [nil "" "block=nope" "surface=chartreuse" "width=enormous" "block=ask&surface=&width="]]

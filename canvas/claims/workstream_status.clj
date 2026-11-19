@@ -25,7 +25,7 @@
   {:about [status workstream-row] :evidence "round"})
 
 (Claim owed-by-from-mode
-  "Owed-by is read off the mode of the next move status names, the action of's answer carries as :next, and off nothing else: :person when that move runs in :human mode — :published among the positions owing one, whose next move is landing — :machine for :mechanical, :agent for :authoring or :working-copy, :nobody when the position is terminal and no move is owed. A position does not fix the mode by itself, because the next move is resolved from more than the position — :design-decided owes a mechanical clearance when its design owes no person and a human approval when it does — so two workstreams at one position may be owed by different parties, and owed-by follows the move. Stalled is owed-by :agent with nothing live."
+  "Owed-by is read off the mode of the next move status names, the action of's answer carries as :next, and off nothing else: :person when that move runs in :human mode — :published among the positions owing one, whose next move is landing — :machine for :mechanical, :agent for :authoring or :working-copy, :nobody when the position is terminal and no move is owed. Stalled is owed-by :agent with nothing live."
   {:about [status] :evidence "round"})
 
 (Claim answers-are-recorded

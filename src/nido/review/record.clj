@@ -1619,9 +1619,10 @@
              design at :of — when it asked and neither a grant nor a reply has been written since; a
              question put to a person and not yet answered. :questions is its open questions by id
              (`questions-carried`), absent on an ask appended before asks carried ids
-     :answered-since  {:seq :asks :by [{:seq :kind :why}]}, the newest reply a person wrote, by
-             writing the record rather than a grant — a design in the chain they wrote, or the intent
-             the design cites, each by its :supersedes :why — with the ask it answered, the newest
+     :answered-since  {:seq :asks :by [{:seq :kind :why}]}, the newest reply a person wrote — a
+             design in the chain they wrote, or the intent the design cites, each by its
+             :supersedes :why, or their answer to a blocker parked after a decision on the chain
+             (:kind :blocker, :why the answer's words) — with the ask it answered, the newest
              asking decision before it; :by is every reply since that ask
      :rewritten  {:seq :why :supersedes :approved?}, the nearest design in the chain a person
              wrote, by its :supersedes :why, when that is not already a reply above — and whether
@@ -1687,7 +1688,22 @@
          intent    (some->> (get-in design [:intent :seq]) (ws/entry-at-seq project ws-id))
          reply     (fn [kind r] {:seq (:seq r) :kind kind :why (get-in r [:supersedes :why])})
          written   (this-gen (filterv #(and (:seq %) (person? %) (get-in % [:supersedes :why])) chain))
-         replies   (sort-by :seq (cond-> (mapv #(reply :design %) written)
+         ;; A question a round stops on reaches the person as a blocker the driver parks over the
+         ;; decision, and their answer to it is a reply like a record they rewrite. Only a blocker
+         ;; parked after a decision on this chain was one of its questions; one nido answered
+         ;; itself (:by :nido), or recorded for an act of the person's (:act), is no reply.
+         on-chain  (into #{} (keep :seq) chain)
+         asked-at  (some #(when (on-chain (:design-seq %)) (:seq %)) every-decision)
+         answered-blockers (when asked-at
+                             (filterv #(and (> (long (or (:blocker-seq %) 0)) (long asked-at))
+                                            (not= :nido (:by %))
+                                            (not (:act %))
+                                            (not (str/blank? (:summary %))))
+                                      (this-gen (ws/entries-of project ws-id :blocker-answered))))
+         replies   (sort-by :seq (cond-> (into (mapv #(reply :design %) written)
+                                               (map (fn [a] {:seq (:seq a) :kind :blocker
+                                                             :why (:summary a)}))
+                                               answered-blockers)
                                    (and (:seq intent) (get-in intent [:supersedes :why]))
                                    (conj (reply :intent intent))))
          after     (fn [n] (filterv #(> (long (:seq %)) (long (or n 0))) replies))
@@ -1749,52 +1765,23 @@
        "the person wrote both. The disagreement goes to asks, never to amend, and no\n"
        "repair cites the :why as its authority over a claim.\n"))
 
-(defn- move-granted
-  "`grant` (`answered`'s :grant) when it already covers the move the judged design declares: a
-   person granted a design this one replaces, and the move — the baseline citation's :relation
-   :breaks :at, and the stance — reads now as it did then (`grant-delta` names neither). A
-   grant answers whatever question it was asked, but approving a design grants its move whole, so
-   a successor that changed something else owes a person only that change. nil for the design's
-   own grant, which there is no successor to carry onto, and for a move that moved."
-  [grant]
-  (when (and grant (not (:self? grant))
-             (nil? (get-in grant [:delta :relation]))
-             (not-any? #{:standing} (get-in grant [:delta :fields])))
-    grant))
-
 (defn- answered-block
   "Who reads `asks`, and what is already off the table for it: the design's :open notes, a grant a
    person gave, a reply they wrote into the record, what they asked for, a question already put to
-   one. `owes?` is `report/owes-a-person?` of the design, `judged` its :seq — nil on a record not
+   one. `judged` is the design's :seq — nil on a record not
    yet on the ledger, which no earlier ask can have been of."
-  [owes? judged open {:keys [grant asked answered-since rewritten asked-for asked-of authored?]}]
-  (let [carried (when owes? (move-granted grant))
-        stops?  (and owes? (not carried))]
-    (str
-     (cond
-       stops?
-       (str "\nWHO READS asks: a person. This design declares a move they must grant\n"
-            "(:challenges or :revisit), so a proceed stops for them and asks is what they read.\n")
-       carried
-       (str "\nWHO READS asks: NOBODY, on a proceed. This design declares a move a person must\n"
-            "grant (:challenges or :revisit), and a person granted it at entry " (:seq carried) " on the\n"
-            "design this one replaces. The move — its stance, its relation to the baseline,\n"
-            "what it breaks — has not changed since, so a proceed carries that grant and\n"
-            "clears the design: the grant covers the move whatever question it answered, and\n"
-            "asks does not pose the move or its worth again. What a person has not granted is\n"
-            "only what changed since, below. A question about that the build must not start\n"
-            "without is recommend ask, never a proceed with the question in asks.\n")
-       :else
-       (str "\nWHO READS asks: NOBODY, on a proceed. This design declares nothing a person\n"
-            "must grant, so a proceed clears it and the build starts; asks is recorded and\n"
-            "no one is stopped to read it. A question the build must not start without —\n"
-            "what the intent means, whether this scope is the one wanted, whether it is\n"
-            "worth its cost — is recommend ask, never a proceed with the question in asks.\n"))
-     ;; Whenever a person may read asks, write it the way every question for them is written:
-     ;; it is what leads their needs-you card.
-     (when-not carried
-       (str "\nHOW TO WRITE asks, when a person reads it — it leads their needs-you card:\n"
-            (ask/guidance :approve-design) "\n"))
+  [judged open {:keys [grant asked answered-since rewritten asked-for asked-of authored?]}]
+  (str
+     (str "\nWHO READS asks: NOBODY, on a proceed. A proceed clears the design and the build\n"
+          "starts; asks is recorded and no one is stopped to read it. A question the build\n"
+          "must not start without — what the intent means, whether this scope is the one\n"
+          "wanted, whether it is worth its cost — is recommend ask, never a proceed with the\n"
+          "question in asks. An ask stops the round: the question goes to a person as a\n"
+          "blocker, and the next round reads their answer before anything is built.\n")
+     ;; Write asks the way every question for a person is written: on an ask it leads their
+     ;; needs-you card.
+     (str "\nHOW TO WRITE asks, when a person reads it — it leads their needs-you card:\n"
+          (ask/guidance :design-question) "\n")
      (when (seq open)
        (str "\nTHE RECORD'S OPEN NOTES — what its author states is decided, or left open on purpose:\n"
             (bullets open) "\n"
@@ -1881,7 +1868,8 @@
      (when answered-since
        (str "\nANSWERED SINCE. A person was asked at entry " (:seq answered-since) ":\n  "
             (:asks answered-since) "\n"
-            "and answered by writing the record rather than a grant:\n"
+            "and answered in their own words — a record they wrote, or their answer to the\n"
+            "blocker the question was put to them as:\n"
             (str/join (for [{n :seq kind :kind why :why} (:by answered-since)]
                         (str "  entry " n " (" (name kind) "): " why "\n")))
             "Do not pose that question again; asks poses only what the answer leaves open.\n"
@@ -1915,7 +1903,7 @@
             "It bears on asks alone and is evidence for no check: scope a person asked for is\n"
             "not a question to put back to them.\n"))
      (when asked
-       (str "\nASKED BEFORE, AND NO GRANT WRITTEN SINCE — at entry " (:seq asked)
+       (str "\nASKED BEFORE, AND NOT ANSWERED SINCE — at entry " (:seq asked)
             (when (:of asked) (str ", of entry " (:of asked))) ":\n  " (:asks asked) "\n"
             (when (and judged (:of asked) (not= judged (:of asked)))
               (str "The record has changed since: this round judges entry " judged ", not entry "
@@ -1937,14 +1925,8 @@
                    "A question none of these asks gets an empty id.\n"))
             "If what you find can only be repaired by answering this, recommend ask: an\n"
             "amender handed it answers it without the person, and the next round refutes\n"
-            "the answer.\n"
-            (cond
-              stops?
-              (str "If you find nothing, recommend proceed: a proceed on this design already stops\n"
-                   "for the person, and asks carries this question to them.\n")
-              carried
-              (str "A proceed on this design clears it and stops for nobody: if this question is\n"
-                   "still open, recommend ask.\n"))))
+            "the answer. A proceed clears the design and stops for nobody: if this question\n"
+            "is still open, recommend ask.\n"))
      (when (seq asked-of)
        (str "\nCLAIMS A PERSON HAS ALREADY BEEN ASKED ABOUT, AND WHAT THEY GRANTED:\n"
             (str/join
@@ -1957,11 +1939,11 @@
                            (when (:note granted) (str " — \"" (:note granted) "\"")) "\n")
                       reply
                       (str "      answered at entry " (:seq reply) " — \"" (:why reply) "\"\n")
-                      :else "      no grant written since\n"))))
+                      :else "      not answered since\n"))))
             "A question about one of these claims is not a new question, and asking for one\n"
             "more exception to it spends the person on the same decision again. If asks has to\n"
             "raise one, cite the entries above and pose it at the CLASS level — what kind of case\n"
-            "the claim admits or excludes, named so that one answer also covers the next instance.\n")))))
+            "the claim admits or excludes, named so that one answer also covers the next instance.\n"))))
 
 (declare decision-asked)
 
@@ -2004,8 +1986,7 @@
    generation's defining elements as the design that fixed them hid them (`fixed-block`)."
   [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior stale
            executed hot fixed]}]
-  (let [owes?        (report/owes-a-person? design)
-        checked      (into #{} (map :id) (get-in (checks-of design (set (keys settled))) [:model :claims]))
+  (let [checked      (into #{} (map :id) (get-in (checks-of design (set (keys settled))) [:model :claims]))
         design       (judged-alone design)
         baseline     (judged-alone baseline)
         relation-ids (relation-yardstick design baseline)]
@@ -2273,7 +2254,7 @@
    "asks already. Pose the scope or worth question so it stands whatever the repair\n"
    "writes — a person can grant that now, and need not wait for a record that is\n"
    "still changing. Name a correction in asks only when the question depends on it.\n"
-   (answered-block owes? (:seq design) (:open design) answers)
+   (answered-block (:seq design) (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
    (hot-area-section hot checked)
    (stale-block (apply dissoc stale (keys settled)))
@@ -4003,7 +3984,9 @@
    Two of the no-verdict outcomes are read out of the records before a judge is
    launched, and cost nothing: no design, and a design standing on a baseline
    nobody verified. The second is the one that was previously discovered by
-   paying for the round — see `unverified-premise`. A third is read out of the
+   paying for the round — see `unverified-premise`. A design something already let be built is
+   never judged again (:already-cleared): a round over it could send back a design the arc is
+   building on, and the ledger refuses the decision anyway. A third is read out of the
    declared design: a claim about something it does not declare — see
    `undeclared-subjects`.
 
@@ -4033,6 +4016,11 @@
   (if-let [[project ws-id :as ledger] (ledger-of opts)]
     (if-let [design (or design (newest-design project ws-id))]
       (or (unverified-premise project ws-id design)
+          (when-let [by (let [st (standing/of-design project ws-id design)]
+                          (when (:cleared? st) (or (:cleared-by st) (:approved-by st))))]
+            {:outcome :already-cleared
+             :detail  (str "the design at entry " (:seq design) " was let be built at entry " by
+                           " — its review is over; write a superseding design to have it decided again")})
           (undeclared-subjects project (or code-cwd cwd) (effective-design ledger design) listing)
           (let [code-cwd  (or code-cwd cwd)
                 effective (effective-design ledger design)
@@ -4112,23 +4100,22 @@
   "Does a `:design-cleared` on this workstream name the design at `design-seq`?
 
    Asked AFTER the decision is appended, because that append is what may have
-   written one. It is the difference between a round that owed a person and one
-   that did not, and the driver has no other way to tell them apart: a `:proceed`
-   is the design round's ask, and an ask nobody is owed is not an escalation."
+   written one: the difference between a round whose design may now be built and
+   one whose clearance is still a write owed."
   [[project ws-id] design-seq]
   (boolean
    (when project
      (some #(= design-seq (get-in % [:design :seq]))
            (ws/entries-of project ws-id :design-cleared)))))
 
-(defn- clear-if-owed-nobody!
+(defn- clear-proceeding!
   "Append a `:design-cleared` for the design a decision just recommended
-   proceeding on, when that design's own declarations owe nobody a grant.
+   proceeding on.
 
    TAKES ITS SUBJECT, and keeps it across retries. Reading `latest-entry :design`
    instead would clear whatever is newest: if D2 is appended after D1's
-   proceeding decision but before this reads, it would check D2's declarations
-   and clear D2, which no round has judged. `standing`'s `:decidable?` does not
+   proceeding decision but before this reads, it would clear D2, which no round
+   has judged. `standing`'s `:decidable?` does not
    ask whether a decision exists — that is the round's own answer — so nothing
    downstream would have caught it.
 
@@ -4145,14 +4132,13 @@
 
    A REFUSAL IS NOT A FAILURE, and re-asking is the whole of the answer to it.
    Only standing can have moved: the decision is already appended and no round
-   re-runs, and the declarations are frozen in the record being cleared. So the
-   retry is the same operation repeated. Interference must not decide anything —
-   a bounded budget that gave up would let five unrelated notes create the human
-   gate this exists to remove — so the loop ends on an ANSWER: cleared, or
+   re-runs. So the retry is the same operation repeated. Interference must not
+   decide anything — a bounded budget that gave up would let five unrelated notes
+   hold a design its round proceeded on — so the loop ends on an ANSWER: cleared, or
    standing come back unclean, and then no clearance is owed because a design
    that does not stand is not implementable on any reading. The cap is a
    runaway guard rather than a policy, and reaching it answers `:contended` —
-   the question still open, never a grant owed — which the round reports as a
+   the question still open, never a person's — which the round reports as a
    status the clearance stage (`clear!`) takes up rather than one it parks for a
    person."
   [project ws-id design-seq]
@@ -4162,12 +4148,11 @@
           at     (count (:entries w))]
       (cond
         (nil? design) nil
-        (report/owes-a-person? design) nil
         (> attempts 100)
         (do (binding [*out* *err*]
               (println (str "clearance: gave up re-reading " ws-id " for the design at "
-                            design-seq " after 100 interruptions — it still owes nobody"
-                            " a grant, so the clearance is to be asked again")))
+                            design-seq " after 100 interruptions — the clearance is to be"
+                            " asked again")))
             :contended)
         :else
         (let [st (standing/of-design project ws-id design)]
@@ -4219,7 +4204,9 @@
   (let [kind   (:format record)
         before (ws/highest-seq-on-disk project ws-id)]
     (try
-      (ws/seq-of-path (ws/append-entry! project ws-id {:kind kind} (pr-str record)))
+      (ws/seq-of-path (if (= :design-decision kind)
+                        (ws/append-decision! project ws-id (pr-str record))
+                        (ws/append-entry! project ws-id {:kind kind} (pr-str record))))
       (catch Exception e
         (let [mine (entry-as-read kind record)]
           (or (some #(when (and (> (:seq %) before) (= mine (dissoc % :seq :at))) (:seq %))
@@ -4233,18 +4220,15 @@
    unwritten record is a failure is the caller's to say — a round that goes on writes again
    next round, and one that ends the run cannot (`run-design-judge-stage`'s `final!`).
 
-   A decision that proceeds (`report/proceeds?`) may also CLEAR the design, and
-   that happens here rather than in either loop so that no round can append a
-   decision and forget the clearance it implies — unless it proceeds over an ask the reading
-   before it made (:unpaired-recommend), whose question a clearance would answer for nobody.
+   A decision that proceeds (`report/proceeds?`) also CLEARS the design, and that
+   happens here rather than in either loop so that no round can append a decision
+   and forget the clearance it implies.
 
    Returns `{:seq n}`, the :seq the ledger gave the record — the only answer to which entry this
    round wrote, since the newest entry once the lock is released may be another writer's — plus
    `:contended true` when a clearance was still owed and could not be written, or a clearance that
    threw. `{:refused (refusal)}` when the ledger refused the record (`write-record!`), which the
-   round keeps (`with-appended`). nil when there was nothing to append: an outcome, or no ledger.
-   Nothing this returns means `a person is owed the grant`, so a caller asks the design itself, as
-   `proceeding-status` does."
+   round keeps (`with-appended`). nil when there was nothing to append: an outcome, or no ledger."
   [ledger record]
   (when (:format record)
     (when-let [[project ws-id] ledger]
@@ -4254,8 +4238,7 @@
           (cond-> written
             (and (= :design-decision (:format record))
                  (report/proceeds? record)
-                 (not (:unpaired-recommend record))
-                 (= :contended (try (clear-if-owed-nobody! project ws-id (:design-seq record))
+                 (= :contended (try (clear-proceeding! project ws-id (:design-seq record))
                                     (catch Exception _ :contended))))
             (assoc :contended true))
           written)))))
@@ -4283,69 +4266,27 @@
   [judgement]
   {:seq (:seq judgement) :reused true})
 
-(defn- grant-carried!
-  "Write the grant `design` carries as its :design-approved, at `at-seq`, the proceeding decision's
-   entry; true when it was written.
-
-   Two grants carry, and no other:
-     - this very design's (`answered`'s :grant :self? and :carried?): a person wrote the design and
-       stated in its :supersedes :granted that they grant it, so parking the proceed asked them to
-       approve their own words again. Written with the note word for word.
-     - a grant of a design this one replaces, whose declared move is unchanged (`move-granted`):
-       the round's judge was told the proceed clears it (`answered-block`), so whatever else
-       changed was its to ask about. Written with :from naming the granted design when it is of
-       the current generation, and its note when it had one.
-   Each is written with :carried, and only while the design stands (`standing/of-design`
-   :decidable?), the premise an Approve would be refused on."
-  [project ws-id design at-seq]
-  (try
-    (let [g     (:grant (answered project ws-id design))
-          self? (and (:self? g) (:carried? g) (not (str/blank? (:note g))))
-          from  (move-granted g)]
-      (when (and at-seq (or self? from)
-                 (:decidable? (standing/of-design project ws-id design)))
-        (some? (ws/append-entry! project ws-id {:kind :design-approved}
-                                 (pr-str (cond-> {:format  :design-approved
-                                                  :design  {:seq (:seq design)}
-                                                  :at-seq  at-seq
-                                                  :carried true}
-                                           (not (str/blank? (:note g))) (assoc :note (:note g))
-                                           ;; A grant of an earlier generation's design crosses
-                                           ;; by the supersession reading alone; citing it would
-                                           ;; cross the boundary no record of this one may.
-                                           (in-current-generation project ws-id from)
-                                           (assoc :from {:seq (:seq from)})))))))
-    (catch Exception _ false)))
-
 (defn- proceeding-status
   "The status a decision that `report/proceeds?` ends on, once the clearance it
-   may imply has been asked for; `answer` is shaped as `append!`'s, whose `:contended` says it was
+   implies has been asked for; `answer` is shaped as `append!`'s, whose `:contended` says it was
    asked for and could not be written.
 
-     :cleared              a clearance names the design, or the grant it carried was written
-                           (`grant-carried!`)
-     :proceed              a person is owed the grant — the round's ask — or the question of an
-                           :ask the reading before made, which this one carries
-                           (:unpaired-recommend)
-     :clearance-contended  it owes nobody and the clearance is still unwritten
-     standing's reason     it owes nobody, but no longer stands
+     :cleared              a clearance names the design
+     :clearance-contended  the clearance is still unwritten
+     standing's reason     the design no longer stands
 
-   Only :proceed parks for a person. A clearance still owed is a write, not an
-   ask, whatever kept it from landing — contention, or a write that threw inside
-   `append!` — and the clearance stage makes it. A design that no longer stands
-   owes nobody anything until what moved under it is repaired, so it goes where
-   standing says rather than onto a person's gate."
+   None parks for a person. A clearance still owed is a write, not an ask,
+   whatever kept it from landing — contention, a write that threw inside
+   `append!`, or a design the ledger cannot read back — and the clearance stage
+   makes it. A design that no longer stands is owed nothing until what moved
+   under it is repaired, so it goes where standing says."
   [[project ws-id :as ledger] record answer]
   (let [n               (:design-seq record)
         design          (when project (ws/entry-at-seq project ws-id n))]
     (cond
       (cleared? ledger n)                               :cleared
       (:contended answer)                               :clearance-contended
-      (:unpaired-recommend record)                      :proceed
-      (nil? design)                                     :proceed
-      (report/owes-a-person? design)                    (if (grant-carried! project ws-id design (:seq answer))
-                                                          :cleared
-                                                          :proceed)
+      (nil? design)                                     :clearance-contended
       :else (let [st (standing/of-design project ws-id design)]
               (if (:decidable? st)
                 :clearance-contended
@@ -4361,8 +4302,7 @@
    one thing left open is the write. Its subject is the design the latest
    proceeding decision names, and only while that is the newest design — a
    design appended since has had no round, and clearing it would clear work
-   nobody judged — and that decision carries no ask the reading before it made
-   (:unpaired-recommend), which is a person's to answer. Anything else answers
+   nobody judged. Anything else answers
    :nothing-to-clear: the ledger moved on after the stage was fired, and the next
    reading of it says where."
   [cwd]
@@ -4373,12 +4313,10 @@
                             last)]
       (cond
         (or (nil? design)
-            (not (report/proceeds? decision))
-            (:unpaired-recommend decision)
-            (report/owes-a-person? design)) :nothing-to-clear
+            (not (report/proceeds? decision))) :nothing-to-clear
         (cleared? ledger (:seq design))     :cleared
         :else (proceeding-status ledger decision
-                                 {:contended (= :contended (clear-if-owed-nobody! project ws-id (:seq design)))})))
+                                 {:contended (= :contended (clear-proceeding! project ws-id (:seq design)))})))
     :no-workstream))
 
 ;; ── The baseline round as a loop ────────────────────────────────────────────
@@ -6718,6 +6656,8 @@
      :read-once     `j` rested on a first reading, which is owed a second
      :superseded    a later record answers `subject`
      :retracted     `j`'s subject was retracted
+     :answered      a person answered a blocker parked after `j` — the question a round stops on
+                    reaches them as one — so the judge reads that answer, never `j` again
      :passed        `j` would let the record through — a proceed, a review that holds — which is
                     never taken: what it may clear is a judge's to decide afresh
 
@@ -6736,6 +6676,9 @@
       :superseded
       (some #(= n (get-in % [:retracts :seq])) (ws/entries-of project ws-id :retraction))
       :retracted
+      (some #(and (> (long (or (:blocker-seq %) 0)) (long (:seq j))) (not= :nido (:by %)))
+            (ws/entries-of project ws-id :blocker-answered))
+      :answered
       (not (stands? j))                                              :passed)))
 
 (defn- rejudged
@@ -8869,22 +8812,28 @@
                                        design record (:seq answer))
                        answer))
 
+      ;; A proceed over a question the reading before it in this run put to a person
+      ;; (:unpaired-recommend): the question is still theirs, so the round stops for it as
+      ;; an :ask does, and does not proceed (`report/proceeds?`). The decision is appended,
+      ;; and the next round reads the person's answer.
+      (and (empty? unsettled) (:unpaired-recommend record)
+           (report/proceeds? (dissoc record :unpaired-recommend)))
+      (final! (assoc ctx :record record :findings []
+                     :underivable (underivable-checks record)
+                     :control :escalate :status :asked))
+
       ;; The judge's own recommendation, or — whatever it recommended — a round
       ;; whose only broken check is the advisory one: `report/proceeds?`, the
-      ;; same answer the clearance, the position and the grant read. The second
+      ;; same answer the clearance and the position read. The second
       ;; is a guard and not a courtesy: the routing lives in the prompt, so
       ;; without it the rule is a third soft bar beside the two that have already
       ;; failed here. The broken check stays on the record, so the human still
       ;; reads the complaint; what it stops doing is spending a round on an
       ;; amender.
       (and (empty? unsettled) (report/proceeds? record))
-      ;; Appending a proceeding decision is what may clear the design, so the
-      ;; escalation is decided AFTER the append: a design whose own
-      ;; declarations owed nobody has just been cleared, and parking it for a
-      ;; person would put back the gate the clearance removed — the driver maps
-      ;; :proceed to :escalate and would append a blocker that outranks the
-      ;; clearance on the next tick. A clearance still owed and never written is
-      ;; a write, not an ask, for the same reason — see `proceeding-status`.
+      ;; Appending a proceeding decision is what clears the design, so the
+      ;; status is decided AFTER the append. A clearance still owed and never
+      ;; written is a write, not an ask — see `proceeding-status`.
       (let [answer (put! ledger (cond-> record (seq traj) (assoc :trajectory traj)))
             status (proceeding-status ledger record answer)]
         (with-appended (assoc ctx :record record :findings []
@@ -8892,7 +8841,6 @@
                               :status status
                               :control (case status
                                          :cleared :advance
-                                         :proceed :escalate
                                          :stop))
                        answer))
 

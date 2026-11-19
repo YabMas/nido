@@ -687,34 +687,17 @@
   (is (= [] (work/gate-actions :intake true)))
   (is (= [] (work/gate-actions :done true))))
 
-;; ── The design gate: same stage, different question ────────────────────────
-;; No new spine stage. A parked :in-progress workstream whose latest ledger
-;; entry is a design decision is asking the one thing the round could not
-;; derive, so it offers one question — grant it, or send it back.
-
-(deftest a-parked-design-decision-asks-to-be-approved
-  (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary}
-          {:id :reply   :label "Reply"   :kind :resume  :style :default}]
-         (work/gate-actions :in-progress true nil {:report-format :design-decision :grantable? true}))
-      "Done is deliberately absent — settling a workstream is not an answer to
-       'should we build this', and offering it beside Approve invites it to be
-       read as one"))
-
 (def ^:private sample-directions
   [{:label "Round once on the total" :shape "Move the rounding to the aggregate."
     :effort :S :confidence {:level :high :reason "one call site"}}
    {:label "Introduce a Money type" :shape "Make per-line rounding unrepresentable."
     :effort :L :confidence {:level :medium :reason "touches every total"}}])
 
-;; The oracle for the bug where a button was rendered with its reading position
-;; and read back without one: :approve reached approve! as nil, took the stale
-;; branch, and no design was ever approved from the web. Derived from
-;; gate-actions rather than listed, so a new position-carrying action cannot be
-;; added on one side only.
+;; A button rendered with its reading position and read back without one
+;; resolves as stale every time. Derived from gate-actions rather than listed,
+;; so a new position-carrying action cannot be added on one side only.
 (deftest every-button-given-a-position-is-read-back-with-one
   (let [descriptors (concat
-                     (work/gate-actions :in-progress true nil
-                                        {:report-format :design-decision :grantable? true :seq 7})
                      (work/gate-actions :in-progress true nil
                                         {:options [{:label "A"} {:label "B"}] :seq 7})
                      (work/gate-actions :triage true nil
@@ -722,10 +705,9 @@
                                          :questions [{:directions sample-directions}] :seq 7}))
         carries-seq (into #{} (comp (filter :seq) (map :id)) descriptors)]
     (is (seq carries-seq) "the fixture must actually produce position-carrying buttons")
-    (is (contains? carries-seq :approve)
-        "Approve is rendered with the position it was read at")
     (is (contains? carries-seq :apply)
-        "and so is the accept, which now appends a record a stale click must not write")
+        "the accept is rendered with the position it was read at, because it appends a
+         record a stale click must not write")
     (doseq [id carries-seq]
       (is (work/position-carrying-action? id)
           (str id " is rendered with a :seq, so the surface must read its ?entry= back")))))
@@ -734,12 +716,13 @@
   (let [usual [{:id :reply :label "Reply" :kind :resume :style :default}
                {:id :done  :label "Done"  :kind :mutation :style :primary}]]
     (is (= usual (work/gate-actions :in-progress true nil {:report-format :blocker})))
+    (is (= usual (work/gate-actions :in-progress true nil {:report-format :design-decision :seq 7}))
+        "a parked design decision offers no approval: a design is built when its round proceeds")
     (is (= usual (work/gate-actions :in-progress true nil {:report-format nil})))
     (is (= usual (work/gate-actions :in-progress true))
         "the arity that predates report-format keeps its answer"))
   (is (= [] (work/gate-actions :in-progress false nil {:report-format :design-decision}))
-      "a decision nobody is parked on is not a gate — there is no agent to
-       resume, so approving it would resume nothing"))
+      "a decision nobody is parked on is not a gate — there is no agent to resume"))
 
 ;; ── The answerable blocker: A/B/… rather than an essay ─────────────────────
 ;; Same gate, same stage. A blocker that NAMED its branches is a question with
@@ -1117,12 +1100,7 @@
       "answering resumes a parked agent, so it needs a workstream — the two-way
        membership hazard documented on that set is why this is pinned"))
 
-(deftest approve-is-not-a-workstream-less-action
-  (is (not (contains? @#'work/workstream-less-actions :approve))
-      "Approve resumes a parked agent, so it needs a workstream; the two-way
-       membership hazard documented on that set is why this is pinned"))
-
-(def ^:private approvable-baseline
+(def ^:private decided-baseline
   ;; :intent names entry 1 — the goal is appended before the survey it scopes.
   {:format :baseline :strata [] :intent {:seq 1} :area "a" :bounded-by "b" :shape "s"
    :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
@@ -1130,16 +1108,16 @@
                      :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
    :read ["src/a.clj"]})
 
-(defn- approvable
-  "A workstream whose latest entry is a design decision on a verified baseline —
-   the one gate that offers Approve. Returns [ws-id design-seq decision-seq]."
+(defn- decided-design
+  "A workstream whose latest entry is a proceeding design decision on a verified
+   baseline. Returns [ws-id baseline-seq design-seq decision-seq]."
   []
   (let [w  (workstream/create! :brian {:external-refs []})
         id (:id w)
-        add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
+        add (fn [kind r] (if (= :design-decision kind) (workstream/append-decision! :brian id (pr-str r)) (workstream/append-entry! :brian id {:kind kind} (pr-str r)))
               (count (:entries (workstream/read-ws :brian id))))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
-    (let [b (add :baseline approvable-baseline)
+    (let [b (add :baseline decided-baseline)
           _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                    :baseline-seq b :reason "ok"})
           d (add :design {:format :design :strata [] :summary "s" :shape "sh"
@@ -1157,235 +1135,36 @@
 
 
 
-(deftest approving-records-the-grant-then-resumes
-  ;; The order is the point, and the same one choose-option! holds: approval used
-  ;; to be an argument to a resume and nothing more, so "was this decided" was
-  ;; nowhere a reader could ask it and a resume that died swallowed the decision.
+(deftest an-option-may-not-say-it-approves-a-design
+  ;; Picking an option grants nothing, so a blocker may not be written claiming it does.
   (with-tmp
     (fn [_]
-      (let [[id _ d dd] (approvable)
-            got (atom nil)]
-        (with-redefs [resume/resume! (fn [_ _ input & _] (reset! got input)
-                                       {:decision :resumed})
-                      work/parked-session (constantly {:name "auto"})]
-          (is (= :approved (:decision (work/resolve-gate! :brian id :approve dd))))
-          (let [granted (workstream/latest-entry :brian id :design-approved)]
-            (is (= d (get-in granted [:design :seq])) "it names the design")
-            (is (= dd (:at-seq granted)) "and the position it was granted at"))
-          (is (str/includes? @got "APPROVED"))
-          (is (str/includes? @got "not a plan"))
-          (is (str/includes? @got "amend or supersede")
-              "an approval that reads as a freeze is how the design stops being
-               able to receive what the code teaches"))))))
+      (let [[id _ d _] (decided-design)]
+        (is (thrown? Exception
+                     (workstream/append-entry!
+                      :brian id {:kind :blocker}
+                      (pr-str {:format :blocker :summary "s" :needs "Should we build this design?"
+                               :after "The next decision round reads your answer."
+                               :options [{:label "Build it" :summary "As designed."
+                                          :approves-design d}
+                                         {:label "Hold" :summary "Leave it."}]}))))))))
 
-(deftest a-grant-with-nobody-listening-is-still-a-grant
+(deftest picking-an-option-on-a-design-question-records-the-answer-and-nothing-else
   (with-tmp
     (fn [_]
-      (let [[id _ d dd] (approvable)]
-        (with-redefs [work/parked-session (constantly nil)]
-          (is (= :approved-unresumed (:decision (work/resolve-gate! :brian id :approve dd))))
-          (is (= d (get-in (workstream/latest-entry :brian id :design-approved)
-                           [:design :seq]))))))))
-
-(deftest an-approval-granted-against-a-page-the-ledger-has-moved-past-is-refused
-  ;; A retraction appended since, another tab's grant, or a second click of the
-  ;; same button all land here. After granting, the approval IS the latest entry.
-  (with-tmp
-    (fn [_]
-      (let [[id _ _ dd] (approvable)]
-        (with-redefs [resume/resume! (fn [& _] {:decision :resumed})
-                      work/parked-session (constantly {:name "auto"})]
-          (is (= :approval-stale (:decision (work/resolve-gate! :brian id :approve nil)))
-              "a click carrying no position fails closed")
-          (is (= :approval-stale (:decision (work/resolve-gate! :brian id :approve (dec dd)))))
-          (is (= :approved (:decision (work/resolve-gate! :brian id :approve dd))))
-          (is (= :approval-stale (:decision (work/resolve-gate! :brian id :approve dd)))
-              "the double click refuses on the same check"))))))
-
-(deftest an-approval-is-refused-when-the-premise-went-while-you-were-reading
-  ;; The check an option click has no equivalent of. The round said this could be
-  ;; decided when it ran; standing is a statement about now.
-  (with-tmp
-    (fn [_]
-      (let [[id b _ dd] (approvable)]
-        (workstream/append-entry! :brian id {:kind :retraction}
-                                  (pr-str {:format :retraction :retracts {:seq b}
-                                           :because "the baseline is not true of the code"
-                                           :evidence ["src/a.clj:9"]}))
-        (with-redefs [resume/resume! (fn [& _] {:decision :resumed})
-                      work/parked-session (constantly {:name "auto"})]
-          (let [out (work/resolve-gate! :brian id :approve dd)]
-            ;; The retraction moved the ledger on, so the position check catches
-            ;; it first — which is the same refusal, arrived at one step sooner.
-            (is (contains? #{:approval-stale :approval-refused} (:decision out)))
-            (is (nil? (workstream/latest-entry :brian id :design-approved))
-                "and no approval is ever written for a premise that is gone")))))))
-
-(defn- decide!
-  "Append a design decision on `design-seq` recommending `r`; returns its seq."
-  [id design-seq r]
-  (workstream/append-entry! :brian id {:kind :design-decision}
-                            (pr-str (cond-> {:format :design-decision :recommend r
-                                             :design-seq design-seq :reason "r"
-                                             :checks [{:check :goal-served :status :held :note "n"}]
-                                             :asks "worth doing now?"}
-                                      (#{:amend} r)
-                                      (assoc :findings [{:check :goal-served :claim "c"
-                                                         :cites ["src/a.clj:1"]}]))))
-  (count (:entries (workstream/read-ws :brian id))))
-
-(deftest a-go-given-in-chat-answers-an-ask-with-the-grant-the-gate-writes
-  ;; The case the verb exists for. A round that stops on :ask is no grant the gate offers, so a
-  ;; person's go in chat had nowhere to go but prose the design judge does not read — and the
-  ;; next round asked the same question again.
-  (with-tmp
-    (fn [_]
-      (let [[id _ d _] (approvable)
-            ask (decide! id d :ask)
-            out (work/grant-design! :brian id d "go — worth it now" nil)]
-        (is (= :approved (:decision out)))
-        (let [granted (workstream/latest-entry :brian id :design-approved)]
-          (is (= {:format :design-approved :design {:seq d} :at-seq ask :note "go — worth it now"}
-                 (dissoc granted :seq :at :kind :file))
-              "one shape for every grant: standing and the design judge read this and nothing else"))
-        (is (:decided? (standing/of-design :brian id
-                                           (workstream/latest-entry :brian id :design)))
-            "standing counts it as the grant it is")
-        (is (= :already-granted (:decision (work/grant-design! :brian id d nil nil)))
-            "an agent repeating the command does not stack a second grant")))))
-
-(defn- approve-card!
-  "A conductor's question card on workstream `id` whose first option approves design `d`; its seq."
-  [id d]
-  (workstream/append-entry! :brian id {:kind :blocker}
-                            (pr-str {:format :blocker :summary "s" :needs "Do you approve building this design?"
-                                     :after "The seat builds it."
-                                     :options [{:label "Approve and build" :summary "Build it as designed."
-                                                :approves-design d}
-                                               {:label "Hold" :summary "Leave it unapproved."}]}))
-  (count (:entries (workstream/read-ws :brian id))))
-
-(deftest picking-an-approving-option-is-the-person-s-approval
-  ;; brian ws-20261116-43c620 entries 39-50: the person picked 'Approve and build' on the
-  ;; conductor's card, nothing recorded a grant, and they were asked to approve twice more.
-  (with-tmp
-    (fn [_]
-      (let [[id _ d _] (approvable)
-            ask  (decide! id d :ask)
-            card (approve-card! id d)]
+      (let [[id _ _ _] (decided-design)
+            _    (workstream/append-entry!
+                  :brian id {:kind :blocker}
+                  (pr-str {:format :blocker :summary "s" :needs "Should we build this design?"
+                           :after "The next decision round reads your answer."
+                           :options [{:label "Build it" :summary "As designed."}
+                                     {:label "Hold" :summary "Leave it."}]}))
+            card (count (:entries (workstream/read-ws :brian id)))]
         (is (= :answered-unresumed (:decision (work/resolve-gate! :brian id :option-a card))))
-        (is (= {:format :design-approved :design {:seq d} :at-seq ask
-                :note "Approve and build: Build it as designed."}
-               (dissoc (workstream/latest-entry :brian id :design-approved) :seq :at :kind :file))
-            "the click wrote the grant the chat command writes, in the person's picked words")
-        (is (< (:seq (workstream/latest-entry :brian id :design-approved))
-               (:seq (workstream/latest-entry :brian id :blocker-answered)))
-            "before the answer, so the answer never stands without the approval it was picked for")
-        (is (:decided? (standing/of-design :brian id (workstream/latest-entry :brian id :design)))
-            "standing counts it as the grant it is")))))
-
-(deftest an-approving-option-for-a-design-sent-back-records-nothing
-  (with-tmp
-    (fn [_]
-      (let [[id _ d _] (approvable)
-            _    (decide! id d :amend)
-            card (approve-card! id d)
-            out  (work/resolve-gate! :brian id :option-a card)]
-        (is (= :approval-refused (:decision out)))
-        (is (= :sent-back (get-in out [:because :reason])) "and says why")
-        (is (nil? (workstream/latest-entry :brian id :design-approved)))
-        (is (nil? (workstream/latest-entry :brian id :blocker-answered))
-            "nor the answer: the card still asks, rather than standing answered and unapproved")))))
-
-(deftest a-chat-grant-refuses-what-the-round-sent-back-naming-the-way-past-it
-  (with-tmp
-    (fn [_]
-      (let [[id _ d _] (approvable)]
-        (decide! id d :amend)
-        (let [out (work/grant-design! :brian id d nil nil)]
-          (is (= :sent-back (get-in out [:because :reason]))
-              "unasked, the next move after :amend is the author's")
-          (is (str/includes? (get-in out [:because :detail]) ":over-sendback? true")
-              "and the refusal names the grant that needs no further amending round")
-          (is (nil? (workstream/latest-entry :brian id :design-approved))))))))
-
-(deftest a-person-may-grant-over-a-send-back-in-their-own-words
-  ;; The round's amender answers a send-back with another design, so a round that never stops
-  ;; sending back left a person's go nowhere to be recorded.
-  (with-tmp
-    (fn [_]
-      (let [[id _ d _] (approvable)
-            amend (decide! id d :amend)]
-        (is (= :note-required
-               (get-in (work/grant-design! :brian id d nil {:over-sendback? true})
-                       [:because :reason]))
-            "a grant over the round's judgement carries the person's words")
-        (let [out (work/grant-design! :brian id d "build it as it stands" {:over-sendback? true})
-              granted (workstream/latest-entry :brian id :design-approved)]
-          (is (= :approved (:decision out)))
-          (is (= {:format :design-approved :design {:seq d} :at-seq amend
-                  :note "build it as it stands" :overrules true}
-                 (dissoc granted :seq :at :kind :file))
-              "the grant marks that it overrules the decision it answers, and copies nothing of it")
-          (is (= {:recommend :amend :open ["goal-served — c"]} (:overruled out))
-              "the findings it leaves open are read off that decision and named to the person")
-          (is (:cleared? (standing/of-design :brian id (workstream/latest-entry :brian id :design)))
-              "and standing reads it as the grant it is")
-          (is (= :already-granted
-                 (:decision (work/grant-design! :brian id d "again" {:over-sendback? true})))))))))
-
-(deftest a-grant-may-overrule-a-proceed-that-does-not-count
-  ;; A :proceed on a first reading lets nothing proceed, and recommends nothing a send-back
-  ;; names; the grant over it is the same grant.
-  (with-tmp
-    (fn [_]
-      (let [[id _ d _] (approvable)
-            once (workstream/append-entry!
-                  :brian id {:kind :design-decision}
-                  (pr-str {:format :design-decision :recommend :proceed :design-seq d :reason "r"
-                           :checks [{:check :goal-served :status :held :note "n"}]
-                           :read-once ["one-path"]}))
-            out (work/grant-design! :brian id d "build it" {:over-sendback? true})]
-        (is (some? once))
-        (is (= :approved (:decision out)))
-        (is (= {:recommend :proceed :open []} (:overruled out)))
-        (is (true? (:overrules (workstream/latest-entry :brian id :design-approved))))))))
-
-(deftest a-design-no-round-judged-is-refused-naming-the-judge-only-round
-  (with-tmp
-    (fn [_]
-      (let [[id b d _] (approvable)
-            ;; approvable decides its design; a design superseding it is one no round has judged.
-            _  (workstream/append-entry!
-                :brian id {:kind :design}
-                (pr-str {:format :design :strata [] :summary "s2" :shape "sh"
-                         :model {:elements [{:id "m" :sort :module}]
-                                 :claims [{:id "one-path" :about ["m"] :statement "one path"
-                                           :falsified-by "a second path" :evidence {:by :round}}]}
-                         :standing {:relation :conforms}
-                         :baseline {:seq b :relation :within} :intent {:seq 1}
-                         :supersedes {:seq d :why "amended"} :effort :S}))
-            d2 (:seq (workstream/latest-entry :brian id :design))
-            out (work/grant-design! :brian id d2 "go" {:over-sendback? true})]
-        (is (= :undecided (get-in out [:because :reason])))
-        (is (str/includes? (get-in out [:because :detail]) "bb nido:review:design :dry-run? true"))
-        (is (nil? (workstream/latest-entry :brian id :design-approved)))))))
-
-(deftest a-chat-grant-names-the-design-that-stands-now
-  (with-tmp
-    (fn [_]
-      (let [[id _ d _] (approvable)
-            out (work/grant-design! :brian id (dec d) nil nil)]
-        (is (= :not-newest (get-in out [:because :reason]))
-            "a grant of a superseded record would be read as deciding the one that replaced it")
-        (is (nil? (workstream/latest-entry :brian id :design-approved)))))))
-
-(deftest approving-a-workstream-that-does-not-exist-is-a-no-op
-  (with-tmp
-    (fn [_]
-      (is (= {:decision :no-workstream}
-             (work/resolve-gate! :brian "ws-nope" :approve))
-          "past the bare-row set, so it lands behind the read-ws guard"))))
+        (is (= card (:blocker-seq (workstream/latest-entry :brian id :blocker-answered)))
+            "the answer is recorded against the card")
+        (is (nil? (workstream/latest-entry :brian id :design-approved))
+            "and no grant is written: the next round reads the answer")))))
 
 (deftest gates-hydrates-a-parked-triage-workstream
   (with-tmp
@@ -1529,9 +1308,9 @@
         (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
         (let [{:keys [seq]} (drive/park! :brian id {:stage :conduct :outcome :escalated
                                                     :summary "the conductor escalated a hand-back"
-                                                    :needs "approve the design"})]
+                                                    :needs "choose the rollout"})]
           (workstream/append-stamped! :brian id {:format :conduct-decision :hand-back "m-1" :position :implementing
-                                                 :by :conductor :decision [:escalate {:needs "approve the design?" :after "The work resumes once you answer." :summary "The work stands at a step only a person takes."}]
+                                                 :by :conductor :decision [:escalate {:needs "Which rollout do we take?" :after "The work resumes once you answer." :summary "The work stands at a step only a person takes."}]
                                                  :parked {:seq seq}}))
         (let [g (first (filter #(= id (:ws-id %)) (work/gates :brian)))]
           (is (some? g) "it is a gate")
@@ -3650,16 +3429,14 @@
           (is (= 3 (count (:entries (workstream/read-ws :nido id))))
               "and the first one is still there — the ledger has no delete"))))))
 
-;; ── The approval a person owes ─────────────────────────────────────────────
-;; The round that writes a design decision is :mechanical: it runs as a task and
-;; parks nobody. So a grant gated on a parked session was unreachable for every
-;; design decision nido produces — land:check refused `not-approved` and sent the
-;; reader to a button that could not exist. What is owed is a fact about the
+;; ── The move a person owes ─────────────────────────────────────────────────
+;; Rounds run as tasks and park nobody, so a move gated on a parked session would
+;; be unreachable for most of what a person owes. What is owed is a fact about the
 ;; POSITION, and these pin that it is read from there.
 
 (deftest awaiting-human-reads-a-human-position-and-nothing-else
-  (is (= :approve-design
-         (work/awaiting-human {:next {:stage :approve-design :mode :human}})))
+  (is (= :accept-triage
+         (work/awaiting-human {:next {:stage :accept-triage :mode :human}})))
   (is (= :answer-blocker
          (work/awaiting-human {:next {:stage :answer-blocker :mode :human}}))
       "every human stage answers — which one it is belongs to the caller")
@@ -3669,18 +3446,6 @@
   (is (nil? (work/awaiting-human nil))
       "and a row that carries no position at all must not throw — :done,
        :dismissed and :analysed are never stamped with one"))
-
-(deftest a-design-decision-is-granted-from-the-position-not-from-a-parked-agent
-  (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary :seq 7}]
-         (work/gate-actions :in-progress false nil
-                            {:report-format :design-decision :seq 7
-                             :awaiting :approve-design :grantable? true}))
-      "approve! records a grant with nobody to wake as :approved-unresumed —
-       the ledger is what the next session reads — so nothing about an absent
-       agent makes the grant premature")
-  (is (empty? (work/gate-actions :in-progress false nil
-                                 {:report-format :design-decision :seq 7}))
-      "and with no position saying a person is owed anything, nothing is offered"))
 
 (deftest a-published-pr-is-landed-from-its-own-button
   (is (= [{:id :land :label "Land" :kind :mutation :style :primary :seq 37}]
@@ -3695,41 +3460,27 @@
       "and the card says what the button does beside it"))
 
 (deftest reply-still-needs-an-agent-to-resume
-  (is (= [:approve]
-         (mapv :id (work/gate-actions :in-progress false nil
-                                      {:report-format :design-decision :seq 7
-                                       :awaiting :approve-design :grantable? true})))
-      "Reply resumes a parked agent; beside a grant with none it could only fail")
-  (is (= [:approve :reply]
-         (mapv :id (work/gate-actions :in-progress true nil
-                                      {:report-format :design-decision :seq 7
-                                       :awaiting :approve-design :grantable? true})))
-      "and when there is one, sending it back is still an answer"))
+  (is (= [:land]
+         (mapv :id (work/gate-actions :shipping false nil
+                                      {:report-format :pr-opened :seq 7 :awaiting :land})))
+      "Reply resumes a parked agent; beside a landing with none it could only fail")
+  (is (= [:land :reply]
+         (mapv :id (work/gate-actions :shipping true nil
+                                      {:report-format :pr-opened :seq 7 :awaiting :land})))
+      "and when there is one, a note to it is still an answer"))
 
-(deftest only-the-approval-stage-offers-the-approval
-  (is (= [:reply] (mapv :id (work/gate-actions :in-progress false nil
-                                               {:report-format :design-decision :seq 7
-                                                :awaiting :answer-blocker :grantable? true})))
-      "a blocker is a human stage too: it is owed an answer, not the approval")
-  (doseq [fmt [:baseline-review :design-verdict]]
-    (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary :seq 7}]
-           (work/gate-actions :in-progress false nil
-                              {:report-format fmt :seq 7
-                               :awaiting :approve-design :grantable? true}))
-        (str "a " (name fmt) " appended after the decision withdraws nothing — the
-              grant is still owed, and the button carries the entry it was
-              rendered at")))
-  (is (empty? (work/gate-actions :in-progress false nil
-                                 {:report-format :baseline-review :seq 7
-                                  :awaiting :approve-design :grantable? false}))
-      "while a design no longer grantable is offered nothing"))
+(deftest a-blocker-raised-over-a-design-decision-is-answered-not-approved
+  (is (= [{:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}]
+         (work/gate-actions :in-progress false nil
+                            {:report-format :design-decision :seq 7 :awaiting :answer-blocker}))
+      "the person's judgement reaches the next round as the blocker's answer"))
 
 (deftest a-workstream-awaiting-a-person-is-a-gate
   (with-tmp
     (fn [_]
       (let [id   (:id (workstream/create! :brian {:external-refs []}))
             add! (fn [kind record]
-                   (workstream/append-entry! :brian id {:kind kind} (pr-str record))
+                   (if (= :design-decision kind) (workstream/append-decision! :brian id (pr-str record)) (workstream/append-entry! :brian id {:kind kind} (pr-str record)))
                    (count (:entries (workstream/read-ws :brian id))))
             row  #(first (filter (comp #{id} :ws-id) (work/list-workstreams :brian)))]
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
@@ -3745,8 +3496,9 @@
           (is (false? (boolean (:needs-you (row))))
               "nothing is owed while the next move is nido's own")
 
-          ;; :challenges, so a person IS owed the grant — a design owing nobody
-          ;; goes to the clearance stage, which is nido's own move.
+          ;; Even a design that :challenges the stance is cleared by its proceeding
+          ;; round, which is nido's own move; a person is owed only the question a
+          ;; round raises as a blocker.
           (let [d (add! :design
                         {:format :design :strata [] :summary "s" :shape "sh"
                          :model {:elements [{:id "m" :sort :module}]
@@ -3760,14 +3512,20 @@
                    :reason "r" :asks "worth it?"
                    :checks [{:check :relation-honest :status :held :note "n"}]})
 
-            (is (= :approve-design (:stage (:next (:position (row)))))
-                "the pipeline says a person owes this workstream a decision")
+            (is (= {:stage :clear-design :mode :mechanical} (:next (:position (row))))
+                "a proceeding round owes nobody a grant, whatever the design declares")
+            (is (false? (boolean (:needs-you (row)))))
+
+            (add! :blocker {:format :blocker :summary "s" :needs "Is challenging the stance worth it now?"
+                            :after "The next decision round reads your answer."})
+            (is (= :answer-blocker (:stage (:next (:position (row)))))
+                "the pipeline says a person owes this workstream an answer")
             (is (true? (:needs-you (row)))
                 "so the spine calls it a gate — with no session parked anywhere,
-                 which is the whole point: the round that decided it was a task")
-            (is (= [:approve]
+                 which is the whole point: the round that raised it was a task")
+            (is (= [:reply]
                    (mapv :id (:actions (work/gate :brian id))))
-                "and the gate offers the grant")))))))
+                "and the gate offers the answer")))))))
 
 
 ;; ── the improvement sweep's writes ──────────────────────────────────────────
@@ -3940,171 +3698,53 @@
             "the address already recorded is not recorded twice")))))
 
 
-;; ── A grant is offered where a round recommended one ───────────────────────
-;; Approve was offered on any design decision at all. A round answers one of
-;; three ways and only :proceed is a question for a human — :recut and :amend
-;; judged the RECORD rather than whether to build it, so the next move is the
-;; author's. Offering Approve there is a one-click grant of the design that
-;; round had just sent back, and approve! would have written it.
-
-(deftest a-decision-that-was-sent-back-offers-no-grant
-  (doseq [r [:recut :amend nil]]
-    (is (empty? (work/gate-actions :in-progress false nil
-                                   {:report-format :design-decision
-                                    :awaiting :approve-design :grantable? (= r :proceed)}))
-        (str (pr-str r) " judged the record, not whether to build it — a position "
-             "owing a person a decision is not on its own something to grant"))
-    (is (not-any? #{:approve} (map :id (work/gate-actions :in-progress true nil
-                                                          {:report-format :design-decision
-                                                           :grantable? (= r :proceed)})))
-        (str (pr-str r) " must not be grantable on the parked path either — that "
-             "path is where this hole actually was")))
-  (is (= [:approve]
-         (mapv :id (work/gate-actions :in-progress false nil
-                                      {:report-format :design-decision
-                                       :awaiting :approve-design
-                                       :grantable? true})))
-      "and a round that did recommend proceeding is still grantable"))
-
-;; ── Answering an invalidated design ─────────────────────────────────────────
-
 (defn- invalidated
-  "A workstream whose approved design a review round has just called invalid.
-   Returns [ws-id design-seq verdict-seq]."
+  "A workstream whose cleared design a review round has just called invalid.
+   Returns [ws-id baseline-seq design-seq verdict-seq]."
   []
-  (let [[id _ d dd] (approvable)
-        add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
+  (let [[id b d _] (decided-design)
+        add (fn [kind r] (if (= :design-decision kind) (workstream/append-decision! :brian id (pr-str r)) (workstream/append-entry! :brian id {:kind kind} (pr-str r)))
               (count (:entries (workstream/read-ws :brian id))))]
-    (add :design-approved {:format :design-approved :design {:seq d} :at-seq dd})
+    (workstream/append-entry-at! :brian id (count (:entries (workstream/read-ws :brian id)))
+                                 {:kind :design-cleared}
+                                 (pr-str {:format :design-cleared :design {:seq d}}))
     (let [v (add :design-verdict
                  {:format :design-verdict :verdict :invalidated :round 2
                   :design-seq d :reason "a second path sums lines"
                   :invariants-broken [{:invariant "one summing path"
                                        :finding "the invoice renderer sums independently"}]
                   :needs "redesign the totalling seam"})]
-      [id d v])))
+      [id b d v])))
 
-(deftest an-invalidated-design-offers-redesign-and-accept-and-nothing-else
+(deftest an-invalidated-design-goes-back-to-be-redesigned-with-nobody-asked
   (with-tmp
     (fn [_]
-      (let [[id _ v] (invalidated)
-            pos (pipeline/of :brian id)
-            acts (work/gate-actions :in-progress false nil
-                                    {:awaiting (work/awaiting-human pos) :seq v})]
+      (let [[id _ _ v] (invalidated)
+            pos (pipeline/of :brian id)]
         (is (= :design-invalidated (:at pos)))
-        (is (= [:redesign :hold-design] (mapv :id acts)))
-        (is (every? #(= v (:seq %)) acts)
-            "and both carry the position they were rendered at")
-        (is (not (work/grantable? :brian id))
-            "while the ordinary Approve is refused — the design does not stand")))))
+        (is (= {:stage :design :mode :authoring} (:next pos))
+            "the redesign is nido's own move")
+        (is (nil? (work/awaiting-human pos)) "so no person owes it anything")
+        (is (empty? (work/gate-actions :in-progress false nil
+                                       {:awaiting (work/awaiting-human pos) :seq v}))
+            "and no gate offers a way to answer the verdict")))))
 
-(deftest an-invalidation-is-asked-from-its-own-verdict-whatever-came-after
+(deftest a-superseding-design-answers-the-verdict
   (with-tmp
     (fn [_]
-      (let [[id d v] (invalidated)
-            pos      (pipeline/of :brian id)]
-        ;; The conductor escalates the owed acknowledgement, and parks nothing.
-        (workstream/append-stamped! :brian id {:format :conduct-decision :hand-back "m-1"
-                                               :position (:at pos) :next (:next pos) :owes (:owes pos)
-                                               :by :conductor
-                                               :decision [:escalate {:needs "Weigh the second path."}]})
-        ;; A later verdict that answers nothing: the invalidation is still owed.
-        (workstream/append-entry! :brian id {:kind :design-verdict}
-          (pr-str {:format :design-verdict :verdict :sound :round 3 :design-seq d
-                   :reason "a later reading" :needs "A later question?"}))
-        (is (= :design-invalidated (:at (pipeline/of :brian id))) "the invalidation is still owed")
-        (let [g (first (filter #(= id (:ws-id %)) (work/gates :brian)))
-              a (:ask g)]
-          (is (= [v :invalidated] [(:seq (:report g)) (:verdict (:report g))])
-              "the actions answer the owed verdict, the later one notwithstanding")
-          (is (every? #(= v (:seq %)) (filter :seq (:actions g))))
-          (is (= "redesign the totalling seam" (:question a))
-              (str "the Ask reads the verdict at " v ", not the one appended after it"))
-          (is (= ["a second path sums lines"] (:context (first (:questions a)))))
-          (is (= "The conductor adds: Weigh the second path." (:note a))
-              "the escalation stays on the move it was made about"))))))
-
-(deftest redesign-retracts-the-design-and-carries-the-verdict-as-its-evidence
-  ;; This is what gives :retraction a writer. One exists across the whole ledger
-  ;; history because the only path was writing it by hand.
-  (with-tmp
-    (fn [_]
-      (let [[id d v] (invalidated)]
-        (is (= :retracted (:decision (work/resolve-gate! :brian id :redesign v))))
-        (let [r (workstream/latest-entry :brian id :retraction)]
-          (is (= d (get-in r [:retracts :seq])) "it names the design")
-          (is (= :review (:found-during r)))
-          (is (str/includes? (:because r) "second path"))
-          (is (= ["one summing path — broken by: the invoice renderer sums independently"]
-                 (:evidence r))
-              "the broken invariants ARE the counterexample, copied not summarised"))
+      (let [[id b d _] (invalidated)]
+        (workstream/append-entry!
+         :brian id {:kind :design}
+         (pr-str {:format :design :strata [] :summary "one totalling seam" :shape "sh"
+                  :model {:elements [{:id "m" :sort :module}]
+                          :claims [{:id "one-path" :about ["m"] :statement "one path"
+                                    :falsified-by "a second path" :evidence {:by :round}}]}
+                  :standing {:relation :conforms}
+                  :baseline {:seq b :relation :within} :intent {:seq 1}
+                  :supersedes {:seq d :why "the renderer sums independently"} :effort :S}))
         (let [pos (pipeline/of :brian id)]
-          (is (= :design-retracted (:at pos)))
-          (is (= :design (:stage (:next pos)))
-              "and it routes to a new design, not to a re-survey"))))))
-
-(deftest accept-grants-the-design-against-the-verdict-and-clears-the-halt
-  (with-tmp
-    (fn [_]
-      (let [[id d v] (invalidated)]
-        (is (= :held (:decision (work/resolve-gate! :brian id :hold-design v))))
-        (let [a (workstream/latest-entry :brian id :design-approved)]
-          (is (= d (get-in a [:design :seq])))
-          (is (str/includes? (:note a) (str "entry " v))
-              "and says which verdict it was answering"))
-        (is (not= :design-invalidated (:at (pipeline/of :brian id)))
-            "the halt is cleared by the grant, with no new ledger kind")
-        (is (:decided? (standing/of-design
-                        :brian id (workstream/latest-entry :brian id :design)))
-            "and the design stands again")))))
-
-(deftest a-standing-challenged-verdict-with-no-broken-invariants-still-retracts
-  ;; :standing-challenged requires no :invariants-broken, so a verdict can arrive
-  ;; with none — and a retraction that failed to validate would leave the gate
-  ;; refusing a click a person is entitled to make.
-  (with-tmp
-    (fn [_]
-      (let [[id _ d dd] (approvable)
-            add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
-                  (count (:entries (workstream/read-ws :brian id))))]
-        (add :design-approved {:format :design-approved :design {:seq d} :at-seq dd})
-        (let [v (add :design-verdict {:format :design-verdict :verdict :standing-challenged
-                                      :round 1 :design-seq d
-                                      :reason "it challenges the stance without saying so"
-                                      :needs "declare :challenges or step back"})]
-          (is (= :retracted (:decision (work/resolve-gate! :brian id :redesign v))))
-          (is (= [(str "the design verdict at entry " v)]
-                 (:evidence (workstream/latest-entry :brian id :retraction)))
-              "the entry is named instead — honest, and one read away"))))))
-
-(deftest answering-against-a-page-the-ledger-has-moved-past-is-refused
-  (with-tmp
-    (fn [_]
-      (let [[id _ v] (invalidated)]
-        (is (= :acknowledge-stale
-               (:decision (work/resolve-gate! :brian id :redesign nil)))
-            "a click carrying no position fails closed")
-        (is (= :acknowledge-stale
-               (:decision (work/resolve-gate! :brian id :hold-design (dec v)))))
-        (is (= :held (:decision (work/resolve-gate! :brian id :hold-design v))))
-        (is (= :acknowledge-stale
-               (:decision (work/resolve-gate! :brian id :hold-design v)))
-            "and the double click refuses on the same check")))))
-
-(deftest a-verdict-answered-in-another-tab-cannot-be-answered-again
-  ;; The position is re-read at the moment of the click, so an answer that landed
-  ;; between render and click takes the question off the table rather than
-  ;; letting a second one be recorded against it.
-  (with-tmp
-    (fn [_]
-      (let [[id d v] (invalidated)
-            add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
-                  (count (:entries (workstream/read-ws :brian id))))
-            a (add :design-approved {:format :design-approved :design {:seq d} :at-seq v
-                                     :note "answered elsewhere"})]
-        (is (= :nothing-to-acknowledge
-               (:decision (work/resolve-gate! :brian id :redesign a)))
-            "the click is current, and the question is gone")))))
+          (is (= :designed (:at pos)) "the verdict is answered by the design that replaced it")
+          (is (= :decide-design (:stage (:next pos))) "which its own round decides next"))))))
 
 ;; ── what holds the improvement sweep ────────────────────────────────────────
 
@@ -4191,17 +3831,20 @@
              :undo {:how :none :why "gone"}}]})
 
 (defn- landed-between-phases!
-  "A ref-less workstream on the two-phase design, standing and granted, its first
-   phase landed."
+  "A ref-less workstream on the two-phase design, standing and cleared by its
+   round, its first phase landed."
   []
   (let [id   (:id (workstream/create! :brian {:external-refs []}))
-        add! #(workstream/append-entry! :brian id {:kind %1} (pr-str %2))]
+        add! #(if (= :design-decision %1) (workstream/append-decision! :brian id (pr-str %2)) (workstream/append-entry! :brian id {:kind %1} (pr-str %2)))]
     (add! :intent {:format :intent :goal "g" :done-when ["d"]})
     (add! :baseline phase-baseline)
     (add! :baseline-review {:format :baseline-review :verdict :sufficient
                             :baseline-seq 2 :reason "ok"})
     (add! :design phase-design)
-    (add! :design-approved {:format :design-approved :design {:seq 4} :at-seq 4})
+    (add! :design-decision {:format :design-decision :recommend :proceed :design-seq 4 :reason "r"
+                            :checks [{:check :relation-honest :status :held :note "n"}]})
+    (workstream/append-entry-at! :brian id 5 {:kind :design-cleared}
+                                 (pr-str {:format :design-cleared :design {:seq 4}}))
     (add! :merged {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq 4}})
     (workstream/close! :brian id :between-phases 4)
     id))
@@ -4244,7 +3887,7 @@
   (with-tmp
     (fn [_]
       (let [id   (:id (workstream/create! :brian {:external-refs []}))
-            add! (fn [k r] (workstream/append-entry! :brian id {:kind k} (pr-str r))
+            add! (fn [k r] (if (= :design-decision k) (workstream/append-decision! :brian id (pr-str r)) (workstream/append-entry! :brian id {:kind k} (pr-str r)))
                    (count (:entries (workstream/read-ws :brian id))))
             b1   (add! :blocker {:format :blocker :summary "first" :needs "Which name?" :after "The work resumes once you answer."})
             b2   (add! :blocker {:format :blocker :summary "second" :needs "Which port?" :after "The work resumes once you answer."})]

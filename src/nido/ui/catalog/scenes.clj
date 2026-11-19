@@ -87,7 +87,7 @@
                      lit ones. If they do not separate at a glance, the chip has failed."
               :render #(rail (fn [p] (name (:mode (:next p))))
                              [{:at :baselined :next {:stage :verify-baseline :mode :authoring}}
-                              {:at :design-decided :next {:stage :approve-design :mode :human}}]
+                              {:at :blocked :next {:stage :answer-blocker :mode :human}}]
                              state/position-chip)}
              {:title "with layers, and with a caller's tip"
               :note "A layered position carries done/of inside the chip; the second arity adds a
@@ -216,8 +216,8 @@
               :render #(row/board-row "nido"
                                       (assoc a-board-row
                                              :needs-you true
-                                             :position {:at :design-decided
-                                                        :next {:stage :approve-design :mode :human}})
+                                             :position {:at :blocked
+                                                        :next {:stage :answer-blocker :mode :human}})
                                       {:href "#"})}
              {:title "open findings"
               :note "A shipped workstream a staging round reopened."
@@ -347,25 +347,26 @@
 ;; The Ask
 
 (def ^:private one-question-ask
-  {:kind :approve-design
-   :question "Approve the component-catalog design?"
-   :questions [{:question "Approve the component-catalog design?"
+  {:kind :answer-blocker
+   :question "Should the component catalog replace the pages as the interface?"
+   :questions [{:question "Should the component catalog replace the pages as the interface?"
                 :context ["The split is behaviour-preserving: no rendered page changes."
                           "It breaks one baseline claim — pages-are-the-interface — and states blocks-are-addressable in its place."]
-                :recommendation "Approve. The decision round found nothing it could not derive."
-                :after "The implementation starts against the claims as they stand."
-                :options [{:letter "A" :label "Approve" :summary "The design stands as written."
-                           :consequence "Recorded as the grant; the work starts."
-                           :recommended? true :action :approve}
-                          {:letter "B" :label "Send it back"
+                :recommendation "Replace them. The decision round found nothing it could not derive."
+                :after "The next decision round reads your answer."
+                :options [{:letter "A" :label "Replace them" :summary "Blocks become the interface."
+                           :consequence "The design stands; the next round judges it again."
+                           :recommended? true :action :option-a}
+                          {:letter "B" :label "Keep the pages"
                            :summary "Something in the shape has to change first."
-                           :consequence "Recorded as an amendment the next design supersedes."
-                           :action :reply}]}]
-   :answer-does [{:action :approve :label "Approve" :does "Records your grant on the ledger and starts the work."}
+                           :consequence "The design is amended before the next round."
+                           :action :option-b}]}]
+   :answer-does [{:action :option-a :label "Choose" :does "Records your answer on the ledger."}
                  {:action :reply :label "Reply" :does "Records what you said and resumes the session."}]})
 
 (def ^:private one-question-actions
-  [{:id :approve :label "Approve" :kind :mutation :style :primary}
+  [{:id :option-a :label "A" :kind :resume :style :primary :seq 7}
+   {:id :option-b :label "B" :kind :resume :style :default :seq 7}
    {:id :reply :label "Reply" :kind :resume :style :default}])
 
 (def ^:private two-question-ask
@@ -422,7 +423,7 @@
                      can retry."
               :render #(ask/question-card "nido" "ws-card-4" one-question-ask one-question-actions
                                           {:route nowhere
-                                           :error-msg "approve refused: the design cites a baseline no round found sufficient"})}
+                                           :error-msg "That option is no longer on the table — the report moved on since this page rendered."})}
              {:title "no recommendation"
               :note "The writer had none. With no recommendation and no submit there is no
                      primary button either — which is the honest rendering of a question nobody

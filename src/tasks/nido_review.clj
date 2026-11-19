@@ -1007,7 +1007,7 @@
     (when (verdict/decision? v)
       (println "  ⚠ this is a decision, not a fix — the design itself is in question")
       (when-let [n (:needs v)] (println (str "  needs: " n)))
-      (println "  → supersede the design record (/design §5) or accept it explicitly"))))
+      (println "  → supersede the design record (/design §5) — nido sends the work back to the design stage, and nothing approves it past the verdict"))))
 
 (def default-launch-budget
   "The wall clock a review loop's agent launches are sized from, when the caller
@@ -1957,12 +1957,9 @@
     ;; person ran themselves says it here or nowhere.
     (run! println (outcome-lines final @report-atom report-path))
     (record-post-loop-writes! entry devs report-atom report-path)
-    ;; The verdict's entry BEFORE the halt, and the order is the whole point twice
-    ;; over. It is the answer to the question the halt asks, so a halt filed first
-    ;; is a gate offering to decline findings the run already knew how to repair.
-    ;; And a :design-verdict is a :design-stage entry: appended after the halt it
-    ;; is the work having moved on, which is exactly what
-    ;; pipeline/unanswered-blocker reads it as, so the halt reached no gate at all.
+    ;; The verdict's entry BEFORE the halt, because it is the answer to the question
+    ;; the halt asks: a halt filed first is a gate offering to decline findings the
+    ;; run already knew how to repair.
     ;;
     ;; The halt survives a verdict pass that fails, because that pass catches its
     ;; own exceptions and answers nil — the only loss is the third branch.
@@ -2672,13 +2669,14 @@
                                                 seq-n)))))
 
 (def ^:private design-remedies
-  {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
-   :asked "the judge found something only you can repair — answer the question below: a go is a grant (the command after it), anything else is an amendment of the design or its intent"
-   :clearance-contended "the design owes nobody a grant and the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
+  {:cleared "the round proceeded and wrote the clearance — the design may be built"
+   :asked "the judge found something only you can repair — answer the question below as the blocker it is parked on (bb nido:workstream:blocker:answer), or amend the design or its intent; the next round reads the answer, and only a round that proceeds lets the design be built"
+   :clearance-contended "the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
    :nothing-to-amend "the round would not proceed and named nothing an amender could repair — read its reason on the ledger and decide by hand"
-   :unrecorded "the round reached its end, but its decision could not be written to the ledger — no grant, later round or figure can read it; run the round again once this worktree resolves to its workstream"
+   :unrecorded "the round reached its end, but its decision could not be written to the ledger — no answer, later round or figure can read it; run the round again once this worktree resolves to its workstream"
    :premise-unverified "verify the baseline it cites first — `bb nido:review:baseline :seq <that entry>` — then decide against it"
+   :already-cleared "the design was already let be built, so no round judges it again — write a superseding design to have it decided again"
    :no-record "author the design first"})
 
 (defn- design-remedy
@@ -2698,7 +2696,8 @@
   [final]
   (doseq [{:keys [check note]} (:underivable final)]
     (println (str "  — " (name check) " could not be derived: " note)))
-  (when-let [asks (get-in final [:record :asks])]
+  ;; A cleared round's :asks reach nobody, so they are not put to the reader as theirs.
+  (when-let [asks (when-not (= :cleared (:status final)) (get-in final [:record :asks]))]
     (if-let [repair (creport/repair-before-asking (:record final))]
       ;; Posed over the record as the repair leaves it, so it is not yet a question to answer.
       (println (str "\n  WILL ASK YOU ONCE REPAIRED — the " (name repair) " recommended above comes first:"))
@@ -2710,21 +2709,13 @@
         (println (str "\n  THE DESIGN'S STANDING MOVED SINCE THIS WAS ASKED — its relation to the baseline was "
                       (line was) ", and design entry " n " declares " (line now)
                       ". Answer the question about the design as it now stands."))))
-    ;; Named here because a go has exactly one record a later round reads: the grant. Written
-    ;; anywhere else — a design's :summary, a supersession's :why — it is prose, the judge
+    ;; Named here because an answer has exactly the records a later round reads: the blocker's
+    ;; answer, or a record the person rewrites. Written anywhere else it is prose, the judge
     ;; reports the question unanswered, and the next round asks it again.
-    (when (#{:proceed :ask} (get-in final [:record :recommend]))
-      (println (str "\n  If the answer is go, record it as the grant — never as prose in the record:\n"
-                    "  bb nido:design:approve :project <p> :ws-id <id> :design-seq "
-                    (get-in final [:record :design-seq] "<n>")
-                    " :note \"<what the person said>\""))))
-  ;; A send-back the amender answers with another design can go on for as long as the judge
-  ;; finds something; the person may end it on a design they accept, and this is how.
-  (when (#{:amend :recut :resurvey} (get-in final [:record :recommend]))
-    (println (str "\n  To build the design as it stands instead, the person's go is a grant over the send-back:\n"
-                  "  judge the newest design without amending it — bb nido:review:design :dry-run? true —\n"
-                  "  then bb nido:design:approve :project <p> :ws-id <id> :design-seq <its seq>"
-                  " :over-sendback? true :note \"<what the person said>\""))))
+    (when (= :ask (get-in final [:record :recommend]))
+      (println (str "\n  Answer it as the blocker it is parked on, in the person's words — the next round\n"
+                    "  reads the answer, and the design is built only once a round proceeds:\n"
+                    "  bb nido:workstream:blocker:answer :answer \"<what the person said>\"")))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   design-cmd*

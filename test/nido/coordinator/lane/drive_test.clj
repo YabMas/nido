@@ -176,21 +176,21 @@
             "a finding that indicts the design routes back, it does not stop")
 
         (let [r (drive/park-on-escalate! :brian id {:stage :decide-design
-                                                    :outcome :proceed})]
+                                                    :outcome :asked})]
           (is (= :escalate (:disposition r)))
           (is (some? (:seq r)))
           (is (some? (ws/latest-entry :brian id :blocker))))))))
 
 (deftest an-escalate-at-a-persons-move-parks-nothing
-  ;; A design round that stops at :proceed leaves the grant owed, and Approve asks for it. A
-  ;; blocker parked on top read :blocked, so the card asked "how should the stage go on" instead.
+  ;; A position owing a person a move has that move's card in front of them. A blocker parked on
+  ;; top would read :blocked, so the card would ask "how should the stage go on" instead.
   (with-tmp
     (fn []
       (let [id (a-ws)]
-        (with-redefs [pipeline/of (constantly {:at :design-decided :next {:stage :approve-design :mode :human}})]
-          (is (= {:disposition :escalate :owed :approve-design}
-                 (drive/park-on-escalate! :brian id {:stage :decide-design :outcome :proceed}))))
-        (is (nil? (ws/latest-entry :brian id :blocker)) "the grant's own card asks; no blocker copies it")))))
+        (with-redefs [pipeline/of (constantly {:at :published :next {:stage :land :mode :human}})]
+          (is (= {:disposition :escalate :owed :land}
+                 (drive/park-on-escalate! :brian id {:stage :review-implementation :outcome :disputed}))))
+        (is (nil? (ws/latest-entry :brian id :blocker)) "the landing's own card asks; no blocker copies it")))))
 
 ;; ── The allow-list is the safety ────────────────────────────────────────────
 
@@ -220,7 +220,7 @@
 (deftest the-driver-declines-everything-it-is-not-for
   (is (= :terminal (:skip (drive/fireable {:next nil}))))
   (is (= :waiting-on-a-human
-         (:skip (drive/fireable {:next {:stage :approve-design :mode :human}})))
+         (:skip (drive/fireable {:next {:stage :accept-triage :mode :human}})))
       "a human gate is not something to fire past")
   (is (= :not-mechanical
          (:skip (drive/fireable {:next {:stage :write-baseline :mode :authoring}})))
@@ -353,7 +353,7 @@
 (deftest a-contended-clearance-spends-no-attempt-and-parks-nothing
   ;; The decision is on the ledger and only its clearance is unwritten. Retrying
   ;; inside this Run would re-run the round and park when the attempts ran out —
-  ;; a person's gate made out of ledger contention, for a design owing nobody.
+  ;; a person's gate made out of ledger contention.
   (with-tmp
     (fn []
       (let [id (a-ws)
@@ -482,12 +482,33 @@
                                     :autonomy a-running-agent})
         (ws/append-entry! :brian id {:kind :intent}
                           (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :implementation-completed}
+                          (pr-str {:format :implementation-completed :summary "done"
+                                   :artifacts []}))
+        ;; A published draft PR: landing it is the person's move.
+        (ws/append-entry! :brian id {:kind :pr-opened}
+                          (pr-str {:format :pr-opened :url "u" :title "t"}))
+        (drive/drive! :brian id)
+        (let [out (first (drive/tick! (fn [_])))]
+          (is (= :waiting-on-a-human (:skipped out)))
+          (is (empty? (blockers-of id))
+              "nothing is wrong — a person simply owes the landing"))))))
+
+(deftest a-proceeding-decision-is-fired-to-its-clearance-whatever-the-design-declares
+  ;; :challenges, and the clearance is owed all the same: the round's proceeding
+  ;; is what lets it be built, so the driver fires the clearance and parks nothing.
+  (with-tmp
+    (fn []
+      (let [id        (a-ws)
+            submitted (atom [])]
+        (session/create! :brian id {:name "auto" :weight :heavy
+                                    :autonomy a-running-agent})
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
         (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
         (ws/append-entry! :brian id {:kind :baseline-review}
                           (pr-str {:format :baseline-review :baseline-seq 2
                                    :verdict :sufficient :reason "r"}))
-        ;; :challenges, so a person IS owed the grant. A design owing nobody
-        ;; is handed to the clearance stage instead, which the driver fires.
         (ws/append-entry! :brian id {:kind :design}
                           (pr-str {:format :design :strata [] :summary "s" :shape "sh"
                                    :model {:elements [{:id "m" :sort :module}]
@@ -498,17 +519,16 @@
                                    :standing {:relation :challenges :note "n"}
                                    :baseline {:seq 2 :relation :within}
                                    :intent {:seq 1} :effort :S}))
-        (ws/append-entry! :brian id {:kind :design-decision}
+        (ws/append-decision! :brian id
                           (pr-str {:format :design-decision :design-seq 4
                                    :recommend :proceed :reason "r"
                                    :checks [{:check :decomposable :status :held
                                              :note "n"}]
                                    :asks "is it worth it?"}))
         (drive/drive! :brian id)
-        (let [out (first (drive/tick! (fn [_])))]
-          (is (= :waiting-on-a-human (:skipped out)))
-          (is (empty? (blockers-of id))
-              "nothing is wrong — a person simply owes an approval"))))))
+        (let [out (first (drive/tick! #(swap! submitted conj %)))]
+          (is (= :clear-design (:fired out)))
+          (is (empty? (blockers-of id)) "no person is asked for it"))))))
 
 ;; ── Which stages the driver can reach ───────────────────────────────────────
 
@@ -517,10 +537,10 @@
   ;; them, so it cannot drift: `next-by-position` decides which stage is DUE and
   ;; `mechanical-stages` decides how it is RUN, nothing else compares them, and
   ;; a stage stamped :mechanical with no runner is a wall nobody wrote.
-  ;; `clearance` is the one next action `of` names outside the table.
+  ;; `redecide` is the one next action `of` names outside the table.
   (is (empty? (->> pipeline/positions
                    (keep #(pipeline/next-action % :pickup))
-                   (cons @#'pipeline/clearance)
+                   (cons @#'pipeline/redecide)
                    (filter #(= :mechanical (:mode %)))
                    (map :stage)
                    (remove drive/mechanical-stages)
@@ -597,20 +617,6 @@
   (is (str/includes? (drive/decision-needs :asked [(a-decision 3 :ask "scope?" :findings [])])
                      "For you to decide: scope?")
       "an :ask waits on no repair, so its question is the person's to answer now"))
-
-(deftest a-grant-owed-proceed-names-the-move-it-grants
-  ;; The final ask of an eight-round run no longer named the four breaks it was meant to grant, and
-  ;; the gate is what the person approves from.
-  (let [design {:seq 4 :standing {:relation :conforms}
-                :baseline {:seq 2 :relation :revisit :at "ingest" :breaks ["recipe-in-one-place" "m-layout"]}}
-        needs  (drive/decision-needs :proceed [(a-decision 9 :proceed "bump the version by hand?" :findings [])]
-                                     design)]
-    (is (str/includes? needs "revisits baseline entry 2, at ingest, breaking:\n    - recipe-in-one-place\n    - m-layout")
-        "approving grants every declared break, so every one is on the gate whatever the asks say")
-    (is (not (str/includes? (drive/decision-needs :proceed [(a-decision 9 :proceed "" :findings [])]
-                                                  (assoc design :baseline {:seq 2 :relation :extends}))
-                            "Approving grants"))
-        "a design owing nobody has no move to grant")))
 
 (deftest a-round-that-appended-no-decision-keeps-the-honest-fallback
   (is (nil? (drive/decision-needs :subjects-undeclared [])))

@@ -231,8 +231,8 @@ bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-comp
 
 **Required whenever the workstream has a `:design` record** (`bb nido:workstream:show`);
 omit the key when there is none — the append refuses a citation that resolves to
-no design. Name the design you actually built against — for approved work, the
-one the `:design-approved` entry names, which is the record `/continue-ticket`
+no design. Name the design you actually built against — the one the
+`:design-cleared` entry names, which is the record `/continue-ticket`
 builds from. **Do not copy the newest `:design` seq off the ledger**: that is
 append order dressed up as a citation, and it is wrong exactly when it matters,
 after a design is appended mid-work. If you cannot say which design the work was

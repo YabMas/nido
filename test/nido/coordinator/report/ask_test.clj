@@ -61,13 +61,18 @@
 
 (deftest an-option-that-hands-over-the-landing-says-so
   (let [[a] (:options (q1 (ask/ask :answer-blocker {:report (assoc-in blocker [:options 0 :grants] [:merge])
-                                                    :actions option-actions})))]
+                                                   :actions option-actions})))]
     (is (= "Choosing this, the seat lands the workstream's own PR itself, once." (:consequence a)))))
 
-(deftest an-option-says-it-approves-the-design-it-names
-  (let [[a] (:options (q1 (ask/ask :answer-blocker {:report (assoc-in blocker [:options 0 :approves-design] 36)
-                                                    :actions option-actions})))]
-    (is (= "Choosing this approves the design at entry 36." (:consequence a)))))
+(deftest an-option-an-older-blocker-says-approves-a-design-says-nothing-of-it
+  ;; Picking an option approves nothing, so the card must not claim it does.
+  (let [[a b] (:options (q1 (ask/ask :answer-blocker
+                                     {:report (-> blocker
+                                                  (assoc-in [:options 0 :approves-design] 36)
+                                                  (assoc-in [:options 1 :approves-design] 36))
+                                      :actions option-actions})))]
+    (is (nil? (:consequence a)) "an option naming no cost says nothing at all")
+    (is (= "Cross-repo, a second ticket." (:consequence b)) "and one naming a cost says only that")))
 
 (deftest a-branch-with-no-button-is-not-offered
   (let [a (ask/ask :answer-blocker {:report blocker :actions [{:id :option-a :label "A" :kind :mutation}]})]
@@ -95,21 +100,17 @@
     (is (= [] (:context (q1 a))))))
 
 (deftest the-owed-record-is-the-newest-of-its-kind
-  (let [a (ask/ask :approve-design
-                   {:report {:format :baseline-review :reason "a later review"}
-                    :entries [{:format :design-decision :asks "Old question?" :seq 3}
-                              {:format :baseline-review :reason "x" :seq 4}
-                              {:format :design-decision :asks "Worth an L now?" :seq 5}]
-                    :actions [{:id :approve :label "Approve" :kind :mutation}]})]
-    (is (= "Worth an L now?" (:question a))
-        "the decision owed is read even when a later record is the gate's report")))
+  (let [a (ask/ask :land
+                   {:report {:format :review-findings :reason "a later review"}
+                    :entries [{:format :pr-opened :title "Old PR" :seq 3}
+                              {:format :review-findings :reason "x" :seq 4}
+                              {:format :pr-opened :title "Fix login loop" :seq 5}]
+                    :actions [{:id :land :label "Land" :kind :mutation}]})]
+    (is (= "Land “Fix login loop”?" (:question a))
+        "the record owed is read even when a later record is the gate's report")))
 
 (deftest every-kind-yields-a-question
-  (doseq [[kind record] {:approve-design {:format :design-decision :recommend :proceed
-                                          :reason "All checks held." :asks "Worth an L now?"}
-                         :acknowledge-invalidation {:format :design-verdict :verdict :invalidated
-                                                    :reason "The claim does not hold."}
-                         :assert-gate {:criterion "p95 under 200ms for a week" :claim "the cache serves reads"}
+  (doseq [[kind record] {:assert-gate {:criterion "p95 under 200ms for a week" :claim "the cache serves reads"}
                          :accept-triage {:format :triage-report :title "Login loops" :determination :bug
                                          :summary "Cookie is dropped." :questions []}
                          :land {:format :pr-opened :title "Fix login loop" :url "https://x/1"}
@@ -124,8 +125,6 @@
 
 (deftest an-unregistered-kind-answers-generically
   (is (= :generic (:kind (ask/ask :something-new {:report {} :actions []}))))
-  (is (= :generic (:kind (ask/ask :approve-design {:report {:title "t"} :entries [] :actions []})))
-      "a kind whose record is missing still asks, generically, rather than costing the card")
   (is (= "This workstream is waiting on you." (:question (ask/ask :something-new {:report {} :actions []})))))
 
 (def ^:private accept-actions
@@ -203,21 +202,21 @@
     (is (str/includes? (does {:id :reply :label "Reply" :kind :resume}) "parked session"))))
 
 (deftest a-note-rides-on-the-ask
-  (is (= "The conductor adds: approve it." (:note (ask/ask :approve-design {:report nil :entries [{:format :design-decision :asks "Go?"}] :actions []
-                                                                         :note "The conductor adds: approve it."})))))
+  (is (= "The conductor adds: approve it." (:note (ask/ask :land {:report nil :entries [{:format :pr-opened :title "Go"}] :actions []
+                                                               :note "The conductor adds: approve it."})))))
 
 (deftest guidance-is-generic-plus-the-kinds-addendum
   (let [g (ask/guidance :answer-blocker)]
     (is (str/starts-with? g "# Asking the person a question"))
     (is (str/includes? g "When you halt on a blocker")))
   (is (str/includes? (ask/guidance :escalation) "When you escalate"))
+  (is (not= (ask/guidance :design-question) (str/trim (ask/guidance :generic)))
+      "a design round's question is briefed with its own addendum")
   (is (= (ask/guidance :land) (str/trim (ask/guidance :generic)))
       "a kind with no addendum is briefed with the generic guidance alone"))
 
 (deftest no-kind-says-what-waits-on-its-answer
   (doseq [[kind record] {:answer-blocker blocker
-                         :approve-design {:format :design-decision :recommend :proceed :asks "Worth an L now?"}
-                         :acknowledge-invalidation {:format :design-verdict :verdict :invalidated :reason "r"}
                          :assert-gate {:criterion "p95 under 200ms for a week"}
                          :accept-triage {:format :triage-report :title "Login loops" :determination :bug
                                          :summary "s" :questions []}

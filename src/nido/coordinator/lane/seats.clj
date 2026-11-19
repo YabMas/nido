@@ -711,7 +711,7 @@
                    "implementation, and the review loop over each — as `bb nido:owed` places it. When the "
                    "workstream owes an intent and your first instruction states its goal, write the intent "
                    "from it, as /design says. When a stage is a person's to take (an intent nothing given "
-                   "states, a design approval, a merge), do not take it: end "
+                   "states, a blocker's answer, a merge), do not take it: end "
                    "your turn saying what the person owes. End your turn when the stage is done or when you "
                    "need a decision.")
    :refuse    (fn [project ws-id]

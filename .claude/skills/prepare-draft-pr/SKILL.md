@@ -158,7 +158,7 @@ poller needs to react when the PR later merges.
 
    **`:design` is required whenever the workstream has a `:design` record**
    (`bb nido:workstream:show`); omit it when there is none. Name the design you
-   built against — for approved work, the one the `:design-approved` entry names.
+   built against — the one the `:design-cleared` entry names.
    **Do not copy the newest `:design` seq off the ledger**: a design appended
    while you worked is one this PR was never made under. Without it on a designed
    workstream the ref is still stamped but the `:pr-opened` event is skipped, and

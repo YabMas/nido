@@ -47,18 +47,31 @@
    :routes [{:health-id "h-fixed" :to :fix-here}
             {:health-id "h-kept" :to :constrains :why "nothing here reads the query"}]})
 
+(defn- clear!
+  "A proceeding decision round on the design at `d` of workstream `id`, and the clearance it
+   earns, written at the position it compares. Returns the clearance's seq."
+  [id d]
+  (ws/append-decision! :brian id
+                    (pr-str {:format :design-decision :recommend :proceed :design-seq d
+                             :reason "r" :asks "worth it?"
+                             :checks [{:check :relation-honest :status :held :note "n"}]}))
+  (let [at (count (:entries (ws/read-ws :brian id)))]
+    (ws/append-entry-at! :brian id at {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq d}}))
+    (inc at)))
+
 (defn- parent
-  "A parent whose design stands: intent 1, baseline 2 found sufficient at 3, design 4 granted at 5.
-   Returns its id; `approve?` false leaves the design ungranted."
+  "A parent whose design stands: intent 1, baseline 2 found sufficient at 3, design 4, a proceeding
+   decision at 5 and the clearance at 6. Returns its id; `clear?` false leaves the design uncleared."
   ([] (parent true))
-  ([approve?]
+  ([clear?]
    (let [id  (:id (ws/create! :brian {:external-refs []}))
-         add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+         add #(if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))]
      (add :intent {:format :intent :goal "one summing path" :done-when ["totals agree"]})
      (add :baseline a-baseline)
      (add :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
      (add :design (a-design 2))
-     (when approve? (add :design-approved {:format :design-approved :design {:seq 4} :at-seq 4}))
+     (when clear? (clear! id 4))
      id)))
 
 (defn- parent-on-disk

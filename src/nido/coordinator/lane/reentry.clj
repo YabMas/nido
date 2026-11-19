@@ -17,7 +17,7 @@
 
    Kept out of `pipeline` and out of `standing`, which is a claim rather than
    tidiness. `standing` answers about ONE design record and must stay that way —
-   it is what the landing gate, the approval gate and this all ask, and a version
+   it is what the landing gate, the clearance writer and this all ask, and a version
    of it that also knew about draft PRs would be answering two questions.
    `pipeline` owns the arc: which kinds belong to which stage, and what outranks
    what. Neither of them was the right home for `does the trail still belong to
@@ -36,10 +36,10 @@
 (def ^:private stages-order
   "Stage order, for picking the LOWEST owed one. Its own list rather than
    `pipeline`'s spine: `pipeline` depends on this namespace, and the rungs a
-   re-entry can name — :approval, and the landing stages — are ones the unit's
+   re-entry can name — :clearance, and the landing stages — are ones the unit's
    spine deliberately leaves out. What reaches the arc is the position this
    clamps, never this vocabulary."
-  [:intent :baseline :design :approval :implementation :publication :shipping])
+  [:intent :baseline :design :clearance :implementation :publication :shipping])
 
 (def stages
   "The arc stages re-entry can name, innermost first.
@@ -49,7 +49,7 @@
    position. :baseline is named for one reason only: the goal the newest survey
    was scoped for was replaced. The rest are the trail stages, which a later
    design unseats."
-  [:baseline :design :approval :implementation :publication :shipping])
+  [:baseline :design :clearance :implementation :publication :shipping])
 
 (def trail-kinds
   "The entry kinds whose stage `place` passes by presence alone, each with the arc
@@ -207,8 +207,8 @@
    standing's own :blocked map where standing is what decided, so a surface
    renders one vocabulary of reasons rather than a translation of it. `:trail` is
    the trail kinds that DO still stand — what the position fold may still read —
-   and it is empty whenever the baseline, the design or the approval is what is
-   owed, because nothing above the approval may be reported at all. `:trail-records` are the
+   and it is empty whenever the baseline, the design or its clearance is what is
+   owed, because nothing above the clearance may be reported at all. `:trail-records` are the
    records `:trail` is the kinds of, present only where `:trail` is not empty.
    `:indeterminate?` marks the answer standing could not derive, which the fold
    must not read as a design that is merely owed again."
@@ -248,18 +248,16 @@
     (not (:decidable? st))
     {:stage :design :trail #{} :because (:blocked st)}
 
-    ;; A clearance satisfies this as a grant does. Without that, a conforming
-    ;; design that cleared and was implemented reads with an EMPTY trail, so
-    ;; `place` ignores the completed implementation, returns :design-cleared
-    ;; again, and points the next action back at :implement for ever — looping at
-    ;; the gate it was supposed to have skipped.
+    ;; Nothing said it may be built: neither its round's clearance nor a grant an older ledger
+    ;; holds. Without the clearance counting, a design that cleared and was implemented reads
+    ;; with an EMPTY trail, so `place` ignores the completed implementation, returns
+    ;; :design-cleared again, and points the next action back at :implement for ever.
     (and (nil? (:approved-by st)) (nil? (:cleared-by st)))
-    {:stage :approval
+    {:stage :clearance
      :trail #{}
-     :because {:reason :not-approved
+     :because {:reason :not-cleared
                :seq (:seq design)
-               :detail (str "neither a :design-approved nor a :design-cleared names"
-                            " the design at entry " (:seq design))}}
+               :detail (str "no :design-cleared names the design at entry " (:seq design))}}
 
     :else
     (let [{:keys [current records stale]} (trail-standing w (:seq design))

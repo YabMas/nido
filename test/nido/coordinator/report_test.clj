@@ -1946,13 +1946,22 @@
     (is (thrown? Exception (report/entry-payload :retraction (pr-str (dissoc ok :evidence)))))
     (is (thrown? Exception (report/entry-payload :retraction (pr-str (dissoc ok :because)))))))
 
-(deftest an-approval-names-the-design-and-the-position-it-was-read-at
-  ;; :at-seq is what makes the grant honest rather than merely durable — a
-  ;; decision made against a stale page is not a decision about what is there.
+(deftest an-approval-is-never-appended
+  ;; A design is built when its decision round proceeds; no grant is written.
   (let [ok {:format :design-approved :design {:seq 34} :at-seq 35}]
-    (is (some? (report/entry-payload :design-approved (pr-str ok))))
-    (is (thrown? Exception (report/entry-payload :design-approved (pr-str (dissoc ok :at-seq)))))
-    (is (thrown? Exception (report/entry-payload :design-approved (pr-str (dissoc ok :design)))))))
+    (is (re-find #"no longer written"
+                 (try (report/entry-payload :design-approved (pr-str ok)) ""
+                      (catch clojure.lang.ExceptionInfo e (pr-str (:explain (ex-data e))))))
+        "refused with the reason, which the writer is shown")
+    (is (thrown? Exception (report/validate-event :design-approved ok)))))
+
+(deftest a-stored-approval-reads-as-the-design-and-the-position-it-was-read-at
+  ;; :at-seq is what made a grant honest rather than merely durable — a decision
+  ;; made against a stale page is not a decision about what is there.
+  (let [ok {:format :design-approved :design {:seq 34} :at-seq 35}]
+    (is (= ok (report/parse-event :design-approved ok)))
+    (is (thrown? Exception (report/parse-event :design-approved (dissoc ok :at-seq))))
+    (is (thrown? Exception (report/parse-event :design-approved (dissoc ok :design))))))
 
 (deftest a-baseline-may-name-the-baseline-it-corrects-and-need-not
   ;; Optional is the load-bearing half: every baseline already written carries
@@ -2135,21 +2144,12 @@
                                       :round 1 :reason "clean"})
             "no reviewer raised"))))
 
-(deftest the-declarations-decide-whether-a-person-is-owed
-  ;; Both are already required and already carry their obligations, so the gate
-  ;; reads what the author had to say rather than asking a question of its own.
-  (is (false? (report/owes-a-person? {:standing {:relation :conforms}
-                                      :baseline {:relation :within}}))
-      "nothing high-level is at stake, and nobody was ever asked about it")
-  (is (false? (report/owes-a-person? {:standing {:relation :conforms}
-                                      :baseline {:relation :extends}}))
-      "landing on an existing extension point extends the design")
-  (is (true? (report/owes-a-person? {:standing {:relation :challenges}
-                                     :baseline {:relation :within}}))
-      "challenging the stance is a person's decision")
-  (is (true? (report/owes-a-person? {:standing {:relation :conforms}
-                                     :baseline {:relation :revisit}}))
-      "and so is asking the core to move"))
+(deftest a-proceed-after-a-reading-that-asked-does-not-proceed
+  ;; The earlier reading's question is still a person's; the round ends asking it.
+  (let [d {:format :design-decision :recommend :proceed
+           :checks [{:check :goal-served :status :held}]}]
+    (is (true? (report/proceeds? d)))
+    (is (false? (report/proceeds? (assoc d :unpaired-recommend {:was :ask :seq 12 :asks "Worth it now?"}))))))
 
 ;; ── Strata ──────────────────────────────────────────────────────────────────
 ;; A record written since strata entered the model names the levels it touches in :strata, and a
@@ -2387,8 +2387,8 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #":questions q1 is not one question"
                           (report/validate-event :blocker (assoc-in two-question-blocker [:questions 0 :question]
                                                                     (str (apply str (repeat 240 "x")) "?"))))))
-  (testing "a question among several may not approve a design"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"q1 has an option that approves a design"
+  (testing "no option of a question approves a design"
+    (is (thrown? clojure.lang.ExceptionInfo
                           (report/validate-event :blocker (assoc-in two-question-blocker
                                                                     [:questions 0 :options 0 :approves-design] 7))))))
 
@@ -2435,8 +2435,8 @@
     (is (str/includes? (report/report->markdown a) "**Q3** — _left open_"))))
 
 (deftest an-escalation-at-a-persons-move-is-a-note
-  (let [e {:format :conduct-decision :hand-back "m" :position :design-decided :by :conductor
-           :next {:stage :approve-design :mode :human}
+  (let [e {:format :conduct-decision :hand-back "m" :position :triage-awaiting :by :conductor
+           :next {:stage :accept-triage :mode :human}
            :decision [:escalate {:needs "Weigh the second path."}]}]
     (is (= e (report/validate-event :conduct-decision e))
         "it parks nothing and rides on the owed card, so it is not held to a question's parts")

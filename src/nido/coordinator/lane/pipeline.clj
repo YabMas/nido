@@ -75,11 +75,11 @@
    ;; Some layers of the stack built under the design being built now are finished, and the
    ;; implementation is not. A trail position: everything above outranks it.
    :implementing
+   ;; A person granted it, on a ledger from before every design was cleared by its own round:
+   ;; nothing writes a grant now, and this position only reads the ones already written.
    :design-approved
-   ;; A round decided it and its own declarations owed nobody a grant. BELOW
-   ;; :design-approved because a person having granted it is the stronger fact
-   ;; and stays worth its own position, and ABOVE :design-decided because a
-   ;; decided design that still owes a person has not got past the gate.
+   ;; A round decided it and wrote the clearance it implies. ABOVE :design-decided because a
+   ;; decided design whose clearance is still unwritten has a write owed before it is built.
    :design-cleared
    :design-decided
    :designed
@@ -215,11 +215,9 @@
    :design          :design
    :design-decision :design
    :design-verdict  :design
-   ;; A grant is part of the design's standing, not a rung of its own: most
-   ;; designs clear without one, and a person is asked only when the design's
-   ;; declarations owe them — a halt on the design, answered here.
+   ;; A grant an older ledger holds is part of the design's standing, not a rung of its own.
    :design-approved :design
-   ;; The same answer given without a person: a round found nobody was owed.
+   ;; The round's clearance: what lets a design be built.
    :design-cleared  :design
    :retraction      :retraction
    :blocker         :halt
@@ -278,9 +276,8 @@
    A unit ends at the implementation, each stage's own review folded into the
    stage it reviews, because a LANDING is not one unit's — one :pr-opened and one
    :merged can carry several units — so :publication and :shipping lie off this
-   spine. Approval is not on it either: a grant is owed only when a design's
-   declarations say a person must give one, so it is a halt on the design rather
-   than a rung every unit climbs, and its records fold into :design.
+   spine. Clearance is not on it either: it is the design round's answer, written by
+   the round, so its records fold into :design.
 
    What ARRIVES before a unit still reads at :intent: a ticket or a triage report
    is the workstream's record, but the stage it belongs to is the one it produced.
@@ -304,9 +301,7 @@
    :rebaseline               :baseline
    :design                   :design
    :decide-design            :design
-   :approve-design           :design
    :clear-design             :design
-   :acknowledge-invalidation :design
    :implement                :implementation
    :review-implementation    :implementation
    :address-findings         :implementation
@@ -574,12 +569,8 @@
    about the record, not about whether to build it, and treating one as a
    decision would advance a design its own round sent back.
 
-   PUBLIC because two things ask it and a second implementation would eventually
-   answer differently: this module, to place a workstream in the arc, and the
-   gate, to decide whether a grant is a thing a human may currently give. The
-   gate learnt that the hard way — it offered Approve on any design decision at
-   all, so a round that answered :recut showed a button that would grant the
-   design it had just sent back."
+   PUBLIC because the surfaces ask it beside this module's placing of the arc, and
+   a second implementation would eventually answer differently."
   [project ws-id]
   (when-let [d (standing/governing-design project ws-id)]
     (standing/proceeding? project ws-id (:seq d))))
@@ -641,12 +632,10 @@
     ;; work goes back to, and each position's next stage writes its replacement.
     retraction                       retraction
 
-    ;; A round judged the design itself wrong and nobody has answered it. A halt
-    ;; rather than a clamp, because it is a question put to a person: the two
-    ;; answers are a retraction or a grant, and neither is derivable from the
-    ;; ledger as it stands. Below :blocked on purpose — an agent asleep at a
-    ;; blocker is waiting on an answer right now, where this has been waiting
-    ;; since whenever the round ran.
+    ;; A round judged the design itself wrong. Not a question for a person: the
+    ;; work goes back to the design, and a superseding design answers it — the
+    ;; redesign raising a blocker when it needs a person. Below :blocked on
+    ;; purpose, so a question already put to a person is answered first.
     (= :design-invalidated (:reason (:because re-entry))) :design-invalidated
 
     ;; The goal the newest survey was scoped for was replaced. The survey is
@@ -665,13 +654,12 @@
     ;; cut: once its halt clears, the layers built under the design still place the work here —
     ;; unless the design was implemented, reviewed or published since, after which the layers
     ;; are progress alone and the caller passes none. And only on a design something said may be
-    ;; built: a layer recorded under one still owing its grant does not walk past the gate.
+    ;; built: a layer recorded under one its round never cleared does not walk past the decision.
     (and layers design-stands? (or approved? cleared?)) :implementing
     approved?                      :design-approved
-    ;; The gate is READ rather than reached. A clearance is a record a round
+    ;; The clearance is READ rather than reached. A clearance is a record a round
     ;; appended, so this is a citation like every other clause here — not a
-    ;; declaration being trusted about itself. What the declarations decided is
-    ;; whether the round had to ask a person at all.
+    ;; declaration being trusted about itself.
     ;;
     ;; Asked of STANDING rather than of the index, because the question is
     ;; whether THIS design is cleared. A bare presence test passes a workstream
@@ -727,17 +715,16 @@
 (defn- placed-by
   "The :seq of the record `place` read to put the workstream at `pos` when a person owes the move
    it names, or nil: the blocker it halts on, the invalidating verdict re-entry names, the
-   decision that let the governing design proceed, the verdict nobody accepted, the newest
+   verdict nobody accepted, the newest
    publication among the trail records that placed :published. :awaiting-gate is placed by a close,
    a status entry; the question it owes is the phase's exit criterion, not a record's.
 
    Read from the same facts `place` read, so the record a gate asks from is the one that put
    the workstream there — never a second, per-kind reading of the ledger."
-  [pos {:keys [blocker-seq re-entry trail-records verdict-seq decision-seq]}]
+  [pos {:keys [blocker-seq re-entry trail-records verdict-seq]}]
   (case pos
     :blocked            blocker-seq
     :design-invalidated (get-in re-entry [:because :seq])
-    :design-decided     decision-seq
     :triage-awaiting    verdict-seq
     :published          (:seq (last (filter #(= :pr-opened (:kind %)) trail-records)))
     nil))
@@ -749,8 +736,7 @@
    no derivation the projection was not already making — and why the mode, not
    the disposition, is what the driver stamps onto a Run. Several stages run in
    :mechanical mode and all of them follow an :advance, so a disposition could
-   never select one. One position has two: :design-decided is a person's only
-   when the design owes one, and `of` names `clearance` when it does not.
+   never select one.
 
    The two terminal positions map to nil, and that is the answer rather than a
    gap: a published draft PR ends this arc — landing it is `nido ship` and stays
@@ -762,9 +748,9 @@
    :baselined          {:stage :verify-baseline         :mode :mechanical}
    :baseline-verified   {:stage :design                :mode :authoring}
    :designed          {:stage :decide-design         :mode :mechanical}
-   ;; A person's only when the design owes one. `of` names `clearance` instead
-   ;; for a standing design whose declarations owe nobody.
-   :design-decided    {:stage :approve-design        :mode :human}
+   ;; The decision proceeds and its clearance is still unwritten: a write owed, never a
+   ;; person's move. `of` re-runs the decision instead on a design no longer decidable.
+   :design-decided    {:stage :clear-design          :mode :mechanical}
    :design-approved   {:stage :implement             :mode :working-copy}
    :design-cleared    {:stage :implement             :mode :working-copy}
    :implementing      {:stage :implement             :mode :working-copy}
@@ -780,9 +766,10 @@
    :design-retracted  {:stage :design                 :mode :authoring}
    ;; A retracted INTENT wants the goal restated: an intent superseding it.
    :intent-retracted  {:stage :establish-intent       :mode :authoring}
-   ;; Nobody but a person can answer it: the round has already said what it
-   ;; found, and what happens next is a judgement about whether it is right.
-   :design-invalidated {:stage :acknowledge-invalidation :mode :human}
+   ;; A review found the design itself wrong: it is redesigned, as a retracted
+   ;; design is, and the superseding design is decided again. The redesign raises
+   ;; a blocker when the verdict leaves it a question only a person can answer.
+   :design-invalidated {:stage :design                :mode :authoring}
    :findings-open     {:stage :address-findings      :mode :working-copy}
    ;; A gate is asserted with the evidence a person looked at; nothing nido can
    ;; run observes production, so the stage is theirs.
@@ -885,17 +872,14 @@
    chose is the retraction's, so it is not here."
   #{:goal-superseded :baselined :baseline-verified :designed})
 
-(def ^:private clearance
-  "The next action at :design-decided for a design whose own declarations owe
-   nobody a grant, and which still stands.
+(def ^:private redecide
+  "The next action at :design-decided for a design that no longer stands: the
+   decision round again, which reports what stops it and routes back there.
 
-   Not :approve-design, because nobody is owed that: the decision is on the
-   ledger and the clearance it implies is not yet, which is a write still owed —
-   the round ended :clearance-contended. So the stage writes the clearance and
-   nothing else: no round re-runs and nothing is turned into a grant. Standing is
-   part of the condition because a design that does not stand owes no clearance
-   either, and a stage fired on one would find nothing to write, every tick."
-  {:stage :clear-design :mode :mechanical})
+   Not the clearance stage, :design-decided's own next action: a design that does
+   not stand owes no clearance, and a stage fired on one would find nothing to
+   write, every tick."
+  {:stage :decide-design :mode :mechanical})
 
 ;; ── What a finished stage means ─────────────────────────────────────────────
 
@@ -965,9 +949,11 @@
    :escalated            :route-back
 
    ;; ── only a human can settle it ──
-   :cleared              :advance   ; a proceeding decision that owed nobody a grant
-   :proceed              :escalate  ; the design round's ask, when a person IS owed one
-   :asked                :escalate  ; the judge stopped for a person, whoever the design owes
+   :cleared              :advance   ; a proceeding decision, and the clearance it implies written
+   :already-cleared      :advance   ; the design was let be built before this round; nothing to judge
+   ;; A decision round's stop for a person. The driver parks it as a blocker, and the next round
+   ;; reads the answer — answering never lets the design proceed by itself.
+   :asked                :escalate
    :disputed             :escalate  ; judge and amender deadlocked
    ;; A record round that would have held, asked twice, and left checks without a ruling both
    ;; times. The record does not hold over them, and another round re-reads the same judge.
@@ -1073,16 +1059,15 @@
    ;; it. And the refusal can strand the working copy mid-stack, where a re-run
    ;; reviews a truncated branch and reports it as the whole one.
    :stack-unmovable      :escalate
-   ;; A proceeding decision on a design owing nobody, whose clearance the ledger
-   ;; kept moving under. Not :proceed — contention is not a grant being owed, and
-   ;; parking it would put back the gate the design's declarations removed. Not
-   ;; :retry either: that re-runs the round whose decision is already on the
-   ;; ledger, and parks when the attempts run out. The next tick reads
-   ;; :design-decided, whose next action for such a design is the clearance
-   ;; stage — which writes the clearance and nothing else, as often as it takes.
+   ;; A proceeding decision whose clearance the ledger kept moving under. Not
+   ;; :escalate — contention is not a person's question. Not :retry either: that
+   ;; re-runs the round whose decision is already on the ledger, and parks when
+   ;; the attempts run out. The next tick reads :design-decided, whose next action
+   ;; is the clearance stage — which writes the clearance and nothing else, as
+   ;; often as it takes.
    :clearance-contended  :advance
-   ;; The clearance stage found no proceeding decision on a design owing nobody:
-   ;; the ledger moved on after the stage was fired. The next tick reads where.
+   ;; The clearance stage found no proceeding decision on the newest design: the
+   ;; ledger moved on after the stage was fired. The next tick reads where.
    :nothing-to-clear     :advance
 
    ;; The stage attached to a holder doing its work, and that run ended without
@@ -1282,10 +1267,8 @@
           pos    (place facts)
           kind   (intake-kind whole (kinds whole))
           next-of (fn [p]
-                    (if (and (= :design-decided p)
-                             (:decidable? st)
-                             (not (:owes-person? st)))
-                      clearance
+                    (if (and (= :design-decided p) (not (:decidable? st)))
+                      redecide
                       (next-action p kind)))
           ;; What an amendment of the newest survey's goal still owes, carried beside the
           ;; stage fired only when the position is one of the arc's and that stage is the

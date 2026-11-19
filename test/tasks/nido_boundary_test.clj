@@ -9,15 +9,15 @@
 ;; ── What it asks for ────────────────────────────────────────────────────────
 
 (deftest a-stage-nobody-owes-asks-the-turn-to-carry-on
-  (let [d (boundary/asks-for {:at :design-approved :stage :implement
+  (let [d (boundary/asks-for {:at :design-cleared :stage :implement
                               :mode :working-copy :person nil})]
     (is (= :continue (:ask d)))
     (is (str/includes? (:say d) "implement")
         "and says what is owed, because the reason is what reaches the model")))
 
 (deftest a-stage-a-person-owes-waits-rather-than-asking
-  (is (= :wait (:ask (boundary/asks-for {:at :design-decided :stage :approve-design
-                                         :mode :human :person :approve-design})))))
+  (is (= :wait (:ask (boundary/asks-for {:at :blocked :stage :answer-blocker
+                                         :mode :human :person :answer-blocker})))))
 
 (defn- are-nothing [cases]
   (doseq [[answer because] cases]
@@ -53,21 +53,21 @@
                         :now-fn   (fn [] @clock)}))))
 
 (deftest an-answer-landing-during-the-wait-carries-the-turn-on
-  ;; The whole point of the wait: an approval is an append, and the next fold
+  ;; The whole point of the wait: an answer is an append, and the next fold
   ;; reads it. Nothing is delivered to the waiting session.
-  (let [d (ask-over [{:at :design-decided :stage :approve-design :mode :human
-                      :person :approve-design}
-                     {:at :design-decided :stage :approve-design :mode :human
-                      :person :approve-design}
-                     {:at :design-approved :stage :implement :mode :working-copy
+  (let [d (ask-over [{:at :blocked :stage :answer-blocker :mode :human
+                      :person :answer-blocker}
+                     {:at :blocked :stage :answer-blocker :mode :human
+                      :person :answer-blocker}
+                     {:at :design-cleared :stage :implement :mode :working-copy
                       :person nil}])]
     (is (= :continue (:ask d)))
     (is (str/includes? (:say d) "implement")
         "and it carries on into what the answer made due, not what it waited on")))
 
 (deftest a-wait-nobody-answers-withdraws-the-request
-  (let [d (ask-over [{:at :design-decided :stage :approve-design :mode :human
-                      :person :approve-design}])]
+  (let [d (ask-over [{:at :blocked :stage :answer-blocker :mode :human
+                      :person :answer-blocker}])]
     (is (= {:ask :nothing :because :waited-out} d)
         "nido stops asking; whether the turn ends is the host's, across every
          hook that answered")))
@@ -77,8 +77,8 @@
   ;; reader has to reconcile, which is what lets a session die mid-wait.
   (let [seen (atom 0)]
     (with-redefs [owed/owed-at (fn [_] (swap! seen inc)
-                                 {:at :design-decided :stage :approve-design
-                                  :mode :human :person :approve-design})]
+                                 {:at :blocked :stage :answer-blocker
+                                  :mode :human :person :answer-blocker})]
       (boundary/ask-at "/anywhere" {:wait-ms 30 :poll-ms 10
                                     :sleep-fn (fn [_] nil)
                                     :now-fn (let [t (atom 0)] #(swap! t + 20))}))
@@ -94,7 +94,7 @@
   ;; one line at every stop with nobody typing.
   (let [folds (atom 0)]
     (with-redefs [owed/owed-at (fn [_] (swap! folds inc)
-                                 {:at :design-approved :stage :implement
+                                 {:at :design-cleared :stage :implement
                                   :mode :working-copy :person nil})]
       (is (= {:ask :nothing :because :already-carried-on}
              (quietly #(boundary/boundary-cmd* {:hook {:stop_hook_active true}}))))

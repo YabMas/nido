@@ -566,7 +566,7 @@
 (defn- check-standing-citations!
   "Every edge `standing` walks resolves to an entry of the kind it expects.
 
-   Six of them. A :retraction's target and a :design-approved's design are
+   A :retraction's target and a :design-cleared's design are
    kinds of their own; a design's and a baseline's :supersedes were both
    writable and neither was ever checked — that pair is why this exists at all,
    :supersedes being the one citation in the ledger nothing had an opinion
@@ -579,7 +579,7 @@
    retraction. A kind nothing supersedes — a :triage — could be retracted but
    never answered, and the workstream would be held at the retraction for good."
   [w kind payload]
-  (when (#{:retraction :design-approved :design-cleared :design :baseline :intent} kind)
+  (when (#{:retraction :design-cleared :design :baseline :intent} kind)
     (let [r (edn/read-string payload)]
       (case kind
         :retraction      (let [n  (get-in r [:retracts :seq])
@@ -592,7 +592,6 @@
                                                   (str/join " or " (sort (map str retractable-kinds))))
                                              {:seq n :kind ek})))
                            (cites! w r [:retracts :seq] retractable-kinds "Retraction"))
-        :design-approved (cites! w r [:design :seq] #{:design} "Approval")
         :design          (cites! w r [:supersedes :seq] #{:design}
                                  "Design :supersedes")
         :baseline        (do (cites! w r [:supersedes :seq] #{:baseline}
@@ -1109,8 +1108,7 @@
 
 (defn- check-clearance-owed!
   "A clearance is admitted only on the evidence that makes it one: the latest
-   decision naming its design recommended proceeding, and that design's own
-   declarations owe nobody a grant.
+   decision naming its design lets it proceed.
 
    Asked of entries this lock can see and never of `standing`, which reads this
    namespace. The third part — nothing blocked the design when it was cleared —
@@ -1118,8 +1116,8 @@
    `append-entry-at!` — never stores — and that compare is what keeps the
    reading true at the write. That is why `append-entry!`
    refuses the kind outright: every reader that admits a design on a clearance
-   naming it trusts this record, so one written with no round behind it, or
-   over a design that owes a person the grant, is work nobody judged.
+   naming it trusts this record, so one written with no round behind it is work
+   nobody judged.
 
    Fails closed on a decision of the current generation nobody can parse, since the one unread may
    be the latest and may not proceed; a retired generation's decide nothing here."
@@ -1141,20 +1139,16 @@
 
         (not (report/proceeds? decision))
         (refuse! (str "whose latest decision recommends " (name (:recommend decision))
-                      " and does not proceed"))
-
-        (report/owes-a-person? design)
-        (refuse! "whose declarations owe a person the grant")))))
+                      " and does not proceed"))))))
 
 (defn- check-implementation-approved!
   "Refuse an implementation record on a workstream whose live design nothing
-   cleared — neither a round nor a person.
+   cleared.
 
-   TWO ways a design becomes implementable, because a grant is owed only when
-   the design says something high-level is at stake. A `:design-cleared` is a
-   round having found it implementable without one; a `:design-approved` is a
-   person granting it. Either satisfies this floor, and a design carrying
-   neither has had nobody and nothing say it may be built.
+   A `:design-cleared` is a round having found the design implementable. A
+   `:design-approved` — a person's grant, which ledgers from before every design
+   was cleared by its round still hold — satisfies this floor too. A design
+   carrying neither has had nothing say it may be built.
 
    ONLY when the workstream HAS a design, and that guard is the whole of the
    rule's aim. Measured across the live ledgers: of the 18 implementation
@@ -1170,15 +1164,15 @@
    All four of those closed :done and three carry a :merged entry, which is
    what makes this worth a refusal rather than a reading. The projection
    already reports the gap — `lane.reentry` clamps such a workstream back to
-   :approve-design, and a test asserts it — but a clamp only decides what the
-   position SAYS. Nothing consults it before the next entry, so the arc ran on
-   past it four times and shipped.
+   its design — but a clamp only decides what the position SAYS. Nothing
+   consults it before the next entry, so the arc ran on past it four times and
+   shipped.
 
-   The LIVE design is the latest one, so a design superseded after its approval
-   needs granting again — which is the case worth catching rather than an
-   awkward edge. Redesigning is how a rejected commitment gets replaced, and an
-   approval that carried over to whatever replaced it would grant the one thing
-   nobody looked at.
+   The LIVE design is the latest one, so a design superseded after it was
+   cleared needs clearing again — which is the case worth catching rather than
+   an awkward edge. Redesigning is how a rejected commitment gets replaced, and
+   a clearance that carried over to whatever replaced it would admit the one
+   thing no round judged.
 
    This is a NECESSARY condition and not `standing`, which can refuse for four
    further reasons and which the pipeline already asks before it will say a
@@ -1186,7 +1180,7 @@
    `standing` reads this namespace, so asking it back would be a cycle. What
    this adds is the floor underneath that — the pipeline governs what nido
    TELLS a session to do, and a person who implements anyway can still be
-   refused the record that would carry the arc past the grant they never got."
+   refused the record that would carry the arc past the round that never cleared it."
   [w kind payload]
   (when (= :implementation-completed kind)
     ;; The design the record CITES, not the ledger's newest. Since a trail record
@@ -1207,7 +1201,7 @@
                       (contains? cleared (:seq design)))
           (throw (ex-info (str "Nothing clears the live design (entry "
                                (:seq design) ") on " (:id w)
-                               " — a round must clear it, or a person grant it,"
+                               " — its decision round must proceed on it,"
                                " or it must be superseded")
                           {:design    (:seq design)
                            :granted   (vec (sort granted))
@@ -1219,8 +1213,7 @@
 
    A clearance is an answer read at a position, and only the guarded writer can
    say that position has not moved since. Admitted here it would be a clearance
-   compared against nothing — and the implementation floor above trusts one as
-   it trusts a grant."
+   compared against nothing — and the implementation floor above trusts one."
   [kind]
   (when (= :design-cleared kind)
     (throw (ex-info "A :design-cleared is appended only through append-entry-at!"
@@ -1233,8 +1226,13 @@
   #{:tension :accord :withdrawal :recut :conduct-decision})
 
 (defn- refuse-unguarded-gate!
-  "A `:phase-gate` goes through `open-phase!`, a `:generation` through `open-generation!`, and a
-   stamped kind through `append-stamped!` — none through a generic append.
+  "A `:phase-gate` goes through `open-phase!`, a `:generation` through `open-generation!`, a
+   `:design-decision` through `append-decision!`, and a stamped kind through `append-stamped!` —
+   none through a generic append.
+
+   A decision is the judgement a decision round reached, and a clearance trusts any proceeding one
+   on the ledger; taken from a generic append, a decision anyone wrote would admit a design no
+   round judged.
 
    A gate opens the next phase and a generation the next cut of the design, and whether either
    may is a question about the workstream that only the writer asking it under the lock can
@@ -1243,6 +1241,8 @@
    writer's word."
   [kind]
   (case kind
+    :design-decision (throw (ex-info "A :design-decision is appended only through append-decision!, which a decision round calls"
+                                     {:kind kind}))
     :phase-gate (throw (ex-info "A :phase-gate is appended only through open-phase!" {:kind kind}))
     :generation (throw (ex-info "A :generation is appended only through open-generation!" {:kind kind}))
     (cond
@@ -1265,17 +1265,16 @@
                     {:ws-id (:id w) :kind kind}))))
 
 (defn- check-clearance-earned!
-  "A `:design-cleared` records a round that ran, over a design that owes nobody,
-   at the position it was compared at.
+  "A `:design-cleared` records a round that ran, over a design on the ledger, at
+   the position it was compared at.
 
-   Both are on the ledger or in hand under the lock, so each is asked rather
-   than trusted to the writer: a `:design-decision` naming the design that
-   `report/proceeds?`, and the design's own declarations
-   (`report/owes-a-person?`). The shared predicate rather than the recorded
+   The decision is on the ledger under the lock, so it is asked rather than
+   trusted to the writer: a `:design-decision` naming the design that
+   `report/proceeds?`. The shared predicate rather than the recorded
    `:recommend`, because this is one more reader of the one clearance answer:
    testing the recommendation refused an advisory-only round that the clearance
-   writer and the gate had both accepted, leaving a conforming design with
-   nothing that could clear it and no grant to ask for. Not `standing` — it
+   writer had accepted, leaving a design with nothing that could clear it. Not
+   `standing` — it
    reads this namespace, and
    re-deriving it under the lock is the alternative the design turned down.
    The stale refusal is what answers for standing: any append after the
@@ -1307,17 +1306,8 @@
 
         (nil? design)
         (throw (ex-info (str "Clearance names the design at entry " n
-                             ", which cannot be read — its declarations are what"
-                             " say whether a grant is owed")
-                        {:design n :ws-id (:id w)}))
-
-        (report/owes-a-person? design)
-        (throw (ex-info (str "Clearance names the design at entry " n
-                             ", which declares :challenges or :revisit — it owes"
-                             " a person a grant, and no round can clear it")
-                        {:design n :ws-id (:id w)}))
-
-))))
+                             ", which cannot be read")
+                        {:design n :ws-id (:id w)}))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   append-lock-path
@@ -1951,6 +1941,38 @@
                           (throw (ex-info "Workstream not found"
                                           {:project project :ws-id ws-id})))
                       entry content))))
+
+(defn- refuse-judging-a-cleared-design!
+  "No decision joins a design something already let be built — a round's :design-cleared or a
+   grant an older ledger holds, naming it in the current generation. Its review is over: what
+   is built on it is judged by the diff review, and a design to be revisited is a superseding
+   design, which a round of its own decides. Judged again, it could be sent back while the arc
+   builds on it."
+  [w design-seq]
+  (when-let [e (some (fn [kind]
+                       (some #(when (= design-seq (get-in (read-entry-at w (:seq %)) [:design :seq])) %)
+                             (span-of w kind)))
+                     [:design-cleared :design-approved])]
+    (throw (ex-info (str "The design at entry " design-seq " was let be built at entry " (:seq e)
+                         " — write a superseding design to have it decided again")
+                    {:ws-id (:id w) :design design-seq :cleared-by (:seq e)}))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :Path]}
+  append-decision!
+  "Append `content`, a `:design-decision`, as every other append's checks allow. The one writer of
+   the kind, which a decision round alone calls: every generic append refuses it
+   (`refuse-unguarded-gate!`). Returns the absolute path."
+  [project ws-id content]
+  (let [decision (edn/read-string content)]
+    (when-not (= :design-decision (:format decision))
+      (throw (ex-info "append-decision! takes a :design-decision" {:ws-id ws-id})))
+    (io/with-file-lock
+      (append-lock-path project ws-id)
+      (fn []
+        (let [w (or (read-ws project ws-id)
+                    (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+          (refuse-judging-a-cleared-design! w (:design-seq decision))
+          (append-locked! project ws-id w {:kind :design-decision} content))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :string] :map]}
   append-entry-at!

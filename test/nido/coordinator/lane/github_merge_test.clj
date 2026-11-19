@@ -22,6 +22,15 @@
            (cstate/ensure-dirs!) (f tmp))
          (finally (fs/delete-tree tmp)))))
 
+(defn- decide-and-clear!
+  "A proceeding decision round on the design at `d`, and the clearance it writes at its position."
+  [id d]
+  (ws/append-decision! :brian id
+                    (pr-str {:format :design-decision :recommend :proceed :design-seq d :reason "r"
+                             :checks [{:check :relation-honest :status :held :note "n"}]}))
+  (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
+                       (pr-str {:format :design-cleared :design {:seq d}})))
+
 (deftest first-poll-seeds-and-reacts-to-nothing
   (with-tmp
     (fn [_]
@@ -114,11 +123,11 @@
                        :done-when ["a multi-line order's total equals the sum of its invoice lines"]})
         (add! :baseline a-baseline)                                                   ; 2
         (add! :design a-design)                                                       ; 3 — D1
-        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (decide-and-clear! id 3)
         (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#5"
                                 :url "https://gh/5" :title "Fix rounding"}
                      {:design 3})                                                    ; :pr-opened under D1
-        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 6 — D2
+        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 7 — D2
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 5 :url "https://gh/5"
                                                          :title "Fix rounding" :merged-at "2026-09-11T10:00:00Z"
@@ -142,13 +151,13 @@
                        :done-when ["a multi-line order's total equals the sum of its invoice lines"]})
         (add! :baseline a-baseline)                                                   ; 2
         (add! :design a-design)                                                       ; 3 — D1
-        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (decide-and-clear! id 3)
         (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#5"
                                 :url "https://gh/5" :title "[1/2] Round the total"}
                      {:design 3})                                                    ; :pr-opened under D1
         (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#6"
                                 :url "https://gh/6" :title "[2/2] Round the total"})
-        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 6 — D2
+        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 7 — D2
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 6 :url "https://gh/6"
                                                          :title "[2/2] Round the total"
@@ -522,7 +531,7 @@
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
         (add! :baseline a-baseline)
         (add! :design a-phased-design)
-        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (decide-and-clear! id 3)
         (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#9" :url "https://gh/9" :title "p1"}
                      {:design 3})
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
@@ -549,10 +558,10 @@
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
         (add! :baseline a-baseline)
         (add! :design a-phased-design)                                               ; 3 — D1, phased
-        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (decide-and-clear! id 3)
         (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#9" :url "https://gh/9" :title "p1"}
                      {:design 3})
-        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 6 — D2, unphased
+        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 7 — D2, unphased
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 9 :url "https://gh/9" :title "p1"
                                                          :merged-at "z" :base "main"}]})

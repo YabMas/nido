@@ -7,9 +7,9 @@
    [nido.platform.core :as core]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.state :as cstate]
-   [nido.platform.io :as pio]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.history :as history]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.record.standing :as standing]
@@ -82,29 +82,8 @@
           (if (= :design-cleared kind)
             (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id)))
                                  {:kind kind} (pr-str record))
-            (ws/append-entry! :brian id {:kind kind} (pr-str record)))
+            (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record))))
           (count (:entries (ws/read-ws :brian id))))]))
-
-(defn- add-past-the-refusal!
-  "Append an entry the ledger would now refuse, by writing what it writes and
-   asking none of its questions.
-
-   For one case, and it is a case this suite has to keep covering: an
-   implementation record on a design nobody granted. `append-entry!` refuses
-   that now — but four workstreams in the live ledgers carry one from before it
-   did, all four of them closed :done, which is what made the refusal worth
-   adding. The projection has to go on reading those correctly long after
-   nothing can write another, so the fixture is built the way history built it
-   rather than through a door that is now shut."
-  [id kind record]
-  (let [w     (ws/read-ws :brian id)
-        seq-n (inc (count (:entries w)))
-        rel   (format "entries/%04d-%s.edn" seq-n (name kind))]
-    (pio/write-text! (str (fs/path (cstate/workstream-dir :brian id) rel))
-                     (pr-str record))
-    (ws/write! (update w :entries conj
-                       {:kind kind :seq seq-n :at "2026-08-21T00:00:00Z" :file rel}))
-    seq-n))
 
 (defn- clear!
   "A clearance of the design at `design-seq`, through `append-entry-at!` — the
@@ -113,6 +92,12 @@
   (let [at (count (:entries (ws/read-ws :brian id)))]
     (ws/append-entry-at! :brian id at {:kind :design-cleared}
                          (pr-str {:format :design-cleared :design {:seq design-seq}}))))
+
+(defn- decide-and-clear!
+  "A proceeding decision round on the design at `design-seq`, and the clearance it writes."
+  [add! design-seq]
+  (add! :design-decision (a-decision design-seq :proceed))
+  (add! :design-cleared {:format :design-cleared :design {:seq design-seq}}))
 
 (defn- intent! [add!] (add! :intent {:format :intent :goal "g" :done-when ["d"]}))
 
@@ -157,11 +142,10 @@
             (add! :design-decision (a-decision d :proceed))
             (is (= :design-decided (:at (p/of :brian id))))
             (is (= {:stage :clear-design :mode :mechanical} (select-keys (:next (p/of :brian id)) [:stage :mode]))
-                "a design owing nobody a grant is not a person's to grant — what
-                 is owed is the clearance the decision implies")
+                "what a proceeding decision owes is the clearance it implies, and no person writes it")
 
-            (add! :design-approved {:format :design-approved :design {:seq d} :at-seq 5})
-            (is (= :design-approved (:at (p/of :brian id))))
+            (add! :design-cleared {:format :design-cleared :design {:seq d}})
+            (is (= :design-cleared (:at (p/of :brian id))))
             (is (= {:stage :implement :mode :working-copy} (select-keys (:next (p/of :brian id)) [:stage :mode])))))))))
 
 ;; ── Precedence ──────────────────────────────────────────────────────────────
@@ -431,8 +415,8 @@
               _ (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                         :baseline-seq b :reason "holds"})
               d (add! :design (a-design b))]
-          (add! :design-decision (a-decision d :proceed))
-          (add! :design-approved {:format :design-approved :design {:seq d} :at-seq 5})
+          (let [dd (add! :design-decision (a-decision d :proceed))]
+            (history/grant! :brian id d dd))
           (is (= :design-approved (:at (p/of :brian id))))
           (add! :retraction {:format :retraction :retracts {:seq b}
                              :because "the baseline was wrong"
@@ -535,7 +519,7 @@
           "and the running round is flagged on its own stage"))))
 
 (deftest a-stage-a-person-owes-is-awaiting-not-running
-  ;; BR-6927: a design waiting on its approval drew the running spinner because the
+  ;; BR-6927: a design waiting on a person drew the running spinner because the
   ;; session still had an instruction pending. The person's move outranks it.
   (let [es (kinds->entries [:intent :baseline :design])
         a  (p/arc es {:at :design :active :design :awaiting :design})]
@@ -617,7 +601,7 @@
 (deftest every-record-loop-terminal-is-classified
   ;; The record pipelines' statuses and the outcomes a round that could not run
   ;; reports in their place. Gathered from what the loops actually set.
-  (doseq [s [:sufficient :proceed :asked :cleared :clearance-contended :nothing-to-clear
+  (doseq [s [:sufficient :asked :cleared :clearance-contended :nothing-to-clear
              :disputed :underivable :nothing-to-amend :unrecorded :retreated
              :amend-noop :amend-launch-failed :usage-limited :amend-invalid :amend-touched-code :amend-unreadable
              :codex-failed :reviewer-unavailable :no-output :round-crashed :unusable-answer
@@ -651,8 +635,8 @@
 
 (deftest a-contended-clearance-advances-rather-than-retrying-the-round
   (is (= :advance (p/disposition :clearance-contended))
-      "contention is not a grant owed, so it never parks as the design round's
-       ask — and not :retry, which re-runs a round whose decision is already on
+      "contention is not a person's question, so it never parks as the design
+       round's ask — and not :retry, which re-runs a round whose decision is already on
        the ledger and parks when the attempts run out")
   (is (= :advance (p/disposition :nothing-to-clear))
       "the ledger moved on after the clearance stage was fired; the next tick
@@ -738,8 +722,8 @@
 
 ;; ── The clamp ───────────────────────────────────────────────────────────────
 
-(defn- approved-and-implemented!
-  "A workstream with a verified baseline, an approved design and an
+(defn- cleared-and-implemented!
+  "A workstream with a verified baseline, a design its round cleared and an
    implementation done under it. Returns [id add! baseline-seq design-seq]."
   [add!]
   (intent! add!)
@@ -748,7 +732,7 @@
                             :baseline-seq b :reason "holds"})
     (let [d (add! :design (a-design b))]
       (add! :design-decision (a-decision d :proceed))
-      (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+      (add! :design-cleared {:format :design-cleared :design {:seq d}})
       (add! :implementation-completed {:format :implementation-completed
                                        :summary "done" :artifacts []
                                        :design {:seq d}})
@@ -762,14 +746,14 @@
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)
-            [b d1] (approved-and-implemented! add!)]
+            [b d1] (cleared-and-implemented! add!)]
         (is (= :implemented (:at (p/of :brian id))) "before the design moves")
         (let [d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
           (add! :design-decision (a-decision d2 :proceed))
-          (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (add! :design-cleared {:format :design-cleared :design {:seq d2}})
           (let [r (p/of :brian id)]
-            (is (= :design-approved (:at r))
-                "the new design is approved, so it is back at the implementation")
+            (is (= :design-cleared (:at r))
+                "the new design is cleared, so it is back at the implementation")
             (is (= {:stage :implement :mode :working-copy} (select-keys (:next r) [:stage :mode])))
             (is (= :implementation (:stage (:re-entry r))))
             (is (= :trail-superseded (:reason (:because (:re-entry r)))))))))))
@@ -780,10 +764,10 @@
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)
-            [b d1] (approved-and-implemented! add!)
+            [b d1] (cleared-and-implemented! add!)
             d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
         (add! :design-decision (a-decision d2 :proceed))
-        (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+        (add! :design-cleared {:format :design-cleared :design {:seq d2}})
         (add! :implementation-completed {:format :implementation-completed :summary "done"
                                          :artifacts [] :design {:seq d2}})
         (let [pr2 (add! :pr-opened {:format :pr-opened :url "https://x/2" :title "under d2"
@@ -804,7 +788,7 @@
           (add! :note "later")
           (is (= blk (:placed-by (p/of :brian id))) "a halt names its blocker"))))))
 
-(deftest a-design-nobody-approved-cannot-be-reported-past-the-approval
+(deftest a-decided-design-cannot-be-reported-past-its-clearance
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
@@ -812,22 +796,23 @@
         (let [b (add! :baseline a-baseline)]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "holds"})
-          ;; :challenges, so the grant nobody gave is one a person owes.
+          ;; :challenges, which the clearance writes over all the same.
           (let [d (add! :design (assoc (a-design b)
                                        :standing {:relation :challenges :note "n"}))]
             (add! :design-decision (a-decision d :proceed))
-            ;; Through the back door on purpose: the grant this test is about
-            ;; is exactly what the ledger now demands before it will write one.
-            (add-past-the-refusal! id :implementation-completed
-                                   {:format :implementation-completed
-                                    :summary "done" :artifacts []
-                                    :design {:seq d}})
+            ;; Through the back door on purpose: the ledger refuses an
+            ;; implementation record on a design nothing cleared.
+            (history/append-past-the-refusal! :brian id :implementation-completed
+                                              {:format :implementation-completed
+                                               :summary "done" :artifacts []
+                                               :design {:seq d}})
             (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
             (let [r (p/of :brian id)]
               (is (= :design-decided (:at r))
-                  "a draft PR does not stand in for the grant nobody gave")
-              (is (= :approve-design (:stage (:next r))))
-              (is (= :human (:mode (:next r)))))))))))
+                  "a draft PR does not stand in for the clearance nobody wrote")
+              (is (= {:stage :clear-design :mode :mechanical}
+                     (select-keys (:next r) [:stage :mode]))
+                  "and what is owed is the clearance, never a person's grant"))))))))
 
 (deftest the-halts-and-terminals-above-the-trail-are-never-clamped
   ;; The clamp reaches the four record-trail clauses and stops. A closed
@@ -837,18 +822,18 @@
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)
-            [_ _] (approved-and-implemented! add!)]
-        (add! :design (a-design 2))            ; unapproved: the clamp bites
+            [_ _] (cleared-and-implemented! add!)]
+        (add! :design (a-design 2))            ; undecided: the clamp bites
         (is (= :designed (:at (p/of :brian id))) "clamped while open")
         (ws/close! :brian id :done)
         (is (= :shipped (:at (p/of :brian id)))
             "and closure still outranks it")))))
 
-(deftest an-invalidated-design-halts-the-workstream-and-waits-for-a-person
+(deftest an-invalidated-design-sends-the-workstream-back-to-the-design
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)
-            [_ d] (approved-and-implemented! add!)]
+            [_ d] (cleared-and-implemented! add!)]
         (add! :design-verdict {:format :design-verdict :verdict :invalidated
                                :round 1 :design-seq d :reason "a second path sums"
                                :invariants-broken [{:invariant "one summing path"
@@ -856,8 +841,8 @@
                                :needs "redesign the totalling seam"})
         (let [r (p/of :brian id)]
           (is (= :design-invalidated (:at r)))
-          (is (= {:stage :acknowledge-invalidation :mode :human} (select-keys (:next r) [:stage :mode]))
-              "and nobody but a person can answer it"))))))
+          (is (= {:stage :design :mode :authoring} (select-keys (:next r) [:stage :mode]))
+              "a superseding design answers it, with no person in between"))))))
 
 (deftest the-newest-designs-standing-speaks-for-its-position-over-the-baselines
   (with-tmp
@@ -865,9 +850,9 @@
       (testing "an invalidated design over a retracted premise stays invalidated"
         ;; The design's standing reports the judgement, above the premise; a
         ;; fall-through to the baseline's :premise-retracted would send the
-        ;; workstream to :rebaseline and bury what a person must acknowledge.
+        ;; workstream to :rebaseline and bury the judgement the redesign answers.
         (let [[id add!] (ledger)
-              [b d] (approved-and-implemented! add!)]
+              [b d] (cleared-and-implemented! add!)]
           (add! :design-verdict {:format :design-verdict :verdict :invalidated
                                  :round 1 :design-seq d :reason "a second path sums"
                                  :invariants-broken [{:invariant "one summing path"
@@ -878,10 +863,10 @@
                              :evidence ["src/a.clj:1"] :found-during :review})
           (let [r (p/of :brian id)]
             (is (= :design-invalidated (:at r)))
-            (is (= {:stage :acknowledge-invalidation :mode :human} (select-keys (:next r) [:stage :mode]))))))
+            (is (= {:stage :design :mode :authoring} (select-keys (:next r) [:stage :mode]))))))
       (testing "a later survey the design does not cite unseats nothing"
         (let [[id add!] (ledger)
-              _      (approved-and-implemented! add!)
+              _      (cleared-and-implemented! add!)
               before (:at (p/of :brian id))
               b2     (add! :baseline a-baseline)]
           (add! :retraction {:format :retraction :retracts {:seq b2}
@@ -899,7 +884,7 @@
     (fn [_]
       (testing "a retracted design"
         (let [[id add!] (ledger)
-              [_ d] (approved-and-implemented! add!)]
+              [_ d] (cleared-and-implemented! add!)]
           (add! :retraction {:format :retraction :retracts {:seq d}
                              :because "the cut does not hold"
                              :evidence ["src/a.clj:1"] :found-during :review})
@@ -908,7 +893,7 @@
             (is (= {:stage :design :mode :authoring} (select-keys (:next r) [:stage :mode]))))))
       (testing "a retracted baseline"
         (let [[id add!] (ledger)
-              [b _] (approved-and-implemented! add!)]
+              [b _] (cleared-and-implemented! add!)]
           (add! :retraction {:format :retraction :retracts {:seq b}
                              :because "the survey was wrong"
                              :evidence ["src/a.clj:1"] :found-during :review})
@@ -929,11 +914,11 @@
             (is (= :design (:stage (p/of :brian id)))))))
       (testing "an implemented unit is in its implementation"
         (let [[id add!] (ledger)]
-          (approved-and-implemented! add!)
+          (cleared-and-implemented! add!)
           (is (= :implementation (:stage (p/of :brian id))))))
       (testing "a blocked unit reads at the stage it halted in"
         (let [[id add!] (ledger)]
-          (approved-and-implemented! add!)
+          (cleared-and-implemented! add!)
           (add! :blocker {:format :blocker :summary "stuck" :needs "a key?" :after "The work resumes once you answer."})
           (let [r (p/of :brian id)]
             (is (= :blocked (:at r)))
@@ -941,7 +926,7 @@
       (testing "a retracted baseline sends the arc back to the survey, and what
                 stood on it no longer stands"
         (let [[id add!] (ledger)
-              [b _] (approved-and-implemented! add!)]
+              [b _] (cleared-and-implemented! add!)]
           (add! :retraction {:format :retraction :retracts {:seq b}
                              :because "the survey was wrong"
                              :evidence ["src/a.clj:1"] :found-during :review})
@@ -951,25 +936,25 @@
             (is (= [:done :current :stale :stale] (mapv :state (:stages a)))))))
       (testing "a published unit is past the spine"
         (let [[id add!] (ledger)
-              [_ d] (approved-and-implemented! add!)]
+              [_ d] (cleared-and-implemented! add!)]
           (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
           (is (nil? (:stage (p/of :brian id)))))))))
 
 (deftest redoing-the-work-lets-the-position-climb-again
   ;; The clamp must not be a one-way door. Reported by walking the arc: a
-  ;; workstream that redesigned, re-approved and re-implemented stayed pinned at
-  ;; :design-approved, because the rule asked that every trail record be current
+  ;; workstream that redesigned, re-cleared and re-implemented stayed pinned at
+  ;; its clearance, because the rule asked that every trail record be current
   ;; rather than that the stage hold one.
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)
-            [b d1] (approved-and-implemented! add!)]
+            [b d1] (cleared-and-implemented! add!)]
         (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d1}})
         (is (= :published (:at (p/of :brian id))))
         (let [d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
           (add! :design-decision (a-decision d2 :proceed))
-          (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
-          (is (= :design-approved (:at (p/of :brian id))) "back to the implementation")
+          (add! :design-cleared {:format :design-cleared :design {:seq d2}})
+          (is (= :design-cleared (:at (p/of :brian id))) "back to the implementation")
           (add! :implementation-completed {:format :implementation-completed
                                            :summary "redone" :artifacts []
                                            :design {:seq d2}})
@@ -1018,9 +1003,9 @@
               (is (= {:stage :implement :mode :working-copy} (select-keys (:next r) [:stage :mode]))
                   "and no person is asked"))))))))
 
-(deftest a-grant-still-outranks-a-clearance
-  ;; A person having granted it is the stronger fact and keeps its own position:
-  ;; :design-approved is what the landing check and the surfaces report.
+(deftest a-grant-an-older-ledger-holds-still-outranks-a-clearance
+  ;; Nothing writes a grant, but a ledger holding one keeps its own position:
+  ;; :design-approved is what the landing check and the surfaces report for it.
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
@@ -1029,9 +1014,9 @@
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "holds"})
           (let [d (add! :design (a-design b))]
-            (add! :design-decision (a-decision d :proceed))
-            (clear! id d)
-            (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            (let [dd (add! :design-decision (a-decision d :proceed))]
+              (clear! id d)
+              (history/grant! :brian id d dd))
             (is (= :design-approved (:at (p/of :brian id))))))))))
 
 (deftest a-cleared-design-lets-the-work-advance-rather-than-looping
@@ -1152,7 +1137,7 @@
                    :undo {:how :none :why "gone"}}]))
 
 (defn- landed-phase-one!
-  "A phased, approved design with its first phase implemented, published and
+  "A phased, cleared design with its first phase implemented, published and
    merged, closed as the landing path closes it."
   []
   (let [[id add!] (ledger)]
@@ -1160,7 +1145,7 @@
     (add! :baseline a-baseline)
     (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
     (let [d (add! :design (a-phased-design 2))]
-      (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+      (decide-and-clear! add! d)
       (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts [] :design {:seq d}})
       (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
       (add! :merged {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq d}})
@@ -1184,7 +1169,7 @@
       (let [[id add! d] (landed-phase-one!)]
         (ws/open-phase! :brian id {:format :phase-gate :design {:seq d}
                                    :opens "the old path is removed" :evidence "a quiet week"})
-        (is (= :design-approved (:at (p/of :brian id)))
+        (is (= :design-cleared (:at (p/of :brian id)))
             "phase one's implementation, PR and merge are history, not stages passed")
         (is (= :implement (:stage (:next (p/of :brian id)))))
         (add! :implementation-completed {:format :implementation-completed :summary "s2" :artifacts [] :design {:seq d}})
@@ -1200,14 +1185,14 @@
         (add! :baseline a-baseline)
         (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
         (let [d (add! :design (a-design 2))]
-          (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+          (decide-and-clear! add! d)
           (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts [] :design {:seq d}})
           (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
           (add! :merged {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq d}})
           (add! :findings {:format :findings :round 1 :items [{:id "f1" :summary "s" :severity :tweak}]})
           (is (= :findings-open (:at (p/of :brian id))) "the round's item is owed")
           (add! :findings-resolved {:format :findings-resolved :round 1 :items ["f1"] :by "c1"})
-          (is (= :design-approved (:at (p/of :brian id))) "resolved, and nothing since the round: its fix is owed")
+          (is (= :design-cleared (:at (p/of :brian id))) "resolved, and nothing since the round: its fix is owed")
           (add! :pr-opened {:format :pr-opened :url "u2" :title "fix" :design {:seq d}})
           (is (= :published (:at (p/of :brian id))) "its own fix PR, not the landed one's"))))))
 
@@ -1335,8 +1320,8 @@
         (add! :baseline a-baseline)
         (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
         (let [d (add! :design (a-design 2))]
-          (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
-          (is (= :design-approved (:at (p/of :brian id))))
+          (decide-and-clear! add! d)
+          (is (= :design-cleared (:at (p/of :brian id))))
           (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 3})
           (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 3})
           (let [r (p/of :brian id)]
@@ -1372,9 +1357,9 @@
         (add! :baseline a-baseline)
         (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
         (let [d1 (add! :design (a-design 2))
-              _  (add! :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+              _  (decide-and-clear! add! d1)
               d2 (add! :design (assoc (a-design 2) :supersedes {:seq d1 :why "amended"}))]
-          (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (decide-and-clear! add! d2)
           (add! :layer-completed {:format :layer-completed :design {:seq d2} :layer 1 :of 3})
           (is (= :implementing (:at (p/of :brian id))))
           (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts []
@@ -1382,7 +1367,7 @@
           (is (= :implementing (:at (p/of :brian id)))
               "work recorded under the earlier design says nothing about the newer one's layers"))))))
 
-(deftest layers-under-an-ungranted-design-do-not-walk-past-the-gate
+(deftest layers-under-an-uncleared-design-do-not-walk-past-the-decision
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
@@ -1392,7 +1377,7 @@
         (let [d (add! :design (a-design 2))]
           (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 3})
           (let [r (p/of :brian id)]
-            (is (not= :implementing (:at r)) "no grant and no clearance: the layer does not place it")
+            (is (not= :implementing (:at r)) "no clearance: the layer does not place it")
             (is (not= :implement (get-in r [:next :stage])))))))))
 
 (deftest seats-layers-are-counted-within-each-seat
@@ -1405,7 +1390,7 @@
         (let [d     (add! :design (a-design 2))
               layer (fn [seat n of] (add! :layer-completed {:format :layer-completed :design {:seq d}
                                                              :seat seat :layer n :of of}))]
-          (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+          (decide-and-clear! add! d)
           (layer "ledger" 1 2)
           (layer "seats" 1 3)
           (is (= {:done 2 :of 5} (:layers (p/of :brian id)))
@@ -1426,7 +1411,7 @@
         (let [marked (assoc-in (a-design 2) [:model :elements 0 :defines-generation] true)
               d1     (add! :design marked)
               stamp  (fn [r] (ws/append-stamped! :brian id r) (count (:entries (ws/read-ws :brian id))))]
-          (add! :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+          (decide-and-clear! add! d1)
           (add! :layer-completed {:format :layer-completed :design {:seq d1} :layer 1 :of 2})
           (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts []
                                            :design {:seq d1}})
@@ -1441,9 +1426,9 @@
             (is (nil? (:layers r)) "the first generation's layers are not this one's progress"))
           (let [d2 (add! :design (assoc marked :supersedes {:seq d1 :why "re-cut"}))]
             (is (= :designed (:at (p/of :brian id))))
-            (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
-            (is (= :design-approved (:at (p/of :brian id)))
-                "and its own approval, not the first generation's, lets it be built")))))))
+            (decide-and-clear! add! d2)
+            (is (= :design-cleared (:at (p/of :brian id)))
+                "and its own clearance, not the first generation's, lets it be built")))))))
 
 (deftest closure-is-read-off-the-ledger
   (with-tmp

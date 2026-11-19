@@ -51,18 +51,22 @@
 (def ^:private c3-about-total {:elements [total] :claims [(claim "c3" ["total"] "a total is stored once")]})
 
 (defn- add! [ws-id kind record]
-  (ws/append-entry! :brian ws-id {:kind kind} (pr-str record))
+  (if (= :design-decision kind) (ws/append-decision! :brian ws-id (pr-str record)) (ws/append-entry! :brian ws-id {:kind kind} (pr-str record)))
   (:seq (ws/latest-entry :brian ws-id kind)))
 
 (defn- parent-and-child
-  "A parent whose design, entry 4, stands, and a child forked from it — whose baseline is entry 3."
+  "A parent whose design, entry 4, stands and is cleared by a proceeding round, and a child forked
+   from it — whose baseline is entry 3."
   []
   (let [p (:id (ws/create! :brian {:external-refs []}))]
     (add! p :intent {:format :intent :goal "one summing path" :done-when ["totals agree"]})
     (add! p :baseline a-baseline)
     (add! p :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
     (add! p :design (a-design 2 unchanged))
-    (add! p :design-approved {:format :design-approved :design {:seq 4} :at-seq 4})
+    (add! p :design-decision {:format :design-decision :design-seq 4 :recommend :proceed :reason "r"
+                              :checks [{:check :relation-honest :status :held :note "n"}]})
+    (ws/append-entry-at! :brian p (count (:entries (ws/read-ws :brian p))) {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq 4}}))
     [p (:id (fork/fork! :brian p {:goal "store totals once" :done-when ["one stored total"]}))]))
 
 (defn- parent-restates! [p model]
@@ -98,15 +102,15 @@
   (testing "a claim both sides changed differently"
     (with-tmp
       (fn [_]
-        (let [[p c] (parent-and-child)]
-          (parent-restates! p {:elements [{:id "agg" :sort :module}]
-                               :claims   [(claim "c1" ["agg"] "one summing path, as the parent says")]})
+        (let [[p c]    (parent-and-child)
+              restated (parent-restates! p {:elements [{:id "agg" :sort :module}]
+                                            :claims   [(claim "c1" ["agg"] "one summing path, as the parent says")]})]
           (child-designs! c {:elements [{:id "agg" :sort :module}]
                              :claims   [(claim "c1" ["agg"] "one summing path, as the child says")]})
           (let [{:keys [proposal appended]} (unit-merge/merge! :brian c "/w" authored)]
             (is (= [{:kind :claim-diverged :names ["c1"]}] (:conflicts proposal)))
             (is (nil? appended))
-            (is (= 6 (:seq (ws/latest-entry :brian p :design))) "the parent's own design is still its newest"))))))
+            (is (= restated (:seq (ws/latest-entry :brian p :design))) "the parent's own design is still its newest"))))))
   (testing "a claim kept about what the other side removed"
     (with-tmp
       (fn [_]

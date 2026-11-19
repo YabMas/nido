@@ -150,10 +150,9 @@
      :delegates [reviewed-kind]})
   (Operation decision-needs
     "What a person is asked when a design round stops: the question its newest decision left them,
-     the checks and claims it stopped on, any earlier ask of the same run, and — read off the judged
-     design, never the judge's prose — the move a grant owed a person would grant."
-    {:signature [:=> [:catn [:outcome :keyword] [:decisions [:sequential :map]]
-                            [:design [:? [:maybe :map]]]] [:maybe :string]]})
+     the checks and claims it stopped on, and any earlier ask of the same run. Their answer is a
+     reply the next round reads, never a grant."
+    {:signature [:=> [:catn [:outcome :keyword] [:decisions [:sequential :map]]] [:maybe :string]]})
   (Operation decision-questions
     "The questions a person is asked when a design round stops: the run's newest decision carrying
      :asks, its own questions as the judge wrote them — its :questions texts, else the sentences of
@@ -196,8 +195,7 @@
      session of the workstream read past its conductor's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]
                             [:opts [:? :map]]] :map]
-     :delegates [park-on-escalate! decision-questions decision-needs workstream/entries-of
-                 workstream/entry-at-seq]})
+     :delegates [park-on-escalate! decision-questions decision-needs workstream/entries-of]})
   (Operation in-flight? "Whether a drive run already claims this workstream."
     {:signature [:=> [:catn [:ws-id WorkstreamId]] :boolean] :delegates [runs/list-run-ids runs/read-run]})
   (Operation tick!

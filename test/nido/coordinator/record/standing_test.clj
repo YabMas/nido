@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
+   [nido.coordinator.record.history :as history]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
@@ -53,7 +54,7 @@
     ;; The seq comes back from the ledger rather than a counter here, so a test
     ;; that also writes an entry another way cannot get out of step with it.
     [id (fn [kind record]
-          (ws/append-entry! :brian id {:kind kind} (pr-str record))
+          (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
           (count (:entries (ws/read-ws :brian id))))]))
 
 (deftest a-design-on-a-verified-baseline-is-decidable-and-not-yet-decided
@@ -67,10 +68,10 @@
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (true? (:decidable? st)))
         (is (false? (:decided? st)))
-        (is (nil? (:blocked st)) "the missing approval is NOT a decidability blocker")
-        (is (= :not-approved (:reason (standing/why-not-decided st))))))))
+        (is (false? (:cleared? st)) "nothing has said it may be built")
+        (is (nil? (:blocked st)) "the missing clearance is NOT a decidability blocker")))))
 
-(deftest an-approval-decides-it
+(deftest a-grant-an-older-ledger-holds-decides-it
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
@@ -78,11 +79,11 @@
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
-            a (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            a (history/grant! :brian id d d)
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (true? (:decided? st)))
-        (is (= a (:approved-by st)))
-        (is (nil? (standing/why-not-decided st)))))))
+        (is (true? (:cleared? st)))
+        (is (= a (:approved-by st)))))))
 
 (deftest retracting-the-premise-stops-a-design-that-was-already-decided
   ;; The case the whole change exists for.
@@ -93,7 +94,7 @@
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
-            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _ (history/grant! :brian id d d)
             st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
             r (add :retraction {:format :retraction :retracts {:seq b}
                                 :because "the invoice renderer sums independently"
@@ -238,7 +239,7 @@
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
-            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _ (history/grant! :brian id d d)
             st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
             v (add :design-verdict (a-verdict d :invalidated))
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
@@ -268,8 +269,8 @@
         (is (= :design-invalidated (:reason (:blocked st2))))))))
 
 (deftest an-approval-after-the-verdict-answers-it-and-one-before-does-not
-  ;; The Accept half of the gate, as the ledger sees it. Ordering is the whole
-  ;; content: a grant made before the round ran was made against a reading the
+  ;; A grant an older ledger holds, answering an invalidating verdict. Ordering
+  ;; is the whole content: a grant made before the round ran was made against a reading the
   ;; round has since contradicted, so presence alone cannot be the test.
   (with-tmp
     (fn [_]
@@ -278,11 +279,10 @@
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
-            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _ (history/grant! :brian id d d)
             v (add :design-verdict (a-verdict d :invalidated))
             st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
-            a2 (add :design-approved {:format :design-approved :design {:seq d}
-                                      :at-seq v :note "the round misread the renderer"})
+            a2 (history/grant! :brian id d v {:note "the round misread the renderer"})
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (false? (:decidable? st0)) "the earlier grant does not answer it")
         (is (true? (:decidable? st)) "a grant made after it does")
@@ -311,7 +311,7 @@
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b1 :reason "ok"})
             d  (add :design (a-design b1))
-            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _  (history/grant! :brian id d d)
             st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
             b2 (add :baseline (assoc a-baseline :area "re-surveyed"
                                      :supersedes {:seq b1 :why "the seam moved"}))
@@ -336,7 +336,7 @@
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b3 :reason "holds"})
             d  (add :design (a-design b3))
-            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _  (history/grant! :brian id d d)
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (true? (:decided? st))
             "three supersessions, all before the design — nothing is unseated")
@@ -353,7 +353,7 @@
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b1 :reason "ok"})
             d  (add :design (a-design b1))
-            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _  (history/grant! :brian id d d)
             _  (add :baseline (assoc a-baseline :area "a different area entirely"))
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (true? (:decided? st)))
@@ -390,7 +390,7 @@
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
-            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _ (history/grant! :brian id d d)
             v (add :design-verdict (dissoc (a-verdict d :strained) :needs))
             path (str (fs/path (cstate/workstream-dir :brian id)
                                (format "entries/%04d-design-verdict.edn" v)))
@@ -557,7 +557,7 @@
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b :reason "ok"})
             d  (add :design (a-design b))
-            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _  (history/grant! :brian id d d)
             st #(standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (true? (:decided? (st))))
         (let [r (retract! add 1)]
@@ -654,22 +654,6 @@
       (is (false? (standing/proceeding? :brian "ws-1" 5))
           "a later sendback retracts the proceed before it"))))
 
-(deftest a-revisit-owes-a-person-and-a-design-within-does-not
-  (with-tmp
-    (fn [_]
-      (let [[id add] (ledger)
-            b  (add :baseline a-baseline)
-            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
-                                      :baseline-seq b :reason "ok"})
-            d  (add :design (a-design b))
-            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
-        (is (false? (:owes-person? st)))
-        (is (true? (:owes-person? (standing/of-design
-                                   :brian id
-                                   (assoc (ws/entry-at-seq :brian id d)
-                                          :baseline {:seq b :relation :revisit
-                                                     :breaks ["c1"] :note "n"})))))))))
-
 (deftest a-new-generation-is-governed-only-by-its-own-designs
   ;; A re-cut opens a span the earlier generation's approval does not reach: the design that
   ;; governs is read over the current span, and its standing from what that span holds.
@@ -681,7 +665,7 @@
                                       :baseline-seq b :reason "ok"})
             marked #(assoc-in % [:model :elements 0 :defines-generation] true)
             d1 (add :design (marked (a-design b)))
-            _  (add :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+            _  (history/grant! :brian id d1 d1)
             _  (is (= d1 (:seq (standing/governing-design :brian id))))
             _  (is (true? (:decided? (:standing (standing/governing :brian id)))))
             _  (ws/append-stamped! :brian id {:format :recut :by {:as :person} :ids ["agg"]

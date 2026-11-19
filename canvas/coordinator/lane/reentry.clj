@@ -23,7 +23,7 @@
    good for; this is that reading, and the clamp stays `lane-pipeline`'s.
 
    Not folded into `record-standing` either. That module answers about ONE design record and is
-   what the landing gate, the approval gate and this all ask; a version of it that also knew
+   what the landing gate, the design round's clearance and this all ask; a version of it that also knew
    about draft PRs would keep two secrets. DERIVED, never stored, for the reason both
    neighbours give."
 

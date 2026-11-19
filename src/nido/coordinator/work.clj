@@ -160,19 +160,19 @@
    It answers a question about `gate-actions`' output, so it lives beside it: a
    surface that decided for itself which ids carry a position would be holding a
    second copy of this, free to disagree — which is exactly what happened. The
-   web read the position back for option buttons only, so :approve arrived nil
-   at `approve!`, took the stale branch, and no design was ever approved from the
-   dashboard.
+   web read the position back for option buttons only, so a positioned button
+   arrived with no position, took the stale branch, and nothing it answered was
+   ever recorded from the dashboard.
 
    Anything added here needs the same two things an option button has: a :seq on
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
-      (contains? #{:approve :redesign :hold-design :apply :defer :land :answer-questions} action-id)))
+      (contains? #{:apply :defer :land :answer-questions} action-id)))
 
 (defn- lettered-actions
   "One button per branch of an enumerated question, lettered by position. `:kind
-   :mutation` because these are resolved nido-side, like :approve — the descriptor
+   :mutation` because these are resolved nido-side, like :land — the descriptor
    carries no input for the browser to send. Order is the record's order, so the
    letters here and the letters on the card cannot disagree.
 
@@ -248,9 +248,8 @@
 
    `{:awaiting <stage>}` is the stage the pipeline says a PERSON owes this
    workstream, or nil — `(:stage (:next position))` when that position's mode is
-   :human. It is what lets a design decision be granted: the round that writes
-   one is mechanical and parks nobody, so `parked?` is false exactly when the
-   grant is due.
+   :human. It is what offers a person's move on a workstream nobody is parked on:
+   a blocker a mechanical round raised, a triage verdict, a phase gate, a landing.
 
    `{:several? true}` says the gate's report is a blocker asking several questions: they are
    answered together by :answer-questions, and no :reply is offered beside it.
@@ -273,7 +272,7 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare? report-format options questions awaiting grantable?
+  ([stage parked? _origin {:keys [bare? report-format options questions awaiting
                                   gate-criterion reply-to several?]
                            entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
@@ -290,65 +289,6 @@
          asking? (and (= :triage-report report-format)
                       (some (comp seq :directions) questions)
                       (every? (comp report/answerable? :directions) questions))
-         ;; Approve is not one of those, which is what `awaiting` is for. It asks
-         ;; the PIPELINE whether a person owes this workstream a decision, and
-         ;; the board stage cannot answer that: the round that produces a design
-         ;; decision is :mechanical, so it runs as a task with no agent, and the
-         ;; workstream that most needs this button is exactly the one no session
-         ;; is parked on. approve! has always accepted a grant with nobody to
-         ;; wake — it records it and answers :approved-unresumed, because the
-         ;; ledger is what the next session reads — so withholding the button was
-         ;; the only thing keeping the grant out of reach.
-         ;;
-         ;; Composed here rather than inside the case because it belongs to the
-         ;; position rather than to a band: the same question is owed whatever
-         ;; stage the board projects the workstream into.
-         ;;
-         ;; Approve carries the ledger position it was rendered from, exactly as
-         ;; an option button does and for the same reason one round further on: a
-         ;; grant made against a stale page is not a grant about what is there
-         ;; now. Omitted when unknown, which fails closed in approve! rather than
-         ;; granting blind.
-         ;;
-         ;; Done is deliberately absent beside it; settling a workstream is not
-         ;; an answer to "should we build this", and offering it there invites it
-         ;; to be read as one.
-         ;; Gated on `grantable?`, which is the SAME reading approve! re-asks —
-         ;; passed in because this is pure and cannot read a ledger. Only a
-         ;; decision that proceeds (`report/proceeds?`) is a question for a
-         ;; human: a round that answered :recut or :amend over anything but the
-         ;; advisory check judged the RECORD rather than whether to build it, and
-         ;; the next move is the author's, so offering Approve there grants the
-         ;; design that round had just sent back.
-         ;;
-         ;; Read off the LEDGER rather than off the report the button was
-         ;; rendered from. The two are usually the same entry and come apart
-         ;; exactly where it matters — a design told to proceed and later sent
-         ;; back leaves a report whose recommendation is stale about what may now
-         ;; be granted.
-         ;;
-         ;; Owed is enough. When the position says a person owes the grant the
-         ;; button is offered whatever the ledger appended since the decision — a
-         ;; verdict, a baseline re-reviewed — because none of those is the
-         ;; decision being withdrawn; `grantable?` is what would say so. The
-         ;; report format is asked only of a parked agent's gate, where the
-         ;; position may be past the decision and the decision on screen is
-         ;; what a grant would answer.
-         approving? (and grantable?
-                         (or (= :approve-design awaiting)
-                             (and parked? (= :design-decision report-format))))
-         ;; The other question only a person can answer, and it is asked off the
-         ;; POSITION alone rather than off the report the pane happens to be
-         ;; showing. `approving?` also reads a report format because a grant is
-         ;; offered beside the decision it grants; an invalidation is a halt, so
-         ;; the workstream sits there whatever was appended after the verdict, and
-         ;; gating on the format would hide the only two buttons that clear it the
-         ;; moment anything landed on top.
-         ;;
-         ;; Both carry the position they were rendered at, exactly as :approve
-         ;; does: retracting a design or granting one against a stale page is not
-         ;; a decision about what is there now.
-         acknowledging? (= :acknowledge-invalidation awaiting)
          ;; A person owes the blocker an answer, whether or not anyone is parked to hear it.
          ;; With nobody parked, :reply records the words as the blocker's answer (`answer-owed!`).
          ;; So the button is "Answer": no agent hears it now, and "Reply" would say one does.
@@ -362,31 +302,16 @@
                           (= :conductor reply-to) (assoc :answers :conductor))
          actions
          (cond
-           acknowledging?
-           (cond-> [(cond-> {:id :redesign :label "Redesign"
-                             :kind :mutation :style :primary}
-                      entry-seq (assoc :seq entry-seq))
-                    (cond-> {:id :hold-design :label "Accept"
-                             :kind :mutation :style :default}
-                      entry-seq (assoc :seq entry-seq))]
-             parked? (conj reply-action))
-
            ;; A gate is asserted with what a person observed, so its one action
            ;; carries free text; the criterion rides on it for the surface to show.
            (= :assert-gate awaiting)
            [(cond-> {:id :assert-gate :label "Assert gate" :kind :evidence :style :primary}
               gate-criterion (assoc :criterion gate-criterion))]
 
-           ;; Landing a published PR is a person's gesture, given as one button as a grant is:
+           ;; Landing a published PR is a person's gesture, given as one button:
            ;; the card's headline names the PR, and there is nothing to choose between.
            (= :land awaiting)
            (cond-> [(cond-> {:id :land :label "Land" :kind :mutation :style :primary}
-                      entry-seq (assoc :seq entry-seq))]
-             parked? (conj reply-action))
-
-           approving?
-           (cond-> [(cond-> {:id :approve :label "Approve"
-                             :kind :mutation :style :primary}
                       entry-seq (assoc :seq entry-seq))]
              parked? (conj reply-action))
 
@@ -692,28 +617,6 @@
   [project live-names]
   (mapv #(with-status project live-names %)
         (wsv/workstream-rows project)))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
-  grantable?
-  "May a human grant this workstream's design right now?
-
-   `pipeline/design-decided?` under a WorkPlane name, and that is the whole of it. Two surfaces
-   render the Approve button — the gate inbox and the workstream pane — and the pane is Surface,
-   which may not reach Lane. Without this the pane would have to ask a different question, and it
-   did: it read the recommendation off the report the button was rendered from, which is a
-   different answer the moment a design told to proceed is later sent back.
-
-   Both halves of the acceptance rule, not just the recommendation. `approve!` also refuses a
-   design whose standing is not decidable — retracted, or citing a baseline no round found
-   sufficient — so a predicate that asked only about the recommendation would offer a button the
-   resolver then refused. The one thing it cannot answer is staleness, because the position it
-   would compare against is the thing the button carries.
-
-   So: offered implies accepted, for a click made against the position it was rendered at."
-  [project ws-id]
-  (boolean (and (pipeline/design-decided? project ws-id)
-                (when-let [d (standing/governing-design project ws-id)]
-                  (:decidable? (standing/of-design project ws-id d))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
   list-workstreams
@@ -1254,8 +1157,7 @@
 
    A blocker holds the workstream until an answer names it, whatever lands on top: a review
    round, a verdict, or a close that a reopen undoes. So does every other owed move: a triage
-   verdict until it is accepted, an invalidation until it is answered, a design decision until it
-   is granted. A gate built from the latest report then answered the wrong record: a note
+   verdict until it is accepted. A gate built from the latest report then answered the wrong record: a note
    appended over a triage took its directions away, and Apply accepted the note.
 
    The one reading of which record a gate acts on. The gate builds its actions from it, the Ask
@@ -1335,7 +1237,7 @@
    supersedes, and the log underneath for anyone who needs the trail.
 
    :verified? and :decided? are asked of the modules that own them — nothing here
-   re-derives whether a baseline held or a design was granted, because a second
+   re-derives whether a baseline held or a design was cleared, because a second
    implementation of that join is a second answer to it."
   [project ws-id]
   (let [entries (:entries (cws/read-ws project ws-id))
@@ -1367,9 +1269,11 @@
                              ;; after deciding, and the design was judged against
                              ;; the one it named.
                              :premise (:seq (:premise st))
+                             ;; True only on a ledger holding a person's grant from
+                             ;; before every design was cleared by its round.
                              :decided? (boolean (:decided? st))
-                             ;; A grant, or a round that found nobody owed one —
-                             ;; either says it may be built.
+                             ;; Its round's clearance, or an older grant — either says
+                             ;; it may be built.
                              :cleared? (boolean (:cleared? st))
                              :blocked (:blocked st)
                              :record design}))))
@@ -1631,11 +1535,10 @@
   (boolean (and (= :blocker (:format report)) (next (report/blocker-questions report)))))
 
 (def ^:private ask-kinds
-  "The ledger kinds a person's question can live in beside the gate's report — a design decision,
-   a design verdict, a triage verdict or a Slack proposal, a published PR — and the intent the
-   question is judged against. Which of them a question reads is the ask registry's to say; this
-   only fetches them."
-  #{:design-decision :design-verdict :triage :proposed-ticket :proposed-tickets :pr-opened :intent})
+  "The ledger kinds a person's question can live in beside the gate's report — a triage verdict
+   or a Slack proposal, a published PR — and the intent the question is judged against. Which of
+   them a question reads is the ask registry's to say; this only fetches them."
+  #{:triage :proposed-ticket :proposed-tickets :pr-opened :intent})
 
 (defn- ask-inputs
   "What `ask/ask` reads for a gate: a hydrated record of each of `ask-kinds`, oldest first — for
@@ -1692,7 +1595,6 @@
         awaiting (awaiting-human (:position row))
         actions  (gate-actions (:stage row) parked? (:origin row)
                                {:report-format  (:format report)
-                                :grantable?     (grantable? project (:ws-id row))
                                 :options        (:options report)
                                 :questions      (report/triage-questions report)
                                 :several?       (asks-several? report)
@@ -3026,27 +2928,10 @@
                 {:decision :triaging})))))
     {:decision :no-trigger}))
 
-(def approval-input
-  "What Approve resumes the parked agent with. Built nido-side rather than sent
-   from the browser, because the server only carries free text for :reply — and
-   because an approval should say the same thing every time it is granted.
-
-   It names what was approved. The decision round adjudicates claims and
-   layering, never a plan, and that distinction is what keeps this gate an
-   approval to proceed rather than a freeze: the most valuable design thoughts
-   arrive from inside the code, and a design frozen at the gate cannot receive
-   them. So the resume says so, and points at the amend path rather than leaving
-   the agent to infer that the record is now untouchable."
-  (str "The design decision was APPROVED by a human. The claims and the layering "
-       "are what was approved — not a plan, and not a freeze. Proceed with "
-       "implementation. If the shape turns out not to hold once you are inside "
-       "the code, amend or supersede the design record (/design §5) rather than "
-       "patching around it."))
-
 (defn ^{:malli/schema [:=> [:cat :int :map] :string]}
   option-input
   "What choosing option `i` resumes the parked agent with. Built nido-side from
-   the ledger, for the same reason as approval-input: the browser sends an id,
+   the ledger: the browser sends an id,
    never prose, so an answer cannot arrive saying something the record never
    offered.
 
@@ -3073,7 +2958,7 @@
   (str "A human replied at the gate to what you parked on. Their words:\n\n" text))
 
 (defn- choose-option-recorded!
-  "The answer half of `choose-option!`, once any grant the option carries is written: append the
+  "The answer half of `choose-option!`: append the
    :blocker-answered for option `i` of the blocker at `entry-seq`, then resume `parked`, the
    session waiting on it, when there is one. A blocker a conductor's escalation parked is answered
    to the conductor instead (`conductor/answer-escalation!`), resuming no seat."
@@ -3097,8 +2982,6 @@
                     {:decision :answered-unresumed}))
       :closed {:decision :option-stale}
       {:decision :answered})))
-
-(declare grant-design!)
 
 (defn- choose-option!
   "ANSWER the blocker, then tell whoever is listening. The answer is written to
@@ -3129,13 +3012,7 @@
    The one other question a click may answer is the blocker the pipeline is halted on
    (`pipeline/owed-blocker`) when later records have buried it. That is the blocker the gate
    offers (`answered-report`), and it is owed until an answer names it. Answering it makes it
-   no longer owed, so a second click on it is refused just as above.
-
-   An option that approves a design (:approves-design) is the person's grant as well as their
-   answer, and the grant is written first, through `grant-design!` — the chat command's path,
-   which answers a round that asked as well as one that proceeded. A grant it refuses refuses
-   the click: nothing is written, and the refusal says why, because an answer recorded without
-   the approval it was picked for is the question that gets asked again."
+   no longer owed, so a second click on it is refused just as above."
   [project ws-id action-id entry-seq]
   (let [latest (latest-report project ws-id)
         report (cond
@@ -3146,12 +3023,7 @@
                    (report-at base-dir entries entry-seq)))
         i      (option-index action-id)]
     (if-let [opt (get (vec (:options report)) i)]
-      (let [parked  (parked-session project ws-id)
-            granted (when-let [n (:approves-design opt)]
-                      (grant-design! project ws-id n (str (:label opt) ": " (:summary opt)) nil))]
-        (if (and granted (not (#{:approved :already-granted} (:decision granted))))
-          granted
-          (choose-option-recorded! project ws-id entry-seq i opt parked)))
+      (choose-option-recorded! project ws-id entry-seq i opt (parked-session project ws-id))
       {:decision :option-stale})))
 
 (defn- answers-input
@@ -3238,81 +3110,6 @@
                                 :resumed nil}))
     {:decision :answered-unresumed}))
 
-(defn- grant!
-  "Append the :design-approved naming design `design-seq`, granted at ledger position `at-seq`.
-   `note` may be nil; `overrules?` marks a grant over a decision that did not let the design
-   proceed (DesignApproved). The one writer of a grant: the gate's Approve, its Accept against an
-   invalidating verdict, and an answer given in chat all record the same act, so they write one
-   shape — every reader of a grant (`standing`, the design judge's `answered`) reads that shape
-   and nothing else."
-  ([project ws-id design-seq at-seq note] (grant! project ws-id design-seq at-seq note nil))
-  ([project ws-id design-seq at-seq note overrules?]
-   (cws/append-entry!
-    project ws-id {:kind :design-approved}
-    (pr-str (cond-> {:format :design-approved
-                     :design {:seq design-seq}
-                     :at-seq at-seq}
-              note (assoc :note note)
-              overrules? (assoc :overrules true))))))
-
-(defn- approve!
-  "GRANT the design, then tell whoever is listening.
-
-   Same order and the same reason as choose-option!: the grant is written to the
-   ledger first and only then is a parked agent resumed, because the two have
-   different lifetimes. Approval used to be an argument to a resume and nothing
-   more — so `was this decided` was nowhere a reader could ask it, a landing
-   gate had nothing to read, and a resume that died mid-turn swallowed the
-   decision. Recorded, the grant stands with nobody listening: the next session
-   picking the workstream up reads it, the way an answered blocker already is.
-
-   Two refusals, and they are different questions.
-
-   The POSITION, exactly as an option click is checked: an Approve carries the
-   entry it was rendered from, and one whose position is no longer the report the
-   gate answers (`gate-report`) is refused. A decision made against a stale page is not a decision
-   about what is there now — a retraction appended since, another tab's
-   approval, or a second click of the same button all land here. After granting,
-   the approval IS the latest entry, so the double-click refuses on the same
-   check.
-
-   The PREMISE, which an option click has no equivalent of: the gate is asked
-   again at the moment of the grant. The design round said this design could be
-   decided when it ran, and standing is a statement about now — so a design
-   whose baseline was retracted between the round and the click is refused here
-   rather than granted, and no approval is ever written for a premise that is
-   already gone."
-  [project ws-id entry-seq]
-  (let [design (standing/governing-design project ws-id)]
-    (cond
-      (nil? design) {:decision :no-design}
-
-      (or (nil? entry-seq)
-          (not= entry-seq (:seq (gate-report project ws-id))))
-      {:decision :approval-stale}
-
-      :else
-      (let [st (standing/of-design project ws-id design)]
-        (if-not (grantable? project ws-id)
-          ;; ONE predicate, and the button reads it too — a resolver reachable by
-          ;; posting an id must not trust that its only caller was a button
-          ;; rendered under the same rule, but it must not apply a DIFFERENT rule
-          ;; either, or the button offers grants this refuses.
-          {:decision :approval-refused
-           :because  (or (:blocked st)
-                         {:reason :not-recommended
-                          :detail (str "the decision round did not recommend proceeding "
-                                       "on this design — re-run bb nido:review:design, "
-                                       "or supersede the design first")})}
-          (let [parked (parked-session project ws-id)]
-            (grant! project ws-id (:seq design) entry-seq nil)
-            (if parked
-              (assoc (resume/resume! project ws-id approval-input parked) :decision :approved)
-              ;; Nobody to tell, and that is a real outcome rather than a
-              ;; failure: the grant is on the ledger and the next session reads
-              ;; it — see ui.server/resolve-failure-msg.
-              {:decision :approved-unresumed})))))))
-
 (defn- land!
   "Hand the published PR to the merge lane, as `nido ship` does: a :ship envelope for the
    workstream's environment session, which the daemon drives home with /drive-home.
@@ -3336,196 +3133,6 @@
         (do (queue/enqueue! {:type :ship :project p :session s :ws-id ws-id})
             {:decision :landing :session s})
         {:decision :no-session}))))
-
-(defn- open-finding
-  "One finding of a send-back as a grant names it: its check, the claim it is filed under when
-   it names one, and what it says."
-  [{:keys [check claim-id claim]}]
-  (str (some-> check name) (when claim-id (str " [" claim-id "]")) " — " claim))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int [:maybe :string] [:maybe :map]] :map]}
-  grant-design!
-  "Record a person's grant of the design at `design-seq`, given in a session's chat rather than
-   on the gate — `bb nido:design:approve`. `note` is what the person said, or nil; `opts` is
-   nil or {:over-sendback? true}.
-
-   Without this a go said in chat had nowhere to go but prose — a design's :summary, a
-   supersession's :why — and no reader of a grant reads prose. The design judge then reported
-   the question unanswered and the next round asked it again. Prose is refused as an answer on
-   purpose: a record that may declare its own question settled is no record of a decision.
-
-   It admits what the gate admits, and two things more. The gate offers Approve only on a
-   decision that `report/proceeds?`; this also takes an :ask, because an :ask is the round
-   stopping to put a question to a person, and a person answering it in chat is the case this
-   exists for. And it takes any other decision — one that sent the record back, or proceeded
-   on a reading that does not count — when `opts` carries :over-sendback? and `note` holds the
-   person's words: the round's amender answers a send-back with another design, so a round
-   that never stops sending back leaves a person no other way to say `build this one`. That
-   grant carries :overrules, and the answer names the decision's findings it leaves open.
-   Without the flag such a decision is refused naming it, and a design no round has judged is
-   refused naming the judge-only round (`:dry-run? true`), which appends a decision and no
-   design. Every refusal answers {:decision :approval-refused :because
-   {:reason :detail}}.
-
-   The position is the decision being answered rather than a rendered page, so `design-seq`
-   must be the newest design: a grant names what stands now, never a superseded record. A
-   second grant of the same design after that decision writes nothing and answers
-   :already-granted, so an agent repeating the command does not stack grants. Resumes nobody —
-   the caller IS the session."
-  [project ws-id design-seq note {:keys [over-sendback?]}]
-  (let [design   (standing/governing-design project ws-id)
-        refused  (fn [reason detail] {:decision :approval-refused
-                                      :because {:reason reason :detail detail}})
-        st       (when design (standing/of-design project ws-id design))
-        decision (when design
-                   (->> (cws/entries-of project ws-id :design-decision)
-                        (filter #(= (:seq design) (:design-seq %)))
-                        last))
-        sent-back? (and decision
-                        (not (or (= :ask (:recommend decision)) (report/proceeds? decision))))]
-    (cond
-      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
-      (nil? design) {:decision :no-design}
-
-      (not= design-seq (:seq design))
-      (refused :not-newest (str "entry " design-seq " is not this workstream's newest design — "
-                                "entry " (:seq design) " is; a grant names what stands now"))
-
-      (not (:decidable? st))
-      (refused :undecidable (or (:detail (:blocked st)) "the design does not stand"))
-
-      (nil? decision)
-      (refused :undecided (str "no decision round has judged entry " design-seq
-                               " — judge it without amending it: bb nido:review:design"
-                               " :dry-run? true"))
-
-      (and sent-back? (not over-sendback?))
-      (refused :sent-back (str "the decision at entry " (:seq decision) " answered "
-                               (name (:recommend decision)) " and does not let the design "
-                               "proceed — amend the design and re-run "
-                               "bb nido:review:design, or, if the person accepts it as it "
-                               "stands, grant it over the send-back with :over-sendback? true "
-                               "and their words as :note; the grant names the "
-                               (count (:findings decision)) " finding(s) it leaves open"))
-
-      (and sent-back? (str/blank? note))
-      (refused :note-required (str "a grant over a send-back carries the person's words — "
-                                   "pass them as :note"))
-
-      (some #(and (= design-seq (get-in % [:design :seq]))
-                  (> (long (:seq %)) (long (:seq decision))))
-            (cws/entries-of project ws-id :design-approved))
-      {:decision :already-granted :design design-seq}
-
-      :else
-      (do (grant! project ws-id design-seq (:seq decision) note sent-back?)
-          (cond-> {:decision :approved :design design-seq :at-seq (:seq decision)}
-            sent-back? (assoc :overruled {:recommend (:recommend decision)
-                                          :open (mapv open-finding (:findings decision))}))))))
-
-(defn- invalidation-at
-  "The design and the unanswered invalidating verdict against it, or nil.
-
-   Re-asked at the moment of the click rather than trusted from the button, for
-   the reason `approve!` re-asks the premise: the gate was rendered at one ledger
-   position and is being acted on at another, and a verdict answered in another
-   tab must not be answerable again here. Reads the position rather than the
-   ledger directly, so the button and the resolver cannot come to disagree about
-   what an unanswered verdict is."
-  [project ws-id]
-  (let [pos (pipeline/of project ws-id)]
-    (when (= :design-invalidated (:at pos))
-      (when-let [d (standing/governing-design project ws-id)]
-        {:design d
-         :verdict (->> (cws/entries-of project ws-id :design-verdict)
-                       (filter #(= (:seq d) (:design-seq %)))
-                       last)
-         :seq (get-in pos [:re-entry :because :seq])}))))
-
-(defn- retraction-evidence
-  "What a retraction written from `verdict` carries as its evidence.
-
-   :evidence is required and non-empty, and it is the whole guard against a
-   retraction becoming noise — a judgement that stops a branch must carry the
-   counterexample that earned it. The verdict's broken invariants ARE that, so
-   they are copied rather than summarised.
-
-   The fallback is not decoration. :standing-challenged requires no
-   :invariants-broken, so a verdict can legitimately arrive with none, and a
-   retraction that failed to validate would leave the gate refusing a click a
-   person is entitled to make. Naming the entry is honest and checkable: the
-   reasoning is one read away."
-  [verdict verdict-seq]
-  ;; A VECTOR either way — the schema demands one, and `seq` over a vector hands
-  ;; back a seq that fails at the ledger boundary rather than here.
-  (let [broken (into [] (keep (fn [{:keys [invariant finding]}]
-                                (when invariant
-                                  (str invariant
-                                       (when finding (str " — broken by: " finding))))))
-                     (:invariants-broken verdict))]
-    (if (seq broken)
-      broken
-      [(str "the design verdict at entry " verdict-seq)])))
-
-(defn- redesign!
-  "Confirm an invalidating verdict: RETRACT the design it names.
-
-   This is what gives `:retraction` a writer. The kind has had a schema, a
-   citation check, a position that outranks the record trail and a way-out in the
-   landing gate since it was introduced, and nothing in nido ever appended one —
-   the only path was `bb nido:workstream:entry:add :kind retraction` by hand, and
-   one exists across the whole ledger history.
-
-   The review loop deliberately does NOT write it. A retraction cascades, so a
-   machine judgement that stopped a branch with nobody in the loop would be an
-   assertion rather than a finding. The verdict is the evidence; a person
-   confirming it is what earns the retraction, and that person is this click."
-  [project ws-id entry-seq]
-  (cond
-    (or (nil? entry-seq)
-        (not= entry-seq (:seq (gate-report project ws-id))))
-    {:decision :acknowledge-stale}
-
-    :else
-    (if-let [{:keys [design verdict seq]} (invalidation-at project ws-id)]
-      (do (cws/append-entry!
-           project ws-id {:kind :retraction}
-           (pr-str {:format :retraction
-                    :retracts {:seq (:seq design)}
-                    :because (or (not-empty (:reason verdict))
-                                 (str "the review round at entry " seq
-                                      " found this design invalid rather than its execution"))
-                    :evidence (retraction-evidence verdict seq)
-                    :found-during :review}))
-          {:decision :retracted :design (:seq design)})
-      {:decision :nothing-to-acknowledge})))
-
-(defn- hold-design!
-  "Answer an invalidating verdict by granting the design anyway.
-
-   A second :design-approved naming the same design, and NOT a new ledger kind.
-   The act is the same one the approval gate performs — a person granting this
-   design — and what distinguishes it is when: standing counts an approval as
-   answering a verdict exactly when it was appended after it, so ordering carries
-   the whole meaning and a :design-held kind would be a second record for one
-   question.
-
-   Deliberately not routed through `approve!`. That resolver refuses anything
-   `grantable?` refuses, and an invalidated design is precisely not grantable —
-   the two would deadlock, with the button offered and the write refused. The
-   position is what licenses this one, and it is re-read here."
-  [project ws-id entry-seq]
-  (cond
-    (or (nil? entry-seq)
-        (not= entry-seq (:seq (gate-report project ws-id))))
-    {:decision :acknowledge-stale}
-
-    :else
-    (if-let [{:keys [design seq]} (invalidation-at project ws-id)]
-      (do (grant! project ws-id (:seq design) entry-seq
-                  (str "held against the design verdict at entry " seq))
-          {:decision :held :design (:seq design)})
-      {:decision :nothing-to-acknowledge})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   advance-phase!
@@ -3559,10 +3166,6 @@
      :defer   -> apply! it with every question left open, under the same check
      :reply   -> answer a conductor's escalation with `payload`, else resume! the
                  parked agent with it
-     :approve -> record the grant (:design-approved) and resume, iff `payload`
-                 still names the latest report AND the design still stands
-     :redesign    -> confirm an invalidating verdict by retracting the design
-     :hold-design -> answer one by granting the design anyway
      :option-a … :option-f -> resume! with the blocker branch that letter names,
                               iff `payload` still names the latest report
      :answer-questions -> record one answer per question of a blocker asking several, and
@@ -3617,9 +3220,6 @@
                   :else (or (answer-owed! project ws-id payload)
                             (resume/resume! project ws-id (reply-input payload))))
        :answer-questions (answer-questions! project ws-id payload)
-       :approve (approve! project ws-id payload)
-       :redesign     (redesign! project ws-id payload)
-       :hold-design  (hold-design! project ws-id payload)
        :assert-gate  (advance-phase! project ws-id payload)
        :land         (land! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))

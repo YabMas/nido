@@ -200,7 +200,7 @@
     (fn []
       (let [id   (:id (ws/create! :brian {:stage :in-progress}))
             add! (fn [kind record]
-                   (ws/append-entry! :brian id {:kind kind} (pr-str record))
+                   (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
                    (:seq (last (:entries (ws/read-ws :brian id)))))
             done #(select-keys (last (ws/entries-of :brian id :layer-completed))
                                [:design :layer :of :bookmark])]
@@ -228,7 +228,7 @@
     (fn []
       (let [id    (:id (ws/create! :brian {:stage :in-progress}))
             add!  (fn [kind record]
-                    (ws/append-entry! :brian id {:kind kind} (pr-str record))
+                    (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
                     (:seq (last (:entries (ws/read-ws :brian id)))))
             _     (add! :intent {:format :intent :goal "g" :done-when ["d"]})
             d     (add! :design (a-design (add! :baseline a-baseline)))

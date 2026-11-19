@@ -43,8 +43,7 @@
          "  2. supersede the design so it cites the baseline that held:\n"
          "     a new :design entry with :baseline {:seq <the verified one> …}\n"
          "     and :supersedes {:seq <this design> :why \"…\"}\n"
-         "  3. bb nido:review:design\n"
-         "  4. Approve it in the gate inbox, unless the round cleared it")
+         "  3. bb nido:review:design — until it proceeds, which clears it")
 
     :premise-retracted
     (str "  The baseline is not merely stale, somebody found it FALSE — read entry "
@@ -54,23 +53,15 @@
            (str "     (entry " replaced-by " corrects it — start from there)\n"))
          "  2. bb nido:review:baseline — until it answers `sufficient`\n"
          "  3. supersede the design so it cites the corrected baseline\n"
-         "  4. bb nido:review:design, then Approve it in the gate inbox unless\n"
-         "     the round cleared it")
+         "  4. bb nido:review:design — until it proceeds, which clears it")
 
     :design-invalidated
     (str "  The review round read the code against this design and found the\n"
          "  DESIGN wrong, not its execution — entry " seq " says which invariants\n"
-         "  it broke and what it needs. That is a decision, so it does not clear\n"
-         "  itself; one of two things has to happen.\n"
-         "  1. Redesign — the ordinary answer. Retract the design (the gate's\n"
-         "     Redesign button writes it), then write a superseding :design,\n"
-         "     bb nido:review:design, and approve it unless the round cleared it.\n"
-         "  2. Accept it — if the round is wrong and you can say why. The gate's\n"
-         "     Accept button records a second approval against entry " seq ",\n"
-         "     which is the ledger saying a person read the invalidation and\n"
-         "     granted the design anyway.\n"
-         "  Do neither by hand: an approval that does not name the verdict looks\n"
-         "  exactly like one made before it.")
+         "  it broke and what it needs. The work goes back to the design:\n"
+         "  1. write a superseding :design that answers the verdict — raise a\n"
+         "     blocker instead when only a person can say which way it goes\n"
+         "  2. bb nido:review:design — until it proceeds, which clears it")
 
     :premise-superseded
     (str "  The baseline this design cites was re-surveyed AFTER the design was\n"
@@ -84,8 +75,7 @@
          "     a new :design entry with :baseline {:seq "
          (or replaced-by "<the new one>") " …}\n"
          "     and :supersedes {:seq <this design> :why \"…\"}\n"
-         "  3. bb nido:review:design, then Approve it in the gate inbox unless\n"
-         "     the round cleared it")
+         "  3. bb nido:review:design — until it proceeds, which clears it")
 
     :premise-goal-superseded
     (str "  The baseline this design stands on (entry " seq ") was scoped for a\n"
@@ -95,7 +85,7 @@
          "     :intent {:seq " replaced-by "} and :supersedes {:seq " seq " :why \"…\"}\n"
          "  2. bb nido:review:baseline — until it answers `sufficient`\n"
          "  3. supersede the design so it cites both, then bb nido:review:design,\n"
-         "     and approve it unless the round cleared it")
+         "     until it proceeds")
 
     :goal-superseded
     (str "  The design serves the goal at entry " seq ", replaced at entry "
@@ -104,7 +94,7 @@
          "     area again first — citing :intent {:seq " replaced-by "} and\n"
          "     superseding it — and bb nido:review:baseline until `sufficient`\n"
          "  2. supersede the design so it cites :intent {:seq " replaced-by "}\n"
-         "  3. bb nido:review:design, then approve it unless the round cleared it")
+         "  3. bb nido:review:design — until it proceeds, which clears it")
 
     :goal-retracted
     (str "  The goal this work serves was found untrue — read entry " seq " for\n"
@@ -113,27 +103,25 @@
          "  2. baseline the area again under it, citing the new intent, and\n"
          "     bb nido:review:baseline until `sufficient`\n"
          "  3. supersede the design so it cites both, then bb nido:review:design\n"
-         "     and approve it unless the round cleared it")
+         "     until it proceeds")
 
     :design-retracted
     (str "  Somebody found this design untrue — read entry " seq " first.\n"
-         "  Write a superseding :design, run bb nido:review:design, and have it\n"
-         "  approved unless the round cleared it. Do not amend the retracted one:\n"
+         "  Write a superseding :design and run bb nido:review:design until it\n"
+         "  proceeds. Do not amend the retracted one:\n"
          "  it stays in the ledger.")
 
     :no-premise
     (str "  This design cites no baseline — it predates the baseline event.\n"
          "  1. baseline the area and append a :baseline (/design §4)\n"
          "  2. bb nido:review:baseline\n"
-         "  3. supersede the design so it cites it, then re-decide — and approve\n"
-         "     it unless the round cleared it")
+         "  3. supersede the design so it cites it, then bb nido:review:design\n"
+         "     until it proceeds")
 
-    :not-approved
-    (str "  The design stands and nothing has cleared it. If no :design-decision\n"
-         "  exists yet, run bb nido:review:design first: a round that proceeds on\n"
-         "  a design owing nobody a grant clears it. One that declares :challenges\n"
-         "  or :revisit owes a person — Approve it in the gate inbox\n"
-         "  (http://localhost:8800), which is what records the grant.")
+    :not-cleared
+    (str "  The design stands and nothing has cleared it. Run bb nido:review:design:\n"
+         "  a round that proceeds clears it. A round that stops for a person parks a\n"
+         "  blocker; answer it, and run the round again.")
 
     :unreadable-ledger
     (str "  An entry this depends on will not parse, so standing cannot be\n"
@@ -153,10 +141,9 @@
 
 (defn- standing-check
   "Refuse unless this session's design DECISION stands: not retracted, cleared —
-   by a round that owed nobody, or by a person's grant — and the exact baseline
-   it cites still live. `:cleared?`, the answer the arc asks, and not
-   `:decided?`: a design owing nobody a grant never gets one, so asking for it
-   here would refuse every design the round was built to let through.
+   by its round, or by a grant an older ledger holds — and the exact baseline it
+   cites still live. `:cleared?`, the answer the arc asks, and not `:decided?`,
+   which only a grant answers.
 
    A workstream with NO design passes. Most do not have one — scratch
    workstreams, pickups mid-flight — and a gate that demanded a design of every
@@ -174,7 +161,7 @@
                               (str "cleared at entry " (:cleared-by st)))))
               0)
           (let [b (or (:blocked st)
-                      {:reason :not-approved :seq (:seq design)})]
+                      {:reason :not-cleared :seq (:seq design)})]
             (println (str "land:check REFUSED · " (name (:reason b))))
             (when-let [d (:detail b)] (println (str "  " d)))
             (println "\nHow to clear it:")

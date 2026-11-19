@@ -6,6 +6,7 @@
    [malli.core :as m]
    [nido.platform.core :as core]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.history :as history]
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
@@ -550,9 +551,12 @@
             "a review of that survey")
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
-             (ws/append-entry! :brian (:id w) {:kind :design-approved}
-                               (pr-str {:format :design-approved :design {:seq 3} :at-seq 4})))
-            "a grant of a design that served it")
+             (ws/append-decision! :brian (:id w)
+                               (pr-str {:format :design-decision :recommend :proceed
+                                        :design-seq 3 :reason "r" :asks "worth it?"
+                                        :checks [{:check :relation-honest :status :held
+                                                  :note "n"}]})))
+            "a decision on a design that served it")
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
              (ws/append-entry! :brian (:id w) {:kind :review}
@@ -644,7 +648,7 @@
     (fn [_]
       (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
-            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            add #(if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))
             now #(ws/goal-amendment (ws/read-ws :brian id) %)]
         (seed-baseline! w)                                                     ; 1, 2
         (add :design (design-citing 2))                                        ; 3
@@ -677,7 +681,7 @@
     (fn [_]
       (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
-            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            add #(if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))
             now #(ws/goal-amendment (ws/read-ws :brian id) %)]
         (seed-baseline! w)                                                     ; 1, 2
         (add :intent (assoc an-intent :goal "b" :independent true))            ; 3
@@ -696,7 +700,7 @@
     (fn [_]
       (let [w     (ws/create! :brian {:external-refs []})
             id    (:id w)
-            add   #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            add   #(if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))
             reads (atom 0)
             real  @#'ws/read-entry-at]
         (seed-baseline! w)                                                     ; 1, 2
@@ -1016,7 +1020,7 @@
     (fn [_]
       (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
-            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+            add #(if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))]
         (add :intent an-intent)                                       ; seq 1
         (add :baseline a-baseline)                                    ; seq 2
         (is (thrown-with-msg?
@@ -1028,9 +1032,10 @@
                                      :because "b" :evidence ["src/a.clj:1"]}))
             "and one naming a real baseline is fine")                 ; seq 3
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"Approval cites entry 2, which is a :baseline"
-             (add :design-approved {:format :design-approved :design {:seq 2} :at-seq 3}))
-            "an approval must name a design, and the refusal says what it found")
+             clojure.lang.ExceptionInfo #"Clearance cites entry 2, which is a :baseline"
+             (ws/append-entry-at! :brian id 3 {:kind :design-cleared}
+                                  (pr-str {:format :design-cleared :design {:seq 2}})))
+            "a clearance must name a design, and the refusal says what it found")
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Baseline :supersedes cites entry 3"
              (add :baseline (assoc a-baseline :supersedes {:seq 3 :why "corrected"})))
@@ -1046,7 +1051,7 @@
     (fn [_]
       (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
-            add #(ws/append-entry! :brian id {:kind %1} %2)
+            add #(if (= :design-decision %1) (ws/append-decision! :brian id %2) (ws/append-entry! :brian id {:kind %1} %2))
             r   #(pr-str {:format :retraction :retracts {:seq %}
                           :because "b" :evidence ["src/a.clj:1"]})]
         (add :triage (pr-str a-triage))                               ; seq 1
@@ -1294,7 +1299,70 @@
             (is (= side (last (ws/rebuilt-index :brian id {:entries []})))))))
       (finally (fs/delete-tree tmp)))))
 
-;; ── Implementing what nobody granted ────────────────────────────────────────
+(defn- decide!
+  "A decision round's record on the design at `n`, recommending `recommend`."
+  ([id n] (decide! id n :proceed))
+  ([id n recommend]
+   (ws/append-decision! :brian id
+                     (pr-str (cond-> {:format :design-decision :recommend recommend
+                                      :design-seq n :reason "r" :asks "worth it?"
+                                      :checks [{:check :relation-honest :status :held
+                                                :note "n"}]}
+                               (not= :proceed recommend)
+                               (assoc :findings [{:cites ["decomposable"]
+                                                  :claim "the cut does not hold"}]))))))
+
+(defn- clear!
+  "A clearance of the design at `n`, through the only writer that takes one and
+   at the position it compares.
+
+   The record stores no position of its own: the append succeeds only while the
+   reading's position is still the ledger's latest, so the entry's own place in
+   the ledger IS the snapshot it was written against."
+  [id n]
+  (let [at (count (:entries (ws/read-ws :brian id)))]
+    (ws/append-entry-at! :brian id at {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq n}}))))
+
+(deftest a-decision-joins-only-through-its-writer
+  ;; A clearance trusts any proceeding decision on the ledger, so a decision a generic append took
+  ;; would admit a design no round judged.
+  (with-tmp
+    (fn [_]
+      (let [w        (ws/create! :brian {:external-refs []})
+            id       (:id w)
+            decision (pr-str {:format :design-decision :recommend :proceed :design-seq 3 :reason "r"
+                              :checks [{:check :relation-honest :status :held :note "n"}]})]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
+        (doseq [[how append] {"a generic append"   #(ws/append-entry! :brian id {:kind :design-decision} decision)
+                              "a positional append" #(ws/append-entry-at! :brian id 3 {:kind :design-decision} decision)
+                              "a once-only append" #(ws/append-entry-once! :brian id {:kind :design-decision}
+                                                                           decision (constantly false))
+                              "a checked append"   #(ws/check-entry :brian id {:kind :design-decision} decision)}]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only through append-decision!" (append))
+              (str how " refuses a decision")))
+        (is (string? (ws/append-decision! :brian id decision)) "the writer takes it")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes a :design-decision"
+                              (ws/append-decision! :brian id (pr-str (design-citing 2))))
+            "and takes nothing else")))))
+
+(deftest a-cleared-design-is-not-judged-again
+  ;; A design something let be built has had its review: a decision after it could send back a
+  ;; design the arc is building on.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
+        (decide! id 3)
+        (clear! id 3)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"was let be built at entry 5"
+                              (decide! id 3 :amend)))
+        (is (= 1 (count (ws/entries-of :brian id :design-decision))) "no second decision joins it")))))
+
+;; ── Implementing what nothing cleared ───────────────────────────────────────
 
 (def ^:private an-implementation
   {:format    :implementation-completed
@@ -1308,8 +1376,8 @@
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"must name the design it was made under"
              (ws/append-entry! :brian id {:kind :implementation-completed}
@@ -1328,8 +1396,8 @@
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
         (ws/activate! :brian id nil)
         (ws/deactivate! :brian id nil)
         (ws/append-entry! :brian id {:kind :implementation-completed} (pr-str an-implementation))
@@ -1375,8 +1443,8 @@
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
         (is (ws/holds-design? (ws/read-ws :brian id)))
         (ws/append-entry! :brian id {:kind :implementation-completed}
                           (pr-str (assoc an-implementation :design {:seq 3})))
@@ -1408,8 +1476,8 @@
                            id (:id w)]
                        (seed-baseline! w)                                                      ; 1, 2
                        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3 — D1
-                       (ws/append-entry! :brian id {:kind :design-approved}
-                                         (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+                       (decide! id 3)
+                       (clear! id 3)
                        (when impl
                          (ws/append-entry! :brian id {:kind :implementation-completed} (pr-str impl)))
                        (ws/append-entry! :brian id {:kind :design}                             ; D2
@@ -1438,8 +1506,8 @@
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 2"
              (ws/append-entry! :brian id {:kind :implementation-completed}
@@ -1450,7 +1518,7 @@
     (fn [_]
       (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)
-            add #(do (ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            add #(do (if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))
                      (count (:entries (ws/read-ws :brian id))))]
         ;; unit A, rooted at 1
         (add :intent an-intent)                                          ; 1
@@ -1477,21 +1545,21 @@
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
-        (ws/append-entry! :brian id {:kind :implementation-completed}           ; 5
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
+        (ws/append-entry! :brian id {:kind :implementation-completed}           ; 6
                           (pr-str (assoc an-implementation :design {:seq 3})))
-        (ws/add-ref! :brian id {:adapter :github :id "o/r#1"                    ; 6 — :pr-opened
+        (ws/add-ref! :brian id {:adapter :github :id "o/r#1"                    ; 7 — :pr-opened
                                 :url "https://gh/1" :title "Round the total"}
                      {:design 3})
-        (ws/append-entry! :brian id {:kind :merged}                            ; 7
+        (ws/append-entry! :brian id {:kind :merged}                            ; 8
                           (pr-str {:format :merged :pr "o/r#1" :url "https://gh/1"
                                    :title "Round the total" :merged-at "2026-09-11T10:00:00Z"
                                    :design {:seq 3}}))
         (let [w (ws/read-ws :brian id)]
-          (is (= 1 (ws/unit-of w 5))
+          (is (= 1 (ws/unit-of w 6))
               "the implementation is the unit's own work")
-          (is (= [nil nil] (mapv #(ws/unit-of w %) [6 7]))
+          (is (= [nil nil] (mapv #(ws/unit-of w %) [7 8]))
               "and neither landing is, though both name the same design"))))))
 
 (deftest a-record-reaching-two-goals-is-refused
@@ -1502,7 +1570,7 @@
     (fn [_]
       (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)
-            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+            add #(if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))]
         (add :intent an-intent)                                          ; 1
         (add :baseline a-baseline)                                       ; 2  roots at 1
         (add :intent (assoc an-intent :goal "a different story"
@@ -1544,7 +1612,7 @@
   (with-tmp
     (fn [_]
       (let [id  (amended-mid-design!)
-            add #(do (ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            add #(do (if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))
                      (count (:entries (ws/read-ws :brian id))))]
         (is (some? (ws/entry-at-seq :brian id 5)) "the hand-written design reads back")
         (add :design-decision {:format :design-decision :recommend :proceed    ; 6
@@ -1570,7 +1638,7 @@
   (with-tmp
     (fn [_]
       (let [id  (amended-mid-design!)
-            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+            add #(if (= :design-decision %1) (ws/append-decision! :brian id (pr-str %2)) (ws/append-entry! :brian id {:kind %1} (pr-str %2)))]
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"reaches 2 goals"
              (add :design (assoc (design-citing 2 4) :supersedes {:seq 3 :why "again"})))
@@ -1633,7 +1701,7 @@
         (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
                                      (pr-str an-implementation))))))))
 
-(deftest a-design-nobody-granted-refuses-the-implementation-record
+(deftest a-design-nothing-cleared-refuses-the-implementation-record
   (with-tmp
     (fn [_]
       (let [w  (ws/create! :brian {:external-refs []})
@@ -1644,71 +1712,50 @@
              clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 3\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
                                (pr-str (assoc an-implementation :design {:seq 3}))))
-            "designed, never granted, and the refusal names the entry to grant")
+            "designed, never cleared, and the refusal names the entry")
         (is (= 3 (count (:entries (ws/read-ws :brian id))))
             "refused before anything is written")))))
 
-(deftest a-grant-naming-the-live-design-lets-the-implementation-through
-  (with-tmp
-    (fn [_]
-      (let [w  (ws/create! :brian {:external-refs []})
-            id (:id w)]
-        (seed-baseline! w)
-        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
-        (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
-                                     (pr-str (assoc an-implementation :design {:seq 3})))))))))
-
-(deftest a-design-superseded-after-its-grant-needs-granting-again
-  ;; The case worth catching rather than an awkward edge: redesigning is how a
-  ;; rejected commitment gets replaced, so an approval carrying over to whatever
-  ;; replaced it would grant the one thing nobody looked at.
+(deftest a-grant-an-older-ledger-holds-lets-the-implementation-through
+  ;; Nothing writes a :design-approved, but ledgers from before every design was
+  ;; cleared by its round hold them, and the floor goes on reading one as it did.
   (with-tmp
     (fn [_]
       (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
-        (ws/append-entry! :brian id {:kind :design}                              ; 5
+        (decide! id 3)                                                          ; 4
+        (history/grant! :brian id 3 4)                                          ; 5
+        (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
+                                     (pr-str (assoc an-implementation :design {:seq 3})))))))))
+
+(deftest a-design-superseded-after-its-clearance-needs-clearing-again
+  ;; The case worth catching rather than an awkward edge: redesigning is how a
+  ;; rejected commitment gets replaced, so a clearance carrying over to whatever
+  ;; replaced it would admit the one thing no round judged. An older ledger's
+  ;; grant carries over no further.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
+        (decide! id 3)                                                          ; 4
+        (clear! id 3)                                                           ; 5
+        (history/grant! :brian id 3 4)                                          ; 6
+        (ws/append-entry! :brian id {:kind :design}                              ; 7
                           (pr-str (assoc (design-citing 2)
                                          :supersedes {:seq 3 :why "the shape could not hold"})))
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 5\)"
+             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 7\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
-                               (pr-str (assoc an-implementation :design {:seq 5}))))
-            "the grant names entry 3, and entry 5 is what would be implemented")))))
+                               (pr-str (assoc an-implementation :design {:seq 7}))))
+            "the clearance and the grant name entry 3, and entry 7 is what would be implemented")))))
 
 ;; ── The gate is read, not reached ──────────────────────────────────────────
 
-(defn- decide!
-  "A decision round's record on the design at `n`, recommending `recommend`."
-  ([id n] (decide! id n :proceed))
-  ([id n recommend]
-   (ws/append-entry! :brian id {:kind :design-decision}
-                     (pr-str (cond-> {:format :design-decision :recommend recommend
-                                      :design-seq n :reason "r" :asks "worth it?"
-                                      :checks [{:check :relation-honest :status :held
-                                                :note "n"}]}
-                               (not= :proceed recommend)
-                               (assoc :findings [{:cites ["decomposable"]
-                                                  :claim "the cut does not hold"}]))))))
-
-(defn- clear!
-  "A clearance of the design at `n`, through the only writer that takes one and
-   at the position it compares.
-
-   The record stores no position of its own: the append succeeds only while the
-   reading's position is still the ledger's latest, so the entry's own place in
-   the ledger IS the snapshot it was written against."
-  [id n]
-  (let [at (count (:entries (ws/read-ws :brian id)))]
-    (ws/append-entry-at! :brian id at {:kind :design-cleared}
-                         (pr-str {:format :design-cleared :design {:seq n}}))))
-
-(deftest a-clearance-lets-the-implementation-through-without-a-grant
+(deftest a-clearance-lets-the-implementation-through
   (with-tmp
     (fn [_]
       (let [w  (ws/create! :brian {:external-refs []})
@@ -1719,7 +1766,7 @@
         (clear! id 3)                                                           ; 5
         (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
                                      (pr-str (assoc an-implementation :design {:seq 3}))))
-            "a round proceeded and cleared it, so nobody was owed a grant")))))
+            "a round proceeded and cleared it")))))
 
 (deftest a-clearance-is-written-only-at-a-position
   ;; Every reader that admits a design on a clearance trusts this record, so the
@@ -1755,21 +1802,57 @@
              (clear! id 3))
             "the latest decision sent it back, so the earlier :proceed clears nothing")))))
 
-(deftest a-clearance-over-a-design-owing-a-person-is-refused
+(deftest a-proceeding-round-clears-a-design-whatever-it-declares
+  ;; A design's :challenges or :revisit is what its decision round judges; once
+  ;; the round proceeds, nothing further is owed before it is built.
+  (with-tmp
+    (fn [_]
+      (doseq [[what design] [[":challenges" (assoc (design-citing 2)
+                                                   :standing {:relation :challenges
+                                                              :note "it moves the boundary"})]
+                             [":revisit" (assoc (design-citing 2)
+                                                :baseline {:seq 2 :relation :revisit
+                                                           :breaks ["c1"] :note "n"})]]]
+        (let [w  (ws/create! :brian {:external-refs []})
+              id (:id w)]
+          (seed-baseline! w)
+          (ws/append-entry! :brian id {:kind :design} (pr-str design))           ; 3
+          (decide! id 3)                                                        ; 4
+          (is (some? (clear! id 3)) (str "a " what " design is cleared by its round"))
+          (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
+                                       (pr-str (assoc an-implementation :design {:seq 3}))))
+              (str "and a " what " design so cleared may be implemented")))))))
+
+(deftest a-design-approved-is-refused-and-leaves-the-ledger-as-it-was
+  ;; A design reaches implementation through its decision round alone, so no
+  ;; append may write a person's grant — whatever it names, and however well
+  ;; formed it is.
   (with-tmp
     (fn [_]
       (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
-        (ws/append-entry! :brian id {:kind :design}                             ; 3
-                          (pr-str (assoc (design-citing 2)
-                                         :standing {:relation :challenges
-                                                    :note "it moves the boundary"})))
-        (decide! id 3 :proceed)
-        (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"owe a person the grant"
-             (clear! id 3))
-            "a :challenges design is granted by a person, whatever the round said")))))
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
+        (decide! id 3)                                                          ; 4
+        (let [before (ws/read-ws :brian id)
+              files  #(set (map str (fs/list-dir (fs/path (cstate/workstream-dir :brian id)
+                                                          "entries"))))
+              on-disk (files)]
+          (let [refused (try (ws/append-entry! :brian id {:kind :design-approved}
+                                               (pr-str {:format :design-approved
+                                                        :design {:seq 3} :at-seq 4}))
+                             nil
+                             (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+            (is (= :design-approved (:kind refused)) "a well-formed grant of a live design is refused")
+            (is (str/includes? (pr-str (:explain refused)) "no longer written")
+                "by the write schema, which says why"))
+          (is (thrown? clojure.lang.ExceptionInfo
+                       (ws/check-entry :brian id {:kind :design-approved}
+                                       (pr-str {:format :design-approved :design {:seq 3}
+                                                :at-seq 4 :note "granted anyway"})))
+              "and checking one refuses it the same way")
+          (is (= before (ws/read-ws :brian id)) "the index is unchanged")
+          (is (= on-disk (files)) "and no entry file was written"))))))
 
 (deftest a-clearance-must-name-a-design
   (with-tmp

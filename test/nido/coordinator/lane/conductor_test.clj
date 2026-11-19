@@ -18,6 +18,7 @@
    [nido.coordinator.record.seats :as rseats]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.history :as history]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.record.workstream :as ws]
@@ -90,7 +91,7 @@
    a-persons-recent-start-works-the-workstream), and these tests ask what a typed prompt does."
   [& [plain]]
   (let [id  (:id (ws/create! :brian {:external-refs []}))
-        add (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record))
+        add (fn [kind record] (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
               (count (:entries (ws/read-ws :brian id))))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
     (when-not (= :plain plain)
@@ -335,7 +336,7 @@
                                                                      :event {} :instruction {:token "t1"} :run nil}]})))
               gone  (atom false)
               seats* rseats/seats]
-          ;; The seat goes while the decision is being made — as an opening or a design approval
+          ;; The seat goes while the decision is being made — as an opening or a new design
           ;; would remove it — after the conductor named it and before the decision is recorded.
           (with-redefs [pipeline/of  (fn [& _] (reset! gone true) {:at :implementing :next nil})
                         rseats/seats (fn [& args] (if @gone [] (apply seats* args)))]
@@ -459,38 +460,6 @@
                                                                                  :decision [:escalate (esc "Something new")]}))))
               "the hand-back stays owed, and a new question is still asked"))))))
 
-(deftest an-escalation-approving-a-superseded-design-is-refused
-  ;; Review judged design 25; the seat then wrote 28, claims unchanged. The conductor offered
-  ;; "approve 25", which the click refuses as not newest, and its blocker held the round on 28.
-  (with-tmp
-    (fn []
-      (let [[id] (workstream)
-            c    (str id "--conductor")
-            ask  (fn [n] [:escalate (assoc (esc "Approve the design?")
-                                           :options [{:label "Approve" :summary "as it stands" :approves-design n}
-                                                     {:label "Amend it" :summary "say what"}])])
-            entries-of ws/entries-of]
-        (launching [_] (seats/conductor! :brian id "conduct it"))
-        (with-redefs [standing/governing-design (constantly {:seq 28})
-                      ws/entries-of (fn [p w k] (if (= :design-decision k)
-                                                  [{:design-seq 25}]
-                                                  (entries-of p w k)))]
-          (let [hb (:id (hand-back! id))]
-            (is (= [:refused :stale-approval]
-                   (in-session c #(conductor/decide! :brian id {:hand-back hb :decision (ask 25)}))))
-            (is (= [:refused :stale-approval]
-                   (in-session c #(conductor/decide! :brian id {:hand-back hb :decision (ask 28)})))
-                "the governing design is not approvable before a round has judged it")
-            (is (empty? (ws/entries-of :brian id :blocker)) "no blocker holds the round")))
-        (with-redefs [standing/governing-design (constantly {:seq 28})
-                      ws/entries-of (fn [p w k] (if (= :design-decision k)
-                                                  [{:design-seq 25} {:design-seq 28}]
-                                                  (entries-of p w k)))]
-          (is (= :accepted
-                 (first (in-session c #(conductor/decide! :brian id {:hand-back (:id (hand-back! id))
-                                                                      :decision (ask 28)}))))
-              "a judged governing design is offered for approval"))))))
-
 (defn- legacy-decide!
   "decide! as it was before an escalation at a person's move stopped parking a blocker — the
    ledgers written then still hold such blockers, and `answers!` still answers them."
@@ -504,15 +473,15 @@
       (let [[id] (workstream)
             c    (str id "--conductor")]
         (launching [_] (seats/conductor! :brian id "conduct it"))
-        (with-redefs [pipeline/of (constantly {:at :design-decided :next {:stage :approve-design :mode :human}})]
+        (with-redefs [pipeline/of (constantly {:at :triage-awaiting :next {:stage :accept-triage :mode :human}})]
           (let [hb (:id (hand-back! id))
                 [v entry] (in-session c #(conductor/decide! :brian id {:hand-back hb
-                                                                        :decision [:escalate (esc "approve the design")]}))]
+                                                                        :decision [:escalate (esc "accept the triage")]}))]
             (is (= :accepted v))
             (is (empty? (ws/entries-of :brian id :blocker))
-                "the design's own card already asks; a blocker would be a second copy of the question")
+                "the triage's own card already asks; a blocker would be a second copy of the question")
             (is (nil? (:parked entry)))
-            (is (= "approve the design?" (get-in (last (ws/entries-of :brian id :conduct-decision)) [:decision 1 :needs]))
+            (is (= "accept the triage?" (get-in (last (ws/entries-of :brian id :conduct-decision)) [:decision 1 :needs]))
                 "the decision is the escalation's record, and its words ride on the card")
             (is (not (conductor/awaiting-answer? :brian id)))))))))
 
@@ -986,14 +955,13 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [commit-gate/acts (fn [command _]
                                          (cond
-                                           (str/includes? command "design:approve") [{:kind :nido-task :task "nido:design:approve" :args []}]
                                            (str/starts-with? command "bb nido:")    [{:kind :nido-task :task (second (str/split command #" "))
                                                                                        :args (vec (drop 2 (str/split command #" ")))}]
                                            (str/includes? command "gh api")         [{:kind :gh-pr :verb "api"}]
                                            (str/includes? command "$V")             [{:kind :gh-pr :verb :unread}]
                                            (str/starts-with? command "gh pr ")      [{:kind :gh-pr :verb (nth (str/split command #" ") 2)}]
                                            :else []))]
-          (is (str/includes? (in c "bb nido:design:approve :design-seq 4") "conductor"))
+          (is (str/includes? (in c "bb nido:phase:advance :design-seq 4") "conductor"))
           (doseq [verb ["nido:improvement:discharge" "nido:ticket:dismiss" "nido:workstream:fork"
                         "nido:recovery:restore" "nido:improvement:reserve" "nido:workstream:stage:advance"
                         "nido:findings:resolve" "nido:status:backfill"]]
@@ -1004,7 +972,7 @@
             (is (some? (in c (str "bb nido:workstream:entry:add :kind " kind)))
                 (str "a kind the task reads as a person's, written " kind)))
           (is (nil? (in c "bb nido:seats:send :to 1")) "a verb that is no person's act")
-          (is (nil? (in c "bb nido:review:design")) "a design round, whose carried grant grants nothing new")
+          (is (nil? (in c "bb nido:review:design")) "a design round, which writes a round's records and no person's act")
           (doseq [cmd ["jj git push -b main" "git push origin main" "gh pr create" "gh pr create --draft" "gh pr ready 3"]]
             (is (nil? (in c cmd)) (str "pushing and opening a PR are allowed: " cmd)))
           (is (some? (in c "gh pr merge 3")) "a merge is the person's")
@@ -1065,7 +1033,7 @@
                                     :letter "A" :label "Narrow" :grants [:intent]})
             (is (nil? (in "fix-it" append)) "the option the person picked grants the amendment")
             (is (some? (in "fix-it" (str "bb nido:workstream:entry:add :project brian :ws-id " id
-                                         " :kind design-approved")))
+                                         " :kind triage-accepted")))
                 "and nothing it did not grant")
             (is (some? (in "fix-it" "bb nido:workstream:entry:add :project brian :ws-id ws-other :kind intent"))
                 "to its own workstream only")
@@ -1121,8 +1089,6 @@
             "nor may the seat make another PR its own while the grant stands")
         (is (some? (in "fix-it" (str "bb nido:workstream:close :project brian :ws-id " id " :outcome done")))
             "closing stays the person's under it")
-        (is (some? (in "fix-it" (str "bb nido:design:approve :project brian :ws-id " id " :design-seq 1")))
-            "and approving a design")
         (is (some? (in "fix-it" (str "bb nido:workstream:entry:add :project brian :ws-id " id " :kind merged")))
             "and recording the landing")
         (is (some? (in "fix-it" (str "bb nido:workstream:entry:add :project brian :ws-id " id " :kind grant")))
@@ -1349,7 +1315,9 @@
                      :read-at ["src/a.clj:1"]}]}
    :read ["src/a.clj"]})
 
-(deftest a-carried-grant-is-no-act-of-the-persons
+(deftest a-grant-an-older-ledger-holds-is-no-act-of-the-persons
+  ;; Nothing writes a :design-approved now, and one already on a ledger takes no step a person
+  ;; owes: it answers no escalation and is never handed back.
   (with-tmp
     (fn []
       (let [[id add] (workstream)
@@ -1361,22 +1329,20 @@
                                            :claims [{:id "one" :about ["agg"] :statement "one path"
                                                      :falsified-by "a second" :evidence {:by :round}}]}
                                    :standing {:relation :conforms} :baseline {:seq b :relation :within}
-                                   :intent {:seq 1} :effort :S})]
+                                   :intent {:seq 1} :effort :S})
+            dd       (add :design-decision {:format :design-decision :recommend :proceed :design-seq d
+                                            :reason "r" :checks [{:check :relation-honest :status :held :note "n"}]})]
         (launching [_] (seats/conductor! :brian id "conduct it"))
-        (with-redefs [pipeline/of (constantly {:at :designed :next {:stage :approve-design :mode :human}})]
+        (with-redefs [pipeline/of (constantly {:at :design-decided :next {:stage :clear-design :mode :mechanical}})]
           (let [hb (:id (hand-back! id))]
-            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "approve it")]})))
+            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate (esc "build it")]})))
           (Thread/sleep 5)
-          (let [granted (add :design-approved {:format :design-approved :design {:seq d} :at-seq d :carried true})]
+          (let [granted (history/grant! :brian id d dd)]
             (conductor/answers! :brian)
-            (is (empty? (ws/entries-of :brian id :blocker-answered)) "a carried grant answers no blocker")
+            (is (empty? (ws/entries-of :brian id :blocker-answered)) "a grant answers no blocker")
             (is (not-any? #(str/includes? (str (:text %)) (str "entry " granted))
                           (filter #(= :hand-back (:kind %)) (seats/traffic :brian id 1)))
-                "nor is it handed back as the person's act"))
-          (let [granted (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})]
-            (conductor/answers! :brian)
-            (is (= [granted] (keep (comp :seq :act) (ws/entries-of :brian id :blocker-answered)))
-                "the person's grant of the design the escalation found answers it")))))))
+                "nor is it handed back as the person's act")))))))
 
 (deftest answering-the-blocker-found-open-answers-the-escalation-at-it
   (with-tmp
@@ -1496,7 +1462,10 @@
                                                    :undo {:how :revert :by "r"}}
                                                   {:claim "old gone" :habitable "h" :exit {:kind :completion :criterion "done"}
                                                    :undo {:how :none :why "gone"}}]))
-            _        (add :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+            _        (add :design-decision {:format :design-decision :recommend :proceed :design-seq d1
+                                            :reason "r" :checks [{:check :relation-honest :status :held :note "n"}]})
+            _        (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
+                                          (pr-str {:format :design-cleared :design {:seq d1}}))
             d2       (add :design (assoc design :summary "a later design"))
             _        (ws/close! :brian id :between-phases d1)
             blocker  (add :blocker {:format :blocker :summary "s" :needs "assert the gate?" :after "The work resumes once you answer."})
@@ -1643,3 +1612,15 @@
             (is (not (str/includes? (brief "off-s") "conductor reads where you stopped"))
                 "a Run's start carried on a plain workstream is told no conductor does")
             (is (str/includes? (brief "off-s") "the person reads where you stopped"))))))))
+
+(deftest the-brief-says-no-option-approves-a-design
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            b    (#'conductor/brief :brian id)]
+        (is (str/includes? b "No option approves a design")
+            "the conductor is told picking an option grants no design")
+        (is (str/includes? b "read by the next round")
+            "and that a person's answer to a design question feeds the next decision round")
+        (is (not (str/includes? b ":approves-design"))
+            "it is never told to mark an option as approving one")))))

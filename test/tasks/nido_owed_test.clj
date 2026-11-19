@@ -31,15 +31,15 @@
         "and the line says the arc is over rather than naming a stage")))
 
 (deftest a-human-mode-names-the-person-and-the-stage-they-owe
-  (let [a (at {:at :design-decided :next {:stage :approve-design :mode :human}})]
-    (is (= :approve-design (:person a))
+  (let [a (at {:at :awaiting-gate :next {:stage :assert-gate :mode :human}})]
+    (is (= :assert-gate (:person a))
         "the stage itself, because a person needs to know WHICH")
-    (is (str/includes? (owed/owed-line a) "a person owes approve-design"))
+    (is (str/includes? (owed/owed-line a) "a person owes assert-gate"))
     (is (str/includes? (owed/owed-line a) "needs-you")
         "and is pointed at the inbox the workstream already stands in")))
 
 (deftest a-stage-nobody-owes-is-not-a-persons
-  (let [a (at {:at :design-approved :next {:stage :implement :mode :working-copy}})]
+  (let [a (at {:at :design-cleared :next {:stage :implement :mode :working-copy}})]
     (is (nil? (:person a)) "nobody is waited on")
     (is (= [:implement :working-copy] [(:stage a) (:mode a)]))
     (is (str/includes? (owed/owed-line a) "bb nido:attach")

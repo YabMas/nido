@@ -432,26 +432,10 @@
     :triage-stale           (str "Nothing was applied — the ledger moved on since this "
                                  "page rendered, so this would have accepted a verdict "
                                  "you were not looking at. Re-read the gate.")
-    :no-design              "Nothing to approve — this workstream holds no design."
     ;; A gate that will not open writes nothing; the reason is the ledger's own.
     :phase-refused          (str "The gate did not open — " because)
     :between-phases         (str "Not restored — this workstream is between phases, not "
                                  "dismissed. Assert its gate to open the next one.")
-    :approval-stale         (str "Not approved — the ledger moved on since this page "
-                                 "rendered, so this would have granted a design you "
-                                 "were not looking at. Re-read the gate.")
-    ;; The premise went while it was being read. Naming the entry is the whole
-    ;; of what a reader can act on, and `because` carries it up from standing.
-    :approval-refused       (str "Not approved — the design no longer stands"
-                                 (when-let [d (:detail because)] (str ": " d)))
-    ;; The two answers to an invalidation, refused for the two reasons an
-    ;; :approve is: the page moved, or the question is no longer being asked.
-    :acknowledge-stale      (str "Not recorded — the ledger moved on since this page "
-                                 "rendered, so this would have answered a verdict you "
-                                 "were not looking at. Re-read the gate.")
-    :nothing-to-acknowledge (str "Nothing to answer — this design is not sitting on an "
-                                 "unanswered verdict any more. Somebody may have "
-                                 "answered it in another tab.")
     :nothing-to-land        (str "Nothing to land — this workstream no longer owes a landing. "
                                  "It may have merged already.")
     :land-stale             (str "Not queued — the ledger moved on since this page rendered. "
@@ -535,10 +519,9 @@
    Which buttons those are is asked of the descriptor, not listed here. Every
    position-carrying button is rendered by the same branch of `action-button`
    (the one that appends ?entry= when a descriptor has a :seq), so a second list
-   of ids kept in this namespace is a list that can disagree with it — and did:
-   :approve was rendered with its position and read back without one, so
-   `work/approve!` saw nil, took its stale branch, and no design was ever
-   approved from the web."
+   of ids kept in this namespace is a list that can disagree with it, and a
+   button rendered with its position but read back without one resolves as
+   stale every time."
   [{:keys [body] :as req} ws-id action-id]
   ;; Read once: the body is a stream, and a second slurp of it is empty.
   (let [signals (delay (parse-json-body body))

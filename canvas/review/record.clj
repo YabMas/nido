@@ -99,12 +99,13 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] [:maybe :map]]
      :delegates [standing/of-design]})
   (Operation answered
-    "What a person has already answered about a design, for its judge's ask: the nearest grant up
-     its supersedes chain against the same intent and baseline, with what changed since and the
-     questions it answered, the newest reply they wrote into the record and the ask it answered,
-     what they asked for in findings, and a question put to a person that neither a grant nor a
-     reply has answered. A record the loop's amender wrote answers and grants nothing; a decision
-     the judging run appended on a first reading asks nobody."
+    "What a person has already answered about a design, for its judge's ask: the nearest grant an
+     older ledger holds up its supersedes chain against the same intent and baseline, with what
+     changed since and the questions it answered; the replies they gave since — a reply written
+     into the record, or their answer to a blocker parked after a decision on the chain — and the
+     ask each answered; what they asked for in findings; and a question put to a person that
+     nothing has answered. A record the loop's amender wrote answers nothing; a decision the
+     judging run appended on a first reading asks nobody."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]
                       [:run-id [:? [:maybe :string]]]] :map]
      :delegates [workstream/amended-seqs]})
@@ -118,7 +119,7 @@
     {:signature [:=> [:catn [:ledger [:maybe [:tuple :keyword :string]]] [:record :map]] :any]})
   (Operation clear!
     "Write the clearance a proceeding decision already on the ledger implies, and nothing else —
-     no round re-runs and nothing becomes a grant."
+     no round re-runs."
     {:signature [:=> [:catn [:cwd Path]] :keyword]})
   (Operation baseline-finding-base-key "What makes two baseline findings the same finding."
     {:signature [:=> [:catn [:f :map]] :any]})

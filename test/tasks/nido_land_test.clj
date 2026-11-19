@@ -137,6 +137,7 @@
     (is (str/includes? out "not recorded"))))
 
 (deftest a-standing-approved-design-lands
+  ;; A grant written before grants were refused still decides the design it names.
   (let [[code out] (run {:session? true :design a-design
                          :standing {:decided? true :cleared? true :approved-by 7}})]
     (is (zero? code))
@@ -144,8 +145,8 @@
     (is (str/includes? out "approved at entry 7"))))
 
 (deftest a-cleared-design-lands-without-a-grant
-  ;; A design owing nobody a grant never gets one, so a gate asking :decided?
-  ;; would refuse every design the round was built to let through.
+  ;; No design gets a grant any more, so a gate asking :decided? would refuse
+  ;; every design a round cleared.
   (let [[code out] (run {:session? true :design a-design
                          :standing {:decidable? true :decided? false
                                     :cleared? true :cleared-by 6}})]
@@ -154,7 +155,7 @@
 
 (deftest a-cleared-design-nobody-granted-lands
   ;; The arc let it through on a clearance, so refusing it here as unapproved
-  ;; would re-impose the grant the round found nobody was owed.
+  ;; would ask for a grant nothing can write.
   (let [[code out] (run {:session? true :design a-design
                          :standing {:decidable? true :decided? false
                                     :cleared? true :cleared-by 8}})]
@@ -176,13 +177,14 @@
   (let [[code _] (run {:session? false})]
     (is (zero? code))))
 
-(deftest a-design-nobody-granted-is-refused-and-told-where-to-grant-it
+(deftest a-design-nothing-cleared-is-refused-and-told-how-to-clear-it
   (let [[code out] (run {:session? true :design a-design
                          :standing {:decidable? true :decided? false}})]
     (is (= 1 code))
     (is (str/includes? out "REFUSED"))
-    (is (str/includes? out "not-approved"))
-    (is (str/includes? out "gate inbox"))))
+    (is (str/includes? out "not-cleared"))
+    (is (str/includes? out "a round that proceeds clears it"))
+    (is (not (str/includes? out "gate inbox")) "no grant at a gate clears a design")))
 
 (deftest a-retracted-premise-is-refused-naming-the-entry-and-the-counterexample
   (let [[code out] (run {:session? true :design a-design
@@ -218,7 +220,7 @@
   (let [way-out #'land/way-out]
     (doseq [reason [:premise-unverified :premise-retracted :design-retracted :goal-retracted
                     :design-invalidated :premise-superseded
-                    :no-premise :not-approved :unreadable-ledger]]
+                    :no-premise :not-cleared :unreadable-ledger]]
       (let [txt (way-out {:reason reason :seq 3})]
         (is (not (str/includes? txt "No route recorded"))
             (str reason " must name what to do"))
@@ -266,7 +268,7 @@
                                                    :vars ["?from" "?to"]
                                                    :offenders [["a.b" "c.d"]]}]}})]
     (is (= 1 code))
-    (is (str/includes? out "not-approved") "the standing refusal")
+    (is (str/includes? out "not-cleared") "the standing refusal")
     (is (str/includes? out "from=a.b  to=c.d") "and the structural one, in the same run")))
 
 ;; ── The declared claims ─────────────────────────────────────────────────────

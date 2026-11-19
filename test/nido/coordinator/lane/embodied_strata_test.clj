@@ -38,15 +38,24 @@
      :baseline {:seq 2 :relation :within}
      :intent {:seq 1} :effort :S}))
 
+(defn- decide-and-clear!
+  "A proceeding decision round on the design at `d`, and the clearance it writes at its position."
+  [id d]
+  (ws/append-decision! :brian id
+                    (pr-str {:format :design-decision :recommend :proceed :design-seq d :reason "r"
+                             :checks [{:check :relation-honest :status :held :note "n"}]}))
+  (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
+                       (pr-str {:format :design-cleared :design {:seq d}})))
+
 (defn- ledger [strata marked]
   (let [id  (:id (ws/create! :brian {:external-refs []}))
-        add (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record))
+        add (fn [kind record] (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
               (count (:entries (ws/read-ws :brian id))))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
     (add :baseline a-baseline)
     (add :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "ok"})
     (let [d (add :design (a-design strata marked))]
-      (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+      (decide-and-clear! id d))
     ;; Re-seating drives only a workstream a person handed to the recipe.
     (ws/activate! :brian id nil)
     id))

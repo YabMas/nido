@@ -894,7 +894,7 @@
   ;; A workstream skipped :not-mechanical every second would fill the log with
   ;; the fact that a later phase has not happened yet.
   (doseq [s [:waiting-on-a-human :not-mechanical :terminal :already-running]]
-    (is (nil? (core/drive-log-line {:ws-id "ws-2" :at :design-approved :skipped s}))
+    (is (nil? (core/drive-log-line {:ws-id "ws-2" :at :design-cleared :skipped s}))
         (str s " is a resting state, not news"))))
 
 ;; ── A tick step that holds the loop is named in the log ─────────────────────

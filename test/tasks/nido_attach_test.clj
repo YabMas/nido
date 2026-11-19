@@ -182,13 +182,13 @@
                                    :standing {:relation :conforms}
                                    :baseline {:seq 2 :relation :within}
                                    :intent {:seq 1} :effort :S}))
-        (ws/append-entry! :brian id {:kind :design-decision}
+        (ws/append-decision! :brian id
                           (pr-str {:format :design-decision :design-seq 4
                                    :recommend :proceed :reason "r"
                                    :checks [{:check :decomposable :status :held :note "n"}]
                                    :asks "worth it?"}))
-        (ws/append-entry! :brian id {:kind :design-approved}
-                          (pr-str {:format :design-approved :design {:seq 4} :at-seq 5}))
+        (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
+                             (pr-str {:format :design-cleared :design {:seq 4}}))
         (let [pos (pipeline/of :brian id)
               out (str/join "\n" (attach/skip-lines :brian id pos (drive/fireable pos)))]
           (is (str/includes? out "implement"))
@@ -231,12 +231,12 @@
           "  1. a :baseline with :intent {:seq 4} and :supersedes {:seq 2 :why \"…\"}"
           "  2. bb nido:review:baseline — until it answers `sufficient`"
           "  3. a :design with :baseline {:seq <that baseline>} and :intent {:seq 4}, and :supersedes {:seq 3 :why \"…\"}"
-          "  4. bb nido:review:design, then approve it unless the round cleared it"]
+          "  4. bb nido:review:design — until it proceeds, which clears it"]
          (attach/amendment-lines [{:stage :rebaseline :intent 4 :supersedes 2}
                                   {:stage :verify-baseline :intent 4 :baseline nil}
                                   {:stage :design :intent 4 :baseline nil :supersedes 3}
                                   {:stage :decide-design :intent 4 :design nil}])))
   (is (= ["The goal amended to entry 4 still owes, in order:"
-          "  1. bb nido:review:design (it decides the newest design, entry 7), then approve it unless the round cleared it"]
+          "  1. bb nido:review:design (it decides the newest design, entry 7) — until it proceeds, which clears it"]
          (attach/amendment-lines [{:stage :decide-design :intent 4 :design 7}])))
   (is (= [] (attach/amendment-lines []))))

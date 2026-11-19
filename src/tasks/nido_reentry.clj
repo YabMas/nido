@@ -11,7 +11,7 @@
 
    Reports and changes nothing. There is no verb here on purpose: what to do
    about a workstream that fell back is a judgement per workstream — redesign,
-   re-approve, or accept — and a task that did any of them in bulk would be
+   re-decide, or re-survey — and a task that did any of them in bulk would be
    making that judgement in bulk."
   (:require
    [clojure.string :as str]
@@ -38,12 +38,12 @@
 
    `:at` is where the board shows it now, after the clamp; `:next` is the one
    action that moves it; `:stage` is the arc stage it OWES. The three differ and
-   all three are wanted: a workstream owing :approval whose design was never
-   decided is at :designed and its next action is the decision round, because the
-   approval cannot be given until something has recommended it.
+   all three are wanted: a workstream owing :clearance whose design was never
+   decided is at :designed and its next action is the decision round, because
+   only a round that proceeds clears it.
 
    A row here does not mean the clamp MOVED the workstream — a workstream that
-   was already back at :designed owes its approval just as much, and leaving it
+   was already back at :designed owes its clearance just as much, and leaving it
    out would report the change rather than the state."
   ([] (rows nil))
   ([projects]

@@ -48,12 +48,25 @@
   []
   (let [id      (:id (ws/create! :brian {:external-refs []}))
         seq-now #(count (:entries (ws/read-ws :brian id)))
-        add     (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record)) (seq-now))
+        add     (fn [kind record] (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record))) (seq-now))
         stamped (fn [record] (ws/append-stamped! :brian id record) (seq-now))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
     (add :baseline a-baseline)
     (add :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "ok"})
     [id add stamped]))
+
+(defn- clear!
+  "A proceeding decision round on the design at `d` of workstream `id`, and the clearance it
+   earns, written at the position it compares. Returns the clearance's seq."
+  [id d]
+  (ws/append-decision! :brian id
+                    (pr-str {:format :design-decision :recommend :proceed :design-seq d
+                             :reason "r" :asks "worth it?"
+                             :checks [{:check :relation-honest :status :held :note "n"}]}))
+  (let [at (count (:entries (ws/read-ws :brian id)))]
+    (ws/append-entry-at! :brian id at {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq d}}))
+    (inc at)))
 
 (deftest a-draft-designs-marks-seat-nobody
   (with-tmp
@@ -61,8 +74,8 @@
       (let [[id add] (ledger)
             d (add :design (a-design ["agg" "split"]))]
         (is (= [{:id 1 :whole true :interface "sh" :tensions []}] (seats/seats :brian id))
-            "nothing is fixed until the design is approved, so the generation has its whole seat")
-        (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            "nothing is fixed until the design is cleared, so the generation has its whole seat")
+        (clear! id d)
         (is (= [{:id "agg" :interface "a total" :tensions []}
                 {:id "split" :interface "split's part" :tensions []}]
                (seats/seats :brian id))
@@ -73,7 +86,7 @@
     (fn []
       (let [[id add stamped] (ledger)
             d  (add :design (a-design ["agg" "split"]))
-            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _  (clear! id d)
             t1 (stamped {:format :tension :by (seat "agg") :to "split" :about ["agg"] :statement "s1"})
             t2 (stamped {:format :tension :by (seat "agg") :to "gone" :about ["agg"] :statement "s2"})
             t3 (stamped {:format :tension :by (seat "split") :to :conductor :about ["split"] :statement "s3"})
@@ -106,7 +119,7 @@
     (fn []
       (let [[id add stamped] (ledger)
             d1 (add :design (a-design ["agg"]))
-            _  (add :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+            _  (clear! id d1)
             t  (stamped {:format :tension :by (seat "agg") :to :conductor :about ["agg"]
                          :statement "two secrets"})
             r  (stamped {:format :recut :by {:as :person} :ids ["agg" "split"] :why "split it"
@@ -134,7 +147,7 @@
           (is (= [t] (mapv :seq (:tensions (first (seats/seats :brian id)))))
               "a tension to the whole seat is the whole seat's while it stands")
           (let [d (add :design (a-design ["agg"]))]
-            (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+            (clear! id d))
           (is (= ["agg"] (mapv :id (seats/seats :brian id))) "fixing ids replaces the whole seat")
           (is (= :conductor (:to (first (seats/tensions :brian id))))
               "once the whole seat is gone, what was addressed to it is the conductor's"))))))

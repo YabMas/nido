@@ -158,6 +158,13 @@
      :delegates [append-lock-path read-ws write! report/entry-payload
                  generation/opened-by generation/current generation/generation-of
                  generation/closed-design generation/fixed-ids generation/defining-ids]})
+  (Operation append-decision!
+    "Append a :design-decision — the kind's one writer, which a decision round alone calls; every
+     generic append refuses the kind. Every other check an append makes holds."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:content :string]] Path]
+     :delegates [append-lock-path read-ws write! report/entry-payload
+                 generation/opened-by generation/current generation/generation-of
+                 generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation open-generation!
     "Append a :generation a person gives, opening the next generation of the design — the kind's
      one writer, under the workstream's lock. Refused while the workstream waits between phases,

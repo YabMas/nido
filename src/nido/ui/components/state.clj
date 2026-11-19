@@ -70,7 +70,6 @@
    :verify-baseline       "verify the baseline"
    :design                "write the design"
    :decide-design         "decide on it"
-   :approve-design        "your approval"
    :implement             "implement it"
    :review-implementation "review the diff"
    :publish-draft-pr      "open the draft PR"
@@ -79,8 +78,7 @@
    :answer-blocker        "your answer"
    :assert-gate           "your gate"
    :land                  "your landing"
-   :accept-triage         "your triage call"
-   :acknowledge-invalidation "your call on the verdict"})
+   :accept-triage         "your triage call"})
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:? :any]] :any]}
   position-chip

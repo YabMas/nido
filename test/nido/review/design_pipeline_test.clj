@@ -89,7 +89,7 @@
 (deftest a-decidable-premise-does-not-gate
   (is (nil? (gate-says {:decidable? true})))
   (is (nil? (gate-says {:decidable? true :approved-by nil}))
-      "an unapproved design is decidable — approval comes after this round, and a
+      "an uncleared design is decidable — its clearance comes from this round, and a
        gate that wanted it first would make the round unreachable"))
 
 (deftest a-design-citing-no-baseline-is-not-gated
@@ -190,9 +190,8 @@
     (is (= 1 @launched))))
 
 (deftest a-design-declaring-it-moves-nothing-still-reaches-the-round
-  ;; The declarations decide whether a person's grant is additionally owed,
-  ;; never whether the round runs — and only a proceeding round writes the
-  ;; clearance such a design needs. Skipping the round left exactly those designs
+  ;; The declarations never decide whether the round runs — and only a
+  ;; proceeding round writes the clearance such a design needs. Skipping the round left exactly those designs
   ;; with nothing that could ever clear them.
   (let [launched (atom 0)
         modest   (assoc a-design :standing {:relation :conforms}
@@ -255,6 +254,12 @@
   (merge {:config {:cwd "/w" :run-id "r1"} :iter 1 :control :continue} over))
 
 (defn- run [stage c] ((:run stage) c))
+
+(defn- clearing
+  "`f` called with every design read as cleared on the ledger, as a proceeding decision's append
+   clears it when the ledger is real (`record/append!`)."
+  [f]
+  (with-redefs-fn {#'record/cleared? (constantly true)} f))
 
 ;; ── What identifies a design finding ────────────────────────────────────────
 
@@ -391,12 +396,16 @@
           (is (= [["sums-once"]] (mapv :claim-ids (:findings out)))
               "handed in the round that could first repair it, under the claim it is about"))))))
 
-(deftest proceed-escalates-because-the-ask-is-the-point
+(deftest a-proceed-clears-the-design-and-asks-nobody
+  ;; A proceed's asks stops nobody: the design it clears goes on to be built.
   (with-redefs [record/design-decision! (fn [_] (decision :proceed))
                 record/append! (fn [_ _] nil)]
+    (let [out (clearing #(run record/design-judge-stage (ctx)))]
+      (is (= :cleared (:status out)))
+      (is (= :advance (:control out))))
     (let [out (run record/design-judge-stage (ctx))]
-      (is (= :escalate (:control out)))
-      (is (= :proceed (:status out))))))
+      (is (= :clearance-contended (:status out)) "a clearance not on the ledger is still a write owed")
+      (is (not= :escalate (:control out))))))
 
 (deftest a-proceed-over-unruled-claims-goes-to-the-next-round
   ;; A proceed reached the person with claims the judge was handed and never ruled on. It does not
@@ -429,8 +438,8 @@
         "a round whose append was lost names no entry rather than a wrong one")))
 
 (deftest a-clearance-the-ledger-kept-refusing-is-not-an-ask
-  ;; Contention is not a grant being owed. Escalating as :proceed would park a
-  ;; design whose declarations owe nobody on interference alone.
+  ;; Contention is not a question for a person. Escalating would park a design
+  ;; its round proceeded on, on interference alone.
   (with-redefs [record/design-decision! (fn [_] (decision :proceed))
                 record/append! (fn [_ _] {:contended true})]
     (let [out (run record/design-judge-stage (ctx))]
@@ -439,9 +448,9 @@
 
 (deftest a-clearance-still-owed-is-never-a-person-s-gate
   ;; Contention is one way a clearance goes unwritten; a write that threw inside
-  ;; `append!` is another, and it answers nil like a design owing a person. Both
-  ;; are a write the clearance stage makes, and a design that no longer stands
-  ;; goes where standing says — neither parks as the round's ask.
+  ;; `append!` is another, and it answers nil. Both are a write the clearance
+  ;; stage makes, and a design that no longer stands goes where standing says —
+  ;; neither parks as the round's ask, whatever the design declares.
   (let [modest   (assoc a-design :standing {:relation :conforms}
                         :baseline {:seq 1 :relation :within})
         run-with (fn [design st]
@@ -452,19 +461,19 @@
                                  ws/entry-at-seq (constantly design)
                                  standing/of-design (constantly st)]
                      (run record/design-judge-stage (ctx))))]
-    (testing "owing nobody and still standing: the clearance stage takes it"
+    (testing "still standing: the clearance stage takes it"
       (let [out (run-with modest {:decidable? true})]
         (is (= :clearance-contended (:status out)))
         (is (not= :escalate (:control out)))))
-    (testing "owing nobody and no longer standing: standing's own reason"
+    (testing "no longer standing: standing's own reason"
       (let [out (run-with modest {:decidable? false
                                   :blocked {:reason :premise-retracted :detail "d"}})]
         (is (= :premise-retracted (:status out)))
         (is (not= :escalate (:control out)))))
-    (testing "and a design that owes a person is still the round's ask"
+    (testing "and a design challenging the stance and revisiting the baseline the same"
       (let [out (run-with a-design {:decidable? true})]
-        (is (= :proceed (:status out)))
-        (is (= :escalate (:control out)))))))
+        (is (= :clearance-contended (:status out)))
+        (is (not= :escalate (:control out)))))))
 
 (defn- clearance-ledger
   "A real workstream on disk, built up to a design with the given `standing`,
@@ -479,7 +488,7 @@
   ([standing decision]
    (let [id   (:id (ws/create! :brian {:external-refs []}))
          add! (fn [kind record]
-                (ws/append-entry! :brian id {:kind kind} (pr-str record))
+                (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
                 (count (:entries (ws/read-ws :brian id))))
          _    (add! :intent {:format :intent :goal "g" :done-when ["d"]})
          b    (add! :baseline
@@ -511,10 +520,9 @@
 (deftest the-clearance-stage-writes-the-clearance-and-runs-no-round
   ;; The round that ended :clearance-contended already appended its decision, so
   ;; what is left is one write, made as often as it takes. Nothing here may
-  ;; re-run the round, turn the write into a grant, or clear a design that no
-  ;; proceeding decision names.
+  ;; re-run the round, or clear a design that no proceeding decision names.
   (with-redefs [record/run-round! (fn [_] (throw (ex-info "no round may run" {})))]
-    (testing "a design owing nobody"
+    (testing "a design conforming to the stance"
       (let [[id decide!] (clearance-ledger {:relation :conforms})]
         (with-redefs [stages/project+ws-from-cwd (fn [_] [:brian id])]
           (is (= :nothing-to-clear (record/clear! "/w")) "no decision, nothing to clear")
@@ -523,19 +531,28 @@
           (is (= 1 (clearances id)))
           (is (= :cleared (record/clear! "/w")) "asked again, it answers")
           (is (= 1 (clearances id)) "without writing a second clearance"))))
-    (testing "a design owing a person is not the clearance stage's to clear"
+    (testing "a design challenging the stance is cleared the same"
       (let [[id decide!] (clearance-ledger {:relation :challenges :note "n"})]
         (with-redefs [stages/project+ws-from-cwd (fn [_] [:brian id])]
           (decide!)
+          (is (= :cleared (record/clear! "/w")))
+          (is (= 1 (clearances id))))))
+    (testing "a proceed carrying a question the reading before it asked is nothing to clear"
+      (let [[id decide!] (clearance-ledger {:relation :conforms}
+                                           {:recommend :proceed
+                                            :checks [{:check :relation-honest :status :held :note "n"}]
+                                            :unpaired-recommend {:was :ask :seq 3 :asks "worth it?"}})]
+        (with-redefs [stages/project+ws-from-cwd (fn [_] [:brian id])]
+          (decide!)
           (is (= :nothing-to-clear (record/clear! "/w")))
-          (is (zero? (clearances id))))))))
+          (is (zero? (clearances id)) "the question is a person's until they answer it"))))))
 
 (deftest an-advisory-only-decision-clears-through-the-real-append-boundary
   ;; The append boundary is a reader of the clearance answer too, and the one a
   ;; stubbed `record/append!` never reaches. Asking for a literal :proceed there
   ;; left a conforming design whose round complained only about the cut with no
-  ;; way out at all: the boundary refused the clearance, and the gate offers no
-  ;; grant to a design owing nobody.
+  ;; way out at all: the boundary refused the clearance, and nothing else clears
+  ;; a design.
   (doseq [r [:amend :recut]]
     (let [[id decide!] (clearance-ledger
                         {:relation :conforms}
@@ -557,7 +574,7 @@
                   standing/of-design (constantly {:decidable? true})
                   ws/append-entry-at! (fn [& _] (swap! writes inc) {:refused :stale})]
       (binding [*err* (java.io.StringWriter.)]
-        (is (= :contended (@#'record/clear-if-owed-nobody! :nido "ws-1" 4))))
+        (is (= :contended (@#'record/clear-proceeding! :nido "ws-1" 4))))
       (is (< 100 @writes) "every refusal was asked again before it gave up"))))
 
 (deftest a-layering-complaint-alone-does-not-hold-a-design-round
@@ -571,9 +588,9 @@
                     (fn [_] (decision r :checks [(check :decomposable :broken)
                                                  (check :goal-served :held)]))
                     record/append! (fn [_ _] nil)]
-        (let [out (run record/design-judge-stage (ctx))]
-          (is (= :proceed (:status out)) (str "recommended " r))
-          (is (= :escalate (:control out)))
+        (let [out (clearing #(run record/design-judge-stage (ctx)))]
+          (is (= :cleared (:status out)) (str "recommended " r))
+          (is (= :advance (:control out)))
           (is (empty? (:findings out))
               "nothing is handed to an amender")))))
   (testing "and the complaint still reaches the human on the record"
@@ -605,10 +622,9 @@
   (is (false? (report/proceeds? (decision :amend :checks [(check :decomposable :broken)
                                                           (check :goal-served :broken)])))))
 
-(deftest an-advisory-only-decision-on-a-design-owing-nobody-is-cleared-not-parked
+(deftest an-advisory-only-decision-is-cleared-not-parked
   ;; The judge treats it as proceeding, so the clearance path has to as well —
-  ;; testing the recorded :recommend instead parked it for a person whose grant
-  ;; `grantable?`, reading the same :amend, would then refuse.
+  ;; testing the recorded :recommend instead parked it for a person.
   (let [modest (assoc a-design :standing {:relation :conforms}
                       :baseline {:seq 1 :relation :within})]
     (with-redefs [record/design-decision!
@@ -620,7 +636,7 @@
                   standing/of-design (constantly {:decidable? true})]
       (let [out (run record/design-judge-stage (ctx))]
         (is (= :clearance-contended (:status out))
-            "owed nobody, so what is owed is the clearance write")
+            "what is owed is the clearance write")
         (is (not= :escalate (:control out)))))))
 
 (deftest a-held-check-is-never-what-a-round-hands-over
@@ -1332,7 +1348,7 @@
 
 ;; ── Driven by the engine ────────────────────────────────────────────────────
 
-(deftest the-pipeline-ends-at-a-human-once-nothing-derivable-is-left
+(deftest the-pipeline-clears-the-design-once-nothing-derivable-is-left
   (let [round (atom 0)]
     (with-redefs [record/design-decision!
                   (fn [_] (if (= 1 (swap! round inc))
@@ -1348,10 +1364,10 @@
                                   (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                         (pr-str {:record a-design}))
                                   {:num-turns 3})]
-      (let [out (rloop/run-loop {:run-id "r-design" :cwd "/w"
-                                 :pipeline record/design-pipeline
-                                 :finding-key record/design-finding-key})]
-        (is (= :proceed (:status out)))
+      (let [out (clearing #(rloop/run-loop {:run-id "r-design" :cwd "/w"
+                                            :pipeline record/design-pipeline
+                                            :finding-key record/design-finding-key}))]
+        (is (= :cleared (:status out)))
         (is (= 3 (:iter out)) "the amendment's proceed is read a second time before it stands")))))
 
 (deftest an-amender-that-changes-nothing-stalls-instead-of-spinning
@@ -2058,7 +2074,8 @@
 
 (defn- judging-a-model-design
   "`f` called with the design stage reading `a-model-design` at seq 4 over an empty ledger, its
-   judge answering `answer` and every append landing in `appended`."
+   judge answering `answer`, every append landing in `appended`, and a proceeding round finding
+   the clearance its append writes (`clearing`)."
   [answer appended f]
   (with-redefs [record/design-decision! (fn [opts] (named-by answer opts))
                 record/append! (fn [_ r] (swap! appended conj r) nil)
@@ -2068,12 +2085,12 @@
                 settled/code-identity (constantly "tree")
                 settled/ledgers (constantly [])
                 design-check/elements (constantly {:status :listed :elements []})]
-    (f)))
+    (clearing f)))
 
 (deftest a-proceed-on-a-first-reading-is-read-again-before-anyone-is-asked
   ;; A design loop proceeded on one clean reading, and the next run broke the same claims on text
   ;; that had not changed. The first reading is kept, proceeds on no reader's reading of it, and so
-  ;; clears nothing; the second is the one that proceeds.
+  ;; clears nothing; the second is the one that proceeds and clears the design.
   (let [appended (atom [])
         read     (assoc (decision :proceed :checks [(check :relation-honest :held)])
                         :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})]
@@ -2085,8 +2102,8 @@
          (is (= ["rounded-once"] (:read-once (first @appended))))
          (is (false? (report/proceeds? (first @appended))) "so appending it writes no clearance")
          (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
-           (is (= :proceed (:status r2)))
-           (is (= :escalate (:control r2)))))))))
+           (is (= :cleared (:status r2)))
+           (is (= :advance (:control r2)))))))))
 
 (deftest a-quiet-reading-is-a-round-of-the-decisions-account
   ;; agentic-rag: 'How this was arrived at' listed the amends as rounds 1 and 2 when the report had
@@ -2102,7 +2119,7 @@
                 (select-keys (last (:history r1)) [:iter :quiet :amended? :read-once]))
              "the quiet round enters the history at its own round number")
          (let [r2 (run record/design-judge-stage (ctx :iter 4 :history (:history r1) :carry (:carry r1)))]
-           (is (= :proceed (:status r2)))
+           (is (= :cleared (:status r2)))
            (is (= [{:round 2 :amended true} {:round 3 :quiet true :recommend "proceed"}]
                   (:trajectory (last @appended)))
                "rounds are named by the run's number, and the quiet one is said, not skipped")))))))
@@ -2137,7 +2154,7 @@
          (is (true? (:amendment-read-once (first @appended))))
          (is (false? (report/proceeds? (first @appended))) "so appending it writes no clearance")
          (let [r2 (run record/design-judge-stage (ctx :iter 3 :history amended :carry (:carry r1)))]
-           (is (= :proceed (:status r2)) "the second reading of the amendment proceeds")
+           (is (= :cleared (:status r2)) "the second reading of the amendment proceeds")
            (is (nil? (:amendment-read-once (last @appended))))))))))
 
 ;; Watched twice on one workstream: a design not yet built had every claim held :owed, so nothing
@@ -2154,7 +2171,7 @@
          (is (= :next-round (:control r1)) "one judge's word that a claim is sound is a sample of it")
          (is (= ["rounded-once"] (:read-once (first @appended))))
          (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
-           (is (= :proceed (:status r2)) "a second owed ruling pairs the first, so the run proceeds")
+           (is (= :cleared (:status r2)) "a second owed ruling pairs the first, so the run proceeds")
            (is (nil? (:read-once (last @appended))))))))))
 
 ;; Watched: a round asked the person with no derivable finding, and the round after it broke three
@@ -2210,8 +2227,9 @@
                "the later reading must not replace the ask with nothing to show there was one")
            (is (= (:asks asks-the-person) (:asks d2))
                "a judge never shown the question has not answered it, so the proceed carries it")
-           (is (= :proceed (:status r2)) "the proceed parks for the person, who reads the question")
+           (is (= :asked (:status r2)) "the proceed does not proceed: the round stops for the person")
            (is (= :escalate (:control r2)))
+           (is (false? (report/proceeds? d2)) "so its append clears nothing")
            (is (report/validate-event :design-decision d2) "and the ledger takes it")))))))
 
 ;; Watched (ws-20261013-f8b578): a first reading asked two questions, the cold second reading of the
@@ -2266,12 +2284,12 @@
            (is (= (:asks asks-the-person) (:asks d2)) "one question, put once")))))))
 
 (deftest a-proceed-over-a-standing-ask-writes-no-clearance
-  ;; A design owing nobody is cleared by its proceeding decision's append, which would answer the
-  ;; carried question for nobody.
+  ;; A design is cleared by its proceeding decision's append, which here would answer the carried
+  ;; question for nobody.
   (let [cleared (atom 0)]
-    (with-redefs [ws/append-entry! (fn [& _] "/l/7.edn")
+    (with-redefs [ws/append-decision! (fn [& _] "/l/7.edn")
                   ws/seq-of-path (constantly 7)
-                  record/clear-if-owed-nobody! (fn [& _] (swap! cleared inc) nil)]
+                  record/clear-proceeding! (fn [& _] (swap! cleared inc) nil)]
       (record/append! [:nido "ws-1"] {:format :design-decision :recommend :proceed :design-seq 4
                                       :checks [(check :goal-served :held)] :asks "a"
                                       :unpaired-recommend {:was :ask :seq 3 :asks "a"}})
@@ -2306,7 +2324,7 @@
            (is (= :next-round (:control r1)) "an amendment's first reading is read again")
            (is (nil? (:read-once (second @appended)))
                "the person's answer settles a claim they are asked about; another judge cannot")
-           (is (= :proceed (:status r2)) "so this reading ends the run, at the person")
+           (is (= :asked (:status r2)) "so this reading ends the run, at the person")
            (is (= (:asks ask) (:asks (second @appended))) "holding the question it was asked")))))))
 
 ;; Watched: a 'carries no X' claim, X not yet built, alternated holds and owed for two rounds — both
@@ -2329,7 +2347,7 @@
          (let [r1 (run record/design-judge-stage (ctx))
                r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
            (is (= [nil :claude] @asked) "the second reading is asked of the other judge")
-           (is (= :proceed (:status r2)) "two judges calling the claim sound is the pair")
+           (is (= :cleared (:status r2)) "two judges calling the claim sound is the pair")
            (is (= [{:id "rounded-once" :was :owed :now :holds}] (:unpaired (second @appended)))
                "the flip is on the ledger, not overwritten by the later ruling")))))))
 
@@ -2476,8 +2494,7 @@
       (is (= [:relation-honest] (mapv :check (:findings out)))))))
 
 (deftest an-ask-parks-even-where-a-proceed-would-clear
-  ;; A design declaring :conforms/:within owes nobody a grant, so a proceed clears it and nobody
-  ;; reads its ask. The judge's way to reach a person there is :ask, and nothing may read an :ask
+  ;; A proceed clears the design and nobody reads its ask. The judge's way to reach a person there is :ask, and nothing may read an :ask
   ;; as proceeding — not even when the only check it broke is the advisory one.
   (is (false? (report/proceeds? (decision :ask :checks [(check :decomposable :broken)]))))
   (let [modest (assoc a-design :standing {:relation :conforms}

@@ -1047,19 +1047,21 @@ commitment — in which case it re-runs the survey and re-states the design
 against the corrected one. Everything derivable is derived, so what reaches you
 at the end is only the judgement that could not be.
 
-**When the person answers that judgement go in chat, record it as the grant:**
+**No person approves a design.** It is built once a decision round proceeds on
+it, and the round writes the clearance itself. A round that stops for a person
+(`:asked`, `:disputed`, `:underivable`) is parked as a `:blocker`; the person
+answers that blocker — on the gate, or in chat as
 
 ```bash
-bb nido:design:approve :project <p> :ws-id <id> :design-seq <n> \
-  :note "what the person said, in their words"
+bb nido:workstream:blocker:answer :project <p> :ws-id <id> \
+  :answer "what the person said, in their words"
 ```
 
-It writes the same `:design-approved` the gate's Approve writes, and answers a
-round that proceeded or asked; it refuses one that sent the record back. Never
-record a go in a superseding design's `:summary` or `:supersedes :why`: nothing
-that reads grants reads them. An answer that is not a go is an amendment, with
-the person's answer in their words, and the entry whose ask it settles, as its
-`:supersedes :why`. What the answer changes decides which record it amends:
+— and the next round reads the answer before it judges again. Answering never
+lets the design proceed by itself. When the answer changes the design or its
+goal, write the amendment instead, with the person's answer in their words, and
+the entry whose ask it settles, as its `:supersedes :why`. What the answer
+changes decides which record it amends:
 
 - **What the work is for, or when it is done** — a `:done-when` relaxed, an
   exception made to one, the goal narrowed — supersedes the **intent**. Adopted
@@ -1068,7 +1070,7 @@ the person's answer in their words, and the entry whose ask it settles, as its
   which one governs, every round and every run after, however plainly the
   design's `:why` quotes them. The intent append prints the baseline and design
   the amended goal now owes; the new design cites the new intent, and carries a
-  go-ahead already given as `:granted` (below), because a grant never reaches
+  go-ahead already given as `:granted` (below), because an answer never reaches
   across a changed premise.
 - **How the design meets an unchanged intent** — supersedes the **design**.
 
@@ -1076,10 +1078,10 @@ A round reads a design or intent you write after its ask as the reply (ANSWERED
 SINCE) and stops posing the question; the same written by the loop's amender
 answers nothing.
 
-When you amend after the person already granted cost or a `:revisit` in chat,
+When you amend after the person already accepted a cost or a `:revisit` in chat,
 carry it in the amendment as `:supersedes {:seq <n> :why "…" :granted "…"}`, in
-their words. A round reads it as it reads a `:design-approved` note — only on a
-record you wrote, never on the amender's.
+their words. A round reads it as the person's reply — only on a record you
+wrote, never on the amender's.
 
 Add `:seq <n>` to the baseline loop when the workstream holds more than one
 survey and you mean a particular one; the default is the newest, which is the

@@ -50,7 +50,7 @@
   []
   (let [id      (:id (ws/create! :brian {:external-refs []}))
         seq-now #(count (:entries (ws/read-ws :brian id)))
-        add     (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record)) (seq-now))
+        add     (fn [kind record] (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record))) (seq-now))
         stamped (fn [record] (ws/append-stamped! :brian id record) (seq-now))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
     (add :baseline a-baseline)
@@ -63,6 +63,19 @@
   (let [t (stamped {:format :tension :by seat :to :conductor :about ["agg"] :statement "two secrets"})]
     (stamped {:format :recut :by {:as :person} :ids ids :why "split the aggregate"
               :tensions [{:seq t}]})))
+
+(defn- clear!
+  "A proceeding decision round on the design at `d` of workstream `id`, and the clearance it
+   earns, written at the position it compares. Returns the clearance's seq."
+  [id d]
+  (ws/append-decision! :brian id
+                    (pr-str {:format :design-decision :recommend :proceed :design-seq d
+                             :reason "r" :asks "worth it?"
+                             :checks [{:check :relation-honest :status :held :note "n"}]}))
+  (let [at (count (:entries (ws/read-ws :brian id)))]
+    (ws/append-entry-at! :brian id at {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq d}}))
+    (inc at)))
 
 (deftest a-ledger-with-no-generation-is-wholly-its-first
   (with-tmp
@@ -77,14 +90,14 @@
         (is (= d (generation/current-design (w))))
         (is (nil? (generation/fixed-ids (w))) "nothing marked, nothing fixed")))))
 
-(deftest a-first-generation-fixes-its-ids-when-a-marking-design-is-approved
+(deftest a-first-generation-fixes-its-ids-when-a-marking-design-is-cleared
   (with-tmp
     (fn []
       (let [[_ add _ w] (ledger)
             d (add :design (a-design 2 ["agg"]))]
         (is (nil? (generation/fixed-ids (w))) "a draft's marks bind nothing")
         (is (= #{"agg"} (generation/defining-ids (ws/entry-at-seq :brian (:id (w)) d))))
-        (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+        (clear! (:id (w)) d)
         (is (= #{"agg"} (generation/fixed-ids (w))))
         (testing "a later design of the generation is held to them"
           (is (thrown-with-msg? Exception #"fixed its generation-defining ids"
@@ -99,10 +112,10 @@
       (let [[id add stamped w] (ledger)
             d1 (add :design (a-design 2 ["agg"]))]
         (is (nil? (generation/fixing-design (w))) "a draft fixes nothing")
-        (add :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+        (clear! id d1)
         (is (= d1 (generation/fixing-design (w))))
         (let [d2 (add :design (a-design 2 ["agg"] :supersedes {:seq d1 :why "amended"}))]
-          (add :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (clear! id d2)
           (is (= d1 (generation/fixing-design (w))) "an amendment is held to the design that fixed them"))
         (let [r (recut! stamped ["agg" "split"])]
           (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "split it"
@@ -153,7 +166,7 @@
     (fn []
       (let [[id add stamped w] (ledger)
             d1 (add :design (a-design 2 ["agg"]))
-            _  (add :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+            _  (clear! id d1)
             r  (recut! stamped ["agg" "split"])
             _  (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "split it"
                                                :ids ["agg" "split"] :base-rev "abc"})
@@ -180,8 +193,10 @@
             (is (= d2 (generation/current-design (w))))
             (testing "and nothing else of the first generation may be cited"
               (is (thrown-with-msg? Exception #"cites entry .*, of generation 1"
-                                    (add :design-approved {:format :design-approved
-                                                           :design {:seq d1} :at-seq d1}))))))))))
+                                    (add :design-decision {:format :design-decision :recommend :proceed
+                                                           :design-seq d1 :reason "r" :asks "worth it?"
+                                                           :checks [{:check :relation-honest
+                                                                     :status :held :note "n"}]}))))))))))
 
 (deftest a-generation-opens-only-from-a-recut-of-the-one-it-closes
   (with-tmp

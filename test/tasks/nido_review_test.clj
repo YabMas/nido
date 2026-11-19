@@ -1478,7 +1478,7 @@
 
 (deftest design-cmd-drives-the-design-pipeline
   (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :proceed})]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :cleared})]
       (with-out-str (t/design-cmd ":cwd" "/w"))
       (is (= record/design-pipeline (:pipeline @seen)))
       (is (= record/design-finding-key (:finding-key @seen)))
@@ -1490,12 +1490,13 @@
 (deftest design-cmd-hands-over-the-question-it-could-not-answer
   ;; The whole point of the round: everything derivable is derived so that what
   ;; reaches a human is only the judgement that cannot be.
-  (with-redefs [rloop/run-loop (fn [_] {:status :proceed
-                                        :record {:asks "is this worth doing now, at this cost?"}})]
+  (with-redefs [rloop/run-loop (fn [_] {:status :asked
+                                        :record {:recommend :ask
+                                                 :asks "is this worth doing now, at this cost?"}})]
     (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
       (is (str/includes? out "FOR YOU TO DECIDE"))
       (is (str/includes? out "is this worth doing now, at this cost?"))
-      (is (str/includes? out "the part only you can answer")))))
+      (is (str/includes? out "something only you can repair")))))
 
 (deftest design-cmd-holds-back-a-question-that-waits-on-a-repair
   ;; A capped run that ended at its :amend judgement printed its "after the corrections, do you
@@ -1510,24 +1511,25 @@
       (is (str/includes? out "do you grant the scope?") "and still shown, so the person sees what is coming")
       (is (not (str/includes? out "FOR YOU TO DECIDE"))))))
 
-(deftest an-ask-names-the-grant-a-go-is-recorded-as
-  ;; A go written into the design's prose is read by no grant reader, so the next round asks the
-  ;; same question again. The hand-over has to name the one record that is read.
+(deftest an-ask-names-the-blocker-its-answer-is-recorded-as
+  ;; An answer written into the design's prose is read by no round, so the next round asks the
+  ;; same question again. The hand-over has to name the record that is read.
   (with-redefs [rloop/run-loop (fn [_] {:status :asked
                                         :record {:recommend :ask :design-seq 50
                                                  :asks "is this worth doing now, at this cost?"}})]
     (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
-      (is (str/includes? out "bb nido:design:approve :project <p> :ws-id <id> :design-seq 50"))
+      (is (str/includes? out "bb nido:workstream:blocker:answer :answer \"<what the person said>\""))
+      (is (not (str/includes? out "nido:design:approve")) "nothing a person writes approves a design")
       (is (not (str/includes? out "amend the design or its intent to say so"))
           "that advice is what sent a go into :summary prose")))
   (with-redefs [rloop/run-loop (fn [_] {:status :nothing-to-amend
                                         :record {:recommend :amend :design-seq 50
                                                  :asks "?"}})]
     (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
-      (is (not (str/includes? out ":design-seq 50 :note"))
-          "a record sent back is not granted as though the round had proceeded")
-      (is (str/includes? out ":over-sendback? true")
-          "the person may still build it as it stands, by a grant over the send-back"))))
+      (is (not (str/includes? out "blocker:answer"))
+          "a record sent back is no question parked for a person")
+      (is (not (str/includes? out "nido:design:approve"))
+          "and no grant builds it as it stands"))))
 
 (deftest design-cmd-names-a-check-it-had-no-yardstick-for
   (with-redefs [rloop/run-loop (fn [_] {:status :underivable
@@ -1550,8 +1552,7 @@
 
 (deftest every-design-terminal-status-names-its-own-remedy
   (doseq [[status marker]
-          {:proceed            "only you can answer"
-           :asked              "only you can repair"
+          {:asked              "only you can repair"
            :underivable        "no yardstick"
            :nothing-to-amend   "named nothing an amender could repair"
            :disputed           "neither can settle it"

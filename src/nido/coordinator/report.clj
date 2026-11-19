@@ -1835,20 +1835,17 @@
    'amend the goal to …' grants :intent, so the seat writes the amendment the person chose instead
    of handing it back as a command to run. The card says so beside the option, the answer
    records it, and the commit gate lets the seat append one entry of each kind granted
-   (conductor/granted?). Only `grantable-kinds`: closing stays the person's own, and so does
-   approving a design — which no seat is handed, because the person's pick does it.
+   (conductor/granted?). Only `grantable-kinds`: closing stays the person's own.
 
-   :approves-design names the design entry picking the option approves. The pick itself is then
-   the person's grant: the click records the same :design-approved the chat command does, for
-   that design, before the answer — or is refused, recording nothing, when that design is not
-   the newest or its decision sent it back (work/grant-design!)."
+   No option approves a design: a design is built when its decision round proceeds, and an
+   option picked over a design question is an answer the next round reads. Blockers written
+   while an option could carry :approves-design still read — read schemas are open."
   [:map {:closed true}
    [:label           string?]
    [:summary         string?]
    [:consequence     {:optional true} string?]
    [:recommended?    {:optional true} boolean?]
-   [:grants          {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]
-   [:approves-design {:optional true} pos-int?]])
+   [:grants          {:optional true} [:vector {:min 1} (into [:enum] grantable-kinds)]]])
 
 (def BlockerQuestion
   "One question of a blocker that asks several (Blocker :questions), in a question's own parts:
@@ -3246,13 +3243,12 @@
    suggestions forever, so the question is split by who can answer it: everything
    derivable is derived into :checks, and :asks carries the irreducible judgement
    — worth doing, now, at this cost — to a human. :asks is required, and never
-   blank, only on an :ask, which stops for it. On any other branch it is absent
-   when nothing is left for a person — a grant or an answer already covers it —
-   and otherwise the question a person is asked once the decision has been acted
-   on. A person reads it only where one is stopped: a :proceed on a design that
-   `owes-a-person?`, or an :ask. A :proceed on a design owing nobody clears it
-   (`DesignCleared`) and its :asks is recorded for nobody in particular, which the
-   judge is told before it answers.
+   blank, only on an :ask, which stops for it: the driver parks it as a blocker,
+   and the person's answer is read by the next round, which must still proceed
+   before anything is built. On any other branch it is absent when nothing is left
+   for a person — an answer already covers it — and otherwise recorded for nobody
+   in particular: a :proceed clears the design (`DesignCleared`) without stopping,
+   which the judge is told before it answers.
 
    :recommend is what the derivation supports. :proceed means nothing derivable
    blocks it. The other four each name a different remedy, and saying the wrong
@@ -3681,6 +3677,12 @@
 (def DesignApproved
   "A human approved this design, at this position in the ledger.
 
+   READ-ONLY HISTORY. Nothing writes one any more — a design is built when its decision round
+   proceeds, and a person's judgement reaches a round as a blocker's answer — so the write
+   contract refuses every append (`DesignApprovedRefused`) and this is the read contract alone:
+   ledgers written while a grant was a person's move still hold them, and they keep counting
+   toward a design's clearance and answering a verdict appended before them.
+
    Before this, approval existed only as an argument to a resume: work/approve
    resumed the parked agent and wrote nothing, so `was this decided` was nowhere
    a reader could ask it. A landing gate needs that answer, and a decision whose
@@ -3717,10 +3719,16 @@
    [:from    {:optional true} [:map {:closed true} [:seq int?]]]
    [:overrules {:optional true} [:= true]]])
 
+(def DesignApprovedRefused
+  "The write contract for :design-approved: nothing is admitted. See `DesignApproved`."
+  [:fn {:error/message (str "a :design-approved is no longer written: a design is built when its"
+                            " decision round proceeds, and a person's judgement reaches the round"
+                            " as a blocker's answer")}
+   (constantly false)])
+
 (def DesignCleared
-  "A decision round found this design implementable without a person: it
-   recommended proceeding, nothing blocked it, and its own declarations owed
-   nobody a grant.
+  "A decision round found this design implementable: it recommended proceeding and
+   nothing blocked it.
 
    RECORDED rather than recomputed, and that is the whole of why it exists. The
    three parts could be composed on demand from records that stay put — a
@@ -3747,27 +3755,6 @@
   [:map {:closed true}
    [:format [:= :design-cleared]]
    [:design [:map {:closed true} [:seq int?]]]])
-
-(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
-  owes-a-person?
-  "Does this design record, on its own, say something high-level is at stake?
-
-   Over the RECORD ALONE and never the ledger, which is what lets the append
-   boundary and `standing` ask it without one calling the other. Two
-   declarations, both already required and both already carrying their
-   obligations: `:challenges` against the project stance needs a note,
-   `:revisit` against the baseline must name what it `:breaks`. A change that
-   declares neither is saying it lands on an existing extension point and adds
-   no commitment — which is the case a person was being asked about for no
-   reason.
-
-   The declarations decide whether a GRANT is owed. They never decide whether
-   the decision round runs: that round is what falsifies them against the
-   record, and a design no round has judged is not cleared by saying so about
-   itself."
-  [design]
-  (boolean (or (= :challenges (get-in design [:standing :relation]))
-               (= :revisit    (get-in design [:baseline :relation])))))
 
 (def ^:private advisory-checks
   "The derived checks that may not block.
@@ -3805,13 +3792,14 @@
    Never while the round left a check it was handed :unruled, or a baseline id :relation-unruled — a
    decision that did not rule on either has not derived that nothing blocks it, whatever it
    recommended — nor while it is the first reading of a claim it confirmed (:read-once), or of a
-   record its own run amended (:amendment-read-once).
+   record its own run amended (:amendment-read-once), nor while the reading before it in its run
+   asked a person a question this one answers by not asking (:unpaired-recommend): that question
+   is still a person's, and a design is built only once a round proceeds with it answered.
 
    ONE definition, over the record alone, for every reader that asks it: the
    judge that ends the round, the clearance writer and the boundary that admits
-   its record, the position fold, and the gate that offers a grant. A reader
-   testing the recorded :recommend instead is how an advisory-only design came to
-   be parked for a person whose grant nothing then accepted."
+   its record, and the position fold. A reader testing the recorded :recommend
+   instead is how an advisory-only design came to be parked for a person."
   [decision]
   (let [broken (filter #(= :broken (:status %)) (:checks decision))]
     ;; An :ask is exempt from the advisory reading: it names a question for a person, and a
@@ -3821,6 +3809,7 @@
                   (empty? (:relation-unruled decision))
                   (empty? (:read-once decision))
                   (not (:amendment-read-once decision))
+                  (not (:unpaired-recommend decision))
                   (or (= :proceed (:recommend decision))
                       (and (seq broken) (every? (comp advisory-checks :check) broken)))))))
 
@@ -4398,7 +4387,7 @@
    :proposed-ticket          ProposedTicket
    :proposed-tickets         ProposedTickets
    :retraction               Retraction
-   :design-approved          DesignApproved
+   :design-approved          DesignApprovedRefused
    :design-cleared           DesignCleared
    :session-diagnosis        SessionDiagnosis
    :session-restored         SessionRestored
@@ -4483,7 +4472,10 @@
    ;; improvement written before improvements had their own product sections
    ;; carries the bug's.
    :proposed-ticket ProposedTicketAny
-   :proposed-tickets ProposedTicketsRead})
+   :proposed-tickets ProposedTicketsRead
+   ;; Nothing writes a grant any more; the ledgers written while a person granted designs still
+   ;; hold them, and read under the shape they were written in.
+   :design-approved DesignApproved})
 
 (def ^:private compiled-schemas
   "[contract kind] → a delay of the compiled schema that pair validates under,
@@ -4617,22 +4609,17 @@
 
 (defn- questions-problems
   "What is wrong with a body's :questions, each as the instruction that fixes it: ids out of
-   order, the first question that is not one question, named, and an option that approves a
-   design — which a question among several cannot, since a pick there is not the whole answer.
-   Empty for a body that asks in :needs."
+   order, and the first question that is not one question, named. Empty for a body that asks in
+   :needs."
   [questions]
   (let [ids       (mapv :id questions)
-        bad       (first (remove (comp one-question? :question) questions))
-        approving (some #(when (some :approves-design (:options %)) (:id %)) questions)]
+        bad       (first (remove (comp one-question? :question) questions))]
     (cond-> []
       (not= ids (mapv #(str "q" %) (range 1 (inc (count questions)))))
       (conj (str ":questions are numbered q1, q2… in order, not " (str/join ", " ids)))
       bad
       (conj (str ":questions " (:id bad) " is not one question — each is one sentence of at most "
-                 needs-max " characters ending in '?'; move its situation and reasoning to its :context"))
-      approving
-      (conj (str ":questions " approving " has an option that approves a design; approving one is "
-                 "a whole answer, so ask it alone in :needs")))))
+                 needs-max " characters ending in '?'; move its situation and reasoning to its :context")))))
 
 (defn- blocker-part-problems
   "What is missing or malformed in a blocker written today, each as the instruction that fixes it.

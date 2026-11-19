@@ -111,7 +111,7 @@
                  ;; entry is named as the design decided, never as the command's argument.
                  :decide-design   (str "bb nido:review:design"
                                        (when design (str " (it decides the newest design, entry " design ")"))
-                                       ", then approve it unless the round cleared it")))]
+                                       " — until it proceeds, which clears it")))]
     (if (empty? owed)
       []
       (into [(str "The goal amended to entry " (:intent (first owed)) " still owes, in order:")]

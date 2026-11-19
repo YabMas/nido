@@ -93,9 +93,6 @@
      (str "Choosing an answer records it. A session parked on the question resumes with it; "
           "otherwise it waits on the ledger for whoever takes the workstream up next."))
    (case id
-     :approve      "Approves the design; the workstream goes on to implement it."
-     :redesign     "Sends the design back to be redesigned against the review's finding."
-     :hold-design  "Accepts the design as it stands despite the finding; the work goes on."
      :assert-gate  "Records what you observed as the gate's evidence and opens the next phase."
      :land         (str "Queues the pull request on nido's merge lane, which drives it home with "
                         "/drive-home in its session and merges it.")
@@ -156,15 +153,13 @@
    :merge  "the seat lands the workstream's own PR itself, once"})
 
 (defn- blocker-option
-  "A blocker's option as the card shows it. What picking it does beyond answering — approving a
-   design, handing the seat an act — is said beside the consequence: the person should see it
-   before they pick it."
-  [{:keys [label summary consequence recommended? grants approves-design]}]
-  (let [approves (when approves-design
-                   (str "Choosing this approves the design at entry " approves-design "."))
-        granted  (when (seq grants)
-                   (str "Choosing this, " (str/join " and " (keep grant-phrases grants)) "."))
-        said     (str/join " " (remove str/blank? [consequence approves granted]))]
+  "A blocker's option as the card shows it. What picking it does beyond answering — handing the
+   seat an act — is said beside the consequence: the person should see it before they pick it.
+   An :approves-design an older blocker carries is not said, because picking it approves nothing."
+  [{:keys [label summary consequence recommended? grants]}]
+  (let [granted (when (seq grants)
+                  (str "Choosing this, " (str/join " and " (keep grant-phrases grants)) "."))
+        said    (str/join " " (remove str/blank? [consequence granted]))]
     (cond-> {:label label :summary (str summary)}
       (not (str/blank? said)) (assoc :consequence said)
       recommended?            (assoc :recommended? true))))
@@ -221,22 +216,6 @@
                  (when (and (next (report/blocker-questions r))
                             (some #(= :answer-questions (:id %)) actions))
                    :answer-questions))}
-
-   :approve-design
-   {:guidance "approve-design"
-    :record   (fn [_ newest _] (newest :design-decision))
-    :question (fn [{:keys [asks]}] asks)
-    :context  (fn [{:keys [reason recommend]}]
-                (non-blank (when recommend (str "The design round recommends: " (name recommend) "."))
-                           reason))}
-
-   :acknowledge-invalidation
-   {:guidance "acknowledge-invalidation"
-    :record   (fn [_ newest _] (newest :design-verdict))
-    :question (fn [{:keys [needs]}]
-                (or (not-empty needs)
-                    "The review found the design does not hold. Redesign it, or accept it as it stands?"))
-    :context  (fn [{:keys [reason]}] (non-blank reason))}
 
    :assert-gate
    {:record   (fn [_ _ actions] {:criterion (some :criterion actions)})
@@ -391,10 +370,12 @@
 (defn ^{:malli/schema [:=> [:cat :keyword] :string]}
   guidance
   "The guidance an author of a `kind` question is briefed with: the generic asking guidance, then
-   the kind's addendum when it has one. `:escalation` is a kind here though no move is owed for it —
-   it is the conductor's own way of asking."
+   the kind's addendum when it has one. `:escalation` and `:design-question` are kinds here though
+   no move is owed for either: the first is the conductor's own way of asking, the second a design
+   round's, whose question reaches the person as the blocker the driver parks on it."
   [kind]
-  (let [addendum (or (get-in registry [kind :guidance]) (when (= :escalation kind) "escalation"))]
+  (let [addendum (or (get-in registry [kind :guidance])
+                     ({:escalation "escalation" :design-question "design-question"} kind))]
     (str/join "\n\n"
               (cond-> [(str/trim (slurp (asking-file "ask")))]
                 (and addendum (fs/exists? (asking-file addendum)))

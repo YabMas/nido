@@ -1402,8 +1402,8 @@
     (is (str/includes? html "write the design"))))
 
 (deftest a-row-waiting-on-a-human-is-lit-and-one-that-is-not-is-muted
-  (let [mine  (str (h/html (board-row {:at :design-decided
-                                       :next {:stage :approve-design :mode :human}})))
+  (let [mine  (str (h/html (board-row {:at :blocked
+                                       :next {:stage :answer-blocker :mode :human}})))
         nido' (str (h/html (board-row {:at :baselined
                                        :next {:stage :verify-baseline :mode :mechanical}})))]
     (is (str/includes? mine "pos pos-you")
@@ -1464,9 +1464,9 @@
     (doseq [s ["Intent" "Baseline" "Design" "Implementation"]]
       (is (str/includes? html s) (str s " has a row")))))
 
-(deftest a-design-cleared-without-a-person-says-no-approval-was-owed
+(deftest a-design-cleared-without-a-person-says-its-round-cleared-it
   (let [cleared (assoc-in a-pane [:holds :design :decided?] false)]
-    (is (str/includes? (views/workstream-pane cleared {}) "no approval owed"))
+    (is (str/includes? (views/workstream-pane cleared {}) "cleared by its round"))
     (is (str/includes? (views/workstream-pane
                         (assoc-in cleared [:holds :design :cleared?] false) {})
                        "not yet cleared to build"))))
@@ -1882,12 +1882,11 @@
 (deftest the-action-bar-never-accepts-a-questioned-verdict
   ;; Such a verdict is a gate, and a gate is answered on its card; the bar beside no card
   ;; offers neither the Accept nor the Defer, and no link elsewhere to find them.
-  (with-redefs [work/grantable? (constantly false)]
-    (let [html (str (h/html (#'views/pane-action-bar "brian" "ws-1" nil :triage [{:parked? true :name "s"}]
-                                                     two-question-report nil nil false)))]
-      (is (not (str/includes? html "/apply")) "the bar never accepts a verdict whose questions it hides")
-      (is (not (str/includes? html "/defer")))
-      (is (not (str/includes? html "Needs you ▸")) "and points nowhere else"))))
+  (let [html (str (h/html (#'views/pane-action-bar "brian" "ws-1" nil :triage [{:parked? true :name "s"}]
+                                                   two-question-report nil nil false)))]
+    (is (not (str/includes? html "/apply")) "the bar never accepts a verdict whose questions it hides")
+    (is (not (str/includes? html "/defer")))
+    (is (not (str/includes? html "Needs you ▸")) "and points nowhere else")))
 
 (deftest a-gated-workstream-answers-on-its-card-and-not-beside-it
   (let [html (gate-in-pane (two-question-gate))]

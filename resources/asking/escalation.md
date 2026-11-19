@@ -1,6 +1,6 @@
 ## When you escalate a hand-back
 
-If the person already owes the workstream a move — a design to approve, a blocker to answer, a
+If the person already owes the workstream a move — a blocker to answer, a phase gate to assert, a
 triage to accept — nido shows your escalation as a note on that card. Write the note as what you
 would add to that question: what changed, what you recommend. Do not restate the question.
 

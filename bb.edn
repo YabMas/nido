@@ -329,11 +329,6 @@
    :doc "Check a worktree against the project's declared design (fukan canvas/). Exits 1 on a violation, 2 when undecidable. [:cwd <dir>]"
    :task (apply nido-design/cmd *command-line-args*)}
 
-  nido:design:approve
-  {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Record a person's go, given in chat, as the grant of a design — the same :design-approved the gate's Approve writes. Answers a decision that proceeds or asks; refuses one that sent the record back unless :over-sendback? true, which grants it with the person's words and names the findings it leaves open. :project <p> (:ws-id <id> | :ref <BR-####>) :design-seq <n> [:note <what the person said>] [:over-sendback? true]"
-   :task (apply nido-workstream/approve-cmd *command-line-args*)}
-
   nido:design:diff
   {:requires ([tasks.nido-design :as nido-design])
    :doc "Show what this branch changes about the project's declared design, rendered by fukan at both ends. A reading, not a gate: exits 0 whatever it finds. [:from main] [:cwd <dir>] [:scope <selection>]"
@@ -867,7 +862,7 @@
 
   nido:ask:guidance
   {:requires ([tasks.nido-ask :as nido-ask])
-   :doc "How to word a question for the person: the generic asking guidance plus a kind's addendum. [:kind answer-blocker|approve-design|acknowledge-invalidation|escalation|…]"
+   :doc "How to word a question for the person: the generic asking guidance plus a kind's addendum. [:kind answer-blocker|design-question|escalation|…]"
    :task (apply nido-ask/guidance-cmd *command-line-args*)}
 
   nido:owed

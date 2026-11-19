@@ -15,8 +15,7 @@
   [:map [:decided? :boolean]
         [:decidable? :boolean]
         [:blocked [:maybe :any]]
-        [:approved-by [:maybe :any]]
-        [:owes-person? {:optional true} :boolean]])
+        [:approved-by [:maybe :any]]])
 
 (Module record-standing
   "Whether a design or baseline record still stands, derived from the ledger's own citations.
@@ -67,9 +66,6 @@
      position and the board's count alike."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:set :string]]
      :delegates [workstream/entries-of generation/current-span]})
-  (Operation why-not-decided
-    "Why a standing is not decided, in words a person can act on. nil when it is."
-    {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]})
   (Operation ever-chose?
     "Whether a stage was ever chosen for the workstream — what tells work started once from work
      never started."

@@ -32,9 +32,10 @@
    working copy still mean nothing here.
 
    Both new causes are answerable, and by records this vocabulary already has: a
-   superseding design cites the corrected baseline, and an approval appended
-   after an invalidating verdict is a person having read it and granted the
-   design anyway.
+   superseding design cites the corrected baseline, and a superseding design
+   replaces the one a verdict invalidated. An approval appended after an
+   invalidating verdict answers it too — a person having granted the design
+   anyway — though nothing writes one any more and only older ledgers hold one.
 
    Lives beside the ledger rather than inside it. The store must not know which
    review verdicts count as verification — that is this module's secret, and the
@@ -150,7 +151,9 @@
    has answered, or nil.
 
    ANSWERED means an approval naming this design appended after the verdict —
-   a person shown the invalidation who granted the design regardless. Compared by
+   a person shown the invalidation who granted the design regardless, on a ledger
+   from before grants stopped being written. Otherwise only a superseding design
+   answers it, by no longer being the design this is asked of. Compared by
    :seq rather than by presence, because a design approved BEFORE the round ran is
    exactly the case this exists to catch: that grant was made against a reading
    the verdict has since contradicted.
@@ -174,7 +177,9 @@
 
    :decidable? is the question the design round asks before it will judge:
    this design is not retracted, and the baseline it NAMES was found sufficient
-   at exactly that number. :decided? adds the human's grant.
+   at exactly that number. :cleared? adds that something said it may be built —
+   the round's clearance, or a grant an older ledger holds; :decided? is the
+   grant alone.
 
    Supersession never blocks. A baseline corrected but not retracted still
    stands, and a design citing it is decidable exactly when a verdict naming
@@ -292,7 +297,7 @@
                           {:reason :design-invalidated :seq invalidated
                            :detail (str "the review round at entry " invalidated
                                         " found this design invalid rather than its"
-                                        " execution, and no approval since answers it")}
+                                        " execution — a superseding design answers it")}
 
                           ;; ABOVE the premise clauses, and the order is the
                           ;; claim. A moved goal is the deeper fact: re-verifying
@@ -372,31 +377,28 @@
                                         ", after this design was written — the design"
                                         " stands on a reading nobody holds any more")})]
             ;; :blocked answers ONE question — what stops this design being
-            ;; DECIDABLE — and the absence of an approval is deliberately not in
-            ;; it. The premise gate reads this before a human has had anything
-            ;; to approve, and a gate that refused an unapproved design would
-            ;; make the design round unreachable. What wants both is :cleared?
-            ;; below, and every reader that gates on the arc asks that.
+            ;; DECIDABLE — and the absence of a clearance is deliberately not in
+            ;; it. The premise gate reads this before any round has run, and a
+            ;; gate that refused an uncleared design would make the design round
+            ;; unreachable. What wants both is :cleared? below, and every reader
+            ;; that gates on the arc asks that.
             (cond-> {:live?       (nil? (retracted design-seq))
                      :premise     premise
                      :approved-by (:seq approval)
                      ;; BESIDE :approved-by, never folded into it. `:decided?`
                      ;; goes on meaning `nothing blocks this and a person granted
-                     ;; it`, which is what `work` and the dashboard report. What
-                     ;; GATES — `place`, `reentry`, the implementation floor and
+                     ;; it`, true only on a ledger holding a grant. What GATES —
+                     ;; `place`, `reentry`, the implementation floor and
                      ;; `tasks/nido_land.clj` — asks :cleared?, and may, because
                      ;; the append boundary admits a clearance only over a
-                     ;; proceeding decision on a design that owes nobody.
+                     ;; proceeding decision.
                      :cleared-by  (:seq clearance)
                      :decidable?  (nil? blocked)
                      :decided?    (and (nil? blocked) (some? approval))
                      ;; What the arc asks: nothing blocks it, and something said
-                     ;; it may be built — a grant, or a round that owed nobody.
+                     ;; it may be built — its round's clearance, or an older grant.
                      :cleared?    (and (nil? blocked)
-                                       (or (some? approval) (some? clearance)))
-                     ;; What the design's own declarations owe: a person's grant before
-                     ;; it is built, whatever any round answers.
-                     :owes-person? (report/owes-a-person? design)}
+                                       (or (some? approval) (some? clearance)))}
               blocked (assoc :blocked blocked))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
@@ -735,19 +737,3 @@
       (throw (ex-info (str "a findings entry could not be read on " ws-id)
                       {:reason :unreadable-ledger :project project :ws-id ws-id})))
     (last rounds)))
-
-(defn ^{:malli/schema [:=> [:cat :Standing] [:maybe :string]]}
-  why-not-decided
-  "Why `standing` is not decided, in a form a human can act on, or nil.
-
-   Composes the two questions the map keeps apart: what stops it being
-   decidable, and — when nothing does — that nobody has granted it."
-  [{:keys [decided? decidable? blocked approved-by] :as st}]
-  (cond
-    decided?        nil
-    (not decidable?) blocked
-    (nil? approved-by)
-    {:reason :not-approved
-     :detail (str "no :design-approved names this design — the decision round "
-                  "prepares an approval and does not grant one")}
-    :else (:blocked st)))

@@ -48,17 +48,26 @@
             :intent {:seq 1} :effort :S}
            extra)))
 
+(defn- decide-and-clear!
+  "A proceeding decision round on the design at `d`, and the clearance it writes at its position."
+  [id d]
+  (ws/append-decision! :brian id
+                    (pr-str {:format :design-decision :recommend :proceed :design-seq d :reason "r"
+                             :checks [{:check :relation-honest :status :held :note "n"}]}))
+  (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
+                       (pr-str {:format :design-cleared :design {:seq d}})))
+
 (defn- ledger
-  "A workstream whose approved design marks `marked`. Returns [id add]."
+  "A workstream whose cleared design marks `marked`. Returns [id add]."
   [marked]
   (let [id  (:id (ws/create! :brian {:external-refs []}))
-        add (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record))
+        add (fn [kind record] (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
               (count (:entries (ws/read-ws :brian id))))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
     (add :baseline a-baseline)
     (add :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "ok"})
     (let [d (add :design (a-design marked))]
-      (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+      (decide-and-clear! id d))
     [id add]))
 
 (defmacro ^:private launching
@@ -149,12 +158,13 @@
         (launching [_ _]
           (embodied/carry! :brian id)
           (seats/conductor! :brian id "conduct it"))
-        (let [t (in-session seat #(seats/record! :brian id {:format :tension :to "canvas.strata/seats"
-                                                              :about ["canvas.strata/ledger"] :statement "s"}))]
-          (is (= {:as :seat :seat "canvas.strata/ledger" :session seat} (:by t))))
-        (is (= {:as :conductor :session (str id "--conductor")}
-               (:by (in-session (str id "--conductor")
-                                #(seats/record! :brian id {:format :accord :tension {:seq 6} :terms "t"})))))
+        (let [t       (in-session seat #(seats/record! :brian id {:format :tension :to "canvas.strata/seats"
+                                                                    :about ["canvas.strata/ledger"] :statement "s"}))
+              tension (count (:entries (ws/read-ws :brian id)))]
+          (is (= {:as :seat :seat "canvas.strata/ledger" :session seat} (:by t)))
+          (is (= {:as :conductor :session (str id "--conductor")}
+                 (:by (in-session (str id "--conductor")
+                                  #(seats/record! :brian id {:format :accord :tension {:seq tension} :terms "t"}))))))
         (testing "outside the ensemble only a re-cut is taken, by whoever runs it"
           (is (= :not-in-ensemble
                  (:reason (ex-data (try (in-session nil #(seats/record! :brian id {:format :tension :to :conductor
@@ -618,7 +628,7 @@
               "a later start displaces no one")
           (testing "once the generation fixes ids, a carried occupant is released, not archived"
             (let [d (add :design (a-design ["canvas.strata/ledger"] :supersedes {:seq 4 :why "mark"}))]
-              (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+              (decide-and-clear! id d))
             (seats/reseat! :brian id)
             (let [s (session/read-session :brian id mine)]
               (is (nil? (:seat s)))
@@ -648,7 +658,7 @@
         (launching [_ retired]
           (seats/occupy! :brian id (seats/default-embodiment) 1 run)
           (let [d (add :design (a-design ["canvas.strata/ledger"] :supersedes {:seq 4 :why "mark"}))]
-            (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+            (decide-and-clear! id d))
           (seats/reseat! :brian id)
           (let [s (session/read-session :brian id run)]
             (is (nil? (:seat s)))

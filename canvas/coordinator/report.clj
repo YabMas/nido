@@ -61,20 +61,6 @@
     "The backward-compatible triage validator — `(validate-event :triage report)`."
     {:signature [:=> [:catn [:report LedgerEvent]] LedgerEvent]
      :performs  [:throws]})
-  (Operation owes-a-person?
-    "Whether a design record, ON ITS OWN, says something high-level is at stake: a
-     `:challenges` against the project stance, or a `:revisit` against its baseline.
-
-     Over the RECORD ALONE and never the ledger, which is what lets the append boundary and
-     `standing` both ask it without either calling the other. Both declarations are already
-     required and already carry their obligations — `:challenges` needs a note, `:revisit`
-     must name what it `:breaks` — so the gate reads what the author already had to say
-     rather than asking a question of its own.
-
-     It decides whether a GRANT is owed, never whether the decision round runs. That round is
-     what falsifies the declarations against the record, and a design no round has judged is
-     not cleared by saying so about itself."
-    {:signature [:=> [:catn [:design :map]] :boolean]})
   (Operation proceeds?
     "Whether a design decision lets its design proceed: it left no check it was handed `:unruled`,
      confirmed no claim on its first reading (`:read-once`), and it recommends `:proceed` or everything it found broken is the advisory `decomposable` check,

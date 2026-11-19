@@ -1990,18 +1990,19 @@
                                                    :cites ["The design leaves the settled rule unchanged"]}))))))
 
 (deftest the-judge-is-told-when-nobody-will-read-its-ask
-  ;; A design declaring :conforms/:within clears on a proceed, and its required ask reached no
-  ;; report, gate or view. Said before the judge answers, so a question the build must not start
-  ;; without is recommended `ask` instead of parked where nobody looks.
-  (let [modest (record/design-prompt {:design design})
-        owing  (record/design-prompt {:design (assoc design :standing {:relation :challenges :note "n"})})]
+  ;; A design clears on a proceed whatever it declares, and a proceed's asks reaches no report,
+  ;; gate or view. Said before the judge answers, so a question the build must not start without
+  ;; is recommended `ask` instead of parked where nobody looks.
+  (let [modest     (record/design-prompt {:design design})
+        challenges (record/design-prompt {:design (assoc design :standing {:relation :challenges :note "n"})})]
     (is (str/includes? modest "WHO READS asks: NOBODY, on a proceed"))
-    (is (str/includes? owing "WHO READS asks: a person"))
+    (is (str/includes? challenges "WHO READS asks: NOBODY, on a proceed")
+        "a challenge to the stance stops nobody on a proceed either")
     (is (str/includes? modest "  ask      — stop for a person"))
-    (is (str/includes? owing "HOW TO WRITE asks")
-        "a judge whose asks a person reads is briefed with the asking guidance every author gets")
-    (is (str/includes? owing "# Asking the person a question"))
-    (is (str/includes? owing "When a design round asks the person"))))
+    (is (str/includes? modest "HOW TO WRITE asks")
+        "the judge is briefed with the asking guidance every author gets, for the ask a person reads")
+    (is (str/includes? modest "# Asking the person a question"))
+    (is (str/includes? modest "When a design round asks the person"))))
 
 (deftest the-judge-is-shown-what-is-already-decided
   ;; Shown neither the record's :open nor its grant, the judge re-posed a product decision the
@@ -2019,19 +2020,20 @@
     (is (str/includes? p "changed: pipeline-boundary"))
     (is (str/includes? p "The grant is not evidence for any structural check")
         "the grant narrows the ask and nothing else; every check is still derived whole")
-    (is (str/includes? p "ASKED BEFORE, AND NO GRANT WRITTEN SINCE — at entry 18, of entry 16:\n  is the compression worth it now?"))))
+    (is (str/includes? p "ASKED BEFORE, AND NOT ANSWERED SINCE — at entry 18, of entry 16:\n  is the compression worth it now?"))))
 
-(deftest a-clean-round-on-an-owing-design-proceeds-over-a-question-already-asked
-  ;; Two zero-finding rounds over the same open questions recorded :ask once and :proceed once:
-  ;; the ASKED BEFORE block ended "recommend ask" and said nothing for a round that found nothing.
-  (let [asked   {:asked {:seq 18 :asks "is the compression worth it now?"}}
-        owing   (record/design-prompt {:design  (assoc design :standing {:relation :challenges :note "n"})
-                                      :answers asked})
-        clear   (record/design-prompt {:design design :answers asked})]
-    (is (str/includes? owing "If you find nothing, recommend proceed")
-        "a proceed already stops for the person, so a clean round has no reason to record :ask")
-    (is (not (str/includes? clear "If you find nothing, recommend proceed"))
-        "on a design that owes nobody a proceed starts the build, so the asked question must not be waved through")))
+(deftest a-proceed-stops-nobody-whatever-the-design-declares
+  ;; A proceed clears the design and the build starts, so a question still open is an ask
+  ;; whether the design challenges the stance, revisits the baseline, or declares neither.
+  (let [asked {:asked {:seq 18 :asks "is the compression worth it now?"}}]
+    (doseq [d [design
+               (assoc design :standing {:relation :challenges :note "n"})
+               (assoc design :baseline {:seq 5 :relation :revisit :breaks ["a"]})]
+            :let [p (record/design-prompt {:design d :answers asked})]]
+      (is (str/includes? p "WHO READS asks: NOBODY, on a proceed"))
+      (is (str/includes? p "if this question\nis still open, recommend ask")
+          "an asked question a proceed would wave through is recommend ask")
+      (is (not (str/includes? p "If you find nothing, recommend proceed"))))))
 
 (deftest what-is-answered-is-read-off-the-ledger
   (let [claims  (fn [& cs] {:claims (mapv (fn [[id st]] {:id id :statement st :about ["m"]}) cs)})
@@ -2116,6 +2118,32 @@
     (is (nil? (:asked a)))
     (is (= [{:seq 96 :kind :intent :why "States the user's answer on shared content"}]
            (:by (:answered-since a))))))
+
+(deftest a-persons-answer-to-a-blocker-answers-the-ask
+  ;; The question a round stops on reaches the person as a blocker parked over the decision; their
+  ;; answer to it is a reply as a record they rewrote is.
+  (let [answer  {:format :blocker-answered :seq 29 :blocker-seq 28
+                 :summary "only the slices this workstream adds"}
+        ledger  (assoc (dissoc asked-ledger 27)
+                       28 {:format :blocker :seq 28}
+                       29 answer)
+        a       (answered-over ledger 24)
+        p       (record/design-prompt {:design (get ledger 24) :answers a})]
+    (is (nil? (:asked a)) "a question answered at its blocker is no longer open")
+    (is (= {:seq 26 :asks "Does the source gate cover only slices this workstream adds?"
+            :by [{:seq 29 :kind :blocker :why "only the slices this workstream adds"}]}
+           (:answered-since a)))
+    (is (str/includes? p "entry 29 (blocker): only the slices this workstream adds")
+        "the judge reads the answer in the person's words")
+    (testing "an answer that is no person's reply"
+      (is (nil? (:answered-since (answered-over (assoc ledger 29 (assoc answer :by :nido)) 24)))
+          "nido's own answer to a blocker that no longer stands")
+      (is (nil? (:answered-since (answered-over (assoc ledger 29 (assoc answer :act {:seq 30})) 24)))
+          "nor an answer nido recorded for an act of the person's")
+      (is (= 26 (get-in (answered-over (assoc ledger 29 (assoc answer :summary "  ")) 24) [:asked :seq]))
+          "a blank answer says nothing, and the question stays open")
+      (is (nil? (:answered-since (answered-over (assoc ledger 29 (assoc answer :blocker-seq 25)) 24)))
+          "a blocker parked before any decision on the design was none of its questions"))))
 
 (deftest an-amendment-carries-what-a-person-already-granted
   ;; A grant given in chat had nowhere to live but a :design-approved written after the round
@@ -2536,75 +2564,45 @@
     (is (= (:questions ask) (:questions (with {:recommend :proceed} ask)))
         "a proceed over the ask carries the ask's questions")))
 
-(deftest a-carried-self-grant-is-written-rather-than-parked
-  ;; A person's "ok" written into the design as :supersedes :granted parked the proceed for a
-  ;; second approval, which the person gave four seconds later in the same words.
-  (let [d        (assoc design :seq 61 :standing {:relation :challenges :note "n"}
-                        :supersedes {:seq 58 :why "narrow depth" :granted "ok (keep the relaxation)"})
-        ledger   {58 (assoc design :seq 58) 61 d}
-        written  (atom [])
-        status   (fn [design-entry]
-                   (with-redefs [ws/amended-seqs      (constantly #{})
-                                 ws/entry-at-seq      (fn [_ _ n] (get (assoc ledger 61 design-entry) n))
-                                 ws/entries-of        (fn [_ _ _] [])
-                                 ws/append-entry!     (fn [_ _ _ body] (swap! written conj (read-string body)) "0063.edn")
-                                 nido.coordinator.record.standing/of-design (constantly {:decidable? true})]
-                     (#'record/proceeding-status [:nido "ws-1"] {:design-seq 61} {:seq 62})))]
-    (is (= :cleared (status d)))
-    (is (= [{:format :design-approved :design {:seq 61} :at-seq 62 :note "ok (keep the relaxation)" :carried true}]
-           @written))
-    (is (= (first @written) (report/validate-event :design-approved (first @written))))
-    (reset! written [])
-    (is (= :proceed (status (update d :supersedes dissoc :granted))) "no grant carried, the person is asked")
-    (is (empty? @written))))
+(deftest a-proceed-on-a-standing-design-parks-nobody
+  ;; A design that challenges the stance or revisits the baseline proceeds like any other: its
+  ;; status is a clearance, or a clearance still to write, and nothing is written for a person.
+  (let [written (atom [])
+        status  (fn [d & {:keys [cleared standing] :or {cleared [] standing {:decidable? true}}}]
+                  (with-redefs [ws/amended-seqs  (constantly #{})
+                                ws/entry-at-seq  (fn [_ _ n] (when (= n (:seq d)) d))
+                                ws/entries-of    (fn [_ _ k] (if (= k :design-cleared) cleared []))
+                                ws/append-entry! (fn [_ _ _ body] (swap! written conj (read-string body)) "0063.edn")
+                                nido.coordinator.record.standing/of-design (constantly standing)]
+                    (#'record/proceeding-status [:nido "ws-1"] {:design-seq 61} {:seq 62})))]
+    (doseq [d [(assoc design :seq 61 :standing {:relation :challenges :note "n"})
+               (assoc design :seq 61 :baseline {:seq 5 :relation :revisit :breaks ["a"]})
+               (assoc design :seq 61 :supersedes {:seq 58 :why "narrow depth" :granted "ok"})]]
+      (is (= :cleared (status d :cleared [{:seq 63 :design {:seq 61}}])))
+      (is (= :clearance-contended (status d))
+          "a clearance not yet written is the clearance stage's write, never a person's ask"))
+    (is (= :clearance-contended (status nil))
+        "a design the ledger cannot read back is still a write owed")
+    (is (empty? @written) "no grant is written on anyone's behalf")))
 
-(deftest a-granted-move-carries-onto-a-successor-declaring-it-unchanged
-  ;; A revisit approved at entry 21 for design 18 was replaced by design 22 declaring the same move
-  ;; word for word; the proceed on 22 parked the person on whether the move was worth building.
-  (let [move     {:seq 5 :relation :revisit :breaks ["pdf-served-by-public-url" "m-pdf-viewer"]}
-        granted  (assoc design :seq 18 :baseline move)
-        current  (assoc design :seq 22 :baseline move :summary "repaired"
-                        :supersedes {:seq 18 :why "corrected against the code after round 1 of run r"})
-        approval {:format :design-approved :seq 21 :design {:seq 18} :at-seq 20 :note "go"}
-        written  (atom [])
-        status   (fn [d]
-                   (let [ledger {18 granted 21 approval 22 d}]
-                     (with-redefs [ws/amended-seqs (constantly #{22})
-                                   ws/entry-at-seq (fn [_ _ n] (get ledger n))
-                                   ws/entries-of   (fn [_ _ k] (->> (vals ledger) (filter #(= k (:format %)))
-                                                                    (sort-by :seq) vec))
-                                   ws/append-entry! (fn [_ _ _ body] (swap! written conj (read-string body)) "0024.edn")
-                                   nido.coordinator.record.standing/of-design (constantly {:decidable? true})]
-                       (#'record/proceeding-status [:nido "ws-1"] {:design-seq 22} {:seq 23}))))]
-    (is (= :cleared (status current))
-        "the move was granted and is unchanged, so parking asks the person for a grant they gave")
-    (is (= [{:format :design-approved :design {:seq 22} :at-seq 23 :carried true :note "go" :from {:seq 18}}]
-           @written)
-        "the carried grant names the grant it carried, so a reader can trace it to a person")
-    (is (= (first @written) (report/validate-event :design-approved (first @written))))
-    (reset! written [])
-    (is (= :proceed (status (update-in current [:baseline :breaks] conj "st-admin-ui")))
-        "a successor breaking more than was granted asks the person for the new break")
-    (is (= :proceed (status (assoc current :standing {:relation :challenges :note "n"})))
-        "a stance challenge nobody granted is still the person's")
-    (is (empty? @written))))
-
-(deftest a-judge-is-told-a-carried-move-stops-nobody
-  ;; The prompt told the judge "a proceed stops for them" over a move already granted, so its asks
-  ;; posed the worth of the whole move again.
-  (let [move    {:seq 5 :relation :revisit :breaks ["a"]}
-        ledger  {18 (assoc design :seq 18 :baseline move)
-                 21 {:format :design-approved :seq 21 :design {:seq 18} :at-seq 20}
-                 22 (assoc design :seq 22 :baseline move
-                           :supersedes {:seq 18 :why "corrected against the code after round 1 of run r"})}
-        p       (fn [d] (record/design-prompt {:design d :answers (answered-over (assoc ledger 22 d) 22 :amended #{22})}))
-        carried (p (get ledger 22))
-        moved   (p (update-in (get ledger 22) [:baseline :breaks] conj "b"))]
-    (is (str/includes? carried "a person granted it at entry 18")
-        "the judge must know the move is granted, or its asks re-pose it")
-    (is (not (str/includes? carried "so a proceed stops for them")))
-    (is (str/includes? moved "so a proceed stops for them")
-        "a moved move is the person's again")))
+(deftest a-proceed-over-a-question-the-reading-before-asked-does-not-proceed
+  ;; The question the earlier reading put to a person is still theirs: the decision neither
+  ;; proceeds nor clears the design it names.
+  (let [d       {:format :design-decision :design-seq 4 :recommend :proceed :reason "r" :asks "a"
+                 :checks []}
+        unpaired (assoc d :unpaired-recommend {:was :ask :seq 3 :asks "worth it?"})
+        cleared (atom [])
+        append  (fn [record]
+                  (reset! cleared [])
+                  (with-redefs-fn {#'record/write-record!     (fn [& _] 7)
+                                   #'record/clear-proceeding! (fn [_ _ n] (swap! cleared conj n) nil)}
+                    #(record/append! [:nido "ws-1"] record)))]
+    (is (report/proceeds? d))
+    (is (not (report/proceeds? unpaired)))
+    (is (= {:seq 7} (append d)))
+    (is (= [4] @cleared) "a decision that proceeds clears its design")
+    (is (= {:seq 7} (append unpaired)))
+    (is (empty? @cleared) "one carrying an unanswered ask clears nothing")))
 
 ;; ── A claim spent across runs ───────────────────────────────────────────────
 
@@ -3387,21 +3385,21 @@
         (is (nil? (:asked-of a)) "the earlier generation's question is not put again")
         (is (nil? (:asked a)) "nor read as one still open")))))
 
-(deftest a-grant-carried-across-a-re-cut-cites-nothing-of-the-generation-before
-  ;; The grant crosses by the supersession reading; an approval citing the earlier design would cross
-  ;; the boundary, and the ledger refuses it.
-  (let [rows    [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :recut}
-                 {:seq 4 :kind :generation} {:seq 5 :kind :design} {:seq 6 :kind :design-decision}]
-        written (atom nil)]
-    (with-redefs [ws/read-ws          (fn [_ _] {:entries rows})
-                  record/answered     (fn [& _] {:grant {:seq 2 :note "go"}})
-                  nido.coordinator.record.standing/of-design (fn [& _] {:decidable? true})
-                  ws/append-entry!    (fn [_ _ _ payload] (reset! written (read-string payload)) "x")]
-      (with-redefs-fn {#'record/move-granted (fn [_] {:seq 2})}
-        (fn []
-          (is (true? (#'record/grant-carried! :brian "ws-1" {:seq 5} 6)))
-          (is (nil? (:from @written)))
-          (is (true? (:carried @written))))))))
+(deftest a-judgement-a-person-answered-after-is-judged-again
+  ;; A round stopped on a question, and the person answered it as the blocker it was parked on: the
+  ;; standing decision is the question, so the next round reads the answer rather than taking it.
+  (let [subject {:seq 5 :format :design}
+        j       {:seq 10 :code-identity "t" :recommend :ask}
+        why     (fn [answers]
+                  (with-redefs [ws/entries-of (fn [_ _ k] (if (= k :blocker-answered) answers []))]
+                    (#'record/why-judged-again {:iter 1} [:nido "ws-1"] subject {:code-identity "t"}
+                                               j (constantly true))))]
+    (is (nil? (why [])) "nothing answered since, so the standing judgement is taken")
+    (is (= :answered (why [{:seq 12 :blocker-seq 11 :summary "keep both"}])))
+    (is (nil? (why [{:seq 12 :blocker-seq 11 :summary "moot" :by :nido}]))
+        "nido's own answer is no person's")
+    (is (nil? (why [{:seq 9 :blocker-seq 8 :summary "earlier"}]))
+        "an answer to a blocker parked before the decision answered an earlier question")))
 
 (deftest a-merged-childs-readings-settle-only-within-its-own-generation
   ;; A child that re-cut can still merge while its parent stays in the generation of its fork base.

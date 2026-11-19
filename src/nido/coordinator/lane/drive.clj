@@ -116,29 +116,12 @@
       (seq tried)   (assoc :tried (mapv attempt tried))
       (and (seq options) (not several?)) (assoc :options (vec options)))))
 
-(defn- declared-move
-  "The move `design` declares that a person must grant (`report/owes-a-person?`) — its stance
-   relation when it challenges, and its baseline relation with every :breaks entry — as gate text;
-   nil when it declares none. Read off the record, never off the judge's asks: an ask written over
-   eight rounds can drop the breaks it was meant to grant, and approving still grants them."
-  [design]
-  (when (and design (report/owes-a-person? design))
-    (let [{sr :relation snote :note} (:standing design)
-          {br :relation :keys [breaks at] bseq :seq} (:baseline design)]
-      (str "\nApproving grants the move this design (entry " (:seq design) ") declares:"
-           (when (= :challenges sr)
-             (str "\n  challenges the project stance" (when-not (str/blank? snote) (str " — " snote))))
-           (when (= :revisit br)
-             (str "\n  revisits baseline entry " bseq (when-not (str/blank? at) (str ", at " at))
-                  ", breaking:"
-                  (str/join (for [b breaks] (str "\n    - " b)))))))))
-
-(defn ^{:malli/schema [:=> [:cat :keyword [:sequential :map] [:? [:maybe :map]]] [:maybe :string]]}
+(defn ^{:malli/schema [:=> [:cat :keyword [:sequential :map]] [:maybe :string]]}
   decision-needs
   "What a person is asked when a design round stops at `outcome`, from the `decisions` that round
    appended, oldest first — or nil when it appended none, and the fallback is all there is to say.
-   `design` is the record the newest decision judged; when it declares a move a person must grant
-   and the round stopped for one (:proceed or :asked), the move is rendered from it (`declared-move`).
+   The person's answer is a reply the next round reads, never a grant: a design is built only once
+   a round proceeds.
 
    The newest decision is where the run stopped, so the question is its: what it recommended, the
    checks it left broken and the claims they name, and its :asks verbatim — labelled as waiting on
@@ -149,9 +132,8 @@
    On :no-progress the newest decision's findings are what repeated and stopped the run, and each
    is quoted beside :asks: the judge wrote :asks without knowing the run would end on it, so it is
    often a standing scope question that never mentions what actually blocks."
-  ([outcome decisions] (decision-needs outcome decisions nil))
-  ([outcome decisions design]
-   (when-let [{:keys [recommend asks checks findings reason] :as last-d} (last decisions)]
+  [outcome decisions]
+  (when-let [{:keys [recommend asks checks findings reason] :as last-d} (last decisions)]
      (let [broken  (keep #(when (= :broken (:status %)) (:check %)) checks)
            claims  (distinct (keep #(not-empty (str (:claim-id %))) findings))
            earlier (remove #{asks} (distinct (keep :asks (butlast decisions))))]
@@ -168,8 +150,7 @@
               (str (if (report/repair-before-asking last-d) "\nWill ask once repaired: " "\nFor you to decide: ")
                    asks))
             (when (seq earlier)
-              (str "\nAsked earlier in the same run: " (str/join " / " earlier)))
-            (when (#{:proceed :asked} outcome) (declared-move design)))))))
+              (str "\nAsked earlier in the same run: " (str/join " / " earlier)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:vector :string]]}
   decision-questions
@@ -233,10 +214,9 @@
    site, so every driven stage asks the question the same way and none of them
    carries its own opinion about which statuses are a person's business.
 
-   A position that owes a person a move has that move's card in front of them — a design round
-   that stopped at :proceed leaves one owing the grant, asked by Approve. A blocker there would be
-   a second, vaguer copy of the question, and it would cover the card it copies: the position
-   reads :blocked until the blocker is answered, so the Approve was never offered."
+   A position that owes a person a move has that move's card in front of them — a published PR's
+   landing, a triage verdict. A blocker there would be a second, vaguer copy of the question, and
+   it would cover the card it copies: the position reads :blocked until the blocker is answered."
   [project ws-id {:keys [outcome] :as halt}]
   (let [d (pipeline/disposition outcome)]
     (if (= :escalate d)
@@ -374,11 +354,10 @@
    click on the resulting row is left exactly as it was.
 
    It is also what makes the parking terminate. `unanswered-blocker` is cleared
-   by a `:blocker-answered`, which only an option click writes, so a halt naming
-   no options cannot be answered from a surface at all: the position stays
-   :blocked, whose next action is a person's, `fireable` skips the workstream
-   from the following tick, and no second halt is written until a later stage
-   record moves the ledger on — which is a fresh report about a wall still
+   only by a `:blocker-answered` naming it — a person's words or option — so the
+   position stays :blocked, whose next action is a person's, `fireable` skips the
+   workstream from the following tick, and no second halt is written until the
+   answer lets the stage run again — which is a fresh report about a wall still
    standing rather than a repetition of one nobody read."
   [project ws-id stage needs]
   (halt-for {:stage          stage
@@ -546,9 +525,7 @@
                      (cond-> {:stage stage :outcome outcome :tried tried}
                        (= :decide-design stage)
                        (as-> h (let [ds  (decisions-since project ws-id since)
-                                     ctx (decision-needs outcome ds
-                                                         (some->> (:design-seq (last ds))
-                                                                  (ws/entry-at-seq project ws-id)))]
+                                     ctx (decision-needs outcome ds)]
                                  (-> (cond-> h
                                        ctx (assoc :summary (str "The " (name stage) " stage stopped at "
                                                                 (name outcome) " and the driver cannot take "

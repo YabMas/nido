@@ -141,7 +141,7 @@
     sup (assoc :supersedes {:seq sup :why "repaired"})))
 
 (defn- add! [id kind record & [amended-by]]
-  (ws/append-entry! :brian id (cond-> {:kind kind} amended-by (assoc :amended-by amended-by)) (pr-str record))
+  (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id (cond-> {:kind kind} amended-by (assoc :amended-by amended-by)) (pr-str record)))
   (count (:entries (ws/read-ws :brian id))))
 
 (defn- halt! [id stage outcome]

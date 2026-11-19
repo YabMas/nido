@@ -26,6 +26,14 @@
    :baseline {:seq 2 :relation :within}
    :intent {:seq 1} :effort :S})
 
+(defn- decide-and-clear!
+  "A proceeding decision round on the design at `d`, and the clearance it writes at its position."
+  [id add! d]
+  (add! :design-decision {:format :design-decision :recommend :proceed :design-seq d :reason "r"
+                          :checks [{:check :relation-honest :status :held :note "n"}]})
+  (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
+                       (pr-str {:format :design-cleared :design {:seq d}})))
+
 (deftest a-halt-the-generation-before-left-does-not-hold-the-new-one
   ;; An answer may not cite across the boundary, so a blocker carried forward would hold the new
   ;; generation at :blocked with no answer the ledger would take.
@@ -33,13 +41,13 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
         (let [id   (:id (ws/create! :brian {:external-refs []}))
-              add! (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record))
+              add! (fn [kind record] (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
                      (count (:entries (ws/read-ws :brian id))))]
           (add! :intent {:format :intent :goal "g" :done-when ["d"]})
           (add! :baseline a-baseline)
           (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
           (let [d1 (add! :design a-design)]
-            (add! :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+            (decide-and-clear! id add! d1)
             (add! :blocker {:format :blocker :summary "which way" :needs "a decision?" :after "The work resumes once you answer."})
             (is (= :blocked (:at (p/of :brian id))))
             (ws/append-stamped! :brian id {:format :recut :by {:as :person} :ids ["agg"] :why "two secrets"})
@@ -57,13 +65,13 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
         (let [id   (:id (ws/create! :brian {:external-refs []}))
-              add! (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record))
+              add! (fn [kind record] (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
                      (count (:entries (ws/read-ws :brian id))))]
           (add! :intent {:format :intent :goal "g" :done-when ["d"]})
           (add! :baseline a-baseline)
           (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
           (let [d1 (add! :design a-design)]
-            (add! :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+            (decide-and-clear! id add! d1)
             (ws/append-stamped! :brian id {:format :recut :by {:as :person} :ids ["agg"] :why "two secrets"})
             (ws/open-generation! :brian id {:format :generation :recut {:seq (count (:entries (ws/read-ws :brian id)))}
                                             :words "split it" :ids ["agg"] :base-rev "abc"})

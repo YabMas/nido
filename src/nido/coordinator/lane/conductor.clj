@@ -202,11 +202,10 @@
          "the person a command to run. An option that lands the workstream's PR carries "
          "`:grants [:merge]`: picking it — or the person saying so through the chat, which records "
          "the same grant — lets the seat land its own PR once, with `nido:workstream:pr:land`, so "
-         "instruct the seat to land it, and never hand the person a merge command. An option that "
-         "approves the governing design carries "
-         "`:approves-design <its entry>`: picking it IS the person's approval, recorded by the "
-         "click, so never ask them to approve again elsewhere or hand them a command for it. "
-         "Nothing else can be granted: closing and approving stay the person's.\n\n"
+         "instruct the seat to land it, and never hand the person a merge command. Nothing else can "
+         "be granted: closing stays the person's. No option approves a design: a design is built "
+         "once its decision round proceeds, and a person's answer to a design question is read by "
+         "the next round.\n\n"
          "Seats: " (seats-line (rseats/seats project ws-id)) "\n"
          "Governing design: " (design-line design) "\n"
          "Position: " (name position) (when next (str ", next " (pr-str next))) "\n\n"
@@ -694,16 +693,6 @@
       (last (filter #(and (span (:seq %)) (answered (:seq %)) (= qs (report/asked-questions %)))
                     (ws/entries-of project ws-id :blocker))))))
 
-(defn- stale-approval
-  "The first option of escalation `ask` that approves a design nobody can approve now — not the
-   governing design, or one no decision round has judged — or nil. Picking it is refused at the
-   click, and the escalation parks the very round that would judge the governing design."
-  [project ws-id ask]
-  (let [governing (:seq (standing/governing-design project ws-id))
-        judged    (into #{} (keep :design-seq) (ws/entries-of project ws-id :design-decision))]
-    (first (filter #(when-let [n (:approves-design %)] (not (and (= n governing) (judged n))))
-                   (mapcat :options (report/blocker-questions ask))))))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :ConductDecision] :DecideResult]}
   decide!
   "Record the conductor's answer to a hand-back — {:hand-back <message id> :decision [:instruct
@@ -723,12 +712,7 @@
 
    An escalation asking, word for word, a question the person already answered in this
    generation is refused (:already-asked) and the hand-back stays owed: the answer is on the
-   ledger, and the decision owed is what to do with it, not asking it again.
-
-   An escalation offering to approve a design that is not the governing one, or that no decision
-   round has judged (`stale-approval`), is refused (:stale-approval) and the hand-back stays
-   owed: the seat amended the design after its round, so the round owed next judges the newer
-   one, and nido puts the Approve card to the person once it proceeds."
+   ledger, and the decision owed is what to do with it, not asking it again."
   [project ws-id {:keys [hand-back decision]}]
   (deciding
    project ws-id
@@ -740,9 +724,6 @@
 
       (and (= :escalate (first decision)) (answered-ask project ws-id (second decision)))
       [:refused :already-asked]
-
-      (and (= :escalate (first decision)) (stale-approval project ws-id (second decision)))
-      [:refused :stale-approval]
 
       (and (= :escalate (first decision))
            (overtaking-act project ws-id (hand-back-message project ws-id hand-back)))
@@ -1195,15 +1176,15 @@
 
 (def ^:private person-kinds
   "The ledger kinds only a person's act writes."
-  #{:intent :design-approved :triage-accepted :phase-gate :blocker-answered :grant :merged :closed
+  #{:intent :triage-accepted :phase-gate :blocker-answered :grant :merged :closed
     ;; a drain's: approving a recipe, and observing its exit
     :recipe :exit-observed})
 
 (defn- persons-act?
   "Whether ledger entry `e` of a person kind is an act of the person's — not a blocker's answer
-   nido recorded for an act, nor an entry nido wrote, nor a grant a design round carried forward."
+   nido recorded for an act, nor an entry nido wrote."
   [e]
-  (and (not (:act e)) (not= :nido (:by e)) (not (:carried e))))
+  (and (not (:act e)) (not= :nido (:by e))))
 
 (defn- open-escalations
   "Every open escalation a conductor made, oldest first: each of the current generation's blockers
@@ -1305,8 +1286,6 @@
    acts on no earlier record."
   {:establish-intent         {:kinds #{:intent}}
    :accept-triage            {:kinds #{:triage-accepted}  :target :verdict}
-   :approve-design           {:kinds #{:design-approved}  :target :design}
-   :acknowledge-invalidation {:kinds #{:design-approved}  :target :design}
    :assert-gate              {:kinds #{:phase-gate}       :target :design}
    :land                     {:kinds #{:merged :closed}   :target :design}
    :answer-blocker           {:kinds #{:blocker-answered} :target :blocker}
@@ -1319,7 +1298,6 @@
    none — a close names a design only between phases — and take the step they are kinds of."
   {:blocker-answered [:blocker-seq]
    :triage-accepted  [:triage-seq]
-   :design-approved  [:design :seq]
    :phase-gate       [:design :seq]
    :merged           [:design :seq]
    :recipe           [:proposal]})
@@ -1368,8 +1346,8 @@
    person's act at the step it named — an act of a kind
    that takes that step, never another, and never one `persons-act?` rejects — as that escalation's blocker's answer, citing the act; and log each act of the person's recorded on the workstream
    since its conductor's record was made — a reply recorded as a blocker's answer among them,
-   never a blocker's answer nido recorded for an act, an entry nido wrote, a grant a design
-   round carried forward (`persons-act?`), or the :closed entry that closes the workstream as
+   never a blocker's answer nido recorded for an act, an entry nido wrote (`persons-act?`), or
+   the :closed entry that closes the workstream as
    its ledger stands — to its conductor as a hand-back, once per entry, with the position the
    pipeline derives at that moment. Answers what it recorded and posted."
   [project]
@@ -1416,10 +1394,9 @@
 
 (def ^:private person-tasks
   "The nido tasks that write a person's act on any path they can take — whatever their arguments,
-   and whether or not they then exit unsuccessfully: a person-kind entry or a close. A carried
-   `:design-approved` the design loop writes is not one — it grants nothing the person did not —
-   so the review tasks are not here."
-  #{"nido:design:approve" "nido:workstream:blocker:answer" "nido:land:record" "nido:recovery:land"
+   and whether or not they then exit unsuccessfully: a person-kind entry or a close. The review
+   tasks are not here: what they write is a round's, never a person's act."
+  #{"nido:workstream:blocker:answer" "nido:land:record" "nido:recovery:land"
     "nido:workstream:close" "nido:phase:advance" "nido:ticket:complete" "nido:ticket:apply"
     "nido:workstream:generation:open"
     ;; :closed — set-stage! to done, a dismissal, a restored recovery, a resolved between-phases
@@ -1645,7 +1622,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
   refusal
-  "Why a Bash command must not run, or nil: a person's act — an intent, a design grant, a triage
+  "Why a Bash command must not run, or nil: a person's act — an intent, a triage
    acceptance, a phase gate, a blocker's answer, a landing, a PR merge or a close — run from the
    conductor's session, or from any other session's conversation in a turn whose latest prompt
    carries an instruction the conductor answers for (`answering-for-conductor?`), judged over

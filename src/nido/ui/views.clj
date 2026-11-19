@@ -554,14 +554,6 @@
         :done    "✓ Marked done."
         :reply   (str "Resuming the session if one is listening… With nobody listening, your "
                       "words are recorded on the ledger as the blocker's answer.")
-        ;; Both say what is being WRITTEN, because that is the whole of what
-        ;; happens: neither answer resumes anything, and the next round reads the
-        ;; ledger. Naming the record is also what makes the two distinguishable
-        ;; afterwards — one retracts, one grants, and they leave different marks.
-        :redesign    (str "✓ Retracting the design — the verdict's broken invariants go on "
-                          "the record as the evidence. Write the superseding design next.")
-        :hold-design (str "✓ Held — recording a grant against the verdict, which is the "
-                          "ledger saying you read it and stand by the design.")
         :land        "Queuing the pull request on the merge lane — /drive-home takes it from here."
         :assert-gate (str "Recording the gate with your evidence and opening the next "
                           "phase — its implementation is owed next.")
@@ -1517,7 +1509,7 @@
                   (:blocked design)
                   [:span.no (or (:detail (:blocked design)) "does not stand")]
                   (:cleared? design)
-                  [:span.ok (str (if (:decided? design) "✓ approved" "✓ cleared — no approval owed")
+                  [:span.ok (str (if (:decided? design) "✓ approved" "✓ cleared by its round")
                                  (when-let [p (:premise design)]
                                    (str " · on the baseline at entry " p)))]
                   :else
@@ -1689,7 +1681,6 @@
                  (remove (fn [{:keys [answers id]}] (or (= :questions answers) (#{:defer :answer-questions} id))))
                  (work/gate-actions stage parked? origin
                                    {:report-format (:format report)
-                                    :grantable?    (work/grantable? project ws-id)
                                     :options       (:options report)
                                     :questions     (report/triage-questions report)
                                     :several?      (work/asks-several? report)

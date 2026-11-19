@@ -46,19 +46,27 @@
     (ws/append-entry! :brian id {:kind :intent}
                       (pr-str {:format :intent :goal "g" :done-when ["d"]}))
     [id (fn [kind record]
-          (ws/append-entry! :brian id {:kind kind} (pr-str record))
+          (if (= :design-decision kind) (ws/append-decision! :brian id (pr-str record)) (ws/append-entry! :brian id {:kind kind} (pr-str record)))
           (count (:entries (ws/read-ws :brian id))))]))
 
-(defn- approved!
-  "A workstream standing on a verified baseline with an approved design.
+(defn- decide-and-clear!
+  "A proceeding decision round on the design at `d`, and the clearance it writes at its position."
+  [id add d]
+  (add :design-decision {:format :design-decision :recommend :proceed :design-seq d :reason "r"
+                         :checks [{:check :relation-honest :status :held :note "n"}]})
+  (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
+                       (pr-str {:format :design-cleared :design {:seq d}})))
+
+(defn- cleared!
+  "A workstream standing on a verified baseline with a design its round cleared.
    Returns [id add design-seq]."
   []
   (let [[id add] (ledger)
         b (add :baseline a-baseline)
         _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                  :baseline-seq b :reason "holds"})
-        d (add :design (a-design b))
-        _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})]
+        d (add :design (a-design b))]
+    (decide-and-clear! id add d)
     [id add d]))
 
 ;; ── generation, which is the whole of the trail question ────────────────────
@@ -80,7 +88,7 @@
 (deftest a-stage-is-current-when-ANY-of-its-records-is
   ;; The rule that lets a workstream escape. Asking that EVERY record be current
   ;; makes the first stale one permanent: a workstream that redesigned,
-  ;; re-approved and re-implemented would still be held at the implementation by
+  ;; re-cleared and re-implemented would still be held at the implementation by
   ;; the entry it had just superseded, and could never reach the review again.
   (let [w {:entries [{:kind :design :seq 1}
                      {:kind :implementation-completed :seq 2}
@@ -117,10 +125,10 @@
 
 ;; ── the composed answer ─────────────────────────────────────────────────────
 
-(deftest an-approved-design-with-a-current-trail-needs-no-re-entry
+(deftest a-cleared-design-with-a-current-trail-needs-no-re-entry
   (with-tmp
     (fn [_]
-      (let [[id _ d1] (approved!)]
+      (let [[id _ d1] (cleared!)]
         (is (nil? (reentry/of :brian id)))
         (testing "and still none once work is done UNDER that design"
           (ws/append-entry! :brian id {:kind :implementation-completed}
@@ -137,7 +145,7 @@
         (is (nil? (reentry/of :brian id))
             "placed by its record trail exactly as before")))))
 
-(deftest an-unapproved-design-sends-it-back-to-the-approval
+(deftest an-uncleared-design-sends-it-back-to-the-clearance
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
@@ -146,14 +154,14 @@
                                      :baseline-seq b :reason "holds"})
             d (add :design (a-design b))
             r (reentry/of :brian id)]
-        (is (= :approval (:stage r)))
-        (is (= :not-approved (:reason (:because r))))
+        (is (= :clearance (:stage r)))
+        (is (= :not-cleared (:reason (:because r))))
         (is (= d (:seq (:because r))))))))
 
 (deftest an-unseated-design-sends-it-back-to-the-design
   (with-tmp
     (fn [_]
-      (let [[id add d] (approved!)]
+      (let [[id add d] (cleared!)]
         (is (nil? (reentry/of :brian id)))
         (add :design-verdict {:format :design-verdict :verdict :invalidated
                               :round 1 :design-seq d :reason "a second path sums"
@@ -166,28 +174,27 @@
               "and it carries standing's own reason rather than a translation"))))))
 
 (deftest implementation-done-under-a-superseded-design-sends-it-back-to-implement
-  ;; The live case. fukan/ws-20260831-1ba009 holds exactly this shape: approved at
+  ;; The live case. fukan/ws-20260831-1ba009 holds exactly this shape: decided at
   ;; 83, implemented at 84, then six more designs — and it reported :implemented.
   (with-tmp
     (fn [_]
-      (let [[id add d1] (approved!)]
-        (add :implementation-completed {:format :implementation-completed
-                                        :summary "done" :artifacts []
-                                        :design {:seq d1}})
-        (is (nil? (reentry/of :brian id)) "current while the design is")
-        (let [b (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
-              d2 (add :design (a-design b d1))
-              _ (add :design-approved {:format :design-approved :design {:seq d2}
-                                       :at-seq d2})
-              r (reentry/of :brian id)]
-          (is (= :implementation (:stage r))
-              "the new design is approved, so the design and approval are fine —
-               what is stale is the code written against the old one")
-          (is (= #{} (:trail r)) "and no trail stage may be reported")
-          (is (= :trail-superseded (:reason (:because r))))
-          (is (= [{:kind :implementation-completed :seq 6 :under d1}]
-                 (:records (:because r)))
-              "and it names the record and the design it was attributed to"))))))
+      (let [[id add d1] (cleared!)]
+        (let [impl (add :implementation-completed {:format :implementation-completed
+                                                   :summary "done" :artifacts []
+                                                   :design {:seq d1}})]
+          (is (nil? (reentry/of :brian id)) "current while the design is")
+          (let [b (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
+                d2 (add :design (a-design b d1))
+                _ (decide-and-clear! id add d2)
+                r (reentry/of :brian id)]
+            (is (= :implementation (:stage r))
+                "the new design is cleared, so the design and its clearance are fine —
+                 what is stale is the code written against the old one")
+            (is (= #{} (:trail r)) "and no trail stage may be reported")
+            (is (= :trail-superseded (:reason (:because r))))
+            (is (= [{:kind :implementation-completed :seq impl :under d1}]
+                   (:records (:because r)))
+                "and it names the record and the design it was attributed to")))))))
 
 (deftest the-design-question-outranks-the-trail-question
   ;; Precedence is a claim: a workstream whose design does not stand AND whose
@@ -196,14 +203,14 @@
   ;; has re-established.
   (with-tmp
     (fn [_]
-      (let [[id add d1] (approved!)]
+      (let [[id add d1] (cleared!)]
         (add :implementation-completed {:format :implementation-completed
                                         :summary "done" :artifacts []
                                         :design {:seq d1}})
         (let [b  (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
               d2 (add :design (a-design b d1))]
-          (is (= :approval (:stage (reentry/of :brian id)))
-              "the trail is stale too, and the approval is the nearer answer")
+          (is (= :clearance (:stage (reentry/of :brian id)))
+              "the trail is stale too, and the clearance is the nearer answer")
           (add :design-verdict {:format :design-verdict :verdict :invalidated
                                 :round 1 :design-seq d2 :reason "no"
                                 :invariants-broken [{:invariant "i" :finding "f"}]
@@ -216,14 +223,13 @@
   ;; that reads for itself — that would be the two-answers defect, one level down.
   (with-tmp
     (fn [_]
-      (let [[id add d1] (approved!)]
+      (let [[id add d1] (cleared!)]
         (add :implementation-completed {:format :implementation-completed
                                         :summary "done" :artifacts []
                                         :design {:seq d1}})
         (let [b  (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
               d2 (add :design (a-design b d1))
-              _  (add :design-approved {:format :design-approved :design {:seq d2}
-                                        :at-seq d2})
+              _  (decide-and-clear! id add d2)
               w   (ws/read-ws :brian id)
               d   (ws/latest-entry :brian id :design)
               st  (standing/of-design :brian id d)
@@ -244,18 +250,18 @@
 (deftest redoing-the-work-clears-the-stage-and-leaves-the-ones-above-it-owed
   ;; The escape. Found by walking the whole arc rather than by a unit test: an
   ;; earlier rule asked that EVERY trail record be current, so a workstream that
-  ;; had redesigned, re-approved and re-implemented was still held at the
+  ;; had redesigned, re-cleared and re-implemented was still held at the
   ;; implementation by the entry it had just superseded.
   (with-tmp
     (fn [_]
-      (let [[id add d1] (approved!)]
+      (let [[id add d1] (cleared!)]
         (add :implementation-completed {:format :implementation-completed
                                         :summary "first" :artifacts []
                                         :design {:seq d1}})
         (add :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d1}})
         (let [b  (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
               d2 (add :design (a-design b d1))]
-          (add :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (decide-and-clear! id add d2)
           (is (= :implementation (:stage (reentry/of :brian id)))
               "both the implementation and the PR are behind")
           (add :implementation-completed {:format :implementation-completed
