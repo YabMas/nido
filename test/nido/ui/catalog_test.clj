@@ -142,7 +142,7 @@
     (is (str/includes? html "st-mark paused"))
     (is (str/includes? html "st-mark stalled"))
     (is (str/includes? html "st-mark live"))
-    (is (str/includes? html "cat-empty") "and a quiet row renders no mark at all")))
+    (is (str/includes? html "scene-empty") "and a quiet row renders no mark at all")))
 
 (deftest a-board-row-scene-renders-a-selectable-row
   (let [html (html-of "board-row" "the ordinary row")]
@@ -219,7 +219,8 @@
 
 (deftest a-selector-link-changes-one-field-and-keeps-the-rest
   (let [html (catalog/catalog-page "block=ask&surface=pane&width=narrow")]
-    (is (str/includes? html "cat-frame s-sunken w-narrow") "the selection reaches the frame")
+    (is (str/includes? html "class=\"cat-frame w-narrow\"") "the width reaches the frame")
+    (is (str/includes? html "background:var(--surface-sunken)") "and so does the surface")
     (is (str/includes? html "block=ask&amp;surface=card&amp;width=narrow")
         "the surface link changes the surface and keeps the block and the width")
     (is (str/includes? html "block=state&amp;surface=pane&amp;width=narrow")

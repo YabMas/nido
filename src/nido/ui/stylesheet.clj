@@ -598,6 +598,18 @@
                             box-shadow:var(--shadow-side); }
         }
         @media (prefers-reduced-motion: reduce) { .chat-toggle svg { transition:none; } }
+        /* A side panel in a box of its own, as a catalog scene shows one: a fixed height it fills,
+           at its width open or closed, against the right edge as it sits against the page's. */
+        .chat-side.boxed { position:static; height:420px; width:420px; margin-left:auto; }
+        .chat-side.boxed:not(.open) { width:58px; }
+        /* The catalog scenes' own layout, for a scene that sets several calls of one function
+           side by side or pairs an input with what it renders as. */
+        .scene-rail { display:flex; flex-wrap:wrap; gap:var(--space-18); align-items:flex-start; }
+        .scene-rail-i { display:flex; flex-direction:column; gap:var(--space-4); align-items:flex-start; }
+        .scene-pair { display:flex; gap:var(--space-14); align-items:baseline; }
+        .scene-label { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--text-faint); }
+        .scene-pair .scene-label { min-width:190px; }
+        .scene-empty { color:var(--text-faint); font-style:italic; }
         .chat-spin { width:8px; height:8px; border-radius:50%; background:var(--working);
                      animation:pulse var(--dur-1200) ease-in-out infinite; flex:none; }
         .chat-spin-asking { background:var(--needs); animation:none; }

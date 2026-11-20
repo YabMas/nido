@@ -370,25 +370,17 @@
      :delegates [set-app-state!]}))
 
 (Module ui-catalog
-  "The component catalog: /_catalog.
+  "The component catalog: /_catalog, and the page that frames it beside the catalog chat.
 
-   HIDES the catalog's own chrome — how a scene is framed, labelled and selected, the rules that
-   chrome is drawn with, and the three query-string names it reads its own selection from.
-   Composes `ui-components-*` and emits `ui-stylesheet`; it holds no markup of a block, and its
-   chrome's rules declare no token and read every colour and font size as var(--…), so a scene
-   that looks wrong is the block being wrong.
-
-   It parses its own query string rather than going through `ui-view-state`, which is the one
-   place in this band where a URL name is not repeated on two sides: three names it both writes
-   and reads, in one table, in one namespace."
+   HIDES that nido's catalog is the library's catalog over nido's registry and stylesheet, and how
+   it sits beside the catalog chat — the page around the frame, which owns the chat's open state,
+   select mode and the marks on the scenes. The catalog's chrome, its selection and its picker are
+   the library's; nothing here frames, labels or selects a scene."
   (Operation catalog-page
-    "The catalog: a sidebar of blocks, every scene of the selected one rendered in the app's own
-     stylesheet with Datastar live, and the two axes these blocks vary over in the app — which
-     surface a block sits on, and how wide its column is. Embedded, it also carries the element
-     picker, which names a picked element by block, scene and path and hands it to the page
-     around it, and marks the elements the page around it says are picked."
+    "The catalog from its own query string: the library's catalog page over nido's registry, in
+     the stylesheet every nido chrome emits."
     {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
-     :delegates [assembled-stylesheet lib/script groups]})
+     :delegates [lib/catalog-page registry assembled-stylesheet]})
   (Operation chat-page
     "The catalog with its chat: the scene page in a frame beside the chat's side panel — closed,
      its toggle alone; open, the panel with Pick, which puts the frame into select mode, under the

@@ -68,7 +68,7 @@
       (is (str/includes? open "class=\"catc open\"")))))
 
 (deftest picks-become-chips-and-a-chip-removes-its-pick
-  (let [picks [{"block" "position-chip" "scene" "every position" "path" "div.cat-rail:0 > span:3"
+  (let [picks [{"block" "position-chip" "scene" "every position" "path" "div.scene-rail:0 > span:3"
                 "text" "yours" "html" "<span>yours</span>"}
                {"block" "chat-panel" "scene" "empty" "path" "section.chat:0" "text" "" "html" "<section>"}]
         body  (fn [ps] (java.io.ByteArrayInputStream.

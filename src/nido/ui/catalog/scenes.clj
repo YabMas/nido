@@ -88,10 +88,10 @@
   "Several renderings side by side, each under the value that produced it — how a mark vocabulary
    is actually judged: not one at a time, but against its siblings."
   [label-fn xs render-fn]
-  (into [:div.cat-rail]
+  (into [:div.scene-rail]
         (for [x xs]
-          [:div.cat-rail-i
-           [:span.cat-scene-fn (label-fn x)]
+          [:div.scene-rail-i
+           [:span.scene-label (label-fn x)]
            (render-fn x)])))
 
 (defn- state-scenes []
@@ -134,12 +134,12 @@
              {:title "no position"
               :note "A bare watched page, or a band the projection is not computed for. It must
                      render nothing at all rather than an empty chip."
-              :render #(or (state/position-chip nil) [:span.cat-empty "renders nothing"])}]}
+              :render #(or (state/position-chip nil) [:span.scene-empty "renders nothing"])}]}
    {:name "phase-chip"
     :note "Which landing of a phased plan this is. Beside the position chip, not inside it."
     :scenes [{:title "phased, and not"
               :render #(list (state/phase-chip {:current 2 :of 3}) " "
-                             (or (state/phase-chip {}) [:span.cat-empty "unphased: nothing"]))}]}
+                             (or (state/phase-chip {}) [:span.scene-empty "unphased: nothing"]))}]}
    {:name "needs-mark"
     :note "The next move is a person's. The one mark a board is scanned for, so it is the same dot
            on a board row, a needs-you row and an arc stage, with only its title saying how."
@@ -164,7 +164,7 @@
                               ["quiet" {:owed-by :person} nil]]
                              (fn [[_ st doing]]
                                (or (state/state-mark st doing)
-                                   [:span.cat-empty "nothing"])))}
+                                   [:span.scene-empty "nothing"])))}
              {:title "a merge keeps its words"
               :note "The one exception to no-words: a blocked merge has to read red on a board
                      that is scanned rather than read."
@@ -184,7 +184,7 @@
                               ["merge" {:source :merge :phase :driving}]]
                              (fn [[_ d]] (if-let [l (state/round-label d)]
                                            [:span l]
-                                           [:span.cat-empty "nothing"])))}]}
+                                           [:span.scene-empty "nothing"])))}]}
    {:name "status-heading"
     :note "The Status section's heading, carrying the position itself. A string, not markup —
            the pane wraps it."
@@ -194,8 +194,8 @@
                      pipeline's keywords."
               :render #(into [:div]
                              (for [p (cons nil positions)]
-                               [:div.cat-pair
-                                [:span.cat-scene-fn (if p (str p) "nil")]
+                               [:div.scene-pair
+                                [:span.scene-label (if p (str p) "nil")]
                                 [:span (state/status-heading (when p {:at p}))]]))}]}
    {:name "arc-name"
     :note "An arc stage's heading."

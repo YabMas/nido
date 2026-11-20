@@ -352,7 +352,7 @@
         confirm (signal :reset)
         asking  (str "$" confirm " && !$" busy)]
     (-> [:aside.chat-side (merge (part :root)
-                                 {:class (when open? "open")
+                                 {:class (not-empty (str/join " " (cond-> [] (:boxed? props) (conj "boxed") open? (conj "open"))))
                                   :aria-label "Chat with the agent"
                                   "data-class:open" (str "$" open)})
          (into [:div.chat-side-bar
@@ -543,7 +543,10 @@ for the text and keep the tint, so it still reads as **yours** without competing
 (def ^:private two-images
   [{:mime "image/png" :data "" :digest "a1"} {:mime "image/png" :data "" :digest "b2"}])
 
-(defn- open-panel [t & {:as more}] (merge {:transcript t :open? true :reset? true} more))
+(defn- open-panel
+  "A scene's panel: open, able to reset, and boxed, since a scene is not a column of a page."
+  [t & {:as more}]
+  (merge {:transcript t :open? true :reset? true :boxed? true} more))
 
 (def ^:private a-change
   {:description "Tighten the catalog chat's composer\n\nSend sits inside the message box."
@@ -566,8 +569,9 @@ for the text and keep the tint, so it still reads as **yours** without competing
    {:id      scope
     :doc     "A conversation with an agent, as a side panel: a toggle that opens and closes it,
               leading a bar over its transcript, the turn's status and the composer. Closed, the
-              toggle is all that shows; the page gives it the width. Reads a transcript value
-              only, so a workstream pane or the catalog can host one."
+              toggle is all that shows; the page gives it the width, or `:boxed?` sets it in a box
+              of its own, as a scene shows it. Reads a transcript value only, so a workstream pane
+              or the catalog can host one."
     :render  render-panel
     :props   [:map
               [:transcript [:map [:items [:sequential :map]]]]
@@ -576,6 +580,7 @@ for the text and keep the tint, so it still reads as **yours** without competing
               [:reset? {:optional true} :boolean]
               [:attach? {:optional true} :boolean]
               [:live? {:optional true} :boolean]
+              [:boxed? {:optional true} :boolean]
               [:picks {:optional true} [:sequential :map]]
               [:staged {:optional true} [:sequential :map]]
               [:bar {:optional true} :any]
