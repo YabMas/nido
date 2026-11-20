@@ -1158,7 +1158,7 @@
           (conduct/conduct! {:projects [:nido]}))
         (is (= "s" @woke) "so a queued instruction still wakes it")))))
 
-(deftest a-torn-down-session-is-not-read-but-a-conductor-is
+(deftest a-torn-down-session-is-not-read-whatever-it-occupied
   (with-tmp
     (fn []
       (auto-baseline!)
@@ -1166,14 +1166,17 @@
       (conduct/instruct! :nido "ws-1" "kid" "/drive-home" "run-7")
       (fs/delete-tree (sstate/session-home-dir "nido" "kid"))
       (let [sent (atom 0)]
-        (with-redefs [substrate/listing (constantly [done-row])
+        ;; Torn down: its home gone, and Claude Code no longer lists its conversation.
+        (with-redefs [substrate/listing (constantly [])
                       substrate/send!   (fn [_ _] (swap! sent inc) {:delivered? true})]
-          (testing "its home gone, nothing is given and its record is left as it was"
+          (testing "its home gone and unlisted, nothing is given and its record is left as it was"
             (let [before (session/read-session :nido "ws-1" "kid")]
               (conduct/conduct! {:projects [:nido]})
               (is (zero? @sent))
               (is (= before (session/read-session :nido "ws-1" "kid")))))
-          (testing "a conductor or a seat is read wherever it is"
-            (is (true? (#'conduct/reachable? {:project :nido :record {:name "kid" :conductor true}})))
-            (is (true? (#'conduct/reachable? {:project :nido :record {:name "kid" :seat "s1"}})))
-            (is (false? (#'conduct/reachable? {:project :nido :record {:name "kid"}})))))))))
+          (testing "a conductor or a seat torn down is no more reachable than any other"
+            (is (false? (#'conduct/reachable? #{} {:project :nido :record {:name "kid" :conductor true}})))
+            (is (false? (#'conduct/reachable? #{} {:project :nido :record {:name "kid" :seat {:id 1}}})))
+            (is (false? (#'conduct/reachable? #{} {:project :nido :record {}})) "a record naming no session"))
+          (testing "a session Claude Code still lists is read though its home is gone"
+            (is (true? (#'conduct/reachable? #{"s"} {:project :nido :record {:name "kid" :claude {:session-id "s"}}})))))))))
