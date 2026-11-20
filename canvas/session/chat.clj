@@ -78,18 +78,44 @@
     {:signature [:=> [:catn [:project :any] [:session :string]] :any]}))
 
 (Module session-change
-  "A session's unlanded change: what it is, landing it, and throwing it away.
+  "A session's unlanded change: what it is, sealing and landing it, bringing the worktree onto
+   main after a landing, and throwing the change away.
 
-   HIDES the revsets that say what a session has not landed — everything between origin's main
-   and its working copy — how a revert is made, and that publishing is the landing verb run as a
-   process in the session's worktree."
+   HIDES the revsets that say what a session has not landed and what it is landing, how a change
+   is sealed (the working copy moves to a new change above it), how the worktree is brought onto
+   main (a rebase that drops what main's content empties), how a revert is made, and that
+   publishing is the landing verb run as a process, told the sealed revision."
   (Operation pending
-    "The change the session holds that origin's main does not — {:description :files} — or nil."
-    {:signature [:=> [:catn [:project :any] [:session :string]] [:maybe :map]]})
+    "The change the session holds that origin's main does not — {:description :files :rev
+     :conflicts}, :rev the revision it was read as, :conflicts the paths left conflicted — or nil. Given a sealed revision that is landing or has landed,
+     only what the worktree holds above it."
+    {:signature [:=> [:catn [:project :any] [:session :string] [:sealed [:? [:maybe :string]]]] [:maybe :map]]})
+  (Operation landing
+    "What a sealed revision lands — the commits of origin's main..`sealed` taken together, as
+     {:description :files} — read from jj when called, or nil when origin's main holds them all."
+    {:signature [:=> [:catn [:project :any] [:session :string] [:sealed :string]] [:maybe :map]]})
+  (Operation tip-of
+    "The revset naming the nearest commit at or below `rev` that carries something — not empty, or a
+     merge, which joins its parents even when it adds nothing to them: one commit."
+    {:signature [:=> [:catn [:rev :string]] :string]})
+  (Operation one-commit
+    "The commit id a revset names in the repository at `dir` when it names exactly one commit, else
+     nil — also when jj cannot answer."
+    {:signature [:=> [:catn [:dir :any] [:revset :string]] [:maybe :string]]})
+  (Operation seal!
+    "Fix the session's change as a revision and start a new change above it, when the change is
+     still the revision `rev` a reading of it returned; the sealed commit id, or nil, sealing
+     nothing, when it is another revision or there is nothing unlanded."
+    {:signature [:=> [:catn [:project :any] [:session :string] [:rev :string]] [:maybe :string]]})
+  (Operation onto-main!
+    "When origin's main is not an ancestor of the session's working copy, rebase the worktree onto
+     it, dropping commits main's content empties; the paths left conflicted, empty when none. Never
+     called while the session's agent runs a turn."
+    {:signature [:=> [:catn [:project :any] [:session :string]] [:vector :string]]})
   (Operation revert!
     "Throw the session's unlanded change away, leaving its working copy empty on origin's main."
     {:signature [:=> [:catn [:project :any] [:session :string]] :any]})
   (Operation publish!
-    "Land the session's change through bb nido:land, calling `on-line` with each line it prints;
-     its exit code, zero when it landed."
-    {:signature [:=> [:catn [:project :any] [:session :string] [:on-line :any]] :int]}))
+    "Land a sealed revision of the session through bb nido:land run in its worktree, calling
+     `on-line` with each line it prints; its exit code."
+    {:signature [:=> [:catn [:project :any] [:session :string] [:rev :string] [:on-line :any]] :int]}))
