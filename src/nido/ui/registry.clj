@@ -8,6 +8,7 @@
    the token values and the rules no registration carries, and never reads a registration."
   (:require [nido.libraries.ui.style :as style]
             [nido.ui.catalog.scenes :as scenes]
+            [nido.ui.components.ask :as ask]
             [nido.ui.stylesheet :as css]))
 
 (def ^:private surfaces
@@ -25,7 +26,7 @@
   []
   {:title    "nido dashboard"
    :surfaces surfaces
-   :blocks   []
+   :blocks   [ask/card ask/bar]
    :groups   (scenes/groups)})
 
 (def ^:private assembled

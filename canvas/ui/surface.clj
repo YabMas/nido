@@ -161,27 +161,17 @@
      :delegates [arc-name arc-mark]}))
 
 (Module ui-components-ask
-  "One Ask, offered for answer.
+  "One Ask, offered for answer, registered with the UI library as two blocks: `card`, the Ask
+   answered — its questions one at a time, their options, and every action the gate offers
+   beside what it does — and `bar`, one action set, the single renderer behind every gate's
+   controls. They are values, not functions: each renders through the library over props, the
+   context and the page's router alone, on the workstream's id as its instance.
 
    HIDES how a decision is offered — one question at a time or all at once, which control is
-   primary, and where a consequence sits relative to the button that carries it. Not hidden: the
-   page-state key its choices are held under, which it publishes as `card-signal`, and the literal
-   names the server repeats from its markup."
-  (Operation card-signal
-    "The key a workstream's question card keeps its step and choices under, in page state —
-     one per workstream, so two cards on one page never share them, and the server reads a
-     submit's choices back from the same key."
-    {:signature [:=> [:catn [:ws-id WorkstreamId]] :string]})
-  (Operation action-bar "One action set, rendered. The single renderer behind every gate."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:actions :any]
-                            [:session :any] [:route :any]] :any]})
-  (Operation question-card
-    "One Ask, answered: its questions one at a time, their options, and every action the gate
-     offers beside what it does. Reads nothing but its arguments — the page supplies only how a
-     click is routed — so any pane can drop it in."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ask :map]
-                            [:actions :any] [:opts :map]] :any]
-     :delegates [action-bar card-signal]}))
+   primary, where a consequence sits relative to the button that carries it — and what a gate's
+   click sends. Each block declares its actions as data, and the server reads a gate's posted
+   body only through the decoder the same declaration derives, so no posted name is repeated on
+   two sides.")
 
 (Module ui-components-chat
   "A conversation with an agent, as a panel.
@@ -281,7 +271,7 @@
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [board-row winddown-row]})
   (Operation workstream-pane "The read-only ledger pane for one workstream."
     {:signature [:=> [:catn [:ws :map] [:session-dev-states [:? :any]]] :any]
-     :delegates [status-heading state-mark arc-row question-card action-bar
+     :delegates [status-heading state-mark arc-row
                  report/report->markdown render]})
   (Operation pickup-bar "The paste-a-ticket bar."
     {:signature [:=> [:catn [:project ProjectName]] :any]})

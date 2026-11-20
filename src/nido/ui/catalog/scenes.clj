@@ -14,7 +14,8 @@
 
    `:name` on a block is the published function's own name, and the catalog test holds the
    registry to covering every one of them."
-  (:require [nido.ui.components.ask :as ask]
+  (:require [nido.libraries.ui.block :as block]
+            [nido.ui.components.ask :as ask]
             [nido.ui.components.chat :as chat]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]))
@@ -28,9 +29,27 @@
 ;; and its choices are page state, so Previous/Next and marking a question answered work for
 ;; real in the catalog without any of this being reached.
 
-(def ^:private nowhere
-  "A route function of (project ws-id action-id), as a pane supplies one."
-  (fn [project ws-id action] (str "/_catalog/nowhere/" project "/" ws-id "/" (name action))))
+(defn- nowhere-router
+  "A block's router that goes nowhere: every action to the catalog's own dead end, its params
+   in the path so the URL is shaped like the real one."
+  [action params]
+  (str "/_catalog/nowhere/" (name action)
+       (apply str (for [[_ v] (sort-by key params)] (str "/" (if (keyword? v) (name v) v))))))
+
+(defn- registered
+  "A block registration's own scenes, as the catalog's group entry under the name its namespace
+   publishes it by: each a thunk rendering the registration over the scene's props, on an
+   instance id of its own."
+  [published-as blk]
+  {:name   published-as
+   :note   (:doc blk)
+   :scenes (vec (map-indexed
+                 (fn [i {:keys [title note props]}]
+                   {:title  title
+                    :note   note
+                    :render #(block/render blk (or (:ws-id props) (str "scene-" i)) props {}
+                                           nowhere-router)})
+                 (:scenes blk)))})
 
 (def ^:private no-click
   "The Datastar expression a scene gives a row whose click patches a fragment in place."
@@ -349,181 +368,6 @@
                                           nil {:open? true :on-click no-click})
                              (row/arc-row {:stage :implementation :state :ahead :visits 0 :entries 0}
                                           nil {:open? false :on-click no-click}))}]}])
-
-;; ---------------------------------------------------------------------------
-;; The Ask
-
-(def ^:private one-question-ask
-  {:kind :answer-blocker
-   :question "Should the component catalog replace the pages as the interface?"
-   :questions [{:question "Should the component catalog replace the pages as the interface?"
-                :context ["The split is behaviour-preserving: no rendered page changes."
-                          "It breaks one baseline claim — pages-are-the-interface — and states blocks-are-addressable in its place."]
-                :recommendation "Replace them. The decision round found nothing it could not derive."
-                :after "The next decision round reads your answer."
-                :options [{:letter "A" :label "Replace them" :summary "Blocks become the interface."
-                           :consequence "The design stands; the next round judges it again."
-                           :recommended? true :action :option-a}
-                          {:letter "B" :label "Keep the pages"
-                           :summary "Something in the shape has to change first."
-                           :consequence "The design is amended before the next round."
-                           :action :option-b}]}]
-   :answer-does [{:action :option-a :label "Choose" :does "Records your answer on the ledger."}
-                 {:action :reply :label "Reply" :does "Records what you said and resumes the session."}]})
-
-(def ^:private one-question-actions
-  [{:id :option-a :label "A" :kind :resume :style :primary :seq 7}
-   {:id :option-b :label "B" :kind :resume :style :default :seq 7}
-   {:id :reply :label "Reply" :kind :resume :style :default}])
-
-(def ^:private two-question-ask
-  {:kind :accept-triage
-   :question "Accept the triage of “Checkout off by a cent”?"
-   :questions [{:question "Where should the total be rounded?"
-                :context ["Each line rounds independently today, so the error accumulates."]
-                :recommendation "Round once — the smallest fix."
-                :after "The fix is built and a PR opened."
-                :options [{:letter "A" :label "Round once" :summary "On the total."
-                           :consequence "Effort: S" :recommended? true}
-                          {:letter "B" :label "A money type"
-                           :summary "Make the wrong thing unrepresentable."
-                           :consequence "Effort: L"}]}
-               {:question "Should the receipt show the rounding?"
-                :context ["Finance asked; the customer has never asked."]
-                :options [{:letter "A" :label "Show it" :summary "One line under the total."
-                           :consequence "Effort: XS"}
-                          {:letter "B" :label "Leave it" :summary "Nothing on the receipt."
-                           :consequence "Effort: none"}]}]
-   :submit :apply
-   :answer-does [{:action :apply :label "Accept" :does "Records every answer and files the ticket."}
-                 {:action :defer :label "Defer" :does "Leaves the questions for the design work."}]})
-
-(def ^:private two-question-actions
-  [{:id :apply :label "Accept" :kind :mutation :style :primary :seq 4}
-   {:id :defer :label "Defer" :kind :mutation :style :default}
-   {:id :reply :label "Reply" :kind :resume :style :default}])
-
-(defn- ask-scenes []
-  [{:name "question-card"
-    :note "One Ask, answered. The pane supplies how a click is routed; the card reads nothing
-           else. Datastar is live here, so the stepper and the choices work — each scene's card
-           on a workstream id of its own, since a card's page state is keyed by it."
-    :scenes [{:title "one question"
-              :note "The ordinary gate. The question leads, its support follows, and the one
-                     recommended answer is the one primary button."
-              :render #(ask/question-card "nido" "ws-card-1" one-question-ask one-question-actions
-                                          {:route nowhere :session "component-catalog"})}
-             {:title "several questions"
-              :note "A verdict with one question per defect cannot let each answer give itself,
-                     because no one answer is the whole of it. One card, one question at a time,
-                     a marker per question, and Accept as the one submitting action. Click
-                     Previous/Next and the markers — the stepper is page state and works here."
-              :render #(ask/question-card "nido" "ws-card-2" two-question-ask two-question-actions
-                                          {:route nowhere :session "auto"})}
-             {:title "pending"
-              :note "Its agent is running. Every choice renders with no control at all, so a
-                     poll cannot flip it back to a fresh button."
-              :render #(ask/question-card "nido" "ws-card-3" two-question-ask two-question-actions
-                                          {:route nowhere :pending? true :session "auto"})}
-             {:title "a failed action"
-              :note "Set above the first question, and the controls stay clickable so the person
-                     can retry."
-              :render #(ask/question-card "nido" "ws-card-4" one-question-ask one-question-actions
-                                          {:route nowhere
-                                           :error-msg "That option is no longer on the table — the report moved on since this page rendered."})}
-             {:title "no recommendation"
-              :note "The writer had none. With no recommendation and no submit there is no
-                     primary button either — which is the honest rendering of a question nobody
-                     has an answer to."
-              :render (fn []
-                        (ask/question-card
-                         "nido" "ws-card-5"
-                         (update-in one-question-ask [:questions 0]
-                                    (fn [q] (-> q (dissoc :recommendation)
-                                                (update :options
-                                                        (fn [os] (mapv #(dissoc % :recommended?) os))))))
-                         (mapv (fn [a] (dissoc a :style)) one-question-actions)
-                         {:route nowhere}))}
-             {:title "a dialog a driven session stands on"
-              :note "A session nido drives stopped mid-turn on a permission prompt nobody was looking
-                     at. After two minutes nido states it here as a blocker it wrote: what the prompt
-                     would run, and where to answer it — a button here could not answer the prompt.
-                     nido marks it answered when the prompt closes."
-              :render #(ask/question-card
-                        "nido" "ws-card-6"
-                        {:kind :answer-blocker
-                         :question "Allow catalog-chat to use Bash: npm install --save-dev playwright?"
-                         :questions [{:question "Allow catalog-chat to use Bash: npm install --save-dev playwright?"
-                                      :context ["catalog-chat stopped mid-turn on a dialog (permission prompt) at 2026-11-13T14:43:19Z, and nothing proceeds until it is answered. It waits to run Bash: npm install --save-dev playwright."]
-                                      :after "Answer it in the session itself — open catalog-chat from the board. nido marks this answered when the dialog closes. A reply here is recorded, but it cannot reach the dialog."
-                                      :options []}]
-                         :answer-does [{:action :reply :label "Answer"
-                                        :does "Records your words on the ledger as the blocker's answer. Nobody is resumed: whoever takes the workstream up next reads it there."}]}
-                        [{:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}]
-                        {:route nowhere :session "catalog-chat"})}
-             {:title "an evidence box"
-              :note "A phase gate is asserted with what you observed on the running system. The
-                     box is a row beside what it does, like every other control."
-              :render #(ask/question-card
-                        "nido" "ws-card-7"
-                        {:kind :assert-gate
-                         :question "Has phase 2 landed on the running system?"
-                         :questions [{:question "Has phase 2 landed on the running system?"
-                                      :context ["The exit criterion is the dashboard serving /_catalog on a daemon that has been up for an hour."]
-                                      :options []}]
-                         :answer-does [{:action :assert :label "Assert the gate"
-                                        :does "Records what you observed and opens phase 3."}]}
-                        [{:id :assert :label "Assert the gate" :kind :evidence
-                          :criterion "the dashboard serves /_catalog on a daemon that has been up for an hour"}]
-                        {:route nowhere})}
-             {:title "a long question"
-              :note "A question nobody managed to write in one line. Prose is bounded to the
-                     reading measure and is never clipped — if this one is cut off or runs the
-                     width of the pane, the card is wrong."
-              :render #(ask/question-card
-                        "nido" "ws-card-8"
-                        (let [q (str "Should the component catalog cover the twenty per-kind record cards as "
-                                     "well, given that each one reads a different ledger record's shape and "
-                                     "would need a sample of that record to have a scene at all, or is that a "
-                                     "different reading job from the blocks a person actually iterates on?")]
-                          (-> one-question-ask (assoc :question q)
-                              (assoc-in [:questions 0 :question] q)))
-                        one-question-actions {:route nowhere})}]}
-   {:name "action-bar"
-    :note "One action set, rendered. The single renderer behind every gate's controls."
-    :scenes [{:title "mutations and a reply"
-              :render #(ask/action-bar "nido" "ws-1"
-                                       [{:id :promote :label "Promote" :kind :mutation :style :primary}
-                                        {:id :drop :label "Drop" :kind :mutation :style :danger}
-                                        {:id :reply :label "Reply" :kind :resume}]
-                                       "component-catalog" nowhere)}
-             {:title "answering a blocker"
-              :note "The free text is recorded on the ledger and resumes nobody, so the copy must
-                     not promise a resume. That is the whole difference from the row above."
-              :render #(ask/action-bar "nido" "ws-1"
-                                       [{:id :reply :label "Answer" :kind :resume}]
-                                       nil nowhere)}
-             {:title "asserting a gate"
-              :note "The evidence box comes first, above the buttons, because what you observed
-                     is what the answer is."
-              :render #(ask/action-bar "nido" "ws-1"
-                                       [{:id :assert :label "Assert the gate" :kind :evidence
-                                         :criterion "the dashboard serves /_catalog"}
-                                        {:id :defer :label "Not yet" :kind :mutation}]
-                                       nil nowhere)}]}
-   {:name "card-signal"
-    :note "The key a workstream's card keeps its step and choices under, in page state. A string,
-           not markup — but the one thing two cards on one page must not share, so it is worth
-           being able to see."
-    :scenes [{:title "one key per workstream"
-              :note "Every character a signal name cannot carry becomes _. Two workstreams must
-                     never collide here, and the server reads a submit's choices back from the
-                     same key."
-              :render #(into [:div]
-                             (for [id ["ws-20261113-609f4c" "ws-1" "BR-7285" "impl-BR-7285"]]
-                               [:div.cat-pair
-                                [:span.cat-scene-fn id]
-                                [:span.cat-ret (str "$qcard." (ask/card-signal id))]]))}]}])
 
 ;; ---------------------------------------------------------------------------
 ;; The chat panel
@@ -885,4 +729,4 @@ for the text and keep the tint, so it still reads as **yours** without competing
     :note "One decision, offered for answer. Datastar is live on this page, so the stepper, the
            choices and the answered-markers work exactly as they do on a real gate; the buttons
            post to a dead end."
-    :blocks (ask-scenes)}])
+    :blocks [(registered "card" ask/card) (registered "bar" ask/bar)]}])

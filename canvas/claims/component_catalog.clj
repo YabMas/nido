@@ -7,7 +7,7 @@
             [canvas.ui.catalog-chat :refer [ui-catalog-chat]]
             [canvas.libraries.ui :refer [libraries-ui-wire]]
             [canvas.strata :refer [ui-blocks ui-state-marks ui-visual-language]]
-            [canvas.ui.surface :refer [handle-request question-card shell status-heading
+            [canvas.ui.surface :refer [handle-request shell status-heading
                                         ui-catalog ui-catalog-scenes ui-components-ask ui-components-row
                                         ui-components-state ui-server ui-stylesheet
                                         ui-views workstreams-fragment]]))
@@ -50,7 +50,7 @@
 
 (Claim markup-unchanged
   "The split changes no page main's dashboard renders: for every page and every fragment main serves, the markup produced over given arguments is what main produces over the same arguments. No assertion the existing ui tests make is removed, relaxed or re-aimed at something weaker."
-  {:about [ui-views shell handle-request question-card] :evidence "round"})
+  {:about [ui-views shell handle-request ui-components-ask] :evidence "round"})
 
 (Claim lands-on-green
   "On this change's tip, bb nido:test shows no failure and no error beyond the three conductor_test errors main already has, bb nido:design:check reports ok, and bb nido:land:check passes."

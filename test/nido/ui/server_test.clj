@@ -133,7 +133,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
                   nido.coordinator.work/all-gates    (fn [] [])]
-      (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"do the fix\"}"))]
+      (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"ask_bar\":{\"ws_1\":{\"reply\":\"do the fix\"}}}"))]
         (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})
         (Thread/sleep 50)
         (is (= [["brian" "ws-1" :reply "do the fix"]] @calls))))))
@@ -156,7 +156,7 @@
 
 (deftest post-gate-reply-returns-resuming-pane
   (with-redefs [nido.coordinator.work/resolve-gate! (fn [& _] {:resumed "auto"})]
-    (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"apply\"}"))
+    (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"ask_bar\":{\"ws_1\":{\"reply\":\"apply\"}}}"))
           resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})]
       (Thread/sleep 50)
       (is (str/includes? (:body resp) "Resuming"))
@@ -650,7 +650,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
                   nido.coordinator.work/all-gates    (fn [] [])]
-      (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"do the fix\"}"))]
+      (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"ask_bar\":{\"ws_1\":{\"reply\":\"do the fix\"}}}"))]
         (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})
         (Thread/sleep 50)
         (is (= [["brian" "ws-1" :reply "do the fix"]] @calls)
@@ -750,7 +750,7 @@
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-qc/gate/apply"
                               :query-string "entry=6"
                               :body (java.io.ByteArrayInputStream.
-                                     (.getBytes "{\"qcard\":{\"ws_qc\":{\"step\":1,\"answers\":{\"q0\":\"B\",\"q1\":\"\",\"q2\":\"A\"}}}}"))})
+                                     (.getBytes "{\"ask\":{\"ws_qc\":{\"step\":1,\"answers\":{\"q0\":\"B\",\"q1\":\"\",\"q2\":\"A\"}}}}"))})
       (Thread/sleep 50)
       (is (= [["brian" "ws-qc" :apply {:seq 6 :answers ["B" nil "A"]}]] @calls)
           "the card's answers arrive one per question, in order, a blank kept as nil —
@@ -763,7 +763,7 @@
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-qc/gate/answer-questions"
                               :query-string "entry=8"
                               :body (java.io.ByteArrayInputStream.
-                                     (.getBytes (str "{\"qcard\":{\"ws_qc\":{\"step\":2,"
+                                     (.getBytes (str "{\"ask\":{\"ws_qc\":{\"step\":2,"
                                                      "\"answers\":{\"q0\":\"A\",\"q1\":\"\",\"q2\":\"\"},"
                                                      "\"words\":{\"q0\":\"\",\"q1\":\"Yes, for now\",\"q2\":\"\"}}}}")))})
       (Thread/sleep 50)

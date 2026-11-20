@@ -7,6 +7,7 @@
             [nido.ui.components.ask :as ui-ask]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]
+            [nido.libraries.ui.block :as block]
             [nido.ui.registry :as registry]
             [nido.ui.views :as views]))
 
@@ -122,7 +123,7 @@
     (is (str/includes? html "bug — reproduced."))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))     ; one-click Apply button
     (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
-    (is (str/includes? html "data-bind=\"reply\""))         ; free-text reply still present
+    (is (str/includes? html "data-bind=\"ask_bar.ws_1.reply\""))         ; free-text reply still present
     (is (str/includes? html "/workstreams/brian/ws-1/gate/reply"))
     (is (str/includes? html "<textarea"))
     (is (not (str/includes? html "class=\"breadcrumb\"")))))
@@ -164,17 +165,17 @@
 (deftest a-verdict-of-several-questions-is-one-stepper-card
   (let [pane (gate-in-pane (two-question-gate))
         at   #(or (str/index-of pane %) (throw (ex-info (str "missing " %) {})))]
-    (is (str/includes? pane "Question <span data-text=\"$qcard.ws_1.step + 1\">1</span> of 2")
+    (is (str/includes? pane "Question <span data-text=\"$ask.ws_1.step + 1\">1</span> of 2")
         "it says which of how many is shown")
     (is (= 2 (count (re-seq #"class=\"qc-mark\"" pane))) "one marker per question")
-    (is (str/includes? pane "data-show=\"$qcard.ws_1.step === 1\"") "only the shown question is visible")
+    (is (str/includes? pane "data-show=\"$ask.ws_1.step === 1\"") "only the shown question is visible")
     (is (str/includes? pane "◂ Previous"))
     (is (str/includes? pane "Next ▸"))
-    (is (str/includes? pane "{qcard: {ws_1: {step: 0, answers: {q0: &apos;&apos;, q1: &apos;&apos;}}}}")
+    (is (str/includes? pane "{&quot;ask&quot;:{&quot;ws_1&quot;:{&quot;step&quot;:0,&quot;answers&quot;:{&quot;q0&quot;:&quot;&quot;,&quot;q1&quot;:&quot;&quot;}}}}")
         "a choice is page state until Accept")
     (is (< (at "<strong>Round once</strong>") (at "On the total.") (at "Effort: S"))
         "an option's name in bold, then what it does, then its cost")
-    (is (str/includes? pane "$qcard.ws_1.answers.q0 = ($qcard.ws_1.answers.q0 === &apos;A&apos;) ? &apos;&apos; : &apos;A&apos;")
+    (is (str/includes? pane "$ask.ws_1.answers.q0 = ($ask.ws_1.answers.q0 === &apos;A&apos;) ? &apos;&apos; : &apos;A&apos;")
         "choosing marks it, and choosing it again leaves the question open")
     (is (not (re-find #"qc-opt[^\"]*\"[^>]*data-on:click=\"@post" pane))
         "no choice submits on its own")
@@ -196,8 +197,10 @@
 
 (deftest the-question-card-reads-only-its-arguments
   (let [g    (two-question-gate)
-        html (str (h/html (ui-ask/question-card "brian" "ws-1" (:ask g) (:actions g)
-                                               {:route (fn [p w a] (str "/x/" p "/" w "/" (name a)))})))]
+        html (str (h/html (block/render ui-ask/card "ws-1"
+                                        {:project "brian" :ws-id "ws-1" :ask (:ask g) :actions (:actions g)}
+                                        {} (fn [_ {:keys [project ws-id action]}]
+                                             (str "/x/" project "/" ws-id "/" (name action))))))]
     (is (str/includes? html "/x/brian/ws-1/apply?entry=4") "every POST is built by the route it is given")
     (is (not (str/includes? html "/gate/")))
     (is (not (str/includes? html "orient")) "no orientation band")
@@ -1652,11 +1655,11 @@
     (is (not (str/includes? (row {:stage :in-progress}) "phase ")) "an unphased row carries no chip")))
 
 (deftest the-gate-is-asserted-from-an-evidence-field
-  (let [html (str (h/html (ui-ask/action-bar "nido" "ws-1"
+  (let [html (str (h/html (#'views/ask-bar "nido" "ws-1"
                                             [{:id :assert-gate :label "Assert gate" :kind :evidence
                                               :style :primary :criterion "a quiet week"}]
-                                            nil pane-route)))]
-    (is (str/includes? html "data-bind=\"evidence\""))
+                                            nil)))]
+    (is (str/includes? html "data-bind=\"ask_bar.ws_1.evidence\""))
     (is (str/includes? html "a quiet week"))
     (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))
     (is (not (str/includes? html "Reply &amp; resume")) "no reply box without a resume action")))
@@ -1713,12 +1716,12 @@
       (is (str/includes? pane "rm -rf build") "the pane lists each, with what was denied"))))
 
 (deftest an-answer-box-promises-no-resume
-  (let [answer (str (h/html (ui-ask/action-bar "brian" "ws-1"
+  (let [answer (str (h/html (#'views/ask-bar "brian" "ws-1"
                                               [{:id :reply :label "Answer" :kind :resume :style :default}]
-                                              "run-x" pane-route)))
-        reply  (str (h/html (ui-ask/action-bar "brian" "ws-1"
+                                              "run-x")))
+        reply  (str (h/html (#'views/ask-bar "brian" "ws-1"
                                               [{:id :reply :label "Reply" :kind :resume :style :default}]
-                                              "run-x" pane-route)))]
+                                              "run-x")))]
     (is (str/includes? answer "Record answer"))
     (is (not (str/includes? answer "resumes run-x"))
         "nobody hears an Answer, so it names no session it would resume")
@@ -1830,8 +1833,8 @@
       (is (not (str/includes? pane "class=\"orient")))
       (is (not (str/includes? pane "action-bar")) "the card is the pane's only control"))
     (testing "each answer is its button, recommended one primary"
-      (is (re-find #"class=\"qc-opt primary\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-a\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>Web only</strong>" pane))
-      (is (re-find #"class=\"qc-opt\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-b\?entry=3&apos;\)\"[^>]*><span class=\"qc-opt-label\"><strong>brian-mobile too</strong>" pane))
+      (is (re-find #"class=\"qc-opt primary\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-a\?entry=3&apos;, \{filterSignals[^\"]*\)\"[^>]*><span class=\"qc-opt-label\"><strong>Web only</strong>" pane))
+      (is (re-find #"class=\"qc-opt\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-b\?entry=3&apos;, \{filterSignals[^\"]*\)\"[^>]*><span class=\"qc-opt-label\"><strong>brian-mobile too</strong>" pane))
       (is (= 1 (count (re-seq #"option-a\?entry" pane))) "no second button for an option")
       (is (not (str/includes? pane "class=\"btn btn-primary\"")) "and no other row is primary beside it"))
     (testing "what an option does is said once"

@@ -107,54 +107,19 @@
         .gate-prev { color:var(--text-faint); font-size:var(--fs-xs); margin:var(--space-5) 0 0 var(--space-26);
                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-err { color:var(--failed); font-size:var(--fs-xs); margin:var(--space-4) 0 0 var(--space-26); }
-        .qcard { border:1px solid var(--border); border-radius:var(--radius-6); background:var(--surface-raised);
-                 padding:var(--space-14) var(--space-16); margin:0 0 var(--space-20); }
-        .qc-head { margin:0 0 var(--space-10); color:var(--text-muted); font-size:var(--fs-sm); max-width:var(--measure); }
-        .qc-nav { display:flex; align-items:center; gap:var(--space-6); margin:0 0 var(--space-10); font-size:var(--fs-xs);
-                  color:var(--text-faint); text-transform:uppercase; letter-spacing:0.04em; }
-        .qc-mark { background:none; border:0; padding:0 var(--space-2); cursor:pointer; color:var(--text-faint);
-                   font-size:var(--fs-sm); line-height:1; }
-        .qc-mark.answered { color:var(--ok); }
-        .qc-mark.current { color:var(--text-strong); text-decoration:underline; }
-        .qc-q { font-size:var(--fs-lg); font-weight:500; color:var(--text-strong); margin:0 0 var(--space-10);
-                line-height:1.4; max-width:var(--measure); }
-        .qc-ctx > .md, .qc-rec, .qc-after { font-size:var(--fs-md); color:var(--text); margin:0 0 var(--space-8);
-                                           max-width:var(--measure); }
-        .qc-k { font-weight:600; color:var(--text-muted); margin:0 0 var(--space-2); }
         /* Agent prose rendered inside the card (md/render) sits in the card's own type, without
-           the bordered box .md draws on its own. */
+           the bordered box .md draws on its own. These override the shared .md, so they stay
+           here: in the ask's own rules, below this layer, they would lose to it. */
+        .qc-ctx > .md { font-size:var(--fs-md); color:var(--text); margin:0 0 var(--space-8);
+                        max-width:var(--measure); }
         .qcard .md { font:inherit; color:inherit; background:none; border:none; border-radius:0;
                      padding:0; line-height:inherit; }
         .qcard .md p { margin:0 0 var(--space-6); }
         .qcard .md ul, .qcard .md ol { margin:var(--space-2) 0 var(--space-6); padding-left:var(--space-20); }
         .qcard .md li { margin:0 0 var(--space-3); }
         .qcard .md > :last-child, .qcard .md li > :last-child { margin-bottom:0; }
-        .qc-opts { display:grid; gap:var(--space-8); margin:var(--space-12) 0 var(--space-6); }
-        .qc-opt { display:block; width:100%; max-width:var(--measure); text-align:left; font:inherit;
-                  color:var(--text); background:var(--surface); border:1px solid var(--border);
-                  border-radius:var(--radius-6); padding:var(--space-9) var(--space-12); cursor:pointer; }
-        .qc-opt:hover { background:var(--surface-hover); }
-        .qc-opt.primary { background:var(--accent-bg); border-color:var(--accent-border); }
-        .qc-opt.chosen { background:var(--recommended-bg); border-color:var(--recommended); }
-        .qc-opt.static { cursor:default; }
-        .qc-opt-label { display:block; color:var(--text-strong); }
-        .qc-opt-sum { display:block; }
-        .qc-opt-cons { display:block; color:var(--text-muted); font-size:var(--fs-sm); }
-        .qc-chosen { color:var(--recommended); font-size:var(--fs-xs); margin-left:var(--space-6); }
-        .qc-step { display:flex; gap:var(--space-8); margin:var(--space-10) 0 0; }
-        .ask-note { color:var(--text-muted); font-style:italic; max-width:var(--measure); }
-        .controls { display:grid; gap:var(--space-8); margin:var(--space-6) 0 var(--space-20); }
-        .ans-row { display:grid; grid-template-columns:minmax(150px, max-content) 1fr; gap:var(--space-12);
-                   align-items:start; padding:var(--space-10) var(--space-12); border:1px solid var(--border-subtle);
-                   border-radius:var(--radius-6); background:var(--surface-raised); }
-        .ans-row.rec { border-color:var(--recommended-bg); }
         .ans-row .btn { font-size:var(--fs-sm); padding:var(--space-6) var(--space-12); text-align:left; }
-        .ans-body p { margin:0 0 var(--space-4); max-width:var(--measure); }
         .ans-body .chip { margin-left:0; }
-        .ans-cons { color:var(--text-muted); font-size:var(--fs-sm); }
-        .ans-letter { font-weight:600; color:var(--text-muted); }
-        .ans-does { margin:0; color:var(--text-faint); font-size:var(--fs-sm); max-width:var(--measure); }
-        .controls .reply { margin-top:0; }
         .md h1 { font-size:var(--fs-lg); } .md h2 { font-size:var(--fs-md); } .md h3, .md h4 { font-size:var(--fs-sm); }
         .chip { padding:0 var(--space-7); border-radius:var(--radius-3); font-size:var(--fs-xs); text-transform:uppercase; }
         .c-triage{ background:var(--needs-bg); color:var(--needs); } .c-ready{ background:var(--ok-bg); color:var(--ok); }
@@ -332,9 +297,6 @@
                          text-align:center; }
         .option p { margin:var(--space-5) 0 0; }
         .chip.c-opt-rec { background:var(--recommended-bg); color:var(--recommended); }
-        .reply { margin-top:var(--space-16); border:1px solid var(--border); border-radius:var(--radius-6); background:var(--surface-raised); padding:var(--space-12) var(--space-14); }
-        .reply textarea { width:100%; min-height:62px; background:var(--surface-sunken); border:1px solid var(--border);
-                          border-radius:var(--radius-4); color:var(--text); font:inherit; font-size:var(--fs-sm); padding:var(--space-9) var(--space-11); }
         .links { margin:var(--space-6) 0 var(--space-14); }
         .link-row { display:flex; gap:var(--space-10); align-items:baseline; font-size:var(--fs-xs);
                     line-height:1.9; }

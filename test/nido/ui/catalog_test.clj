@@ -16,6 +16,7 @@
    is the claim; `ns-publics` is how it is checked, so adding a public function to a component
    namespace fails this test until it has somewhere to be looked at."
   (:require
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [hiccup2.core :as h]
@@ -63,14 +64,16 @@
       (is (= (render-str scene) (render-str scene))))))
 
 (defn- page-state-names
-  "The DOM ids and the page signals a scene's markup declares. A card's state nests under
-   `qcard`, keyed by its workstream, so that key is the name it owns."
+  "The DOM ids and the page signals a scene's markup declares. A registered block seeds its
+   signals as JSON nested under its scope and instance, so that pair is the name it owns."
   [html]
   (let [signal-values (map second (re-seq #"data-signals[^=]*=\"([^\"]*)\"" html))]
     (into (set (map #(str "#" (second %)) (re-seq #"\sid=\"([^\"]+)\"" html)))
           (mapcat (fn [v]
-                    (if (str/starts-with? v "{qcard: {")
-                      (map #(str "$qcard." (second %)) (re-seq #"^\{qcard: \{(\w+)" v))
+                    (if (str/starts-with? v "{&quot;")
+                      (for [[scope ids] (json/parse-string (str/replace v "&quot;" "\""))
+                            [id _] ids]
+                        (str "$" scope "." id))
                       (map #(str "$" (second %)) (re-seq #"(?:\{|, )(\w+): " v)))))
           signal-values)))
 
@@ -167,7 +170,7 @@
     (is (str/includes? stale "no record"))))
 
 (deftest a-question-card-scene-asks-its-question-and-offers-every-answer
-  (let [one (html-of "question-card" "one question")]
+  (let [one (html-of "card" "one question")]
     (is (str/includes? one "class=\"qcard\""))
     (is (str/includes? one "Should the component catalog replace the pages as the interface?"))
     ;; With no submit, the recommended OPTION is the primary — it is the control that gives the
@@ -179,17 +182,17 @@
         "and nothing else on the card is primary beside it")
     (is (str/includes? one "/_catalog/nowhere/") "every POST goes to the route the scene gave it")
     (is (not (str/includes? one "/workstreams/")) "and to no real route"))
-  (let [many (html-of "question-card" "several questions")]
+  (let [many (html-of "card" "several questions")]
     (is (str/includes? many "qc-nav") "one stepper")
     (is (= 2 (count (re-seq #"class=\"qc-mark\"" many))) "one marker per question")
     (is (str/includes? many "data-signals__ifmissing") "the choices are page state")
     (is (= 1 (count (re-seq #"class=\"btn btn-primary\"" many)))
         "one submitting action, and no choice that submits on its own"))
-  (let [pending (html-of "question-card" "pending")]
+  (let [pending (html-of "card" "pending")]
     (is (str/includes? pending "working…"))
     (is (not (str/includes? pending "/_catalog/nowhere/"))
         "a pending card offers no control for any action"))
-  (is (str/includes? (html-of "question-card" "a failed action") "action-err")))
+  (is (str/includes? (html-of "card" "a failed action") "action-err")))
 
 ;; ---------------------------------------------------------------------------
 ;; The page
@@ -256,7 +259,7 @@
                                                  {:href "/x"})))
                      "href=\"/x\""))
   (is (= "Status — Approved" (state/status-heading {:at :design-approved})))
-  (is (= "ws_1" (ask/card-signal "ws-1"))))
+  (is (= "ask.ws_1.step" (nido.libraries.ui.names/signal (:id ask/card) "ws-1" :step))))
 
 (deftest the-catalog-spans-the-shell-grid
   ;; The stylesheet makes body the dashboard shell's two-column grid (rail, content). The catalog

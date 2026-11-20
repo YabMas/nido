@@ -17,6 +17,7 @@
             [nido.ui.place :as place]
             [nido.ui.side-chat :as side-chat]
             [nido.ui.structure :as structure]
+            [nido.libraries.ui.block :as block]
             [nido.ui.components.ask :as ask]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
@@ -553,14 +554,23 @@
                     (cond l {:letter l} w {:words w} :else {})))
           (range (max (count letters) (count said))))))
 
+(defn- gate-decoding
+  "Which of the ask blocks' declared actions a gate click on `action-id` was sent by, as the
+   block and the action's key — what its body is decoded against."
+  [action-id]
+  (cond
+    (= :reply action-id)                             [ask/bar :reply]
+    (= :assert-gate action-id)                       [ask/bar :evidence]
+    (#{:answer-questions :apply} action-id)          [ask/card :submit]
+    :else                                            [ask/card :click]))
+
 (defn- click-payload
-  "What a gate click carries besides its action id, which depends on the action:
-   the reply textarea's text for :reply, the evidence textarea's for :assert-gate,
-   and for every button that answers a ledger question the :seq of the report it
-   was rendered from — posted as
-   ?entry=, the same reading position every other surface rides, so the resolver
-   can refuse an answer whose question the ledger has since moved past. nil for
-   every other action: those resolve entirely nido-side.
+  "What a gate click carries besides its action id, from the fields `decoded` — the body read
+   through the decoder of the block action that sent it — and the request's ?entry=: the reply's
+   text for :reply, the evidence's for :assert-gate, and for every button that answers a ledger
+   question the :seq of the report it was rendered from, the same reading position every other
+   surface rides, so the resolver can refuse an answer whose question the ledger has since moved
+   past. nil for every other action: those resolve entirely nido-side.
 
    Which buttons those are is asked of the descriptor, not listed here. Every
    position-carrying button is rendered by the same branch of `action-button`
@@ -568,26 +578,29 @@
    of ids kept in this namespace is a list that can disagree with it, and a
    button rendered with its position but read back without one resolves as
    stale every time."
-  [{:keys [body] :as req} ws-id action-id]
-  ;; Read once: the body is a stream, and a second slurp of it is empty.
-  (let [signals (delay (parse-json-body body))
-        card    (delay (get-in @signals [:qcard (keyword (ask/card-signal ws-id))]))
-        answers (delay (:answers @card))]
-    (cond
-      (= :reply action-id)                     (:reply @signals)
-      ;; A blocker's several questions are sent together, each as its letter or its words.
-      (= :answer-questions action-id)
-      {:seq     (:entry (view-state/parse req))
-       :answers (card-picks (when (map? @card) @card))}
-      (= :assert-gate action-id)               (:evidence @signals)
-      ;; An Accept that submits questions also carries the card's choices — this
-      ;; workstream's `qcard.<card-signal>.answers`, one `q<i>` per question — as the answers
-      ;; in order, a blank for a question left open. What each letter means is the
-      ;; resolver's to read off the ledger; this only keeps the order.
-      (and (= :apply action-id) (map? @answers))
-      {:seq     (:entry (view-state/parse req))
-       :answers (card-answers @answers)}
-      (work/position-carrying-action? action-id) (:entry (view-state/parse req)))))
+  [req action-id decoded]
+  (cond
+    (#{:reply :assert-gate} action-id)       (:text decoded)
+    ;; A blocker's several questions are sent together, each as its letter or its words.
+    (= :answer-questions action-id)
+    {:seq     (:entry (view-state/parse req))
+     :answers (card-picks decoded)}
+    ;; An Accept that submits questions also carries the card's choices, one `q<i>` per
+    ;; question, as the answers in order, a blank for a question left open. What each letter
+    ;; means is the resolver's to read off the ledger; this only keeps the order. An Accept
+    ;; from a card with no questions to submit carries none, and resolves on its position.
+    (and (= :apply action-id) (:answers decoded))
+    {:seq     (:entry (view-state/parse req))
+     :answers (card-answers (:answers decoded))}
+    (work/position-carrying-action? action-id) (:entry (view-state/parse req))))
+
+(defn- decode-failure-msg
+  "Why a gate click's body was refused, in a sentence the pane can show."
+  [{:keys [failure key]}]
+  (case failure
+    :unparseable "the click carried no readable page state; reload the page and try again"
+    :missing     (str "the click did not carry its " (name key) "; reload the page and try again")
+    :invalid     (str "the click's " (name key) " was not what this action takes")))
 
 (defn- gate-action-response-fragment
   "The pane/gate fragment for a POST'd gate action: the per-action success toast
@@ -611,9 +624,16 @@
       (let [project   (nth segs 1)
             ws-id     (nth segs 2)
             action-id (keyword (nth segs 4))
-            started?  (gate-resolve! project ws-id action-id (click-payload req ws-id action-id))]
-        (sse-response (sse-fragment
-                       (gate-action-response-fragment started? action-id project ws-id "ws-pane"))))
+            [blk k]   (gate-decoding action-id)
+            ;; Read once: the body is a stream, and a second slurp of it is empty.
+            decoded   (block/decode-action blk k (some-> body slurp) ws-id)]
+        (sse-response
+         (sse-fragment
+          (if-let [fields (:ok decoded)]
+            (gate-action-response-fragment
+             (gate-resolve! project ws-id action-id (click-payload req action-id fields))
+             action-id project ws-id "ws-pane")
+            (views/gate-action-skip-fragment (decode-failure-msg decoded) project ws-id "ws-pane")))))
 
       ;; POST /workstreams/:project/:ws-id/sessions/:session/dev/:action
       (and (= 7 (count segs)) (= "workstreams" (first segs))

@@ -13,6 +13,7 @@
             [nido.ui.registry :as registry]
             [nido.ui.components.state :as state]
             [nido.ui.components.row :as row]
+            [nido.libraries.ui.block :as block]
             [nido.ui.components.ask :as ask]
             [nido.coordinator.work :as work]))
 
@@ -1620,6 +1621,17 @@
   [project ws-id action-id]
   (str "/workstreams/" project "/" ws-id "/gate/" (name action-id)))
 
+(defn- gate-router
+  "The ask blocks' router: their one action name, :gate, to the pane-scoped resolve route."
+  [_action {:keys [project ws-id action]}]
+  (pane-route project ws-id action))
+
+(defn- ask-bar
+  "The gate's action set, rendered through the ask's bar registration on the workstream's id."
+  [project ws-id actions session]
+  (block/render ask/bar ws-id {:project project :ws-id ws-id :actions (vec actions) :session session}
+                {} gate-router))
+
 (defn- plan-block
   "A phased workstream's plan, phase by phase: which landed, which is underway, which
    are ahead, the gate each one's successor waits on, and the evidence a person gave
@@ -1673,7 +1685,7 @@
   [project ws-id origin stage sessions report position plan replyable?]
   (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
-    (ask/action-bar project ws-id
+    (ask-bar project ws-id
                 ;; Rendered only for a workstream that is no gate, which owes no Ask: an action that
                 ;; answers a verdict's questions, or Defer, which accepts with every one left open,
                 ;; would accept questions nobody was shown, so neither is offered here, nor the send
@@ -1692,7 +1704,7 @@
                                     :awaiting      (work/awaiting-human position)
                                     :gate-criterion (get-in plan [:owed-gate :criterion])
                                     :seq           (:seq report)}))
-                session pane-route)))
+                session)))
 
 (defn- file-findings-form
   "Findings-filing form shown on a shipped (:done) workstream's pane. One finding
@@ -1757,7 +1769,7 @@
         (empty? actions) [:p.meta "Nothing to do from here — the ticket is tracked in Notion, not nido."]
         :else            nil)]
      (when error-msg [:div.action-err "⚠ " error-msg])
-     (ask/action-bar project ws-id actions nil pane-route)]))
+     (ask-bar project ws-id actions nil)]))
 
 (defn ^{:malli/schema [:=> [:cat :map [:? :any]] :any]}
   workstream-pane
@@ -1825,9 +1837,11 @@
             ;; and above the log. The card owns the gate's error line and every
             ;; control, so the pane offers neither of its own beside it.
             (when gate
-              (ask/question-card project ws-id (:ask gate) (:actions gate)
-                             {:route pane-route :pending? (boolean (or (:working? gate) pending?))
-                              :error-msg error-msg :session (:session gate)}))
+              (block/render ask/card ws-id
+                            {:project project :ws-id ws-id :ask (:ask gate) :actions (vec (:actions gate))
+                             :pending? (boolean (or (:working? gate) pending?))
+                             :error-msg error-msg :session (:session gate)}
+                            {} gate-router))
             ;; The actions belong HERE and not under the log, because they act on
             ;; the workstream as it stands — pane-action-bar reads :action-report,
             ;; the CURRENT report, never the entry a reader happens to have open.

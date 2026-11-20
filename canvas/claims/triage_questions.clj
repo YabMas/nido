@@ -9,7 +9,7 @@
             [canvas.coordinator.report.ask :refer [Ask ask report-ask]]
             [canvas.coordinator.work :refer [apply! gate-actions gates resolve-gate! workstream]]
             [canvas.tasks.nido-review :refer [parked-blocker]]
-            [canvas.ui.surface :refer [needs-fragment question-card ui-server workstream-pane]]))
+            [canvas.ui.surface :refer [needs-fragment ui-components-ask ui-server workstream-pane]]))
 
 (Claim questions-write-shape
   "The write contract for :triage accepts :questions, each a :question, a :context, an :after, one to authoring-branch-cap :directions and an optional :recommendation, which a triager gives only when it genuinely holds a view on which fix is right. It refuses a new report carrying :directions; a report with no questions writes :questions []."
@@ -33,15 +33,15 @@
 
 (Claim answer-is-its-button
   "On a card that is not pending, each Ask option carrying an :action is the one button that gives it, labelled as the option, beside its summary and consequence. When the Ask has no :submit, the recommended option is the primary button. Every other action the gate offers is a row of its control beside the Ask's :does for it, so the reply says whom it reaches and the evidence what it opens. No option action is rendered as a button anywhere else. A pending card renders no control for any action: it shows its options without buttons and the working message in place of every other row."
-  {:about [question-card Ask] :evidence "test"})
+  {:about [ui-components-ask Ask] :evidence "test"})
 
 (Claim option-does-said-once
   "What giving a lettered option does is worded without its letter, so every option action on one gate has the same :does. The card states that sentence once, under the options, and never once per option."
-  {:about [report-ask question-card] :evidence "test"})
+  {:about [report-ask ui-components-ask] :evidence "test"})
 
 (Claim card-leads-with-the-question
   "A needs-you row previews its Ask :question. A failed action's error line, when there is one, sits at the top of the question card, above its first question."
-  {:about [needs-fragment question-card Ask] :evidence "test"})
+  {:about [needs-fragment ui-components-ask Ask] :evidence "test"})
 
 (Claim ask-carries-questions
   "The accept-triage Ask is read from the newer of a triage report and a Slack proposal. Over a triage report it carries one question per question of the report, in order; a report with no questions is asked as its own acceptance — one question, the headline's, over its determination and summary, with no options. Each has its words ('Which fix should be built?' where a legacy question has none), its context, recommendation and after, and its directions as options with no :action, label, summary and the effort as consequence. :submit is :apply when the report asks a question; a report with none has no :submit, its Apply answering as its own button. The headline asks to accept the triage. Over a Slack proposal it asks to file it as a ticket, as one option-less question over the proposal's sections, answered by Apply with no :submit. An answer-blocker Ask carries one question from report/blocker-parts, whose options carry their :option-<letter> actions. Every other kind yields one question from its own record."
@@ -64,20 +64,20 @@
   {:about [apply!] :evidence "test"})
 
 (Claim card-is-self-contained
-  "nido.ui.components.ask/question-card is (question-card project ws-id ask actions opts), with opts {:route :pending? :error-msg :session}. It renders every control the Ask's gate offers — the questions with their choices, Previous/Next, and each action the gate offers beside the Ask's :does for it — and reads nothing but its arguments: no orientation band, no :holding, no position or doing line. Every POST it renders goes to the path opts' :route builds; the card adds only the reading position, as ?entry=<seq>, for an action descriptor that carries :seq."
-  {:about [question-card] :evidence "test"})
+  "nido.ui.components.ask/card is a block registration rendered over props {:project :ws-id :ask :actions :pending? :error-msg :session}, the context and the page's router. It renders every control the Ask's gate offers — the questions with their choices, Previous/Next, and each action the gate offers beside the Ask's :does for it — and reads nothing but its props, context and router: no orientation band, no :holding, no position or doing line. Every POST it renders goes to the path the router builds; the card adds only the reading position, as ?entry=<seq>, for an action descriptor that carries :seq."
+  {:about [ui-components-ask] :evidence "test"})
 
 (Claim stepper-card
   "The card shows one question at a time. With several questions it shows a 'Question i of n' line, one marker per question saying whether it is answered and which is shown, and Previous/Next controls. Each option is a button whose first line is its label in bold, then its summary, then its consequence; no letter appears on screen. An option with an :action posts that action. One without marks itself chosen, and choosing it again leaves its question open. The :submit action's row is the one primary button and posts the chosen letters. A pending card shows its questions with no button."
-  {:about [question-card] :evidence "test"})
+  {:about [ui-components-ask] :evidence "test"})
 
 (Claim question-line-calm
   "A question's line is set at --fs-lg, the largest step of the scale, at weight 500 — lighter than the bold title and than the 600 a section heading carries. Its context, recommendation and after-the-answer text follow as body text at --fs-md, the recommendation and the after each led by a short label. No Ask text is set larger than a title."
-  {:about [question-card] :evidence "test"})
+  {:about [ui-components-ask] :evidence "test"})
 
 (Claim panes-use-the-card
-  "The workstream map carries :gate exactly when `gates` lists a gate for the workstream, and it is that gate. workstream-pane over a map carrying :gate renders question-card over that gate's :ask, :actions and :session with pane-route, after its status section — the status heading, the plan, the stage list, holds and denials — and before History, passing it the pane's :error-msg and, as :pending?, the reading work/screen gives a needs gate: the gate's :working?, or a gate action on the workstream still resolving. It then renders no error line of its own and no pane-action-bar. The card's step and choices survive the pane's refresh. A pane over a map without :gate renders pane-action-bar without the actions that answer an Ask's questions (an action with :answers :questions, and :defer), and none of its actions is a link to another page. No other pane renders an Ask."
-  {:about [workstream-pane workstream gates question-card] :evidence "test"})
+  "The workstream map carries :gate exactly when `gates` lists a gate for the workstream, and it is that gate. workstream-pane over a map carrying :gate renders the card registration over that gate's :ask, :actions and :session, routed to pane-route, after its status section — the status heading, the plan, the stage list, holds and denials — and before History, passing it the pane's :error-msg and, as :pending?, the reading work/screen gives a needs gate: the gate's :working?, or a gate action on the workstream still resolving. It then renders no error line of its own and no pane-action-bar. The card's step and choices survive the pane's refresh. A pane over a map without :gate renders pane-action-bar without the actions that answer an Ask's questions (an action with :answers :questions, and :defer), and none of its actions is a link to another page. No other pane renders an Ask."
+  {:about [workstream-pane workstream gates ui-components-ask] :evidence "test"})
 
 (Claim skill-splits-defects
   "The triage-bug skill's report template writes :questions. It tells the agent to write one question per independent defect, each with its question, context and after and a recommendation only when it genuinely holds one; to list within a question only alternatives that exclude one another; and that a question may carry a single direction."
@@ -89,4 +89,4 @@
 
 (Claim principles-say-questions
   "docs/reference/ui-principles.md §1 makes the question line the focal point by place and weight rather than by being the largest text. §2 states the type scale as four steps, the question at the titles' step. §4 says an Ask of several questions is answered in one card, a question at a time, each answer a choice within its question, with the one submitting action as the primary button."
-  {:about [question-card] :evidence "round"})
+  {:about [ui-components-ask] :evidence "round"})
