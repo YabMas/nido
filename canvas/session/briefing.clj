@@ -48,6 +48,11 @@
     "Write nido's launch baseline into a worktree's .claude/settings.local.json, keeping what the
      file already declares."
     {:signature [:=> [:catn [:worktree :string] [:home :string]] :any]})
+  (Operation release-worktree-baseline!
+    "Take the hooks that run from a session home out of a worktree's .claude/settings.local.json,
+     keeping everything else the file declares. The file outlives the session and may be a
+     checkout's own, read by every worktree linked to it."
+    {:signature [:=> [:catn [:worktree :string] [:home :string]] :any]})
   (Operation write-artifacts!
     "Write every session-home artifact. Takes the owning Run's directory as its own argument —
      a per-session fact, kept out of the project's shared session.edn."
@@ -76,6 +81,8 @@
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]
                             [:instance-id InstanceId]] :any]
      :delegates [session-briefing claude-md-path agents-md-path]})
-  (Operation remove-artifacts! "Remove a session home. No-op when it is already gone."
+  (Operation remove-artifacts!
+    "Remove a session home, first taking its hooks out of the worktree it points at. No-op when
+     it is already gone."
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] :any]
-     :delegates [sstate/session-home-dir]}))
+     :delegates [sstate/session-home-dir release-worktree-baseline!]}))

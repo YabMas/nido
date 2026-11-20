@@ -364,7 +364,7 @@
             (is (not (fs/sym-link? composed)))
             (is (= (get-in own [:permissions :allow]) (get-in s [:permissions :allow]))
                 "the checkout's own permissions stay; the baseline adds its mode beside them")
-            (is (some #{(str "cd '" home "' && bb nido:boundary")}
+            (is (some #{(str "cd '" home "' 2>/dev/null || exit 0; bb nido:boundary")}
                       (map #(get-in % [:hooks 0 :command]) (get-in s [:hooks :Stop])))))))
       (finally (fs/delete-tree tmp)))))
 
@@ -380,8 +380,8 @@
             (is (= "auto" (get-in s [:permissions :defaultMode])))
             (is (= "none" (get-in s [:worktree :bgIsolation])))
             (is (= "accept" (:crossSessionInbound s))))
-          (is (= [(str "cd '" home "' && bb nido:session:hook Stop")
-                  (str "cd '" home "' && bb nido:boundary")]
+          (is (= [(str "cd '" home "' 2>/dev/null || exit 0; bb nido:session:hook Stop")
+                  (str "cd '" home "' 2>/dev/null || exit 0; bb nido:boundary")]
                  (map #(get-in % [:hooks 0 :command]) (get-in s [:hooks :Stop])))
               "the session hook and the boundary hook, once each")
           (testing "the commit gate runs on every Bash call an agent in the home makes"
@@ -962,3 +962,44 @@
         "and names the command that shows them once they are")
     (is (str/includes? running "## Services are already running"))
     (is (str/includes? lite "## Lite session"))))
+
+(deftest a-hook-whose-home-is-gone-lets-the-turn-through
+  ;; Claude Code reads exit 2 as "block", and a failed `cd` exits 2 under `sh`. A leftover hook in a
+  ;; checkout's settings would otherwise refuse every prompt in every linked worktree.
+  (let [gone "/nonexistent/nido-session-home"
+        cmd  (@#'launcher/from-home gone "nido:session:hook UserPromptSubmit")
+        r    (babashka.process/sh ["sh" "-c" cmd])]
+    (is (zero? (:exit r)))
+    (is (= "" (:out r)))))
+
+(deftest removing-a-session-takes-its-hooks-out-of-the-worktree
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [wt     (str (fs/path tmp "wt"))
+            path   (str (fs/path wt ".claude" "settings.local.json"))
+            other  {:type "command" :command "cd '/home/other' 2>/dev/null || exit 0; bb nido:session:hook Stop"}
+            own    {:permissions {:allow ["Bash(ls)"]}
+                    :hooks {:Stop [{:hooks [{:type "command" :command "say done"}]}]}}
+            hooked (fn [s] (set (for [[_ es] (:hooks s) e es h (:hooks e)] (:command h))))]
+        (fs/create-dirs (fs/parent path))
+        (spit path (json/generate-string own))
+        (launcher/ensure-worktree-baseline! wt "/home/s")
+        (let [installed (update-in (json/parse-string (slurp path) true) [:hooks :Stop] conj {:hooks [other]})]
+          (spit path (json/generate-string installed))
+          (launcher/release-worktree-baseline! wt "/home/s")
+          (let [after (json/parse-string (slurp path) true)]
+            (testing "nothing that runs from the removed home is left"
+              (is (not-any? #(str/includes? % "'/home/s'") (hooked after))))
+            (testing "every other hook and setting the file declared stays"
+              (is (= (set (remove #(str/includes? % "'/home/s'") (hooked installed))) (hooked after)))
+              (is (contains? (hooked after) "say done"))
+              (is (contains? (hooked after) (:command other)))
+              (is (= (dissoc installed :hooks) (dissoc after :hooks)))))
+          (testing "a file without the home's hooks is not rewritten"
+            (let [before (slurp path)
+                  t0     (fs/last-modified-time path)]
+              (Thread/sleep 20)
+              (launcher/release-worktree-baseline! wt "/home/s")
+              (is (= before (slurp path)))
+              (is (= t0 (fs/last-modified-time path)))))))
+      (finally (fs/delete-tree tmp)))))

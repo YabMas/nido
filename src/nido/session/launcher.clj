@@ -1044,6 +1044,18 @@
    nothing — far less legibly, and leaves a dead process in the log to explain."
   1860)
 
+(defn- from-home
+  "The shell command a hook runs to call nido's `task` from the session `home`, where nido's
+   bb.edn is linked. A home that is gone makes it exit 0 having done nothing.
+
+   That exit is the point. Claude Code reads a hook's exit 2 as \"block this\", and a failed
+   `cd` exits 2 in the `sh` it runs hooks under — so a hook left behind by a session whose home
+   was removed would refuse every prompt and tool call of every agent that reads the settings
+   file it sits in. A worktree that is a repository's own checkout is read by every linked
+   worktree of that repository, so one leftover stops them all."
+  [home task]
+  (str "cd '" home "' 2>/dev/null || exit 0; bb " task))
+
 (defn- boundary-settings
   "`settings` with nido's Stop hook added: one entry, running nido's boundary
    verb from the session home. Every hook `settings` already declares stays.
@@ -1057,7 +1069,7 @@
   [settings home]
   (update-in settings [:hooks :Stop] (fnil conj [])
              {:hooks [{:type    "command"
-                       :command (str "cd '" home "' && bb nido:boundary")
+                       :command (from-home home "nido:boundary")
                        :timeout boundary-hook-timeout-s}]}))
 
 (def ^:private session-hook-events
@@ -1102,7 +1114,7 @@
       (as-> s (reduce (fn [s ev]
                         (update-in s [:hooks (keyword ev)] (fnil conj [])
                                    {:hooks [{:type    "command"
-                                             :command (str "cd '" home "' && bb nido:session:hook " ev)
+                                             :command (from-home home (str "nido:session:hook " ev))
                                              :timeout 10}]}))
                       s session-hook-events))
       commit-gate/with-gate))
@@ -1446,13 +1458,39 @@
             (core/log-step (str "warning: worktree AGENTS.override.md: "
                                 (ex-message e)))))))))
 
+(defn ^{:malli/schema [:=> [:cat :string :string] :any]}
+  release-worktree-baseline!
+  "Take the hooks that run from `home` out of the worktree's `.claude/settings.local.json`,
+   keeping everything else the file declares, and every other session's hooks. The other half of
+   `ensure-worktree-baseline!`: the file outlives the session, and may be a checkout's own that
+   every linked worktree reads. No file, or none of this home's hooks in it, writes nothing."
+  [worktree home]
+  (let [path   (str (fs/path worktree ".claude" "settings.local.json"))
+        mine?  (fn [entry]
+                 (some #(str/includes? (str (:command %)) (str "cd '" home "'")) (:hooks entry)))
+        before (when (fs/exists? path) (io/read-json path))
+        hooks  (into {} (keep (fn [[ev entries]]
+                                (let [kept (vec (remove mine? entries))]
+                                  (when (seq kept) [ev kept])))
+                              (:hooks before)))
+        after  (if (seq hooks) (assoc before :hooks hooks) (dissoc before :hooks))]
+    (when (and before (not= before after))
+      (io/write-json! path after)
+      (core/log-step (str "Released " path)))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] :any]}
   remove-artifacts!
-  "Remove the session home. Called from stop-session!. No-op if the session
-   was never written there (e.g. a stale session-name lookup)."
+  "Remove the session home, first taking its hooks out of the worktree it points at. Called from
+   stop-session!. No-op if the session was never written there (e.g. a stale session-name
+   lookup)."
   [project-name session-name]
   (when (and project-name session-name)
-    (let [home (state/session-home-dir project-name session-name)]
+    (let [home (state/session-home-dir project-name session-name)
+          link (worktree-link project-name session-name)]
+      (when (fs/sym-link? link)
+        (try (release-worktree-baseline! (str (fs/read-link link)) (str home))
+             (catch Exception e
+               (core/log-step (str "warning: worktree launch baseline: " (ex-message e))))))
       (when (fs/exists? home)
         (fs/delete-tree home)
         (core/log-step (str "Removed " home))))))
