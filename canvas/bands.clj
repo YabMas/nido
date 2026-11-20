@@ -16,6 +16,17 @@
   "Generic low-level libraries and the nido home. Depends on nothing."
   {:prefix ["nido.platform."]})
 
+(Band Library
+  "Libraries nido develops inside its own codebase that are meant to outlive it: today
+   `nido.libraries.ui`, the UI machinery a server-rendered Clojure + Datastar app builds its
+   visual components with.
+
+   It depends on NO other band, not even Platform, and that is the whole point of the band. A
+   library here is held to the shape it would have in a repo of its own — a dependency nido takes,
+   never a part of nido — so lifting it out later is a move of files, not an unpicking of
+   requires. Only the bands that consume it may reach it."
+  {:prefix ["nido.libraries."]})
+
 (Band Design
   "Reading a project's declared design and checking its code against it.
 
@@ -220,7 +231,7 @@
    `Review`, `Boot`, `Design` — are FU-38."
   {:prefix ["nido.ui."]
    :may-depend [Platform Integration Session Review Boot Design
-                View WorkPlane Control Report]})
+                View WorkPlane Control Report Library]})
 
 (Band Tasks
   "The bb task entry points — one namespace per CLI verb.
@@ -246,4 +257,5 @@
    `:correspondence/module-ambiguous` fails the check."
   {:prefix ["tasks."]
    :may-depend [Platform Integration Session Review Boot Design Surface
-                Record Source Daemon View Lane WorkPlane Report Control Agent Executor Core]})
+                Record Source Daemon View Lane WorkPlane Report Control Agent Executor Core
+                Library]})
