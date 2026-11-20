@@ -55,7 +55,7 @@
    names a workstream of the project being left."
   [{:keys [active scope projects]}]
   (let [path (slice-path active "/workstreams")]
-    [:details.switcher
+    [:details.switcher {"data-on:click__outside" "el.open = false"}
      [:summary {:title "focused project"} [:span scope] " ▾"]
      [:div.menu
       (for [p projects]
@@ -72,7 +72,7 @@
    [:div.topbar-gap]
    [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/"}
     [:span "Needs you"] (rail-needs-badge needs-count)]
-   [:details.gear
+   [:details.gear {"data-on:click__outside" "el.open = false"}
     [:summary {:title "menu" :aria-label "menu"} "⚙"]
     [:div.menu
      [:a {:href "/operations" :class (when (= :operations active) "active")} "Operations"]

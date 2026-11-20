@@ -257,7 +257,7 @@
              [:p.chat-attach-err {:id (str id "-attach-err") :role "alert"}]))
      [:div.chat-field
       [:textarea {"data-bind" text :rows 3 :placeholder "Message the agent"
-                  "data-on:keydown" (str "if (!$" busy " && (evt.metaKey || evt.ctrlKey) && evt.key === 'Enter') "
+                  "data-on:keydown" (str "if (!$" busy " && evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) "
                                          "{ evt.preventDefault(); @post('" send-url "') }")}]
       [:div.chat-actions
        (when attach-url
