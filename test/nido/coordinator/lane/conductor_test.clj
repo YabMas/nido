@@ -655,9 +655,172 @@
             (is (= :nido (:by e)))
             (is (= (:id hb) (:hand-back e)))
             (is (= :escalate verb))
-            (is (str/includes? (:summary body) (subs (:text hb) 0 20))
-                "the person reads what the seat reported"))
+            (is (str/includes? (:summary body) "“done”") "the person reads what the seat reported")
+            (is (not (str/includes? (:summary body) (subs (:text hb) 0 20)))
+                "in words of its own, not the conductor's hand-back text"))
           (is (= [] (conductor/close-unanswered! :brian id c {:token "tok-2"})) "answered once, by nido"))))))
+
+;; ── the undecided hand-back's blocker, worded for the person ────────────────
+
+(def ^:private edn-token
+  "What printed EDN leaves in text: a map or vector bracket, or a keyword — a colon followed by
+   anything a keyword may hold, wherever it sits; a clock's or a URL's colon aside."
+  #"[{}\[\]]|(?<!\d):(?!//)[^\s,;.)`“”]")
+
+(defn- escalation-of
+  "nido's stand-in escalation of hand-back message `m` on `id`, at next stage `next`."
+  [id m next]
+  (#'conductor/unanswered-escalation :brian id m 2 :designed next))
+
+(deftest each-hand-back-keeps-its-origin
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            c        (seats/chat-session id)]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (session/create! :brian id {:name c :weight :heavy :autonomy nil :chat true})
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (let [turn   (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
+                                                                 :event {:last-message "built it"}
+                                                                 :instruction {:token "t1"} :run nil}]}))
+              person (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
+                                                                 :conversation "conv-p"
+                                                                 :event {:last-message "as you asked" :at "2026-11-20T10:00:00Z"}
+                                                                 :instruction nil :run nil}]}))
+              chat   (in-session c #(conductor/tell! :brian id "drop the export"))
+              _      (Thread/sleep 5)
+              act    (add :blocker-answered {:format :blocker-answered :blocker-seq 1 :summary "yes" :resumed nil})
+              _      (conductor/answers! :brian)
+              acted  (some #(when (= (str "act:" act) (:key %)) %) (seats/hand-backs :brian id))]
+          (is (= {:origin :turn :said "built it"} (select-keys turn [:origin :said :act-seq])))
+          (is (= {:origin :person-turn :said "as you asked"} (select-keys person [:origin :said :act-seq])))
+          (is (= {:origin :chat :said "drop the export"} (select-keys chat [:origin :said :act-seq])))
+          (is (= {:origin :act :act-seq act} (select-keys acted [:origin :said :act-seq]))
+              "an act keeps the entry it is, not its printed record")
+          (is (str/includes? (:text acted) ":blocker-answered") "the conductor still reads the act as recorded")
+          (is (str/includes? (:text turn) "Hand-back: a turn nido gave ended") "the conductor's text is as before"))))))
+
+(deftest an-undecided-hand-back-asks-for-the-next-move
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            m    {:origin :turn :said "done"}]
+        (with-redefs [standing/governing-design (fn [_ _] {:seq 2 :summary "a long summary of the whole design"})]
+          (let [impl (:needs (escalation-of id m {:stage :implement :mode :working-copy}))
+                base (:needs (escalation-of id m {:stage :write-baseline :mode :authoring}))
+                none (:needs (#'conductor/unanswered-escalation :brian id m 2 :shipped nil))]
+            (is (= "Should the seat start building on the design at entry 2 now?" impl))
+            (is (= "Should the seat write the baseline survey now?" base))
+            (is (not= impl base) "two moves, two questions")
+            (is (= "The workstream is merged, so should it close as it stands, or should the seat do something more?" none)
+                "no next stage: the position, and whether to close")
+            (doseq [q [impl base none (:needs (escalation-of id m {:stage :some-new-stage :mode :authoring}))]]
+              (is (str/ends-with? q "?"))
+              (is (<= (count q) 240))
+              (is (not (str/includes? q "could not decide on"))))))))))
+
+(deftest an-undecided-hand-back-tells-what-was-reported
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            approval (add :blocker-answered {:format :blocker-answered :blocker-seq 1 :summary "go" :resumed nil})
+            design   {:seq 1 :summary "a long summary of the whole design"}
+            sum      #(:summary (with-redefs [standing/governing-design (fn [_ _] design)]
+                                  (escalation-of id % {:stage :implement :mode :working-copy})))]
+        (is (str/includes? (sum {:origin :act :act-seq approval :text "Hand-back: x\nSession: s-1"})
+                           (str "You recorded your answer to a blocker at entry " approval
+                                ", on the blocker at entry 1. It reads: “go”.")))
+        (is (= "You recorded your approval of a design at entry 102, on the design at entry 97. It reads: “go”."
+               (#'conductor/act-prose 102 {:format :design-approved :design {:seq 97} :at-seq 99 :note "go" :seq 102}))
+            "ws-20261117-02c84d's entry 105, asked in words")
+        (is (str/includes? (sum {:origin :turn :said "built the reader"}) "The seat finished the turn nido gave it. Its last message: “built the reader”."))
+        (is (str/includes? (sum {:origin :person-turn :said "ok"}) "A turn you took in the seat's session ended."))
+        (is (str/includes? (sum {:origin :chat :said "drop the export"}) "chat passed on your words: “drop the export”"))
+        (is (str/includes? (sum {:origin :stall}) "Work stalled"))
+        (is (str/includes? (sum {:key (str "act:" approval) :text "Hand-back: the person's blocker-answered"})
+                           (str "You recorded your answer to a blocker at entry " approval))
+            "a message from before reports were kept is worded from the act its key names")
+        (is (= "The seat finished the turn nido gave it. Its full text is in the conductor's copy of the hand-back, among the workstream's seat messages."
+               (#'conductor/report-prose :brian id {:key "turn:s-1:tok" :text "Hand-back: a turn nido gave ended\nIts last message:\n\ndone"}))
+            "any other names where it came from and points to the conductor's copy, quoting nothing")
+        (is (str/starts-with? (#'conductor/report-prose :brian id {:key "stall:s-1:t" :text "x"}) "Work stalled"))
+        (is (str/starts-with? (#'conductor/report-prose :brian id {:key "chat-word:c:u" :text "x"}) "The workstream's chat passed on word from you."))
+        (is (str/includes? (sum {:origin :turn :said "moved `:design {:seq 97}` on"}) "“moved `design seq 97` on”")
+            "quoted words are kept, rendered plain")
+        (doseq [m [{:origin :act :act-seq approval :session "s-1" :text "Hand-back: x\nSession: s-1\nGoverning design: entry 1"}
+                   {:origin :turn :said "done" :session "s-1" :text "Hand-back: y\nSession: s-1"}
+                   {:session "s-1" :text "Hand-back: z\nSession: s-1\nPosition: designed"}]]
+          (let [s (sum m)]
+            (is (not (str/includes? s "s-1")) "no session name")
+            (is (not (str/includes? s "Hand-back:")) "not the conductor's text")
+            (is (not (str/includes? s (:summary design))) "not the design's summary")))))))
+
+(deftest an-undecided-hand-back-s-blocker-carries-no-edn
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            act      (add :blocker-answered {:format :blocker-answered :blocker-seq 1 :summary "yes, go" :resumed nil})
+            grant    (add :grant {:format :grant :grants [:merge] :words "land it" :session "chat"})
+            answers  (add :blocker-answered {:format :blocker-answered :blocker-seq 1 :resumed nil
+                                             :answers [{:question-id "q1" :summary "use {:$a 1}"} {:question-id "q2"}]})]
+        (with-redefs [standing/governing-design (fn [_ _] {:seq 1 :summary "{:a 1} a summary"})]
+          (doseq [m    [{:origin :turn :said "done"} {:origin :person-turn :said "ok"} {:origin :chat :said "go left"}
+                        {:origin :stall :said "stopped"} {:origin :act :act-seq act} {:origin :act :act-seq grant}
+                        {:origin :act :act-seq 999} {:text "Hand-back: {:format :x}"}
+                        {:key (str "act:" act) :text "Its last message: {:format :blocker-answered}"}
+                        {:origin :turn :said "set `:stage :implement` from {:design {:seq 97}} over [:a :b]"}
+                        {:origin :turn :said "Use {:$cache true} with ::auto and :%x"}
+                        {:origin :chat :said "#_:secret :public and :/ alone"}
+                        {:origin :act :act-seq answers}]
+                  next [{:stage :implement :mode :working-copy} {:stage :design :mode :authoring} nil]]
+            (let [{:keys [needs summary]} (escalation-of id m next)]
+              (is (not (re-find edn-token needs)) (str needs))
+              (is (not (re-find edn-token summary)) (str summary)))))))))
+
+(deftest an-act-s-answers-are-told-in-words
+  (let [prose #'conductor/act-prose]
+    (is (= (str "You recorded your answer to a blocker at entry 9, on the blocker at entry 4. Your answers: "
+                "question 1, branch A “keep it”: “the old reader stays”; question 2, “drop x 1 the export”; "
+                "question 3 left open.")
+           (prose 9 {:format :blocker-answered :blocker-seq 4 :resumed nil
+                     :answers [{:question-id "q1" :letter "A" :label "keep it" :summary "the old reader stays"}
+                               {:question-id "q2" :summary "drop {:x 1} the export"}
+                               {:question-id "q3"}]}))
+        "a multi-question answer says what the person answered to each question")
+    (is (= (str "You recorded your acceptance of a triage at entry 7, on the triage at entry 5. Your answers: "
+                "“Which reader?”, branch B “new”: “rewrite it”; “Ship when?” left open.")
+           (prose 7 {:format :triage-accepted :triage-seq 5
+                     :answers [{:question "Which reader?"
+                                :direction {:letter "B" :label "new" :shape "rewrite it" :effort :s}}
+                               {:question "Ship when?"}]})))
+    (is (str/includes? (prose 7 {:format :triage-accepted :triage-seq 5
+                                 :direction {:letter "A" :label "old" :shape "patch it" :effort :s}})
+                       "branch A “old”: “patch it”")
+        "an acceptance from before questions says its one direction")
+    (is (str/includes? (prose 3 {:format :phase-gate :design {:seq 1} :phase 2 :opens "phase two" :evidence "p95 under 1s"})
+                       "It reads: “phase two”; “p95 under 1s”."))
+    (is (str/includes? (prose 3 {:format :exit-observed :exit "no callers left" :census 2 :by :person})
+                       "on the census at entry 2. It reads: “no callers left”."))
+    (is (str/includes? (prose 3 {:format :intent :goal "faster" :done-when ["p95 < 1s" "no :regressions"]})
+                       "Done when “p95 < 1s”, “no regressions”."))
+    (is (str/includes? (prose 3 {:format :intent :goal "faster" :done-when ["fast"] :supersedes {:seq 1 :why "it was {:too :slow}"}})
+                       "on the goal at entry 1 it replaces. It reads: “faster”. Done when “fast”; Replacing it because “it was too slow”."))
+    (is (str/includes? (prose 4 {:format :recipe :proposal 2 :by :person
+                                 :recipe {:steps ["cut it"] :ready-gates ["tests pass"] :standing-orders []
+                                          :counter {:command "grep -c x"}}})
+                       "on the proposal at entry 2. Its steps: “cut it”; Its ready gates: “tests pass”."))
+    (is (str/includes? (prose 3 {:format :blocker-answered :blocker-seq 1 :letter "A" :label "go" :summary "build it" :resumed nil})
+                       "You picked branch A."))))
+
+(deftest quoted-words-lose-every-keyword
+  (doseq [[in out] [["Use {:$cache true}" "Use $cache true"]
+                    ["set :%x and :&y" "set %x and &y"]
+                    ["an ::auto/key here" "an auto/key here"]
+                    ["#{:a :b} and :1" "# a b and 1"]
+                    ["#_:secret :public" "#_secret public"]
+                    ["the :/ keyword and '(:x) ^:meta @:y" "the / keyword and '(x) ^meta @y"]
+                    ["at 10:30, see http://x" "at 10:30, see http://x"]]]
+    (is (= out (#'conductor/plain in)) in)))
 
 (deftest an-undecided-hand-back-s-escalation-is-answered-once-the-conductor-decides-that-seat-s-next
   ;; brian ws-20261116-325d89, entries 116-118: nido escalated a stall hand-back the conductor
@@ -1915,11 +2078,11 @@
             (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] tok))
             (seats/delivered! :brian id (:id hb) tok))
           (with-redefs [conductor/unanswered-escalation
-                        (fn [m offers]
+                        (fn [& args]
                           (when (nil? @writer)
                             (reset! writer (future (person-blocker! id)))
                             (deref @writer 1500 nil))
-                          (esc m offers))]
+                          (apply esc args))]
             (let [[e] (conductor/close-unanswered! :brian id c {:token "tok-2"})
                   at  (:seq (last (ws/entries-of :brian id :conduct-decision)))]
               @@writer

@@ -224,8 +224,9 @@
                  seats/post!]})
   (Operation close-unanswered!
     "When a conductor turn ends, escalate the hand-back delivered to it for that turn — the one
-     delivered under the ended instruction's token — if the turn left it unanswered, naming that
-     the conductor reached no decision; while a blocker is open, hold it instead, naming that
+     delivered under the ended instruction's token — if the turn left it unanswered, asking the
+     person whether the seat should make the move the position names next, with what the
+     hand-back reported told in words; while a blocker is open, hold it instead, naming that
      blocker, since the person is already asked. A hand-back not yet delivered, or delivered for a
      turn that has not ended, stays owed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session SessionName]

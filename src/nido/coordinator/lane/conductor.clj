@@ -560,18 +560,27 @@
    in; a slice's names the slice, so its coordinator can tell which slice it answers. A key
    already logged answers that message without deriving anything: `answers!` offers every act the
    person ever recorded on every pass, and deriving the position for each costs the coordinator's
-   loop minutes."
-  [project ws-id key fields]
+   loop minutes.
+
+   Beside the :text, the message keeps the report the text was rendered from, so a reader other
+   than the conductor can word it for itself: its :origin (:turn, :person-turn, :act, :chat or
+   :stall), what was said as plain :said — an act's never, since the act is its ledger entry,
+   named by :act-seq — and nothing else."
+  [project ws-id key {:keys [origin said word act-seq] :as fields}]
   (let [[to slice] (conducted-by project ws-id)]
     (or (seats/posted project to key)
-        (let [pos (position project ws-id)
-              msg (merge fields pos {:design (standing/governing-design project ws-id)
-                                     :seats  (rseats/seats project ws-id)})]
+        (let [pos  (position project ws-id)
+              msg  (merge fields pos {:design (standing/governing-design project ws-id)
+                                      :seats  (rseats/seats project ws-id)})
+              said (when-not (= :act origin) (or word said))]
           (seats/post! project to (cond-> (merge {:key key :kind :hand-back :to :conductor
                                                   :text (str (when slice (str "Slice: " slice "\n")) (hand-back-text msg))
                                                   :session (:session fields) :position (:position pos)}
                                                  (select-keys fields [:turn :conversation]))
-                                    slice (assoc :slice slice)))))))
+                                    slice   (assoc :slice slice)
+                                    origin  (assoc :origin origin)
+                                    (and (string? said) (not (str/blank? said))) (assoc :said said)
+                                    act-seq (assoc :act-seq act-seq)))))))
 
 (defn- conducted?
   "Whether `w` has a conductor to read its hand-backs: activated, or a slice, whose drain's
@@ -599,10 +608,10 @@
            :when (and s (not (:conductor s)) (not (:chat s)) (conducted? project ws-id))]
        (if instruction
          (post-hand-back! project ws-id (str "turn:" session ":" (:token instruction))
-                          {:what "a turn nido gave ended" :session session :seat (get-in s [:seat :id])
+                          {:what "a turn nido gave ended" :origin :turn :session session :seat (get-in s [:seat :id])
                            :said (:last-message event)})
          (post-hand-back! project ws-id (str "person-turn:" (or conversation session) ":" (:at event))
-                          {:what "a person's turn ended" :turn :person :session session
+                          {:what "a person's turn ended" :origin :person-turn :turn :person :session session
                            :conversation conversation :seat (get-in s [:seat :id])
                            :said (:last-message event)}))))))
 
@@ -709,14 +718,15 @@
                             " stays the person's own")
                        {:reason :not-grantable :grants grants})))
      (let [fields {:what "the workstream's chat has word for you, from the person talking there"
-                   :session n :word (str/trim text)}]
+                   :origin :chat :session n :word (str/trim text)}]
        (if grants
          (let [path (ws/append-entry! project ws-id {:kind :grant :session n}
                                       (pr-str {:format :grant :grants grants
                                                :words (str/trim text) :session n}))
                seq  (parse-long (re-find #"^\d+" (str (fs/file-name path))))]
            (post-hand-back! project ws-id (str "act:" seq)
-                            (assoc fields :what (str "the workstream's chat has word for you, from the "
+                            (assoc fields :origin :act :act-seq seq
+                                   :what (str "the workstream's chat has word for you, from the "
                                                      "person talking there, granting the seats "
                                                      (str/join " and " (map name grants))))))
          (post-hand-back! project ws-id (str "chat-word:" n ":" (random-uuid)) fields))))))
@@ -979,6 +989,7 @@
       (let [act   (overtaking-act project ws-id (hand-back-message project ws-id hand-back))
             cover (post-hand-back! project ws-id (str "act:" (:seq act))
                                    {:what (str "the person's " (name (:format act)) " at entry " (:seq act))
+                                    :origin :act :act-seq (:seq act)
                                     :session (:name (conductor-of project ws-id)) :said (pr-str act)})
             {:keys [position next owes]} (position project ws-id)]
         (record-decision! project ws-id (cond-> {:format :conduct-decision :hand-back hand-back
@@ -1018,13 +1029,171 @@
                         (let [a (at (:at %))] (and a m-at (.isAfter ^java.time.Instant a m-at))))
                   hand-backs))))
 
+(def ^:private seat-moves
+  "Each stage a seat can be instructed to take, as the move the person is asked whether the seat
+   should make — a verb phrase completing \"Should the seat … now?\". A function takes the
+   governing design. A stage not here is worded from its name."
+  {:establish-intent      "state the workstream's goal"
+   :write-baseline        "write the baseline survey"
+   :verify-baseline       "have the baseline survey verified"
+   :rebaseline            "redo the baseline survey"
+   :design                "write the design"
+   :decide-design         "have the design decided"
+   :clear-design          "record the design's clearance"
+   :implement             (fn [design] (if design
+                                         (str "start building on the design at entry " (:seq design))
+                                         "start building"))
+   :review-implementation "have the implementation reviewed"
+   :address-findings      "address the review's findings"
+   :publish-draft-pr      "open the draft PR"
+   :review-slice          "have the slice reviewed"
+   :clear-slice           "clear the slice"
+   :propose-recipe        "propose the drain's recipe"
+   :take-census           "take the drain's census"
+   :coordinate            "go on coordinating the drain"})
+
+(defn- words [k] (str/replace (name k) "-" " "))
+
+(def ^:private position-words
+  "Each position the pipeline names no next stage for, as what the workstream is — completing
+   \"The workstream is …\". A position not here is worded from its name."
+  {:shipped     "merged"
+   :analysed    "analysed and filed"
+   :unplaceable "at a position nido cannot place"})
+
+(defn- next-move-question
+  "The question nido's stand-in escalation asks: whether the seat should make the move `next`
+   names, under `design`; with no next stage, whether the workstream at `position` should close
+   or the seat do more. Within a blocker's 240 characters, since a move names at most an entry."
+  [position next design]
+  (if-let [stage (:stage next)]
+    (let [move (get seat-moves stage (words stage))]
+      (str "Should the seat " (if (fn? move) (move design) move) " now?"))
+    (str "The workstream is " (get position-words position (words (or position :unplaceable)))
+         ", so should it close as it stands, or should the seat do something more?")))
+
+(def ^:private act-names
+  "Each kind of the person's act, as a noun phrase completing \"You recorded …\"."
+  {:intent           "the workstream's goal"
+   :design-approved  "your approval of a design"
+   :blocker-answered "your answer to a blocker"
+   :grant            "a grant to the seats"
+   :phase-gate       "a phase gate"
+   :merged           "a landing"
+   :closed           "a close"
+   :triage-accepted  "your acceptance of a triage"
+   :recipe           "your approval of the drain's recipe"
+   :exit-observed    "the drain's exit"})
+
+(def ^:private keyword-colon
+  "The colon — or the two of an auto-resolved keyword — that starts a keyword token, as EDN reads
+   one: a colon that begins a token, followed by anything a token may hold. A token begins wherever
+   the character before is no symbol constituent — text's start, whitespace, a delimiter, a reader
+   macro (`'`, `#`, `^`, `@`, …) — or right after a discard marker `#_`, whose `_` is the macro's,
+   not the token's. A colon inside a token (`a:b`, `10:30`, `http://`) starts none."
+  #"(?:(?<![\p{L}\p{N}_*+!?$%&=<>./:-])|(?<=#_))::?(?=[^\s,;()\[\]{}\"])")
+
+(defn- plain
+  "Words someone wrote, with what printed EDN leaves in them taken out: every `keyword-colon`, and
+   every map, set or vector bracket. What they said survives — `:design {:seq 97}` reads
+   `design seq 97`."
+  [s]
+  (-> (str s)
+      (str/replace #"[{}\[\]]" " ")
+      (str/replace keyword-colon "")
+      (str/replace #"\s+" " ")
+      (str/replace #" (?=[.,;:)]|`(?:\s|$))" "")
+      str/trim))
+
+(defn- quoted
+  "`s` as a quotation in the person's wording: rendered plain, then excerpted to `n` characters."
+  [s n]
+  (str "“" (excerpt (plain s) n) "”"))
+
+(defn- answer-prose
+  "One answer of a multi-question blocker's or a triage's acceptance, in words: the question — by
+   number, or its own words quoted — and the branch picked, the words given, or that it was left
+   open."
+  [{:keys [question-id question letter label summary direction]}]
+  (let [letter (or letter (:letter direction))
+        label  (or label (:label direction))
+        said   (or summary (:shape direction))]
+    (str (cond question-id (str "question " (subs question-id 1))
+               question    (quoted question 200)
+               :else       "its question")
+         (cond letter (str ", branch " (plain letter) " " (quoted label 120)
+                           (when said (str ": " (quoted said 200))))
+               said   (str ", " (quoted said 300))
+               :else  " left open"))))
+
+(defn- act-prose
+  "The person's act `e`, at entry `at`, in words: its kind, the records it names by entry, and
+   its own plain-text fields quoted — a multi-question answer's and a triage's answers each as
+   prose; an intent's done-when and the goal it replaces and why, and a recipe's steps, gates and
+   orders, listed. Never the entry printed."
+  [at e]
+  (let [cites (remove nil? [(when-let [d (get-in e [:design :seq])] (str "the design at entry " d))
+                            (when-let [b (:blocker-seq e)] (str "the blocker at entry " b))
+                            (when-let [t (:triage-seq e)] (str "the triage at entry " t))
+                            (when-let [p (:proposal e)] (str "the proposal at entry " p))
+                            (when-let [c (:census e)] (str "the census at entry " c))
+                            (when-let [g (get-in e [:supersedes :seq])] (str "the goal at entry " g " it replaces"))])
+        grants (seq (:grants e))
+        text?  #(and (string? %) (not (str/blank? %)))
+        fields (keep #(let [v (get e %)] (when (text? v) (quoted v 300)))
+                     [:words :note :goal :title :label :summary :opens :evidence :exit :criterion :context])
+        lists  (keep (fn [[k lead]] (when-let [vs (seq (filter text? (let [v (get-in e k)] (if (string? v) [v] v))))]
+                                      (str lead (str/join ", " (map #(quoted % 160) vs)))))
+                     [[[:done-when] "Done when "] [[:supersedes :why] "Replacing it because "]
+                      [[:supersedes :granted] "Granting "] [[:recipe :steps] "Its steps: "]
+                      [[:recipe :ready-gates] "Its ready gates: "] [[:recipe :standing-orders] "Its standing orders: "]])
+        answers (seq (or (:answers e) (when (:direction e) [e])))]
+    (str "You recorded " (get act-names (:format e) (str "a " (words (or (:format e) :act))))
+         " at entry " at
+         (when (seq cites) (str ", on " (str/join " and " cites)))
+         (when grants (str ", granting the seats " (str/join " and " (map words grants))))
+         "."
+         (when (seq fields) (str " It reads: " (str/join "; " fields) "."))
+         (when-let [l (:letter e)] (str " You picked branch " (plain l) "."))
+         (when (seq lists) (str " " (str/join "; " lists) "."))
+         (when answers (str " Your answers: " (str/join "; " (map answer-prose answers)) ".")))))
+
+(defn- report-prose
+  "What hand-back `m` reported, in words for the person: where it came from and what it said,
+   read off the report the message keeps — and for an act, off the ledger entry it names. A
+   message logged before reports were kept is worded from its key alone — an act's (act:<seq>) as
+   that act, any other as where it came from, pointing to the conductor's copy for its words: its
+   :text is the conductor's, and is never read for the person."
+  [project ws-id {:keys [origin said act-seq key]}]
+  (let [legacy?   (nil? origin)
+        act-seq   (or act-seq (when legacy? (some-> (re-find #"^act:(\d+)$" (str key)) second parse-long)))
+        origin    (or origin (when act-seq :act) (keyword (second (re-find #"^([a-z-]+):" (str key)))))
+        said      (when-not legacy? said)
+        said-part (fn [lead] (if said (str lead " " (quoted said 900) ".") ""))]
+    (str
+     (case origin
+      :turn        (str "The seat finished the turn nido gave it." (said-part " Its last message:"))
+      :person-turn (str "A turn you took in the seat's session ended." (said-part " The seat's last message:"))
+      (:chat :chat-word) (if said
+                           (str "The workstream's chat passed on your words: " (quoted said 900) ".")
+                           "The workstream's chat passed on word from you.")
+      :stall       (str "Work stalled: the seat's last turn ended and nothing has worked on it since."
+                        (said-part " Its last message:"))
+      :act         (let [e (when act-seq (ws/entry-at-seq project ws-id act-seq))]
+                     (if e (act-prose act-seq e) (str "You recorded an act at entry " act-seq ".")))
+      "The seat sent a report.")
+     (when (and legacy? (not= :act origin))
+       " Its full text is in the conductor's copy of the hand-back, among the workstream's seat messages."))))
+
 (defn- unanswered-escalation
-  "nido's escalation of hand-back `m`, which `offers` conductor turns ended without deciding:
-   the question carries the seat's report, so the person reads what it was about."
-  [m offers]
-  {:needs   "What should the seat do next, given the report below that the conductor could not decide on?"
-   :summary (str "The conductor ended " offers " turns without deciding this hand-back, so the seat that sent it is waiting. "
-                 "The hand-back reads: " (excerpt (:text m) 1200))
+  "nido's escalation of hand-back `m`, which `offers` conductor turns ended without deciding,
+   worded for the person: the move the `position`'s `next` stage names, as the question, and what
+   the hand-back reported, in prose, as its context. Nothing in it is printed EDN."
+  [project ws-id m offers position next]
+  {:needs   (next-move-question position next (standing/governing-design project ws-id))
+   :summary (str (report-prose project ws-id m) " "
+                 "The conductor ended " offers " turns without deciding what the seat should do about it, "
+                 "so the seat is waiting.")
    :after   "Your answer reaches the conductor on its next pass, which instructs the waiting seat."})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:maybe :map]] [:sequential :map]]}
@@ -1034,8 +1203,9 @@
    settle what follows. A hand-back a later, decided hand-back from the same session covers
    (`covering`) is recorded as :covered by it, and nobody is asked. Otherwise a turn that was its
    first offer to that conversation leaves it owed, so the conductor is given it again
-   (`seats/hand-back-offers`); the last offer ending undecided escalates it to a person, the
-   seat's report quoted. A hand-back not yet delivered, or delivered for a turn that has not
+   (`seats/hand-back-offers`); the last offer ending undecided escalates it to a person, asking
+   whether the seat should make the move the position names next and saying in words what the
+   hand-back reported (`unanswered-escalation`). A hand-back not yet delivered, or delivered for a turn that has not
    ended, stays owed. Answers the decisions written."
   [project ws-id session-name instruction]
   (let [conversation (get-in (session/read-session project ws-id session-name) [:claude :session-id])
@@ -1071,7 +1241,7 @@
               :else                            (decide (fn [open]
                                                          (if (seq open)
                                                            [:hold {:blocker (:seq (last open))}]
-                                                           [:escalate (unanswered-escalation m offer)])))))))
+                                                           [:escalate (unanswered-escalation project ws-id m offer position next)])))))))
       [])))
 
 ;; ── stops: a dialog nobody can answer, a turn whose process is gone, and work that stalled ──
@@ -1331,6 +1501,7 @@
                          {:what (str "work stalled — " (:session why) "'s turn ended at " (:ended-at why)
                                      " owing " (if (:owes why) (name (:owes why)) "the next move")
                                      ", and nothing has worked on it since")
+                          :origin :stall
                           :session (:session why) :seat (get-in s [:seat :id]) :said (:said why)})
         [{:ws-id ws-id :session (:session why) :wrote :hand-back}]))))
 
@@ -1625,6 +1796,7 @@
                             (open? e) (not= upto (:seq e)) (persons-act? e))]
              (assoc (post-hand-back! project ws-id (str "act:" (:seq e))
                                      {:what (str "the person's " (name (:format e)) " at entry " (:seq e))
+                                      :origin :act :act-seq (:seq e)
                                       ;; No turn ended: what the person said is the act as recorded.
                                       :session (:name c) :said (pr-str e)})
                     :ws-id ws-id))))))
