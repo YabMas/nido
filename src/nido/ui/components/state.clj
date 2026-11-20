@@ -210,6 +210,13 @@
   [stage]
   (get arc-label stage (name stage)))
 
+(defn ^{:malli/schema [:=> [:cat [:? :string]] :any]}
+  needs-mark
+  "The needs-you mark: the dot in the colour that says the next move is a person's. `title` is
+   what hovering it reads, \"needs you\" unless the caller says how this one waits."
+  ([] (needs-mark "needs you"))
+  ([title] [:span.needs {:title title}]))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   arc-mark
   "The mark for one arc stage: what is happening there right now if anything is — a person being
@@ -219,6 +226,6 @@
    dot the board rows carry, and a breathing dot in the working colour."
   [state now]
   (case now
-    :awaiting [:span.needs {:title "waiting on you"}]
+    :awaiting (needs-mark "waiting on you")
     :running  [:span.arc-live {:title "an agent is working"}]
     (get arc-glyph state "·")))

@@ -108,6 +108,13 @@
     :scenes [{:title "phased, and not"
               :render #(list (state/phase-chip {:current 2 :of 3}) " "
                              (or (state/phase-chip {}) [:span.cat-empty "unphased: nothing"]))}]}
+   {:name "needs-mark"
+    :note "The next move is a person's. The one mark a board is scanned for, so it is the same dot
+           on a board row, a needs-you row and an arc stage, with only its title saying how."
+    :scenes [{:title "plain, and titled by its caller"
+              :note "Hover each: a row's dot reads its default title, an arc stage's says what it
+                     waits on."
+              :render #(list (state/needs-mark) " " (state/needs-mark "waiting on you"))}]}
    {:name "state-mark"
     :note "Whether anything is happening right now, as one mark and no words. What runs and who
            owes the next move are the mark's title — hover to read them."

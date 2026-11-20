@@ -46,7 +46,7 @@
   [:a {:class (str "gate-card" (when selected? " sel"))
        :href  href}
    [:div.gate-top
-    (status-slot (cond needs-you                      [:span.needs {:title "needs you"}]
+    (status-slot (cond needs-you                      (state/needs-mark)
                        (= :merge (:source (:doing row))) nil
                        :else                          (state/state-mark (:status row) (:doing row))))
     [:span.lbl label]
@@ -80,7 +80,7 @@
   [{:keys [project stage label tag report ask session resume-error pending? error-msg doing denials selected?]} href]
   [:a {:class (str "gate-card" (when selected? " sel"))
        :href  href}
-   [:div.gate-top (status-slot [:span.needs {:title "needs you"}]) [:span.lbl label]]
+   [:div.gate-top (status-slot (state/needs-mark)) [:span.lbl label]]
    (tag-line tag)
    [:div.gate-sub [:span project] (state/stage-chip stage)
     [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]

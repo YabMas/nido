@@ -121,6 +121,10 @@
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation arc-name "One arc stage's heading."
     {:signature [:=> [:catn [:stage :any]] :any]})
+  (Operation needs-mark
+    "The needs-you mark: the one dot that says the next move is a person's, wherever a state is
+     said — a board row, a needs-you row, an arc stage. Its title is the caller's to word."
+    {:signature [:=> [:catn [:title [:? :string]]] :any]})
   (Operation arc-mark
     "The mark for one arc stage: what is happening there right now if anything is, and otherwise
      what the stage's records amount to."
