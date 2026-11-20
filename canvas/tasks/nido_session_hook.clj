@@ -6,6 +6,7 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.session-events :as events]
+            [canvas.platform.secrets :as secrets]
             [fukan.common.typing.malli]))
 
 (Module nido-session-hook
@@ -18,11 +19,16 @@
     "The event a hook payload records, or nil for a hook it does not record — the facts the
      driver reads, and nothing else of the payload."
     {:signature [:=> [:catn [:hook-name :string] [:payload :map]] [:maybe :map]]})
+  (Operation export-notion-token!
+    "Append the Notion token to the env file Claude Code sources before a session's commands,
+     narrowing the file to its owner first; answer whether it wrote. Never throws."
+    {:signature [:=> [:catn [:env-file [:maybe :string]] [:token [:maybe :string]]] :boolean]})
   (Operation hook*
     "Record one hook's payload; answer what to print — the supervisor briefing at SessionStart,
-     else nothing. Never throws."
+     else nothing. At SessionStart, hand the session nido's Notion token unless it has one.
+     Never throws."
     {:signature [:=> [:catn [:hook-name :string] [:raw [:maybe :string]]] [:maybe :string]]
-     :delegates [->event events/append!]})
+     :delegates [->event events/append! export-notion-token! secrets/read-secret]})
   (Operation hook-cmd
     "Run as the hook: read stdin, record, print, exit 0."
     {:signature [:=> [:catn [:args [:* :any]]] :any]

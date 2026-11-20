@@ -1,6 +1,7 @@
 (ns tasks.nido-session-hook-test
   (:require
    [babashka.fs :as fs]
+   [babashka.process]
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
@@ -68,3 +69,30 @@
     (fn []
       (doseq [raw ["" "{" "[]" (json/generate-string {:session_id 7}) nil]]
         (is (nil? (hook/hook* "Stop" raw)) (pr-str raw))))))
+
+(deftest the-notion-token-reaches-the-session-s-shell-and-no-one-else
+  (let [dir (fs/create-temp-dir)
+        f   (str (fs/path dir "sessionstart-hook-0.sh"))]
+    (try
+      (spit f "export ALREADY=there\n")
+      (fs/set-posix-file-permissions f "rw-rw-r--")
+      (is (true? (hook/export-notion-token! f "ntn_it's")))
+      (testing "what was there stays, and a shell reads the token back exactly"
+        (is (str/starts-with? (slurp f) "export ALREADY=there\n"))
+        (is (= "ntn_it's|there"
+               (str/trim (:out (babashka.process/sh
+                                ["sh" "-c" (str ". '" f "'; printf '%s|%s' \"$NOTION_TOKEN\" \"$ALREADY\"")]))))))
+      (testing "the file is its owner's alone once it holds a token"
+        (is (= "rw-------" (fs/posix->str (fs/posix-file-permissions f)))))
+      (finally (fs/delete-tree dir)))))
+
+(deftest without-a-file-or-a-token-nothing-is-written
+  (let [dir (fs/create-temp-dir)
+        f   (str (fs/path dir "env.sh"))]
+    (try
+      (is (false? (hook/export-notion-token! nil "ntn_x")))
+      (is (false? (hook/export-notion-token! f nil)))
+      (is (false? (hook/export-notion-token! f "  ")))
+      (is (not (fs/exists? f)))
+      (is (false? (hook/export-notion-token! (str (fs/path dir "no" "such" "dir" "env.sh")) "ntn_x")))
+      (finally (fs/delete-tree dir)))))

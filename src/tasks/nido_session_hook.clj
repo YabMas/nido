@@ -5,11 +5,13 @@
 
    It records and lets the session proceed — always. Every path exits 0, a payload it cannot
    read records nothing, and nothing it does can block a prompt or a tool call: a nido fault may
-   cost an event, never a person's turn. The one thing it adds is the supervisor briefing, as
-   context at session start."
-  (:require [cheshire.core :as json]
+   cost an event, never a person's turn. What it adds at session start is the supervisor
+   briefing, as context, and nido's Notion token, as the session's environment."
+  (:require [babashka.fs :as fs]
+            [cheshire.core :as json]
             [clojure.string :as str]
-            [nido.coordinator.record.session-events :as events]))
+            [nido.coordinator.record.session-events :as events]
+            [nido.platform.secrets :as secrets]))
 
 (def supervisor-briefing
   "What every session in a nido directory is told about its supervisor, whoever started it. It
@@ -74,10 +76,35 @@
       "SessionEnd"       (merge base {:event :session-end :reason (some-> (:reason payload) str)})
       nil)))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :string] [:maybe :string]] :boolean]}
+  export-notion-token!
+  "Append `export NOTION_TOKEN=<token>` to `env-file`, the file Claude Code hands a SessionStart
+   hook as CLAUDE_ENV_FILE and sources before every command the session runs. Answers whether it
+   wrote. Either argument nil, or a file that cannot be written, writes nothing; never throws.
+
+   The file is narrowed to its owner before the token goes in: Claude Code creates it readable
+   by everyone.
+
+   Why a session needs it handed over: `bb notion:*` reads NOTION_TOKEN, and a background
+   session's environment is the background supervisor's, not that of whoever started it — so
+   whether a session saw the token depended on the shell the supervisor first came up in."
+  [env-file token]
+  (try
+    (if (and (not (str/blank? env-file)) (not (str/blank? token)))
+      (do (when-not (fs/exists? env-file) (fs/create-file env-file))
+          (fs/set-posix-file-permissions env-file "rw-------")
+          (spit env-file
+                (str "export NOTION_TOKEN='" (str/replace token "'" "'\\''") "'\n")
+                :append true)
+          true)
+      false)
+    (catch Throwable _ false)))
+
 (defn ^{:malli/schema [:=> [:cat :string [:maybe :string]] [:maybe :string]]}
   hook*
   "Record the hook `hook-name` fired with `raw` (its stdin JSON). Answers what to print on
-   stdout: the briefing as SessionStart context, else nothing. Never throws."
+   stdout: the briefing as SessionStart context, else nothing. At SessionStart it also hands the
+   session nido's Notion token, unless the session already has one. Never throws."
   [hook-name raw]
   (try
     (let [payload (json/parse-string (or raw "") true)
@@ -88,6 +115,10 @@
     (catch Throwable _ nil))
   ;; Outside the recording's try: a payload that could not be read still gets its briefing.
   (when (= "SessionStart" hook-name)
+    ;; A token the session already has is the person's choice, and stays.
+    (when (str/blank? (System/getenv "NOTION_TOKEN"))
+      (export-notion-token! (System/getenv "CLAUDE_ENV_FILE")
+                            (try (secrets/read-secret "nido-notion") (catch Throwable _ nil))))
     (json/generate-string {:hookSpecificOutput {:hookEventName     "SessionStart"
                                                 :additionalContext supervisor-briefing}})))
 
