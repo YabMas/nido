@@ -233,6 +233,28 @@ Nido does not redocument target-project routing. When working in a brian session
 
 Brian's domain agents and most of its skills are mirrored under `nido/.claude/` via symlink, declared in `nido/.claude/harness.edn`. Run `bb nido:harness:sync` to reconcile after brian ships harness changes — it adds new entries, prunes deletions/exclusions, and leaves any user-overridden file (real, non-symlink) untouched. Currently excluded: `dev`, `push` (brian session/workflow plumbing nido owns).
 
+## How a project lands — `:landing`
+
+Each project declares how its workstreams land, as `:landing` on its entry in
+`~/.nido/projects.edn`, and nido dispatches on it in one place
+(`nido.coordinator.lane.landing`):
+
+| `:landing` | what landing runs |
+|---|---|
+| `:pr-auto` (the default, when undeclared) | `gh pr merge --auto`, or the merge queue where the repository refuses auto-merge |
+| `:pr-squash` | marks a draft ready, then `gh pr merge --squash` now (fukan) |
+| `:push-main` | `bb nido:land` in the worktree — rebase, test, check, push main (nido) |
+
+Any other value is refused by name, never read as the default. The dashboard's
+**Land** is the same for every project: on an activated workstream at a
+published PR it records the person's `:merge` grant, and nido instructs the
+seat to land through its one verb, `nido:workstream:pr:land`, which runs the
+declared procedure. Land queues no merge Run. Under the grant the commit gate
+admits that verb only — for the workstream's own PR, or with no PR where the
+project lands none; a raw `gh pr merge`, `nido:land` and `nido:ship` stay the
+person's. A merge Run whose workstream landed by another route is settled on
+the next daemon pass.
+
 ## Landing work — no pull requests
 
 **Nido's own work lands by integrating with `main` locally and pushing. This

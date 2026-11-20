@@ -17,7 +17,8 @@
    [nido.coordinator.lane.backfill :as backfill]
    [nido.review.stages :as stages]
    [nido.coordinator.work :as work]
-   [nido.github.client :as github]
+   [nido.coordinator.lane.landing :as landing]
+   [babashka.fs :as fs]
    [tasks.nido-attach :as attach]))
 
 (defn- resolve-ws-id
@@ -421,39 +422,60 @@
     (println (str "hand-back " (:id m) " posted to " id "'s conductor"))
     m))
 
+(defn- worktree-of
+  "The worktree a session's directory `cwd` stands for: its `worktree/` when `cwd` is the
+   session's home, else `cwd` itself."
+  [cwd]
+  (let [wt (fs/path cwd "worktree")]
+    (if (fs/exists? wt) (str (fs/canonicalize wt)) cwd)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   pr-land*
-  "Land the pull request :pr names — `owner/repo#n`, or `n` when one ref has that number — when it
-   is the own PR (`ws/own-pr`) of the workstream of the session this runs in, through
-   github/land-pr!; answer its result. A PR that workstream does not record, or a directory in no
-   session's workstream, is refused before anything reaches gh. The workstream is read from the
-   directory and never named, so this lands no other workstream's PR."
+  "Land the change of the workstream of the session this runs in, by its project's declared
+   procedure, through landing/land!; answer its result. Where that landing names a PR
+   (landing/names-pr?), :pr — `owner/repo#n`, or `n` when one ref has that number — must be the
+   workstream's own PR (`ws/own-pr`); one it does not record is refused before anything runs. A
+   :push-main landing takes no :pr and runs in the session's worktree. A directory in no session's
+   workstream is refused. The workstream is read from the directory and never named, so this
+   lands no other workstream."
   [{:keys [pr]}]
-  (let [[p id] (or (stages/project+ws-from-cwd (System/getProperty "user.dir"))
+  (let [cwd    (System/getProperty "user.dir")
+        [p id] (or (stages/project+ws-from-cwd cwd)
                    (throw (ex-info "No workstream here — run from a session's worktree or session home"
-                                   {:reason :no-workstream :cwd (System/getProperty "user.dir")})))
-        w      (ws/read-ws p id)
-        ref    (when (some? pr) (ws/own-pr w (str pr)))]
-    (when-not ref
-      (throw (ex-info (str "PR " (pr-str pr) " is not one workstream " id " records as its own; its PRs: "
-                           (or (some->> (filter #(= :github (:adapter %)) (:external-refs w))
-                                        (map :id) seq (str/join ", "))
-                               "none"))
-                      {:reason :not-own :pr pr :ws-id id})))
-    (let [[_ repo n] (re-find #"^(.+)#(\d+)$" (:id ref))]
-      (assoc (github/land-pr! repo (parse-long n)) :pr (:id ref)))))
+                                   {:reason :no-workstream :cwd cwd})))
+        needs  (landing/names-pr? p)]
+    (when (map? needs)
+      (throw (ex-info (str "Project " (name p) " declares :landing " (pr-str (:value needs))
+                           ", which is none of :pr-auto, :pr-squash or :push-main")
+                      {:reason :undeclared-landing :value (:value needs)})))
+    (if needs
+      (let [w   (ws/read-ws p id)
+            ref (when (some? pr) (ws/own-pr w (str pr)))]
+        (when-not ref
+          (throw (ex-info (str "PR " (pr-str pr) " is not one workstream " id " records as its own; its PRs: "
+                               (or (some->> (filter #(= :github (:adapter %)) (:external-refs w))
+                                            (map :id) seq (str/join ", "))
+                                   "none"))
+                          {:reason :not-own :pr pr :ws-id id})))
+        (landing/land! p id {:pr (:id ref)}))
+      (landing/land! p id {:dir (worktree-of cwd)}))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   pr-land-cmd
-  "bb nido:workstream:pr:land :pr <owner/repo#n | n> — exits non-zero, printing why, when the PR
-   is not the workstream's own or GitHub refuses it."
+  "bb nido:workstream:pr:land [:pr <owner/repo#n | n>] — exits non-zero, printing why, when the
+   landing is refused: a PR that is not the workstream's own, a project landing it cannot read, or
+   the procedure's own refusal."
   [& args]
   (let [[_ opts] (task-args/split-args args #{:pr})
         r        (try (pr-land* opts)
                       (catch clojure.lang.ExceptionInfo e {:error :refused :detail (ex-message e)}))]
     (if (= :ok (:status r))
-      (println (str "pr:land · " (:pr r) " "
-                    (case (:via r) :auto "set to merge once its checks allow" :queue "enqueued on its merge queue")))
+      (println (str "pr:land · " (or (:pr r) "main") " "
+                    (case (:via r)
+                      :auto   "set to merge once its checks allow"
+                      :queue  "enqueued on its merge queue"
+                      :squash "squash-merged"
+                      :push   "landed on main by nido:land")))
       (binding [*out* *err*]
         (println (str "pr:land · refused: " (:detail r)))
         (System/exit 1)))))

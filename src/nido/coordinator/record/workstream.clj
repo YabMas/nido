@@ -2346,6 +2346,35 @@
           (->> (:entries w) (filter #(= kind (:kind %))) (sort-by :seq)))
     []))
 
+
+(def ^:private grant-spent-by
+  "The ledger kind whose append spends each grantable act (report/grantable-kinds): :intent is
+   spent by the goal amendment the seat appends; :merge by the landing's :merged — whoever
+   records it, the merge poller included — so one grant is one landing, however many times a
+   seat must enqueue before a queue takes it."
+  {:intent :intent
+   :merge  :merged})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential [:map [:kind :keyword] [:seq :int]]]]}
+  unspent-grants
+  "The grants a person gave the sessions of workstream `ws-id` that are still unspent, oldest
+   first, each as its act (:kind) and the :seq of the entry that gave it: the :grants of its
+   :blocker-answered and :grant entries that are the person's own acts — not an answer nido
+   recorded for an act (:act), an entry nido wrote (:by :nido), or a grant a design round carried
+   forward (:carried) — each unspent until an entry of its act's spending kind follows it. No
+   text is read for a grant. The one reading of a grant's spending: the conductor's refusal and
+   instruction and the pipeline's position all read it here."
+  [project ws-id]
+  (->> (for [a (mapcat #(entries-of project ws-id %) [:blocker-answered :grant])
+             :when (and (not (:act a)) (not= :nido (:by a)) (not (:carried a)))
+             k (:grants a)
+             :let [spent-by (grant-spent-by k)]
+             :when (and spent-by
+                        (not-any? #(> (:seq %) (:seq a)) (entries-of project ws-id spent-by)))]
+         {:kind k :seq (:seq a)})
+       (sort-by :seq)
+       vec))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] [:maybe :LedgerEntry]]}
   entry-at-seq
   "The typed entry at `seq-n` on this workstream, parsed through the READ contract

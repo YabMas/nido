@@ -54,6 +54,7 @@
    :reviewed          "Reviewed"
    :awaiting-gate     "Awaiting gate"
    :published         "Draft PR open"
+   :land-granted      "Landing"
    :shipped           "Merged"
    :findings-open     "Findings open"
    :blocked           "Blocked"

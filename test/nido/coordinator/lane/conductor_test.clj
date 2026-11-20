@@ -1712,3 +1712,60 @@
             (session/update-substrate! :brian id "fix-it" #(assoc % :dispatching {:token "t" :at "now"}))
             (seats/delivered! :brian id (:id m) "t")
             (is (= [:blocker-answered] (mapv :wrote (conductor/undelivered! :brian id))) "answered once delivered")))))))
+
+(deftest a-merge-grant-admits-the-one-landing-verb-and-no-other
+  ;; project-landing: a seat lands only through nido:workstream:pr:land, which runs the procedure
+  ;; the project declares. Where that procedure lands no PR (:push-main) the verb names none.
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            in       (fn [n command]
+                       (in-session n #(conductor/refusal {:tool_name "Bash" :cwd "/wt" :tool_input {:command command}})))]
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#412" :url "u412"})
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id "fix-it" "conv" {:token "t" :at "t" :via :send :seen? true})
+        (prompted! "conv" "land it\n\n[nido-send t]")
+        (is (some? (in "fix-it" "bb nido:workstream:pr:land")) "without a grant, no PR named is no different")
+        (add :grant {:format :grant :grants [:merge] :words "Land, clicked on the gate"})
+        (is (nil? (in "fix-it" "bb nido:workstream:pr:land")) "under the grant, the verb with no PR is admitted")
+        (is (nil? (in "fix-it" "bb nido:workstream:pr:land :pr brian-study/brian#412")) "and with its own PR")
+        (doseq [cmd ["bb nido:land" "bb --config ~/Code/nido/bb.edn nido:land" "bb nido:ship"]]
+          (let [raw (in "fix-it" cmd)]
+            (is (some? raw) (str "no grant admits another landing verb: " cmd))
+            (is (str/includes? raw "nido:workstream:pr:land") "and its refusal names the one it admits")))
+        (add :merged {:format :merged :pr "brian-study/brian#412" :url "u412" :title "t"})
+        (is (some? (in "fix-it" "bb nido:workstream:pr:land")) "a recorded landing spends the grant")))))
+
+(deftest a-standing-merge-grant-is-instructed-once-per-grant
+  (with-tmp
+    (fn []
+      (let [[id add] (workstream)
+            posted   (atom [])]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [seats/held  (fn [& _] #{"whole"})
+                      seats/post! (fn [_ _ m]
+                                    (when-not (some #(= (:key m) (:key %)) @posted)
+                                      (swap! posted conj m) m))]
+          (with-redefs [project/landing (constantly :pr-auto)]
+            (is (empty? (conductor/instruct-landing! :brian)) "no grant, no instruction")
+            (add :grant {:format :grant :grants [:merge] :words "Land"})
+            (is (empty? (conductor/instruct-landing! :brian))
+                "a PR landing waits until the workstream records its PR")
+            (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#412" :url "u412"})
+            (let [[m] (conductor/instruct-landing! :brian)]
+              (is (= "whole" (:seat m)))
+              (is (str/includes? (:text (first @posted)) "nido:workstream:pr:land :pr brian-study/brian#412")
+                  "naming the workstream's own PR")
+              (is (not (re-find #"drive-home|nido ship|nido:ship" (:text (first @posted))))
+                  "and never another landing route"))
+            (is (empty? (conductor/instruct-landing! :brian)) "once per grant"))
+          (with-redefs [project/landing (constantly :push-main)]
+            (reset! posted [])
+            (conductor/instruct-landing! :brian)
+            (is (str/ends-with? (re-find #"`[^`]*`" (:text (first @posted))) "nido:workstream:pr:land`")
+                "a :push-main landing names no PR"))
+          (add :merged {:format :merged :pr "brian-study/brian#412" :url "u412" :title "t"})
+          (reset! posted [])
+          (with-redefs [project/landing (constantly :pr-auto)]
+            (is (empty? (conductor/instruct-landing! :brian)) "a spent grant is instructed no more")))))))

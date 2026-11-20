@@ -27,6 +27,10 @@
     "Put one pull request on its way to the base branch: auto-merge, or — where the repository
      refuses auto-merge — an enqueue on its merge queue by the node id it reads itself.
      {:status :ok :via :auto|:queue} or {:error :auth|:gh :detail}, gh's refusal in :detail."
+    {:signature [:=> [:catn [:repo :string] [:number :int]] :map] :delegates [sh!]})
+  (Operation squash-pr!
+    "Squash-merge one pull request into its base branch now, marking a draft ready first:
+     {:status :ok :via :squash} or {:error :auth|:gh :detail}, gh's refusal in :detail."
     {:signature [:=> [:catn [:repo :string] [:number :int]] :map] :delegates [sh!]}))
 
 (Module github-config

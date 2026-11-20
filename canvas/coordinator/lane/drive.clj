@@ -261,6 +261,17 @@
   (Operation handle-ship! "Process a ship envelope. No-op when a merge is already running."
     {:signature [:=> [:catn [:opts :map]] [:maybe :any]]
      :delegates [merge-run-in-flight? create-merge-run!]})
+  (Operation reap-landed!
+    "Settle every merge run left non-terminal on a workstream that has landed or closed since the
+     run was created, to :done — its /drive-home has nothing left to land. Answers the run ids it
+     settled."
+    {:signature [:=> [:catn] [:vector RunId]]
+     :delegates [runs/list-run-ids runs/read-run runs/write-run! workstream/read-ws]})
+  (Operation reap-stranded!
+    "Settle to :done each merge run it is given that is not yet terminal — the runs earlier Land
+     clicks left behind — and touch no other. Answers the run ids it settled."
+    {:signature [:=> [:catn [:run-ids [:sequential RunId]]] [:vector RunId]]
+     :delegates [runs/read-run runs/write-run!]})
   (Operation merge-lane-summary "Counts for the coordinator's status line."
     {:signature [:=> [:catn] :map] :delegates [runs/list-run-ids runs/read-run]})
   (Operation classify-outcome "What a merge run's result means, by declared precedence."

@@ -78,6 +78,25 @@
                  {:number (:number m) :url (:url m) :title (:title m) :body (:body m)})}
       {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))})))
 
+(defn ^{:malli/schema [:=> [:cat :string :int] :map]}
+  squash-pr!
+  "Squash-merge pull request `number` of `repo` into its base branch now, marking it ready first
+   when it is a draft — gh refuses to merge a draft. {:status :ok :via :squash} or
+   {:error :auth|:gh :detail}, :detail carrying gh's refusal in its own words."
+  [repo number]
+  (let [fail  (fn [{:keys [err out]}]
+                (let [msg (str/trim (str err (when (str/blank? err) out)))]
+                  {:error (if (auth-error? msg) :auth :gh) :detail msg}))
+        draft (sh! ["gh" "pr" "view" (str number) "--repo" repo "--json" "isDraft" "--jq" ".isDraft"])
+        ready (when (and (zero? (:exit draft)) (= "true" (str/trim (str (:out draft)))))
+                (sh! ["gh" "pr" "ready" (str number) "--repo" repo]))]
+    (cond
+      (not (zero? (:exit draft)))           (fail draft)
+      (and ready (not (zero? (:exit ready)))) (fail ready)
+      :else
+      (let [m (sh! ["gh" "pr" "merge" (str number) "--repo" repo "--squash"])]
+        (if (zero? (:exit m)) {:status :ok :via :squash} (fail m))))))
+
 (def ^:private auto-merge-off
   "What GitHub answers `gh pr merge --auto` with on a repository that disables auto-merge: the call
    never reaches the merge queue, and an enqueue is the queue's own entry point."

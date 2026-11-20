@@ -150,7 +150,7 @@
 (def ^:private grant-phrases
   "What choosing an option that grants a kind hands the seat, as the card says it."
   {:intent "the seat writes the goal amendment itself"
-   :merge  "the seat lands the workstream's own PR itself, once"})
+   :merge  "the seat lands the workstream itself, once, through nido:workstream:pr:land, by the procedure its project declares"})
 
 (defn- blocker-option
   "A blocker's option as the card shows it. What picking it does beyond answering — handing the

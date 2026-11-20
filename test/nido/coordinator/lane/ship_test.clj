@@ -214,3 +214,42 @@
     (runs/transition! (:id r3) :running)
     (runs/transition! (:id r3) :awaiting-review))                ; :blocked
   (is (= {:driving 1 :queued 1 :blocked 1} (sut/merge-lane-summary))))
+
+(deftest reap-landed-settles-merge-runs-a-landing-by-another-route-left
+  ;; fukan ws-20261117-2786b5: squash-merged by hand and closed, while its merge runs sat
+  ;; :queued and :awaiting-review in the lane for good.
+  (let [w       (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-7"}]})
+        other   (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-8"}]})
+        queued  (sut/create-merge-run! :brian (:id w) "impl-br-7")
+        parked  (sut/create-merge-run! :brian (:id w) "impl-br-7")
+        live    (sut/create-merge-run! :brian (:id other) "impl-br-8")]
+    (runs/transition! (:id parked) :running)
+    (runs/transition! (:id parked) :awaiting-review)
+    (is (empty? (sut/reap-landed!)) "nothing has landed: nothing is settled")
+    (ws/append-entry! :brian (:id w) {:kind :merged} (pr-str {:format :merged :pr "o/r#1" :url "u" :title "t"}))
+    (is (= #{(:id queued) (:id parked)} (set (sut/reap-landed!))) "a landing after the run settles it")
+    (is (= :done (:state (runs/read-run (:id queued)))) "a run never started is settled too")
+    (is (= :done (:state (runs/read-run (:id parked)))))
+    (is (= {:reason :landed-elsewhere} (:error (runs/read-run (:id parked)))))
+    (is (= :queued (:state (runs/read-run (:id live)))) "another workstream's run is untouched")
+    (is (empty? (sut/reap-landed!)) "and a settled run is not settled twice")
+    (is (= :settled (sut/settle-drive-home! (:id parked) {}))
+        "a turn ending after the reap leaves the settled run as it is")))
+
+(deftest reap-landed-ignores-a-landing-from-before-the-run
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9"}]})]
+    (with-redefs [nido.coordinator.record.clock/now-iso (constantly "2020-01-01T00:00:00Z")]
+      (ws/append-entry! :brian (:id w) {:kind :merged} (pr-str {:format :merged :pr "o/r#1" :url "u" :title "t"})))
+    (let [run (sut/create-merge-run! :brian (:id w) "impl-br-9")]
+      (is (empty? (sut/reap-landed!)) "a re-ship after an earlier landing is left to run")
+      (is (= :queued (:state (runs/read-run (:id run))))))))
+
+(deftest reap-stranded-settles-the-runs-it-is-given-and-no-other
+  (let [w     (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-11"}]})
+        a     (sut/create-merge-run! :brian (:id w) "impl-br-11")
+        b     (sut/create-merge-run! :brian (:id w) "impl-br-11")]
+    (runs/transition! (:id a) :running)
+    (runs/transition! (:id a) :done)
+    (is (= [] (sut/reap-stranded! [(:id a)])) "a terminal run is left as it is")
+    (is (= [(:id b)] (sut/reap-stranded! [(:id b) "no-such-run"])) "an unknown id is skipped")
+    (is (= :done (:state (runs/read-run (:id b)))))))

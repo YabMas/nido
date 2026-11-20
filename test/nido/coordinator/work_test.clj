@@ -1969,19 +1969,6 @@
   (is (not (session/work-session? {:name "c" :conductor true})))
   (is (not (session/work-session? {:name "ch" :chat true}))))
 
-(deftest land-ships-work-session
-  (let [enqueued (atom [])]
-    (with-redefs [nido.coordinator.record.session/list-sessions (fn [_ _] impl-and-newer-chat)
-                  nido.coordinator.lane.pipeline/of           (fn [_ _] {:at :pr-opened})
-                  nido.coordinator.work/awaiting-human        (fn [_] :land)
-                  nido.coordinator.work/gate-report           (fn [_ _] {:seq 115})
-                  nido.coordinator.lane.ship/merge-run-in-flight? (fn [_ _] false)
-                  nido.coordinator.source.queue/enqueue!      (fn [env] (swap! enqueued conj env) "/tmp/x.edn")]
-      (is (= {:decision :landing :session "view-on-the-fly"}
-             (#'work/land! :fukan "ws-1" 115)))
-      (is (= ["view-on-the-fly"] (mapv :session @enqueued))
-          "the :ship envelope names the impl session, never ws-1--chat"))))
-
 (deftest screen-needs-count-equals-gate-count
   (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "brian"}]
         s (work/screen {:surface :needs :scope "all" :source :notion :facets {}}
@@ -3449,7 +3436,8 @@
 
 (deftest a-published-pr-is-landed-from-its-own-button
   (is (= [{:id :land :label "Land" :kind :mutation :style :primary :seq 37}]
-         (work/gate-actions :shipping false nil {:report-format :pr-opened :seq 37 :awaiting :land}))
+         (work/gate-actions :shipping false nil {:report-format :pr-opened :seq 37 :awaiting :land
+                                                 :landable? true}))
       "a landing owed is one button carrying the record it was owed over — not a bare question")
   (is (work/position-carrying-action? :land)
       "so the click comes back with the record it answers, and a stale page is refused")
@@ -3462,11 +3450,11 @@
 (deftest reply-still-needs-an-agent-to-resume
   (is (= [:land]
          (mapv :id (work/gate-actions :shipping false nil
-                                      {:report-format :pr-opened :seq 7 :awaiting :land})))
+                                      {:report-format :pr-opened :seq 7 :awaiting :land :landable? true})))
       "Reply resumes a parked agent; beside a landing with none it could only fail")
   (is (= [:land :reply]
          (mapv :id (work/gate-actions :shipping true nil
-                                      {:report-format :pr-opened :seq 7 :awaiting :land})))
+                                      {:report-format :pr-opened :seq 7 :awaiting :land :landable? true})))
       "and when there is one, a note to it is still an answer"))
 
 (deftest a-blocker-raised-over-a-design-decision-is-answered-not-approved
@@ -4357,3 +4345,36 @@
             "a position that no longer names the blocker")
         (is (= 1 (count (workstream/entries-of :brian (:id w) :blocker))))
         (is (empty? (workstream/entries-of :brian (:id w) :blocker-answered)))))))
+
+(deftest land-is-offered-only-where-a-seat-can-act-on-it
+  (is (= [] (work/gate-actions :shipping false nil {:report-format :pr-opened :seq 7 :awaiting :land}))
+      "a workstream with nobody to land it — not activated, or a drain's slice — is offered no Land")
+  (is (= [:reply] (mapv :id (work/gate-actions :shipping true nil {:report-format :pr-opened :seq 7
+                                                                    :awaiting :land})))
+      "though a parked agent can still be replied to")
+  (is (= ["Land" "B" "Answer"]
+         (mapv :label (work/gate-actions :in-progress false nil
+                                         {:report-format :blocker :seq 9 :awaiting :answer-blocker
+                                          :options [{:label "Land it now" :grants [:merge]}
+                                                    {:label "Hold"}]})))
+      "a question's landing option is the same Land, whatever it was called"))
+
+(deftest land-grants-the-landing-and-queues-no-merge-run
+  (with-tmp
+    (fn [_]
+      (let [id   (:id (workstream/create! :brian {:external-refs []}))
+            add! (fn [kind record]
+                   (workstream/append-entry! :brian id {:kind kind} (pr-str record))
+                   (count (:entries (workstream/read-ws :brian id))))]
+        (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+        (let [pr (add! :pr-opened {:format :pr-opened :url "https://x/pull/1" :title "t"})]
+          (is (= :not-landable (:decision (work/resolve-gate! :brian id :land pr)))
+              "a workstream not activated has no seat to land it, so nothing is granted")
+          (workstream/activate! :brian id nil)
+          (is (= :landing-granted (:decision (work/resolve-gate! :brian id :land pr))))
+          (is (= [:merge] (:grants (last (workstream/entries-of :brian id :grant))))
+              "the click is recorded as the person's :merge grant")
+          (is (empty? (runs/list-run-ids)) "and no merge run is queued")
+          (is (= :land-granted (:at (pipeline/of :brian id))) "the landing is now the seat's")
+          (is (= :nothing-to-land (:decision (work/resolve-gate! :brian id :land pr)))
+              "so a second click grants nothing more"))))))

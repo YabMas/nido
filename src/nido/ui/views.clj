@@ -554,7 +554,7 @@
         :done    "✓ Marked done."
         :reply   (str "Resuming the session if one is listening… With nobody listening, your "
                       "words are recorded on the ledger as the blocker's answer.")
-        :land        "Queuing the pull request on the merge lane — /drive-home takes it from here."
+        :land        "Granting the landing — the seat lands it by the procedure its project declares."
         :assert-gate (str "Recording the gate with your evidence and opening the next "
                           "phase — its implementation is owed next.")
         "Done."))

@@ -520,6 +520,13 @@
            (.println ^java.io.PrintWriter *err* (str "nido conductor: " what " failed — " (ex-message t))))
          nil)))
 
+(def ^:private stranded-merge-runs
+  "Merge runs left non-terminal on fukan workstreams squash-merged by hand on 2026-11-19."
+  ["2026-11-19-fukan-merge-0a0d09d8" "2026-11-19-fukan-merge-1c0c665f" "2026-11-19-fukan-merge-24b29ad4"
+   "2026-11-19-fukan-merge-294f3b00" "2026-11-19-fukan-merge-43425f1e" "2026-11-19-fukan-merge-4a01d7e7"
+   "2026-11-19-fukan-merge-805f20a8" "2026-11-19-fukan-merge-95b46b5c" "2026-11-19-fukan-merge-b4df9f90"
+   "2026-11-19-fukan-merge-d1d3a9c5" "2026-11-19-fukan-merge-e35fe22e" "2026-11-19-fukan-merge-f52af267"])
+
 (defn- conductor-pass!
   "What the conductor lane does with one conduct pass: answer in place an escalation on a
    person's turn the person has prompted that session after, post a hand-back for each turn end
@@ -530,6 +537,12 @@
   [r now-ms]
   (timed "conductor answers-in-place" #(logged "answering escalations in place" (fn [] (conductor/answers-in-place! r))))
   (timed "conductor hand-backs" #(logged "posting hand-backs" (fn [] (conductor/hand-backs! r))))
+  ;; A standing :merge grant is the seat's to act on, however it was given: instruct the landing
+  ;; once per grant, and settle a merge run whose workstream landed by another route.
+  (doseq [p (registered-projects)]
+    (timed (str "conductor landings " (name p))
+           #(logged (str "instructing " (name p) "'s landings") (fn [] (conductor/instruct-landing! p)))))
+  (timed "merge lane reap" #(logged "settling landed merge runs" (fn [] (ship/reap-landed!))))
   (timed "conductor close-unanswered"
          #(doseq [{:keys [project ws-id session instruction]} (:turn-ends r)
                   :when (:conductor (session/read-session project ws-id session))]
@@ -1645,6 +1658,11 @@
   (cstate/ensure-dirs!)
   (println "nido coordinator: starting (poll" poll-ms "ms)")
   (reconcile/reconcile!)
+  ;; The merge runs Land clicks queued on fukan's workstreams after they had landed by hand: made
+  ;; after the landing, so reap-landed! never reaches them. Settling an already-terminal run is a
+  ;; no-op, so this is safe at every start.
+  (try (ship/reap-stranded! stranded-merge-runs)
+       (catch Throwable t (println "nido coordinator: settling stranded merge runs failed —" (ex-message t))))
   ;; Before anything else touches the registry, and halted or not: what was up when the host went
   ;; down is held now, since the first prune would otherwise be the last to see it.
   (try (let [{:keys [outcome held error]} (casualties/record! (vec (vals (sstate/read-registry))))]

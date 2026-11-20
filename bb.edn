@@ -726,7 +726,7 @@
 
   nido:workstream:pr:land
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Land the workstream's own PR — one its :github refs record — from its session: auto-merge, else enqueue on its merge queue. :pr <owner/repo#n | n>. A seat on the conductor's instruction may run it only under the person's :merge grant."
+   :doc "Land the workstream from its session by the procedure its project declares (:landing in its registry entry — :pr-auto auto-merge/merge queue, the default; :pr-squash squash-merge; :push-main nido:land). [:pr <owner/repo#n | n>] — the workstream's own PR, required by the PR procedures. A seat on the conductor's instruction may run it only under the person's :merge grant."
    :task (apply nido-workstream/pr-land-cmd *command-line-args*)}
 
   nido:workstream:show

@@ -485,10 +485,10 @@
                                  "dismissed. Assert its gate to open the next one.")
     :nothing-to-land        (str "Nothing to land — this workstream no longer owes a landing. "
                                  "It may have merged already.")
-    :land-stale             (str "Not queued — the ledger moved on since this page rendered. "
+    :land-stale             (str "Not granted — the ledger moved on since this page rendered. "
                                  "Re-read the gate.")
-    :already-landing        "Already on the merge lane — a merge Run owns this workstream."
-    :no-session             "Not queued — no live session holds this workstream's branch."
+    :not-landable           (str "Not granted — only an activated workstream at a published PR "
+                                 "has a seat to land it. Land it from its session, or activate it.")
     :unresolved             (str "Couldn't resolve the ticket in Notion"
                                  (when error (str ": " (name error))))
     (:notion-failed :error) (str "Apply failed"

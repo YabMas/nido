@@ -62,7 +62,7 @@
 (deftest an-option-that-hands-over-the-landing-says-so
   (let [[a] (:options (q1 (ask/ask :answer-blocker {:report (assoc-in blocker [:options 0 :grants] [:merge])
                                                    :actions option-actions})))]
-    (is (= "Choosing this, the seat lands the workstream's own PR itself, once." (:consequence a)))))
+    (is (= "Choosing this, the seat lands the workstream itself, once, through nido:workstream:pr:land, by the procedure its project declares." (:consequence a)))))
 
 (deftest an-option-an-older-blocker-says-approves-a-design-says-nothing-of-it
   ;; Picking an option approves nothing, so the card must not claim it does.

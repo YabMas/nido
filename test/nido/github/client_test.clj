@@ -64,3 +64,15 @@
 (deftest view-issue-flags-auth-errors
   (with-redefs [gh/sh! (fn [_] {:exit 1 :out "" :err "gh auth required"})]
     (is (= :auth (:error (gh/view-issue "o/r" 42))))))
+
+(deftest squash-pr-readies-a-draft-once-then-squash-merges
+  (let [calls (atom [])]
+    (with-redefs [gh/sh! (fn [args] (swap! calls conj (vec (take 3 args)))
+                           (if (= "view" (nth args 2)) {:exit 0 :out "true\n"} {:exit 0 :out ""}))]
+      (is (= {:status :ok :via :squash} (gh/squash-pr! "o/r" 5)))
+      (is (= [["gh" "pr" "view"] ["gh" "pr" "ready"] ["gh" "pr" "merge"]] @calls))))
+  (let [calls (atom [])]
+    (with-redefs [gh/sh! (fn [args] (swap! calls conj (nth args 2))
+                           (case (nth args 2) "view" {:exit 0 :out "false"} {:exit 1 :err "not mergeable"}))]
+      (is (= {:error :gh :detail "not mergeable"} (gh/squash-pr! "o/r" 5)) "gh's refusal in its own words")
+      (is (= ["view" "merge"] @calls) "a ready PR is not readied"))))

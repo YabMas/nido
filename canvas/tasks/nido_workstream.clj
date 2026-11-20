@@ -8,10 +8,10 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.lane.conductor :as conductor]
+            [canvas.coordinator.lane.landing :as landing]
             [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.coordinator.work :as work]
-            [canvas.integration.github :as github]
             [fukan.common.typing.malli]))
 
 (Module nido-workstream
@@ -89,11 +89,12 @@
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [conductor/tell!]})
   (Operation pr-land*
-    "Land the workstream's own pull request — the :github ref :pr names, read off the workstream of
-     the session this runs in — through the GitHub adapter; refused, landing nothing, for a PR the
-     workstream has no ref for."
+    "Land the change of the workstream of the session this runs in by its project's procedure,
+     through lane-landing — where that landing names a PR (landing/names-pr?), the workstream's own
+     pull request, the :github ref :pr names; refused, landing nothing, for a PR the workstream has
+     no ref for."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [workstream/own-pr github/land-pr!]})
+     :delegates [workstream/own-pr landing/names-pr? landing/land!]})
   (Operation pr-land-cmd
     "bb nido:workstream:pr:land — the entry point for `pr-land*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

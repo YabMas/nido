@@ -269,8 +269,9 @@
             landed (atom [])]
         (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian (:id w)])
                       nido.github.client/land-pr! (fn [repo n] (swap! landed conj [repo n]) {:status :ok :via :queue})]
-          (is (= {:status :ok :via :queue :pr "brian-study/brian#412"}
-                 (task/pr-land* {:pr "brian-study/brian#412"})))
+          (is (= {:status :ok :via :queue :procedure :pr-auto :pr "brian-study/brian#412"}
+                 (task/pr-land* {:pr "brian-study/brian#412"}))
+              "an undeclared project lands by :pr-auto")
           (is (= [["brian-study" "brian" ] ] (map #(vec (take 2 (str/split (first %) #"/"))) @landed))
               "the repository is the ref's")
           (is (= 412 (second (first @landed))) "and so is the number")
@@ -304,3 +305,19 @@
         (task/blocker-answer* {:project "brian" :ws-id id :answer "land it, please"})
         (is (nil? (:grants (last (ws/entries-of :brian id :blocker-answered))))
             "words with no :grants grant nothing — the text is not read")))))
+
+(deftest pr-land-runs-the-declared-procedure
+  (with-tmp
+    (fn [_]
+      (let [w     (ws/create! :brian {:external-refs [{:adapter :github :id "o/r#3"}]})
+            calls (atom [])]
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:nido (:id w)])
+                      nido.coordinator.lane.landing/names-pr? (constantly false)
+                      nido.coordinator.lane.landing/land!     (fn [p id opts] (swap! calls conj [p id opts])
+                                                                {:status :ok :via :push :procedure :push-main})]
+          (is (= :push (:via (task/pr-land* {}))) "a project that lands no PR needs none named")
+          (is (nil? (:pr (nth (first @calls) 2))) "and none is handed on"))
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian (:id w)])
+                      nido.coordinator.lane.landing/names-pr? (constantly {:error :undeclared-landing :value :x})]
+          (is (thrown? clojure.lang.ExceptionInfo (task/pr-land* {:pr "o/r#3"}))
+              "an undeclared landing value is refused before anything runs"))))))

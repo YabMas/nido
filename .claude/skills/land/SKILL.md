@@ -522,14 +522,17 @@ bb --config ~/Code/nido/bb.edn nido:workstream:pr:land :pr "$SLUG#<top-pr-number
 
 **Land through nido, not through `gh`.** The verb lands only a PR the workstream
 records as its own (a `:github` ref, as `/prepare-draft-pr` stamps one per
-layer), runs `gh pr merge --auto`, and where the repository refuses auto-merge
-enqueues it on the merge queue itself — so the two paths below are what it does
-for you, and their refusals reach you in its output.
+layer), by the landing its project declares (`:landing` in
+`~/.nido/projects.edn`). Undeclared, that is `:pr-auto`: it runs
+`gh pr merge --auto`, and where the repository refuses auto-merge enqueues it on
+the merge queue itself — so the two paths below are what it does for you, and
+their refusals reach you in its output. A `:pr-squash` project is squash-merged
+at once instead.
 
 **On the conductor's instruction, landing is the person's act unless they
-granted it.** A grant is theirs to give — the landing option on the gate card,
-or their word through the workstream's chat — and it hands you exactly one
-landing of this workstream's own PR. Under it the gate admits the verb; a raw
+granted it.** A grant is theirs to give — Land on the gate, the landing option
+on a gate card, or their word through the workstream's chat — and it hands you
+exactly one landing of this workstream; nido then instructs you to land it. Under it the gate admits the verb; a raw
 `gh pr merge` or `enqueuePullRequest` stays refused whatever was granted.
 Without a grant the gate refuses the verb too: then, and only then, escalate —
 say the PR is ready to land and why, and end your turn. Never hand the person a

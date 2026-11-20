@@ -294,6 +294,17 @@
     "The :github ref of a workstream naming a pull request — as `owner/repo#n`, or as `n` when
      exactly one of its refs has that number — or nil: what nido knows as the workstream's own PR."
     {:signature [:=> [:catn [:w :any] [:pr :string]] [:maybe :map]]})
+  (Operation unspent-grants
+    "The grants a person gave the sessions of a workstream that are still unspent, each as its act
+     (:kind) and the :seq of the entry that gave it: the :grants of its :blocker-answered and
+     :grant entries that are the person's own acts — not an answer nido recorded for an act, an
+     entry nido wrote, or a grant a design round carried forward — each unspent until an entry of
+     its act's spending kind follows it (:intent by an :intent, :merge by a :merged). The one
+     reading of a grant's spending: the conductor's refusal and instruction and the pipeline's
+     position all read it here."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]]
+                 [:sequential [:map [:kind :keyword] [:seq :int]]]]
+     :delegates [entries-of]})
   (Operation find-by-ref-id
     "The workstream carrying this external id, whichever adapter raised it."
     {:signature [:=> [:catn [:project ProjectName] [:external-id :string]] [:maybe Workstream]]

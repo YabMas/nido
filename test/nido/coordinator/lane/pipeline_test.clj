@@ -1575,3 +1575,25 @@
         (let [r (p/of :brian id)]
           (is (= :issue (:intake r)) "how it arrived is the :issue entry, not a ref")
           (is (= :intake (:at r)) "an arrival alone carries no position"))))))
+
+(deftest a-granted-landing-is-the-seats-until-it-lands
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :pr-opened {:format :pr-opened :url "https://example.test/pr/1" :title "t"})
+        (add! :grant {:format :grant :grants [:merge] :words "Land"})
+        (is (= :land-granted (:at (p/of :brian id))))
+        (is (= {:stage :land :mode :working-copy} (:next (p/of :brian id)))
+            "the seat lands it on nido's instruction, so a person owes nothing")
+        (add! :grant {:format :grant :grants [:intent] :words "amend"})
+        (is (= :land-granted (:at (p/of :brian id))) "a grant of another kind changes nothing")))))
+
+(deftest a-grant-without-a-published-pr-places-nothing
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [before (:at (p/of :brian id))]
+          (add! :grant {:format :grant :grants [:merge] :words "Land"})
+          (is (= before (:at (p/of :brian id)))))))))

@@ -7,6 +7,7 @@
             [canvas.coordinator.agent.substrate :as substrate]
             [canvas.coordinator.lane.drive :as drive]
             [canvas.coordinator.lane.embodied-strata :as embodied-strata]
+            [canvas.coordinator.lane.landing :as landing]
             [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.seats :as rseats :refer [SeatId]]
             [canvas.coordinator.record.session :as session]
@@ -120,6 +121,22 @@
      delivered, is owed to a live session nido drives, or its seat is no longer current."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]
      :delegates [seats/traffic-all seats/occupants seats/owed rseats/seats workstream/read-ws]})
+  (Operation grant-landing!
+    "Record the person's Land on the gate as their :merge grant to the seats of an activated
+     workstream: one :grant entry, which instruct-landing! then instructs. Writes it only while the
+     workstream is activated and its position is :published (drive/of); anywhere else — a drain's
+     slice at :slice-cleared included — it writes nothing and answers why."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
+     :delegates [workstream/read-ws standing/activated? drive/of]})
+  (Operation instruct-landing!
+    "For each activated workstream holding a person's unspent :merge grant
+     (workstream/unspent-grants), post each seat it holds one instruction per grant, keyed on the
+     :seq of the entry that gave it, to land by `bb nido:workstream:pr:land` — naming the
+     workstream's own PR where the project's landing names a PR (landing/names-pr?). Run every
+     daemon pass, so a grant however recorded — the gate, an escalation's answer, the chat — is
+     instructed once. Answers the instructions posted."
+    {:signature [:=> [:catn [:project ProjectName]] [:sequential :map]]
+     :delegates [workstream/read-ws workstream/unspent-grants standing/activated? seats/held seats/post! landing/names-pr?]})
   (Operation tell!
     "Pass word on to the workstream's conductor from the workstream's chat, which it must run in:
      posted once as a hand-back naming the chat's session — and, when the person's word grants the

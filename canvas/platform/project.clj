@@ -33,4 +33,14 @@
   (Operation get-project
     "One project entry, or nil."
     {:signature [:=> [:catn [:name :string]] [:maybe :map]]
-     :delegates [config/read-projects]}))
+     :delegates [config/read-projects]})
+  (Operation landing
+    "How a project's work reaches its main, as its registry entry declares it under :landing —
+     :pr-auto (auto-merge, else its merge queue), :pr-squash (a direct squash-merge of the PR) or
+     :push-main (nido:land) — and :pr-auto when it declares none. Any other value is answered as
+     {:error :undeclared-landing :value v}, never read as the default: a misspelt declaration would
+     otherwise land by a procedure nobody chose."
+    {:signature [:=> [:catn [:name :any]]
+                 [:or [:enum :pr-auto :pr-squash :push-main]
+                      [:map [:error [:= :undeclared-landing]] [:value :any]]]]
+     :delegates [get-project]}))

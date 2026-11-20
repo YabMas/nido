@@ -88,8 +88,8 @@ or deactivating the workstream — you run when they asked for it.
 When the person's word is to land the workstream's PR — \"/land\", \"land it\", \"merge it\" — that word
 is their grant, and they should not be asked again: pass it on with `:grants merge` beside the
 :text, or, when it answers the blocker the workstream waits on, record it with
-`nido:workstream:blocker:answer :answer \"…\" :grants merge`. The seat then lands the workstream's own
-PR once. Pass a grant only when the person said so; never infer one they did not give.
+`nido:workstream:blocker:answer :answer \"…\" :grants merge`. nido then instructs the seat to land
+the workstream once, by the procedure its project declares. Pass a grant only when the person said so; never infer one they did not give.
 
 Never push, fast-forward or move main, and never record a landing.
 

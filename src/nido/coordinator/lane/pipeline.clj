@@ -69,6 +69,9 @@
    ;; The goal the newest survey was scoped for was replaced — the survey is
    ;; owed again, before anything that stands on it.
    :goal-superseded
+   ;; The person granted the landing of a published PR and it has not landed yet: the seat
+   ;; lands it, on nido's instruction.
+   :land-granted
    :published
    :reviewed
    :implemented
@@ -587,7 +590,8 @@
    then the record arc. Each clause names a fact that is true of the ledger, so
    a position is always answerable by pointing at an entry."
   [{:keys [closed? closed-outcome findings-open? blocker-seq retraction ks decided? approved?
-           cleared? verified? re-entry trail-records layers triage-unaccepted? class-position]}]
+           cleared? verified? re-entry trail-records layers triage-unaccepted? class-position
+           merge-granted?]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
   ;; true, is true for ever. `re-entry` is the reading that says how far up the
@@ -645,6 +649,9 @@
     ;; which `reentry` already lets through first.
     (= :baseline (:stage re-entry))      :goal-superseded
 
+    ;; The person granted the landing (`ws/unspent-grants`) and it has not landed since: the next
+    ;; move is the seat's, which nido instructs, so no gate offers Land again.
+    (and merge-granted? (contains? trail-ks :pr-opened)) :land-granted
     (contains? trail-ks :pr-opened)      :published
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
@@ -778,6 +785,8 @@
    ;; The arc's last move is a person's: landing a published draft is their gesture, and a
    ;; board that called it nobody's showed a ready PR as finished.
    :published         {:stage :land                  :mode :human}
+   ;; Granted: the seat lands it by its project's procedure, so nobody owes a person's move.
+   :land-granted      {:stage :land                  :mode :working-copy}
    ;; A drain's recipe: the coordinator proposes a recipe, the person approves it, nido takes the
    ;; census, the coordinator runs the drain, and the person closes it once the census reads zero.
    :drain-chartered   {:stage :propose-recipe        :mode :authoring}
@@ -1263,7 +1272,11 @@
                          :decided?       (some? decision)
                          ;; `baseline-verified?`'s answer, from the reading
                          ;; already in hand rather than a second closure.
-                         :verified?      (boolean (:verified? bst))}
+                         :verified?      (boolean (:verified? bst))
+                         ;; Read only where a PR was published: the grant matters nowhere else.
+                         :merge-granted? (boolean (and (contains? ks :pr-opened)
+                                                       (some #(= :merge (:kind %))
+                                                             (ws/unspent-grants project ws-id))))}
           pos    (place facts)
           kind   (intake-kind whole (kinds whole))
           next-of (fn [p]

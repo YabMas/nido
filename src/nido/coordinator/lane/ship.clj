@@ -136,6 +136,62 @@
           (executor/submit! (:id run) (:priority run) true :merge 1)
           run)))))
 
+(defn- inst [s] (try (java.time.Instant/parse (str s)) (catch Exception _ nil)))
+
+(def ^:private unsettled #{:queued :preprocessing :running :awaiting-review})
+
+(defn- landed-since?
+  "Whether the workstream of merge run `run` holds a :merged or :closed entry written after the
+   run was created: it has landed or closed since, and the run has nothing left to land. One from
+   before the run — a re-ship on a reopened workstream — does not count."
+  [run]
+  (let [project (keyword (name (:project run)))
+        ws-id   (:workstream-id run)
+        born    (inst (:at (first (:state-history run))))]
+    (boolean
+     (and ws-id born
+          (some #(when-let [at (inst (:at %))] (.isAfter ^java.time.Instant at born))
+                (mapcat #(ws/entries-of project ws-id %) [:merged :closed]))))))
+
+(defn- settle!
+  "Write merge run `rid` :done with :error {:reason :landed-elsewhere}, unless it is terminal
+   already. Written directly rather than through runs/transition!: a run still :queued never ran,
+   and no transition takes it to :done. Answers whether it settled the run."
+  [rid]
+  (let [run (runs/read-run rid)]
+    (if (and run (= :merge (:trigger run)) (unsettled (:state run)))
+      (try (runs/write-run! (-> run
+                                (assoc :state :done :error {:reason :landed-elsewhere})
+                                (update :state-history (fnil conj []) {:at (clock/now-iso) :state :done})))
+           true
+           (catch Throwable t
+             (binding [*err* *err*]
+               (.println ^java.io.PrintWriter *err*
+                         (str "WARN: merge lane — could not settle " rid " — " (ex-message t))))
+             false))
+      false)))
+
+(defn ^{:malli/schema [:=> [:cat] [:vector :RunId]]}
+  reap-landed!
+  "Settle to :done every merge run not yet terminal whose workstream has landed or closed since the
+   run was created (`landed-since?`), and touch no other run. Run every daemon pass, so a merge run
+   a landing by another route left behind does not sit in the lane for ever. Answers the run ids
+   it settled."
+  []
+  (vec (for [rid   (runs/list-run-ids)
+             :let  [run (runs/read-run rid)]
+             :when (and run (= :merge (:trigger run)) (unsettled (:state run)) (landed-since? run)
+                        (settle! rid))]
+         rid)))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :RunId]] [:vector :RunId]]}
+  reap-stranded!
+  "Settle to :done each merge run of `run-ids` not yet terminal, and touch no other. For the runs
+   earlier Land clicks left on a workstream that had already landed by hand — created after its
+   landing, so `reap-landed!` never reaches them. Answers the run ids it settled."
+  [run-ids]
+  (vec (filter settle! run-ids)))
+
 (defn ^{:malli/schema [:=> [:cat] :map]}
   merge-lane-summary
   "Counts for the coordinator status line: {:driving n :queued n :blocked n}
@@ -190,6 +246,10 @@
      :awaiting-merge → :done   (PR on GitHub's queue; lane slot freed)
      :blocked        → :awaiting-review (session parked + :error; gate inbox)"
   [run-id result]
+  (if-not (contains? #{:running :awaiting-review} (:state (runs/read-run run-id)))
+    ;; Settled already — reap-landed! settles a merge run whose workstream landed by another
+    ;; route, and the turn it gave may still end after.
+    :settled
   (let [run          (runs/read-run run-id)
         project      (:project run)
         ws-id        (:workstream-id run)
@@ -211,7 +271,7 @@
             (session/set-error! project ws-id session-name
                                 {:at (clock/now-iso) :reason :ship-blocked :message note})
             (catch Throwable _ nil)))))                  ; best-effort (human/non-autonomous session)
-    outcome))
+    outcome)))
 
 (defn- give-drive-home!
   "Give `/drive-home` to the run's session: queue it for the background session nido drives,

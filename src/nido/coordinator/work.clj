@@ -21,7 +21,6 @@
    [nido.coordinator.lane.findings :as findings]
    [nido.coordinator.lane.phase :as lphase]
    [nido.coordinator.source.notion-cache :as notion-cache]
-   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.source.start-failures :as start-failures]
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.lane.promote :as promote]
@@ -32,7 +31,6 @@
    [nido.coordinator.lane.drain :as drain-lane]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.lane.resume :as resume]
-   [nido.coordinator.lane.ship :as ship]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.lane.scratch :as scratch]
@@ -50,6 +48,7 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.drain :as rdrain]
    [nido.coordinator.record.workstream :as cws]
+   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.view.drains :as drains-view]
    [nido.coordinator.view.recoveries :as recoveries-view]
    [nido.coordinator.view.review-queue :as review-queue-view]
@@ -211,9 +210,14 @@
         (take (count ids) branches))))
 
 (defn- option-actions
-  "One button per branch of a blocker's :options."
+  "One button per branch of a blocker's :options, lettered. A branch carrying :grants [:merge]
+   reads Land instead, as the gate's Land does at :published: picking it is the same act, the
+   person's grant to land, whatever the project and whatever the branch was called."
   [entry-seq options]
-  (lettered-actions option-action-ids entry-seq options (fn [_ opt] (:label opt))))
+  (mapv (fn [action opt]
+          (cond-> action (some #{:merge} (:grants opt)) (assoc :label "Land")))
+        (lettered-actions option-action-ids entry-seq options (fn [_ opt] (:label opt)))
+        options))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :boolean [:? :any] [:? :map]] :any]}
   gate-actions
@@ -273,7 +277,7 @@
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
   ([stage parked? _origin {:keys [bare? report-format options questions awaiting
-                                  gate-criterion reply-to several?]
+                                  gate-criterion reply-to several? landable?]
                            entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
@@ -308,11 +312,15 @@
            [(cond-> {:id :assert-gate :label "Assert gate" :kind :evidence :style :primary}
               gate-criterion (assoc :criterion gate-criterion))]
 
-           ;; Landing a published PR is a person's gesture, given as one button:
-           ;; the card's headline names the PR, and there is nothing to choose between.
+           ;; Landing is a person's gesture, given as one button: it grants the landing, and the
+           ;; seat lands by the procedure its project declares. Offered only where a grant has
+           ;; someone to act on it (`landable?`: activated, at :published); a drain's slice lands
+           ;; by its drain, and a workstream not activated by its own session.
            (= :land awaiting)
-           (cond-> [(cond-> {:id :land :label "Land" :kind :mutation :style :primary}
-                      entry-seq (assoc :seq entry-seq))]
+           (cond-> (if landable?
+                     [(cond-> {:id :land :label "Land" :kind :mutation :style :primary}
+                        entry-seq (assoc :seq entry-seq))]
+                     [])
              parked? (conj reply-action))
 
            :else
@@ -1599,6 +1607,11 @@
                                 :questions      (report/triage-questions report)
                                 :several?       (asks-several? report)
                                 :awaiting       awaiting
+                                ;; Land grants the landing to the seats, so it is offered only
+                                ;; where there are seats to act on it.
+                                :landable?      (and (= :published (:at (:position row)))
+                                                     (boolean (some-> (cws/read-ws project (:ws-id row))
+                                                                      standing/activated?)))
                                 :gate-criterion (get-in row [:phase :exit :criterion])
                                 ;; Whom a Reply reaches, in resolve-gate!'s order: a conductor's
                                 ;; open escalation before a parked agent.
@@ -3111,13 +3124,14 @@
     {:decision :answered-unresumed}))
 
 (defn- land!
-  "Hand the published PR to the merge lane, as `nido ship` does: a :ship envelope for the
-   workstream's environment session, which the daemon drives home with /drive-home.
+  "Grant the landing the gate offers: the person's :merge grant, recorded by
+   `conductor/grant-landing!`, which `conductor/instruct-landing!` then hands the seat to land by
+   its project's declared procedure. Nothing is landed here and no merge run is queued.
 
-   Refused when the position no longer owes a landing (:nothing-to-land — merged since, or
-   sent back), when the click names another record than the one owed (:land-stale), when a
-   merge Run already owns the workstream (:already-landing), and when no session holds the
-   branch (:no-session). Nothing is written on a refusal."
+   Refused when the position no longer owes a landing (:nothing-to-land — granted or merged since,
+   or sent back), when the click names another record than the one owed (:land-stale), and when
+   the workstream has nobody to land it — not activated, or not at :published (:not-landable).
+   Nothing is written on a refusal."
   [project ws-id entry-seq]
   (let [p (keyword (name project))]
     (cond
@@ -3126,13 +3140,11 @@
       (or (nil? entry-seq) (not= entry-seq (:seq (gate-report p ws-id))))
       {:decision :land-stale}
 
-      (ship/merge-run-in-flight? p ws-id) {:decision :already-landing}
-
       :else
-      (if-let [s (:name (environment p ws-id))]
-        (do (queue/enqueue! {:type :ship :project p :session s :ws-id ws-id})
-            {:decision :landing :session s})
-        {:decision :no-session}))))
+      (let [{:keys [granted refused]} (conductor/grant-landing! p ws-id)]
+        (if granted
+          {:decision :landing-granted :seq granted}
+          {:decision :not-landable :because refused})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   advance-phase!
