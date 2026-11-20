@@ -60,7 +60,7 @@
    [nido.review.tree :as review-tree]
    [nido.session.casualties :as casualties]
    [nido.session.reclaim :as reclaim]
-   [nido.vsdd.jj :as jj]
+   [nido.platform.jj :as jj]
    [nido.session.state :as sstate]
    [nido.session.profiles :as profiles]
    [nido.coordinator.work :as work]))

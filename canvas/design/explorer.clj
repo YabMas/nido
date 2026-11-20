@@ -12,7 +12,8 @@
    HIDES how the explorer is asked for — the project's fukan command with the `explore` verb — and
    how its port is learned: port 0 and the one line it announces once listening, which is also the
    only readiness signal there is. Like `design-check` it never reads the model; fukan draws it.
-   A directory rather than a revision, because a revision is a VCS question this band may not reach."
+   A directory rather than a revision, for the reason `diff` takes one: the caller holds the
+   revision and materializes it."
   (Operation start!
     "Start an explorer over a directory's declaration and answer its handle at once, or nil when
      the directory declares no design. It dies with the process that started it."

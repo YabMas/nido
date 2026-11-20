@@ -11,7 +11,7 @@
    [nido.review.codex :as codex]
    [nido.review.digest :as digest]
    [nido.review.prompts :as prompts]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (defn ^{:malli/schema [:=> [:cat :Finding] :string]}
   finding-id

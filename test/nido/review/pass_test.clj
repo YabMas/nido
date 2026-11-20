@@ -6,7 +6,7 @@
    [nido.review.codex :as codex]
    [nido.review.pass :as pass]
    [nido.review.prompts :as prompts]
-   [nido.vsdd.jj :as jj]
+   [nido.platform.jj :as jj]
    [nido.coordinator.record.state :as cstate]
    [nido.platform.core :as core]
    [babashka.fs :as fs]

@@ -28,12 +28,6 @@
     :tasks [["nido:bench:memory"        ":project <name> [:levers [kw...]] [:session <name>]"]
             ["nido:bench:memory:levers" "List known bench levers"]]}
 
-   {:title "VSDD"
-    :tasks [["nido:vsdd:run"      ":project-dir <path> :module-path <path>"]
-            ["nido:vsdd:resume"   ":project-dir <path> :run-id <id>"]
-            ["nido:vsdd:analyze"  ":project-dir <path> :run-id <id> [:model opus]"]
-            ["nido:vsdd:sweep"    ":project-dir <path> — run across all changed modules"]]}
-
    {:title "Project commands"
     :tasks [["nido:run" ":project <p> <session> <command-ref> — run an adopted command in the worktree"]]}
 

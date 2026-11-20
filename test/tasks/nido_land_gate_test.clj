@@ -8,7 +8,7 @@
             [nido.coordinator.daemon.supervisor :as sup]
             [nido.coordinator.daemon.restart :as restart]
             [nido.review.layers :as layers]
-            [nido.vsdd.jj :as jj]
+            [nido.platform.jj :as jj]
             [tasks.nido-land :as land]))
 
 ;; ── a real repository with a real origin ─────────────────────────────────────

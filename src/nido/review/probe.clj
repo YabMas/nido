@@ -35,7 +35,7 @@
    [nido.review.codex :as codex]
    [nido.review.prompt-shape :as shape]
    [nido.review.tree :as tree]
-   [nido.vsdd.jj :as jj])
+   [nido.platform.jj :as jj])
   (:import
    [java.util.concurrent Executors TimeUnit]))
 

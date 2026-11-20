@@ -25,7 +25,7 @@
    [nido.session.change :as change]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (defn- way-out
   "What to DO about a refusal, as commands rather than advice.

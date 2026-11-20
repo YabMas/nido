@@ -22,7 +22,7 @@
    [nido.review.verdict :as verdict]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (deftest parse-warden-decision-reads-per-finding-rulings
   (let [txt (str "Here is my call.\n\n```json\n"

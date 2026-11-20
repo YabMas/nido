@@ -24,7 +24,7 @@
    [clojure.string :as str]
    [nido.review.digest :as digest]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (def ^:private row-template
   "One tab-separated row per commit. Descriptions are deliberately NOT in here:

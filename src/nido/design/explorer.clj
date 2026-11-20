@@ -6,9 +6,8 @@
    where it is listening once it is, and stops it. Like `nido.design.check` it shells to the
    project's fukan command and never reads the model itself.
 
-   A directory rather than a revision, for the reason `nido.design.check/diff` takes one: a
-   revision is a VCS question this band may not reach, so the caller materializes one and hands
-   the result down."
+   A directory rather than a revision, for the reason `nido.design.check/diff` takes one: the
+   caller holds the revision, materializes it and hands the result down."
   (:require [babashka.process :as process]
             [clojure.java.io :as io]
             [clojure.string :as str]

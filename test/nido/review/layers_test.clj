@@ -5,7 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.review.layers :as layers]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (defn- log-out
   "Render rows the way the `row-template` does: commit \\t change \\t bookmarks."

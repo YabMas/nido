@@ -25,7 +25,7 @@
   {:about [dispatch! lane-conduct] :evidence "round"})
 
 (Claim one-shot-calls-stay-calls
-  "A one-shot agent call is a claude process that code in nido.review or nido.vsdd starts and waits on for a value its loop consumes — the review reviewers, warden, fixer and amender, the design-verdict judge and vsdd's agents among them — or that the board-title generator in nido.coordinator.lane.titles starts and waits on for a title. It runs as that process, never as a session dispatched to the substrate; only the loop that started it may continue it, as a review run resumes its fixer across its repair rounds, and conduct never drives it. Its command line limits the settings it loads to the user and project sources, so no settings.local.json — and with it neither nido's session event hook nor the supervisor briefing — reaches it, whatever directory it runs in."
+  "A one-shot agent call is a claude process that code in nido.review starts and waits on for a value its loop consumes — the review reviewers, warden, fixer and amender, the design-verdict judge among them — or that the board-title generator in nido.coordinator.lane.titles starts and waits on for a title. It runs as that process, never as a session dispatched to the substrate; only the loop that started it may continue it, as a review run resumes its fixer across its repair rounds, and conduct never drives it. Its command line limits the settings it loads to the user and project sources, so no settings.local.json — and with it neither nido's session event hook nor the supervisor briefing — reaches it, whatever directory it runs in."
   {:about [launch!] :evidence "round"})
 
 (Claim driver-is-recorded-not-inferred

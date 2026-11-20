@@ -29,7 +29,7 @@
    [nido.review.layers :as layers]
    [nido.review.pass :as pass]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (def ^:private base
   "What the fork point is taken with — the diff review's default base, so the tree a baseline

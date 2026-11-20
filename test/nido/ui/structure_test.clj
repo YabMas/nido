@@ -10,7 +10,7 @@
    [nido.ui.server :as server]
    [nido.ui.structure :as structure]
    [nido.ui.views :as views]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (use-fixtures :each (fn [t] (reset! @#'structure/held {}) (t) (reset! @#'structure/held {})))
 

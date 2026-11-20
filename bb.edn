@@ -259,26 +259,6 @@
            ;; its keys are babashka's internals and change between releases.
            (deref (promise)))}
 
-  nido:vsdd:run
-  {:requires ([tasks.nido-vsdd :as nido-vsdd])
-   :doc "Run VSDD loop: :project-dir <path> :module-path <path>"
-   :task (apply nido-vsdd/run *command-line-args*)}
-
-  nido:vsdd:resume
-  {:requires ([tasks.nido-vsdd :as nido-vsdd])
-   :doc "Resume an interrupted VSDD run: :project-dir <path> :run-id <id>"
-   :task (apply nido-vsdd/resume *command-line-args*)}
-
-  nido:vsdd:analyze
-  {:requires ([tasks.nido-vsdd :as nido-vsdd])
-   :doc "Analyze a VSDD run: :project-dir <path> :run-id <id> [:model opus]"
-   :task (apply nido-vsdd/analyze *command-line-args*)}
-
-  nido:vsdd:sweep
-  {:requires ([tasks.nido-vsdd :as nido-vsdd])
-   :doc "Run VSDD across all changed modules: :project-dir <path>"
-   :task (apply nido-vsdd/sweep *command-line-args*)}
-
   nido:ship
   {:requires ([tasks.nido-ship :as nido-ship])
    :doc "Hand the current session's branch to nido's merge lane (drives /drive-home autonomously, serialized). Run from the session home/worktree."

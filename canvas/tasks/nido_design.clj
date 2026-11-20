@@ -7,7 +7,7 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.vsdd.core :as jj]
+            [canvas.platform.jj :as jj]
             [fukan.common.typing.malli]))
 
 (Module nido-design

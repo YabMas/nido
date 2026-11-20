@@ -5,7 +5,7 @@
             [canvas.design.check :as check]
             [canvas.design.explorer :as explorer]
             [canvas.platform.project :as project]
-            [canvas.vsdd.core :as jj]
+            [canvas.platform.jj :as jj]
             [fukan.common.typing.malli]))
 
 (Module ui-structure

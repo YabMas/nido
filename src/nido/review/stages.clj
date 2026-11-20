@@ -26,7 +26,7 @@
    [nido.review.prompts :as prompts]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (def stage-statuses
   "Every status these stages end a run on themselves, beside the ones the engine

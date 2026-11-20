@@ -10,7 +10,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.review.digest :as digest]
    [nido.review.settled :as settled]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (def ^:private c1 {:id "c1" :property "only the aggregate sums lines"
                    :falsified-by "a second summing path"})

@@ -47,7 +47,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
    [nido.review.digest :as digest]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (def ^:private content-id
   "What every line of `jj debug tree` carries for the entry it lists: `FileId(\"…\")`,

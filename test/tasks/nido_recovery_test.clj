@@ -6,7 +6,7 @@
    [nido.coordinator.record.workstream :as cws]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]
+   [nido.platform.jj :as jj]
    [tasks.nido-recovery :as recovery]))
 
 (defn- land-in [{:keys [project diagnosis]}]

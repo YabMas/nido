@@ -15,7 +15,7 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.workstream :as cws]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (defn- project-for-dir
   "The registered project whose directory contains `dir` — how a check run in the project's own

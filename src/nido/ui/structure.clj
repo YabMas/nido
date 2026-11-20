@@ -18,7 +18,7 @@
             [nido.design.explorer :as explorer]
             [nido.platform.project :as project]
             [nido.ui.stylesheet :as css]
-            [nido.vsdd.jj :as jj]))
+            [nido.platform.jj :as jj]))
 
 (def default-view
   "The view the slice opens on: the Bands and what each may depend on — the system at the altitude

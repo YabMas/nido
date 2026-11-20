@@ -19,7 +19,7 @@
 (Band Design
   "Reading a project's declared design and checking its code against it.
 
-   A capability band over the floor, like Vsdd: it shells to fukan and reads
+   A capability band over the floor: it shells to fukan and reads
    findings back. It is deliberately NOT a floor namespace despite everything
    above eventually wanting it — high fan-in is not what makes something
    generic, and a seam that knows what a `canvas/` is belongs to nido, not to
@@ -37,11 +37,6 @@
   "Bringing a development session up and down: worktrees, services, the session home."
   {:prefix ["nido.session." "nido.bench."]
    :may-depend [Platform Integration Design]})
-
-(Band Vsdd
-  "Parallel sweep orchestration across dirty modules."
-  {:prefix ["nido.vsdd."]
-   :may-depend [Platform]})
 
 ;; ── the work plane, floor first ──────────────────────────────────────────────
 ;;
@@ -169,7 +164,7 @@
 (Band Review
   "The judgment loops over a record, a design, a diff."
   {:prefix ["nido.review."]
-   :may-depend [Platform Session Vsdd Design Record Report Control Agent]})
+   :may-depend [Platform Session Design Record Report Control Agent]})
 
 (Band Boot
   "The daemon composition root: it wires the other bands together, and is reached
@@ -182,7 +177,7 @@
    reverse edge real; it now takes a dashboard lifecycle as an argument and the
    task supplies both. The declaration is what forced that."
   {:prefix ["nido.boot."]
-   :may-depend [Platform Integration Session Vsdd Review
+   :may-depend [Platform Integration Session Review
                 Record Source Daemon Lane WorkPlane Report Control Agent Executor]})
 
 (Band Surface
@@ -200,10 +195,10 @@
    rather than the one declared. A reader trusting it believed in a seal that was never enforced,
    and the conformance law checks the declaration. What is actually reached beneath: `Session` in
    seventeen live call sites across five namespaces, and `Platform` plus `Integration` in sixteen
-   more. Closing the Session edge is FU-37, and the four permissions nothing uses at all —
-   `Vsdd`, `Review`, `Boot`, `Design` — are FU-38."
+   more. Closing the Session edge is FU-37, and the three permissions nothing uses at all —
+   `Review`, `Boot`, `Design` — are FU-38."
   {:prefix ["nido.ui."]
-   :may-depend [Platform Integration Session Vsdd Review Boot Design
+   :may-depend [Platform Integration Session Review Boot Design
                 View WorkPlane Control Report]})
 
 (Band Tasks
@@ -229,5 +224,5 @@
    do; the rest need nothing. Forgetting it is not silent any more: fukan's
    `:correspondence/module-ambiguous` fails the check."
   {:prefix ["tasks."]
-   :may-depend [Platform Integration Session Vsdd Review Boot Design Surface
+   :may-depend [Platform Integration Session Review Boot Design Surface
                 Record Source Daemon View Lane WorkPlane Report Control Agent Executor]})

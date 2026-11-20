@@ -9,7 +9,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.review.provenance :as provenance]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (deftest names-the-tree-the-running-loop-came-from
   (let [{:keys [root]} (provenance/loaded-from)]

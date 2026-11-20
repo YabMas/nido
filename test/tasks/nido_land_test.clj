@@ -13,7 +13,7 @@
    [nido.review.stages :as stages]
    [nido.session.change :as change]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]
+   [nido.platform.jj :as jj]
    [tasks.nido-design :as nido-design]
    [tasks.nido-land :as land]))
 

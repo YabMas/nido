@@ -10,7 +10,7 @@
    [nido.review.layers :as layers]
    [nido.review.settled :as settled]
    [nido.review.tree :as tree]
-   [nido.vsdd.jj :as jj]))
+   [nido.platform.jj :as jj]))
 
 (defn- repo!
   "A real repo whose `main` holds src/a.clj and canvas/d.clj, and a session-like

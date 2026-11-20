@@ -392,8 +392,9 @@
    now stands, which is the same question for a branch that rewrote `canvas/` and one that
    touched only code — so a design change was the one change nothing here could show.
 
-   A DIRECTORY, not a revision. Materializing a revision is a VCS question and the Design band
-   may reach nothing but Platform; the caller materializes and hands the result down.
+   A DIRECTORY, not a revision: this seam reads a declaration and never learns how it was
+   fetched. The caller holds the revision, materializes it with
+   `nido.platform.jj/materialize-spec-dirs!` and hands the result down.
 
    Both ends are rendered by fukan and diffed as TEXT, which is honest about what it is: a
    reordering would read as a change. Two renderings of the same specs are byte-identical across

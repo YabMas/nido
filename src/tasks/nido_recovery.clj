@@ -15,7 +15,7 @@
    [nido.review.stages :as stages]
    [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]
+   [nido.platform.jj :as jj]
    [tasks.nido-land :as nido-land]))
 
 (defn- cwd-of [opts]

@@ -22,7 +22,7 @@
    [nido.review.stages :as stages]
    [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
-   [nido.vsdd.jj :as jj]
+   [nido.platform.jj :as jj]
    [tasks.nido-review :as t]))
 
 (defn- with-tmp-nido-root

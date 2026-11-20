@@ -160,10 +160,10 @@
     "What this worktree changes about the declared design, against a directory holding the spec
      dirs as they were at some base.
 
-     A DIRECTORY rather than a revision, and that is a band boundary rather than a convenience:
-     materializing a revision is a VCS question, the Design band may reach nothing but Platform,
-     and a seam that learned what a revision is would have to reach past that. The caller —
-     a task, which may reach everything — materializes and hands the result down.
+     A DIRECTORY rather than a revision: the seam reads a declaration and never learns how it
+     was fetched, so it runs without a repository and is tested without one. The caller holds the
+     revision, materializes it with `nido.platform.jj/materialize-spec-dirs!` and hands the
+     result down.
 
      Composed from two renderings and a textual diff. nido gains no opinion about what a design
      IS by doing this: it never parses the model, names no sort, and would diff a vocabulary it
