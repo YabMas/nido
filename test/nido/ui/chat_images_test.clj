@@ -1,6 +1,7 @@
 (ns nido.ui.chat-images-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [nido.libraries.ui.block :as block]
             [nido.session.chat :as chat]
             [nido.ui.chat-host :as host]
             [nido.ui.components.chat :as panel]
@@ -13,10 +14,10 @@
 
 (defn- bytes-of [& xs] (byte-array (map unchecked-byte xs)))
 
-(def ^:private routes (#'side-chat/routes-under ["_chat"]))
+(def ^:private view (#'side-chat/view-under ["_chat"]))
 
 (defn- fresh-host []
-  (host/host {:project "nido" :session "test" :name (str (gensym "img"))} routes
+  (host/host {:project "nido" :session "test" :name (str (gensym "img"))} view
              ["_imgtest" (str (gensym))] (constantly [])))
 
 (defn- post-image [h ^bytes bs]
@@ -60,7 +61,7 @@
     (testing "a send takes the staged images with the words, and clears them"
       (with-redefs [chat/send! (fn [_ text refs images] (reset! sent [text refs images]) true)]
         (host/handle! h {:request-method :post :uri (str "/" (str/join "/" (:prefix h)) "/send")
-                         :body (ByteArrayInputStream. (.getBytes "{\"nidochatText\":\"what is this?\"}"))}))
+                         :body (ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"what is this?\"}}}"))}))
       (is (= "what is this?" (first @sent)))
       (is (= ["image/png"] (map :mime (nth @sent 2))))
       (is (empty? @(:staged h))))))
@@ -70,7 +71,7 @@
     (post-image h png-bytes)
     (with-redefs [chat/send! (fn [& _] nil)]
       (host/handle! h {:request-method :post :uri (str "/" (str/join "/" (:prefix h)) "/send")
-                       :body (ByteArrayInputStream. (.getBytes "{\"nidochatText\":\"hi\"}"))}))
+                       :body (ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"hi\"}}}"))}))
     (is (= 1 (count @(:staged h))))))
 
 (deftest a-message-carries-at-most-four-images
@@ -85,26 +86,30 @@
                        :uri (str "/" (str/join "/" (:prefix h)) "/unattach/" (:digest (first @(:staged h))))})
       (is (= 3 (count @(:staged h)))))))
 
-(deftest attaching-is-offered-only-where-the-routes-say
-  (let [with    (str (host/html (panel/composer "nido-chat" routes)))
-        without (str (host/html (panel/composer "catalog-chat" (dissoc routes :attach-url))))]
-    (is (str/includes? with "nido-chat-attachments"))
+(defn- panel-html [v]
+  (host/html (block/render panel/panel (:id v) {:transcript {:items []} :attach? (boolean (:attach? v))}
+                           {} (:router v))))
+
+(deftest attaching-is-offered-only-where-the-view-says
+  (let [with    (panel-html view)
+        without (panel-html (assoc view :id "catalog-chat" :attach? false))]
+    (is (str/includes? with "chat:nido-chat:attachments"))
     (is (str/includes? with "type=\"file\""))
     (is (not (str/includes? without "type=\"file\"")))
-    (is (not (str/includes? without "-attachments")))
-    (is (nil? (host/handle! (assoc (fresh-host) :routes (dissoc routes :attach-url))
+    (is (not (str/includes? without ":attachments")))
+    (is (nil? (host/handle! (assoc (fresh-host) :view (assoc view :attach? false))
                             {:request-method :post :uri "/x/attach" :body nil})))))
 
 (deftest images-are-shown-by-url-never-inline
   (let [img  {:mime "image/png" :data "iVBORw0KGgoAAAA=" :digest "abc"}
-        item (str (host/html (panel/chat-item {:id "i0" :kind :user :text "look" :refs [] :images [img]} routes)))
-        chips (str (host/html (panel/attachments "nido-chat" [img] routes)))]
+        item (str (host/html (host/part view :item {:item {:id "i0" :kind :user :text "look" :refs [] :images [img]}})))
+        chips (str (host/html (host/part view :attachments {:staged [img]})))]
     (is (str/includes? item "src=\"/_chat/image/abc\""))
     (is (str/includes? chips "src=\"/_chat/image/abc\""))
     (is (not (str/includes? (str item chips) "iVBORw0KGgo")))
     (is (not (str/includes? (str item chips) "data:image")))
     (testing "a message without images renders no image markup"
-      (is (not (str/includes? (str (host/html (panel/chat-item {:id "i0" :kind :user :text "look" :refs [] :images []} routes)))
+      (is (not (str/includes? (str (host/html (host/part view :item {:item {:id "i0" :kind :user :text "look" :refs [] :images []}})))
                               "chat-imgs"))))))
 
 (deftest the-limit-holds-against-concurrent-attaches
@@ -135,7 +140,7 @@
       (with-redefs [chat/send! (fn [_ _ _ images] (deliver entered true) (deref release 2000 nil)
                                  (reset! sent images) true)]
         (let [sending   (future (host/handle! h {:request-method :post :uri (uri "/send")
-                                                 :body (ByteArrayInputStream. (.getBytes "{\"nidochatText\":\"hi\"}"))}))
+                                                 :body (ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"hi\"}}}"))}))
               _         (deref entered 2000 nil)
               unattach  (future (host/handle! h {:request-method :post :uri (uri (str "/unattach/" d))}))]
           (Thread/sleep 100)
@@ -170,7 +175,7 @@
       (let [resetting (future (host/handle! h {:request-method :post :uri (uri "/reset")}))
             _         (deref entered 2000 nil)
             sending   (future (host/handle! h {:request-method :post :uri (uri "/send")
-                                               :body (ByteArrayInputStream. (.getBytes "{\"nidochatText\":\"hi\"}"))}))]
+                                               :body (ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"hi\"}}}"))}))]
         (Thread/sleep 100)
         (is (not (realized? sending)) "the send waits for the reset it raced")
         (deliver release true)

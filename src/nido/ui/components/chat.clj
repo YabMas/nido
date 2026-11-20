@@ -1,47 +1,63 @@
 (ns nido.ui.components.chat
-  "A conversation with an agent, as a panel: its transcript, the state of the running turn, then
-   the composer.
+  "A conversation with an agent, as a side panel: a bar with its toggle, then its transcript, the
+   state of the running turn, and the composer; and beside it, the bar saying what the
+   conversation changed that main does not have.
+
+   Registered with the UI library as two blocks: `panel`, the conversation, and `change-bar`, its
+   unlanded change. Both render over props and the page's router, and every control is an action
+   one of them declares, so the panel names no URL and no posted field of its own: a host routes
+   the actions and reads a post back through `decode`.
 
    HIDES how a transcript reads — the order of its items, the turn's status row, how a reply
    streams, reasoning and tool calls disclosed, the permission prompt's buttons, the composer and
-   its pick chips — and the page-state keys the composer is held under.
+   its pick chips. Reads nothing: it takes a transcript value (`nido.acp.transcript` describes
+   it, and this namespace reads only that).
 
-   Reads nothing. It takes a transcript value (`nido.acp.transcript` describes it, and this
-   namespace reads only that) or a vector of picks, plus where its controls post, so the catalog,
-   a workstream pane or a question card can each host one without the panel knowing which. Every
-   item renders with its transcript id as its DOM id, and the status row and the chips each have
-   one id of their own, which is what lets a stream patch one of them in place.
+   A stream keeps a panel live by patching its parts — an item, the status row, the chips, the
+   staged images, the whole log. The panel renders one of them alone when its props name it in
+   `:part` (`:item` with the item in `:item`), on the same instance, so the part carries the names
+   the whole panel gives it and the patch lands in place.
 
    Disclosure follows what is happening: a thought is open while it streams and collapsed once it
    is finished; a tool call is collapsed unless it failed. The status row names the turn's phase
    from the transcript alone; the seconds it shows are counted by the browser from the turn's
    start, which the transcript carries.
 
-   A panel whose routes carry `:attach-url` also offers attaching images — a picker, paste into the
-   text box, drop onto the panel — each uploaded as it is chosen, raw, by the browser's own fetch;
-   the images staged so far are the host's, rendered by `attachments` and patched in by the stream.
-   Images, staged or sent, are only ever `<img>`s naming `(:image-url routes)` of their digest: no
-   image's bytes are in the panel's markup.
+   A panel with `:attach?` also offers attaching images — a picker, paste into the text box, drop
+   onto the panel — each uploaded as it is chosen, raw, by the browser's own fetch, to where the
+   router sends `:attach`; the images staged so far are the host's, rendered by `attachments` and
+   patched in by the stream. Images, staged or sent, are only ever `<img>`s naming the router's
+   `:image` of their digest: no image's bytes are in the panel's markup.
 
-   The composer's page state is three signals under the panel's key — the draft, the picks (a
-   JSON array, each pick `{block scene path label}` and whatever else its host keeps) and whether a
-   turn is running — named by `signals`. A server reading a send reads them back by those names;
-   one that renders the chips (`picks`) is posted the picks signal. Send and Stop switch on the
-   busy signal, so a turn starting or ending never re-renders the composer and never loses a
-   draft or a pick."
+   The composer's page state is the panel's signals — the draft (`:text`), the picks (`:picks`, a
+   JSON array, each pick `{block scene path label}` and whatever else its host keeps), whether a
+   turn is running (`:busy`), whether the side panel is open (`:open`) and whether New
+   conversation is asking (`:reset`) — seeded by the panel's morph contract, so a patch never
+   resets them. Send and Stop switch on the busy signal, so a turn starting or ending never
+   re-renders the composer and never loses a draft or a pick."
   (:require [clojure.string :as str]
+            [nido.libraries.ui.block :as block]
+            [nido.libraries.ui.names :as names]
             [nido.ui.markdown :as md]))
 
-(defn ^{:malli/schema [:=> [:cat :string] :map]}
-  signals
-  "The names of a panel's page-state signals — `:text` (the draft), `:picks` (the picks, as JSON
-   text), `:busy` (whether a turn is running) and `:open` (whether a `side` panel is open) — for
-   the panel `id`. Each panel on a page gets its own, so two panels never share a draft."
-  [id]
-  (let [k (str/replace id #"[^A-Za-z0-9]" "")]
-    {:text (str k "Text") :picks (str k "Picks") :busy (str k "Busy") :open (str k "Open")}))
+(def ^:private scope
+  "The panel's scope: what every name it derives, and the change bar's reach to its busy signal,
+   are derived under."
+  :chat)
 
-(defn- item-dom-id [panel-id item] (str panel-id "-" (:id item)))
+(def ^:private panel-actions
+  {:send       [:post :send {:text  [:signal :text :string]
+                             :picks [:signal :picks :string {:optional true}]}]
+   :cancel     [:post :cancel {}]
+   :reset      [:post :reset {}]
+   :stream     [:get :stream {}]
+   :answer     [:post :permission {}]
+   :unpick     [:post :unpick {:picks [:signal :picks :string]}]
+   :unattach   [:post :unattach {}]
+   :sync-picks [:post :picks {:picks [:signal :picks :string]}]})
+
+;; ---------------------------------------------------------------------------
+;; Items
 
 (def ^:private tool-status
   "A tool call's status as its mark: a glyph, the class that colours it, and its words."
@@ -62,7 +78,9 @@
         (when (seq old) [:pre.chat-diff-old old])
         [:pre.chat-diff-new new]])]))
 
-(defn- permission-item [{:keys [id title options answer]} {:keys [answer-url]}]
+
+
+(defn- permission-item [{:keys [title options answer] item-id :id} {:keys [action]}]
   (if answer
     [:div.chat-perm.answered
      [:span.chat-st.chat-st-ok {:title "answered"} "✓"]
@@ -76,7 +94,7 @@
                                 (:allow_once :allow_always) "btn btn-primary"
                                 (:reject_once :reject_always) "btn btn-danger"
                                 "btn")
-                       "data-on:click" (str "@post('" (answer-url id oid) "')")}
+                       "data-on:click" (action :answer {:params {:item item-id :option oid}})}
               oname]))]))
 
 (defn- sent-picks
@@ -90,39 +108,44 @@
                        refs))))
 
 (defn- sent-images
-  "The images a sent message carried, as thumbnails that open the image itself — when the panel's
-   routes say where an image is fetched from; a panel that has none shows none."
-  [images {:keys [image-url]}]
-  (when (and image-url (seq images))
+  "The images a sent message carried, as thumbnails that open the image itself — on a panel that
+   offers attaching; one that does not shows none."
+  [images {:keys [props router]}]
+  (when (and (:attach? props) (seq images))
     (into [:div.chat-imgs]
-          (for [{:keys [digest]} images]
-            [:a {:href (image-url digest) :target "_blank" :rel "noopener"}
-             [:img.chat-img {:src (image-url digest) :alt "Attached image" :loading "lazy"}]]))))
+          (for [{:keys [digest]} images
+                :let [src (router :image {:digest digest})]]
+            [:a {:href src :target "_blank" :rel "noopener"}
+             [:img.chat-img {:src src :alt "Attached image" :loading "lazy"}]]))))
 
-(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
-  chat-item
-  "One transcript item, under the DOM id the panel gives it. `routes` carries the panel's `:id`
-   and `:answer-url`, a function of (item id, option id) giving where answering a permission
-   request posts."
-  [item {:keys [id] :as routes}]
-  (let [dom-id (item-dom-id id item)]
+(defn- item-attrs
+  "The attrs of one transcript item: a part of its own, named by the item's transcript id, which
+   is what lets a stream morph it in place."
+  [{:keys [id]} item]
+  (assoc (names/part-attrs scope id (keyword (str "item-" (:id item)))) "data-part" "item"))
+
+(defn- render-item [kit item]
+  (let [a (item-attrs kit item)]
     (case (:kind item)
-      :user       [:div.chat-msg.chat-you {:id dom-id}
+      :user       [:div.chat-msg.chat-you a
                    (sent-picks (:refs item))
-                   (sent-images (:images item) routes)
+                   (sent-images (:images item) kit)
                    (md/render (:text item))]
-      :agent      [:div.chat-msg.chat-agent {:id dom-id}
+      :agent      [:div.chat-msg.chat-agent a
                    (md/render (:text item))
                    (when (:streaming? item) [:span.chat-caret {:title "writing"} "▍"])]
-      :thought    [:details.chat-thought (cond-> {:id dom-id} (:streaming? item) (assoc :open true))
+      :thought    [:details.chat-thought (cond-> a (:streaming? item) (assoc :open true))
                    [:summary (if (:streaming? item) "Thinking…" "Thought")]
                    [:div.chat-thought-text (md/render (:text item))]]
-      :tool       [:div {:id dom-id} (tool-item item)]
-      :permission [:div {:id dom-id} (permission-item item routes)]
-      :error      [:div.chat-err {:id dom-id} [:span.chat-st.chat-st-failed {:title "failed"} "⚠"]
+      :tool       [:div a (tool-item item)]
+      :permission [:div a (permission-item item kit)]
+      :error      [:div.chat-err a [:span.chat-st.chat-st-failed {:title "failed"} "⚠"]
                    [:span (:text item)]]
-      :note       [:p.chat-note {:id dom-id} (:text item)]
-      [:div {:id dom-id}])))
+      :note       [:p.chat-note a (:text item)]
+      [:div a])))
+
+;; ---------------------------------------------------------------------------
+;; The turn's status
 
 (defn- phase
   "What a running turn is doing now, read off its transcript: nothing yet is waiting, a request
@@ -146,14 +169,9 @@
    the panel reads no clock."
   "var s = Math.max(0, Math.round((Date.now() - Number(el.dataset.since)) / 1000)); el.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's'")
 
-(defn ^{:malli/schema [:=> [:cat :string :Conversation] :any]}
-  turn-status
-  "The panel's status row, under the DOM id `<id>-status`: while a turn runs, its phase — waiting,
-   thinking, running a named tool, writing, waiting for the person's answer, or working — and the
-   seconds since it started; empty when no turn runs. A polite live region, so a screen reader
-   hears the turn start, change phase and end, and never each token."
-  [id {:keys [busy? started-at] :as transcript}]
-  [:div.chat-status {:id (str id "-status") :role "status" :aria-live "polite"}
+
+(defn- render-status [{:keys [part]} {:keys [busy? started-at] :as transcript}]
+  [:div.chat-status (merge (part :status) {:role "status" :aria-live "polite"})
    (when busy?
      (let [[ph label] (phase transcript)]
        (list [:span {:class (str "chat-spin chat-spin-" (name ph)) :aria-hidden "true"}]
@@ -163,34 +181,27 @@
                                     "data-init" elapsed-js
                                     "data-on-interval__duration.1s" elapsed-js}]))))])
 
-(defn ^{:malli/schema [:=> [:cat :string [:sequential :map] :map] :any]}
-  picks
-  "The composer's pick chips, under the DOM id `<id>-picks`: one per pick, numbered from 1 in the
-   order given — the number the host marks the same element with — each with its label and a
-   control that posts to `(:unpick-url routes)` of its index. Nothing when there are none."
-  [id ps {:keys [unpick-url]}]
-  (into [:div.chat-picks {:id (str id "-picks")}]
+;; ---------------------------------------------------------------------------
+;; The composer
+
+(defn- render-picks [{:keys [part action]} ps]
+  (into [:div.chat-picks (part :picks)]
         (map-indexed (fn [i {:keys [label title]}]
                        [:span.chat-pick {:title (or title label)}
                         [:span.chat-pick-n (inc i)]
                         [:span.chat-pick-l label]
                         [:button.chat-pick-x {:title "Remove" :type "button"
-                                              "data-on:click" (str "@post('" (unpick-url i) "')")}
+                                              "data-on:click" (action :unpick {:params {:index i}})}
                          "✕"]])
                      ps)))
 
-(defn ^{:malli/schema [:=> [:cat :string [:sequential :map] :map] :any]}
-  attachments
-  "The composer's staged images, under the DOM id `<id>-attachments`: one chip per image, a
-   thumbnail from `(:image-url routes)` of its digest, with a control that posts to
-   `(:unattach-url routes)` of it. Empty when none are staged."
-  [id images {:keys [image-url unattach-url]}]
-  (into [:div.chat-attachments {:id (str id "-attachments")}]
+(defn- render-attachments [{:keys [part action router]} images]
+  (into [:div.chat-attachments (part :attachments)]
         (for [{:keys [digest]} images]
           [:span.chat-att
-           [:img {:src (image-url digest) :alt "Image to send"}]
+           [:img {:src (router :image {:digest digest}) :alt "Image to send"}]
            [:button.chat-att-x {:type "button" :title "Remove" :aria-label "Remove image"
-                                "data-on:click" (str "@post('" (unattach-url digest) "')")}
+                                "data-on:click" (action :unattach {:params {:digest digest}})}
             "✕"]])))
 
 (def ^:private attach-types
@@ -239,37 +250,37 @@
     var fs = files(e.dataTransfer); if (fs.length) { e.preventDefault(); upload(fs); } });
 })(el)")
 
-(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
-  composer
-  "The composer, under the DOM id the panel gives it: the pick chips, the staged images and the
-   attach control when `routes` carry `:attach-url`, the text box, and Send — or Stop while a turn
-   runs, switched by the busy signal rather than by re-rendering."
-  [id {:keys [send-url cancel-url attach-url] :as routes}]
-  (let [{:keys [text busy]} (signals id)]
-    [:div.chat-compose (cond-> {:id (str id "-compose")}
-                         attach-url (assoc "data-attach-url" attach-url
-                                           "data-attach-max" (str attach-max-bytes)
-                                           "data-attach-types" (str/join " " attach-types)
-                                           "data-init" attach-js))
-     (picks id [] routes)
-     (when attach-url
-       (list (attachments id [] routes)
-             [:p.chat-attach-err {:id (str id "-attach-err") :role "alert"}]))
+
+(defn- render-composer [{:keys [props part signal action router] :as kit}]
+  (let [{:keys [attach? picks staged]} props
+        busy (signal :busy)]
+    [:div.chat-compose (cond-> (part :compose)
+                         attach? (assoc "data-attach-url" (router :attach nil)
+                                        "data-attach-max" (str attach-max-bytes)
+                                        "data-attach-types" (str/join " " attach-types)
+                                        "data-init" attach-js))
+     (render-picks kit (or picks []))
+     (when attach?
+       (list (render-attachments kit (or staged []))
+             [:p.chat-attach-err (merge (part :attach-err) {:role "alert"})]))
      [:div.chat-field
-      [:textarea {"data-bind" text :rows 3 :placeholder "Message the agent"
+      [:textarea {"data-bind" (signal :text) :rows 3 :placeholder "Message the agent"
                   "data-on:keydown" (str "if (!$" busy " && evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) "
-                                         "{ evt.preventDefault(); @post('" send-url "') }")}]
+                                         "{ evt.preventDefault(); " (action :send) " }")}]
       [:div.chat-actions
-       (when attach-url
+       (when attach?
          (list [:input {:type "file" :accept (str/join "," attach-types) :multiple true :hidden true
                         :aria-hidden "true" :tabindex "-1"}]
                [:button.btn.chat-attach {:type "button" :title "Attach an image — or paste or drop one"
                                          :aria-label "Attach an image"}
                 "Image"]))
        [:button.btn.btn-primary {"data-show" (str "!$" busy)
-                                 "data-on:click" (str "@post('" send-url "')")} "Send"]
+                                 "data-on:click" (action :send)} "Send"]
        [:button.btn {"data-show" (str "$" busy)
-                     "data-on:click" (str "@post('" cancel-url "')")} "Stop"]]]]))
+                     "data-on:click" (action :cancel)} "Stop"]]]]))
+
+;; ---------------------------------------------------------------------------
+;; The log
 
 (def ^:private scroll-js
   "How the log scrolls — brian's chat model, for a log that scrolls itself:
@@ -315,35 +326,12 @@
   room(); bottom();
 })(el)")
 
-(defn ^{:malli/schema [:=> [:cat :string] :string]}
-  log-id
-  "The DOM id of the panel `id`'s log: what a stream appends a new item to, by selector."
-  [id]
-  (str id "-log"))
 
-(defn ^{:malli/schema [:=> [:cat :string [:sequential :map] :map] :any]}
-  chat-log
-  "The transcript, under the DOM id `log-id` gives: each item as `chat-item` renders it, in a log
-   that scrolls the way `scroll-js` says. A stream re-rendering the whole log renders it with this,
-   so the morph keeps the log's scrolling and the page's log is always the panel's own markup."
-  [id items routes]
-  (into [:div.chat-log {:id (log-id id) "data-init" scroll-js}] (map #(chat-item % routes) items)))
+(defn- render-log [{:keys [part] :as kit} items]
+  (into [:div.chat-log (assoc (part :log) "data-init" scroll-js)] (map #(render-item kit %) items)))
 
-(defn ^{:malli/schema [:=> [:cat :Conversation :map] :any]}
-  chat-panel
-  "The whole panel: its transcript, the turn's status row, then the composer. `opts` carries the
-   panel's `:id`, the `:send-url` and `:cancel-url` its buttons post to, `:answer-url` (see
-   `chat-item`), `:unpick-url` (see `picks`), and the `:stream-url` that keeps it live, or nil
-   for a panel that is not — a catalog scene."
-  [{:keys [items busy?] :as transcript} {:keys [id stream-url] :as opts}]
-  (let [{:keys [text picks busy]} (signals id)]
-    [:section.chat (cond-> {:id id
-                            "data-signals" (str "{" text ": '', " picks ": '[]', " busy ": "
-                                                (boolean busy?) "}")}
-                     stream-url (assoc "data-init" (str "@get('" stream-url "')")))
-     (chat-log id items opts)
-     (turn-status id transcript)
-     (composer id opts)]))
+;; ---------------------------------------------------------------------------
+;; The panel
 
 (defn- panel-icon
   "A right-hand panel glyph with a chevron drawn by `chevron` (an SVG path): pointing in, the
@@ -355,56 +343,65 @@
    [:path {:d "M15 3v18"}]
    [:path {:d chevron}]])
 
-(defn ^{:malli/schema [:=> [:cat :Conversation :map :map] :any]}
-  side
-  "The panel as a side panel that opens and closes: a bar — the toggle, `:heading`, then the
-   hiccup in `:bar` — then the hiccup in `:top`, over the panel, with the hiccup in `:extra`
-   appended inside it. The toggle leads the bar, so it rides the panel's left edge; closed, the
-   toggle is all that shows.
 
-   Whether it is open is the panel's `:open` signal (see `signals`), declared here starting at
-   `:open?`, and the aside carries class `open` while it is. How wide it is, open or closed, is
-   the page's: give the closed column room for the toggle and the bar's padding, 58px.
-
-   Routes carrying `:reset-url` put New conversation in the bar, after the heading. Choosing it
-   asks in the bar itself — the conversation cannot be brought back — and only the ask's own
-   button posts. Both are hidden while a turn runs (the busy signal); the ask's state is the
-   page's alone, one signal, `<id>Reset`."
-  [transcript {:keys [id reset-url] :as routes} {:keys [open? heading bar top extra]}]
-  (let [{:keys [open busy]} (signals id)
-        confirm (str (str/replace id #"[^A-Za-z0-9]" "") "Reset")
+(defn- render-side
+  [{:keys [props part signal action] :as kit}]
+  (let [{:keys [transcript open? heading reset? bar top extra]} props
+        open    (signal :open)
+        busy    (signal :busy)
+        confirm (signal :reset)
         asking  (str "$" confirm " && !$" busy)]
-    (-> [:aside.chat-side {:class (when open? "open")
-                           :aria-label "Chat with the agent"
-                           "data-signals" (str "{" open ": " (boolean open?)
-                                               (when reset-url (str ", " confirm ": false")) "}")
-                           "data-class:open" (str "$" open)}
+    (-> [:aside.chat-side (merge (part :root)
+                                 {:class (when open? "open")
+                                  :aria-label "Chat with the agent"
+                                  "data-class:open" (str "$" open)})
          (into [:div.chat-side-bar
-                [:button.chat-toggle {:id (str id "-toggle") :type "button"
-                                      :title "Chat with the agent (⌘I)" :aria-label "Chat with the agent"
-                                      :aria-expanded (str (boolean open?))
-                                      "data-attr:aria-expanded" (str "$" open)
-                                      "data-on:click" (str "$" open " = !$" open)
-                                      "data-class:busy" (str "$" busy)}
+                [:button.chat-toggle (merge (part :toggle)
+                                            {:type "button"
+                                             :title "Chat with the agent (⌘I)" :aria-label "Chat with the agent"
+                                             :aria-expanded (str (boolean open?))
+                                             "data-attr:aria-expanded" (str "$" open)
+                                             "data-on:click" (str "$" open " = !$" open)
+                                             "data-class:busy" (str "$" busy)})
                  (panel-icon "chat-i-open" "m10 15-3-3 3-3")
                  (panel-icon "chat-i-close" "m8 9 3 3-3 3")
                  [:span.chat-spin {:aria-hidden "true"}]]
-                [:h1 (when reset-url {"data-show" (str "!(" asking ")")}) (or heading "Chat")]
-                (when reset-url
+                [:h1 (when reset? {"data-show" (str "!(" asking ")")}) (or heading "Chat")]
+                (when reset?
                   [:button.btn.chat-new {:type "button" :title "Start a new conversation"
                                          "data-show" (str "!$" confirm " && !$" busy)
                                          "data-on:click" (str "$" confirm " = true")}
                    "New conversation"])
-                (when reset-url
+                (when reset?
                   [:div.chat-new-ask {"data-show" asking}
                    [:span "Start over? This conversation can't be brought back."]
                    [:button.btn {:type "button" "data-on:click" (str "$" confirm " = false")} "Back"]
                    [:button.btn.btn-danger {:type "button"
-                                            "data-on:click" (str "$" confirm " = false; @post('" reset-url "')")}
+                                            "data-on:click" (str "$" confirm " = false; " (action :reset))}
                     "Start over"]])]
                bar)]
         (into top)
-        (conj (into (chat-panel transcript routes) extra)))))
+        (conj (into [:section.chat (cond-> (part :panel)
+                                     (:live? props) (assoc "data-init" (action :stream)))
+                     (render-log kit (:items transcript))
+                     (render-status kit transcript)
+                     (render-composer kit)]
+                    extra)))))
+
+(defn- render-panel
+  "The side panel, or the one part of it `:part` names — what a stream patches in place."
+  [{:keys [props] :as kit}]
+  (let [{:keys [transcript picks staged item]} props]
+    (case (:part props)
+      :log         (render-log kit (:items transcript))
+      :item        (render-item kit item)
+      :status      (render-status kit transcript)
+      :picks       (render-picks kit (or picks []))
+      :attachments (render-attachments kit (or staged []))
+      (render-side kit))))
+
+;; ---------------------------------------------------------------------------
+;; The change bar
 
 (defn- first-line [s] (some-> s str/trim not-empty str/split-lines first))
 
@@ -442,35 +439,18 @@
     (list (files-summary label (:files landing))
           [:p.chat-change-desc (or (first-line (:description landing)) [:em "Not described."])])))
 
-(defn ^{:malli/schema [:=> [:cat :string [:maybe :map] :map :map] :any]}
-  change-bar
-  "The conversation's unlanded change, under the DOM id `<id>-change`, and the two things a person
-   can do with it: publish it to main or throw it away, each asked to confirm first. Renders from
-   `change` — `{:description :files :rev :conflicts}`, see `nido.session.change`, or nil for none —
-   and `publishing`: `{:running? :step :landing}` while a publish runs, its last `land · ` step as
-   the status and `:landing` the change being landed (`{:description :files}`); `{:landed <commit>
-   :landing}` or `{:refused <why>}` for how the last one ended, `:landing` shown until the worktree
-   is back on main; `{:reverted? true}` after a throw-away; or {}
-   for nothing to say. Beside any of these, `:restart` carries the latest landing as
-   `nido.coordinator.control/latest-landing` answers it, shown whether or not there is a change or a
-   publish result: owed with what it waits for, running since a time, or unreadable.
-
-   While a change is being landed or awaits the worktree's return to main, `change` is what the
-   conversation made since — it stays editable, and is listed apart from what is landing. Publish posts the change's `:rev`, so it
-   lands only the change this bar showed; it is withheld while a publish runs, while the change has
-   no description (it would land unnamed) or holds a conflict, and both actions are withheld while
-   a turn runs (the panel's busy signal) — a change the agent is still making is not one to land or
-   lose. No change, nothing to say and no landing renders the empty element, which takes no space.
-   The confirm state is the page's alone: one signal, `<id>Confirm`."
-  [id change {:keys [running? step landing landed refused reverted? restart]} {:keys [publish-url revert-url]}]
-  (let [{:keys [busy]} (signals id)
-        confirm   (str (str/replace id "-" "") "Confirm")
+(defn- render-change-bar
+  [{:keys [id props part signal action]}]
+  (let [{:keys [change publishing]} props
+        {:keys [running? step landing landed refused reverted? restart]} publishing
+        busy      (names/signal scope id :busy)
+        confirm   (signal :confirm)
         desc      (first-line (:description change))
         conflicts (seq (:conflicts change))
         held      (or running? (nil? desc) conflicts)
         asking    (fn [v] (str "$" confirm " === '" v "'"))
-        publish   (str publish-url "?rev=" (:rev change))]
-    [:section.chat-change {:id (str id "-change") "data-signals" (str "{" confirm ": ''}")}
+        publish   (action :publish {:query (if-let [rev (:rev change)] {:rev rev} {})})]
+    [:section.chat-change (part :root)
      (cond
        running?
        (list
@@ -512,11 +492,238 @@
          [:span "Land this on main? Tests and the landing check run first."]
          [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
          [:button.btn.btn-primary {:type "button" "data-attr:disabled" (if held "true" (str "$" busy))
-                                   "data-on:click" (str "$" confirm " = ''; @post('" publish "')")}
+                                   "data-on:click" (str "$" confirm " = ''; " publish)}
           "Publish"]]
         [:div.chat-change-ask {"data-show" (asking "revert")}
          [:span "Throw these edits away? The conversation stays."]
          [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
          [:button.btn.btn-danger {:type "button" "data-attr:disabled" (if running? "true" (str "$" busy))
-                                  "data-on:click" (str "$" confirm " = ''; @post('" revert-url "')")}
+                                  "data-on:click" (str "$" confirm " = ''; " (action :revert))}
           "Throw away"]]))]))
+
+;; ---------------------------------------------------------------------------
+;; Scenes: literal conversations
+
+(defn- transcript
+  "A literal transcript of `items`, each given the id its position would give it. A running one
+   carries no start time — a scene renders the same markup at any hour, so it cannot say when
+   its turn began — and so shows no elapsed time; `nido.ui.components.chat-test` covers it."
+  [busy? & items]
+  {:busy? busy? :items (vec (map-indexed (fn [i item] (assoc item :id (str "i" i))) items))})
+
+(def ^:private chip
+  {:label "span.pos-chip" :title "position-chip · every position · span.pos-chip"})
+
+(def ^:private you
+  {:kind :user :text "Make the needs-you chip a little quieter — it shouts beside the title."
+   :refs [chip]})
+
+(def ^:private you-two
+  {:kind :user :text "These two should read as one family — same weight, same tint."
+   :refs [chip
+          {:label "span.row-stage" :title "row · a running workstream · span.row-stage"}]})
+
+(def ^:private reply
+  {:kind :agent :text "The chip takes `--needs` at full strength. I will move it to `--needs-dim`
+for the text and keep the tint, so it still reads as **yours** without competing with the title."})
+
+(def ^:private edit-call
+  {:kind :tool :title "Edit src/nido/ui/stylesheet.clj" :status :completed :tool-kind :edit
+   :body nil
+   :diffs [{:path "src/nido/ui/stylesheet.clj"
+            :old ".pos-you { background:var(--needs-bg); color:var(--needs); }"
+            :new ".pos-you { background:var(--needs-bg); color:var(--needs-dim); }"}]})
+
+(def ^:private asking
+  {:kind :permission :title "Run bb nido:test :only nido.ui" :request-id 3 :answer nil
+   :options [{:id "allow" :name "Allow" :kind :allow_once}
+             {:id "always" :name "Always allow" :kind :allow_always}
+             {:id "deny" :name "Deny" :kind :reject_once}]})
+
+(def ^:private two-images
+  [{:mime "image/png" :data "" :digest "a1"} {:mime "image/png" :data "" :digest "b2"}])
+
+(defn- open-panel [t & {:as more}] (merge {:transcript t :open? true :reset? true} more))
+
+(def ^:private a-change
+  {:description "Tighten the catalog chat's composer\n\nSend sits inside the message box."
+   :files [{:path "src/nido/ui/components/chat.clj" :status :modified}
+           {:path "src/nido/ui/stylesheet.clj" :status :modified}
+           {:path "src/nido/ui/catalog/new_scene.clj" :status :added}]})
+
+(def ^:private a-newer-change
+  {:description "Give the composer's Send a quieter border"
+   :files [{:path "src/nido/ui/stylesheet.clj" :status :modified}]
+   :rev "fedcba9876543210"})
+
+;; ---------------------------------------------------------------------------
+;; The registrations
+
+(def ^{:malli/schema :map}
+  panel
+  "A conversation with an agent, as a side panel."
+  (block/block
+   {:id      scope
+    :doc     "A conversation with an agent, as a side panel: a toggle that opens and closes it,
+              leading a bar over its transcript, the turn's status and the composer. Closed, the
+              toggle is all that shows; the page gives it the width. Reads a transcript value
+              only, so a workstream pane or the catalog can host one."
+    :render  render-panel
+    :props   [:map
+              [:transcript [:map [:items [:sequential :map]]]]
+              [:open? {:optional true} :boolean]
+              [:heading {:optional true} [:maybe :string]]
+              [:reset? {:optional true} :boolean]
+              [:attach? {:optional true} :boolean]
+              [:live? {:optional true} :boolean]
+              [:picks {:optional true} [:sequential :map]]
+              [:staged {:optional true} [:sequential :map]]
+              [:bar {:optional true} :any]
+              [:top {:optional true} :any]
+              [:extra {:optional true} :any]
+              [:part {:optional true} [:enum :log :item :status :picks :attachments]]
+              [:item {:optional true} :map]]
+    :css     ""
+    :actions panel-actions
+    :morph   {:signals (fn [{:keys [transcript open?]}]
+                         {:text "" :picks "[]" :busy (boolean (:busy? transcript))
+                          :open (boolean open?) :reset false})}
+    :scenes
+    [{:title "empty"
+      :note  "Nothing said yet: only the composer, waiting for the first message."
+      :props (open-panel (transcript false))}
+     {:title "sent, nothing back yet"
+      :note  "The moment after Send: the message with the elements it carried, and the status row
+              saying the turn is under way before the agent has said anything."
+      :props (open-panel (transcript true you-two))}
+     {:title "a streaming reply"
+      :note  "The reply grows, the caret marks where, the thought before it has folded, the status
+              row says writing, and Send is Stop."
+      :props (open-panel (transcript true you
+                                     {:kind :thought :text "The chip sits beside an --fs-lg title…"}
+                                     (assoc reply :text "The chip takes `--needs` at full strength. I will"
+                                            :streaming? true)))}
+     {:title "a finished reply"
+      :note  "A turn ended: the reply settled, a tool call folded, no status, and Send is back."
+      :props (open-panel (transcript false you edit-call reply))}
+     {:title "a permission request"
+      :note  "The agent asks before a tool runs: the request and its answers, each a button, and
+              the status row saying it waits for you."
+      :props (open-panel (transcript true you asking))}
+     {:title "an error"
+      :note  "A turn that failed: what went wrong, and the composer ready again."
+      :props (open-panel (transcript false you {:kind :error :text "The agent process stopped."}))}
+     {:title "closed"
+      :note  "Only the toggle, pointing in."
+      :props (open-panel (transcript false you reply) :open? false)}
+     {:title "closed while a turn runs"
+      :note  "The running dot on the toggle's corner says the agent is still at work."
+      :props (open-panel (transcript true you) :open? false)}
+     {:title "thinking"
+      :note  "The status row's phase while a thought streams."
+      :props (open-panel (transcript true you {:kind :thought :streaming? true :text "The chip sits…"}))}
+     {:title "running a tool"
+      :note  "The status row names the tool, by its title. A running and a failed call: the failed
+              one opens itself, so its output is read without a click."
+      :props (open-panel (transcript true you
+                                     {:kind :tool :title "Read src/missing.clj" :status :failed
+                                      :body "File does not exist." :diffs []}
+                                     {:kind :tool :title "bb nido:test" :status :in-progress :diffs []}))}
+     {:title "an answered permission request"
+      :note  "Once answered, a request folds to one line saying what was chosen."
+      :props (open-panel (transcript false you
+                                     {:kind :permission :title "Run bb nido:test" :answer "allow"
+                                      :request-id 3 :options [{:id "allow" :name "Allow" :kind :allow_once}]}))}
+     {:title "a long conversation"
+      :note  "Opens on the newest message, at the top, with the reply under it and the room the
+              reply still has. Scroll up for the earlier turns; your own scroll lets go."
+      :props (open-panel (transcript false you edit-call reply you-two reply))}
+     {:title "picks for the next message"
+      :note  "Two elements picked: their chips above the text box, numbered as the page marks them,
+              each removable."
+      :props (open-panel (transcript false) :picks (:refs you-two))}
+     {:title "images attached"
+      :note  "A panel that offers attaching: a sent image as a thumbnail that opens it, two staged
+              for the next message above the text box, and the Image control beside Send. The box
+              takes a pasted image and the panel a dropped one."
+      :props (open-panel (transcript false {:kind :user :text "What is wrong with this row?" :refs []
+                                            :images (subvec two-images 0 1)})
+                         :attach? true :staged two-images)}]}))
+
+(def ^{:malli/schema :map}
+  change-bar
+  "The conversation's unlanded change, and what a person can do with it."
+  (block/block
+   {:id      :chat-change
+    :doc     "The conversation's change that main does not have, above the log, and the two things
+              a person can do with it: Publish lands it on main, Cancel throws it away, each
+              confirmed in place. Its instance is the panel's id, and both actions are withheld
+              while that panel's turn runs. Props: `:change` — `{:description :files :rev
+              :conflicts}`, see `nido.session.change`, or nil for none — and `:publishing`:
+              `{:running? :step :landing}` while a publish runs, `:landing` the change being
+              landed; `{:landed <commit> :landing}` or `{:refused <why>}` for how the last ended,
+              `:landing` shown until the worktree is back on main; `{:reverted? true}` after a
+              throw-away; or {} — each beside `:restart`, the latest landing as
+              `nido.coordinator.control/latest-landing` answers it. While a change lands,
+              `:change` is what the conversation made since, listed apart. Publish posts the
+              change's `:rev` as its query, so it lands only the change the bar showed; it is
+              withheld while a publish runs, while the change has no description (it would land
+              unnamed) or holds a conflict. No change, nothing to say and no landing renders the
+              empty element, which takes no space."
+    :render  render-change-bar
+    :props   [:map [:change [:maybe :map]] [:publishing :map]]
+    :css     ""
+    :actions {:publish [:post :publish {}]
+              :revert  [:post :revert {}]}
+    :morph   {:signals {:confirm ""}}
+    :scenes
+    [{:title "no change"
+      :note  "Nothing unlanded and nothing to say: the empty element, which takes no space."
+      :props {:change nil :publishing {}}}
+     {:title "a change"
+      :note  "Its files fold away; what it would land as is its description."
+      :props {:change a-change :publishing {}}}
+     {:title "a change not yet described"
+      :note  "Publish waits: an undescribed change would land unnamed."
+      :props {:change (assoc a-change :description "") :publishing {}}}
+     {:title "publishing"
+      :note  "The landing verb's current step and the change it lands, which stays shown until the
+              worktree is back on main. Nothing has been made since Publish, so there is nothing
+              pending beside it."
+      :props {:change nil :publishing {:running? true :step "running bb nido:test at 0123456789ab"
+                                       :landing a-change}}}
+     {:title "publishing, with newer edits"
+      :note  "The chat stays open while a change lands: what the agent made since Publish is
+              listed apart, and waits for the landing before it can be published."
+      :props {:change a-newer-change
+              :publishing {:running? true :step "running bb nido:test at 0123456789ab"
+                           :landing a-change}}}
+     {:title "conflicting with main"
+      :note  "Brought onto main after a landing, the newer edits conflict: the paths are named,
+              and Publish waits for the agent to resolve them."
+      :props {:change (assoc a-newer-change :conflicts ["src/nido/ui/stylesheet.clj"])
+              :publishing {}}}
+     {:title "refused"
+      :note  "Why it did not land, with the change still there to fix and publish again."
+      :props {:change a-change :publishing {:refused "bb nido:test is red at the tip"}}}
+     {:title "published"
+      :note  "Landed: the commit it landed as, and nothing made since."
+      :props {:change nil :publishing {:landed "0123456789abcdef"}}}
+     {:title "published, restart owed"
+      :note  "The landing's restart is owed, and the bar names what the daemon waits for."
+      :props {:change nil
+              :publishing {:landed  "0123456789abcdef"
+                           :restart {:landing {:state :owed :commit "0123456789abcdef"
+                                               :owed-at "2026-11-17T12:00:00Z" :by-pid 4242}
+                                     :waits ["1 run(s) to finish: 2026-11-17-nido-review-1a2b"]}}}}
+     {:title "running the landing"
+      :note  "After the restart: the bar says which commit the dashboard runs, with no publish in
+              its memory."
+      :props {:change nil
+              :publishing {:restart {:landing {:state :running :commit "0123456789abcdef"
+                                               :owed-at "2026-11-17T12:00:00Z"
+                                               :since "2026-11-17T12:03:10Z" :pid 5151}}}}}
+     {:title "landing unreadable"
+      :note  "A record nobody can read is said, never taken for no landing."
+      :props {:change nil
+              :publishing {:restart {:unreadable "restart-owed.edn does not hold a landing"}}}}]}))

@@ -28,7 +28,7 @@
                                                       :actions [{:label "Approve"}]}})]
       (side-chat/handle! {:request-method :post :uri "/_chat/send" :headers headers
                           :body (java.io.ByteArrayInputStream.
-                                 (.getBytes (json/generate-string {"nidochatText" "approve the open one"})))}))
+                                 (.getBytes (json/generate-string {"chat" {"nido_chat" {"text" "approve the open one"}}})))}))
     @sent))
 
 (deftest a-message-carries-the-place-it-was-sent-from
@@ -57,8 +57,8 @@
                                         [:h1 "Workstreams"]))]
       (testing "closed"
         (let [p (page false)]
-          (is (str/includes? p "id=\"nido-chat-toggle\""))
-          (is (str/includes? p "nidochatOpen: false"))
+          (is (str/includes? p "id=\"chat:nido-chat:toggle\""))
+          (is (str/includes? p "&quot;open&quot;:false"))
           (is (str/includes? p "/_chat/stream") "the panel is live on every page")))
       (testing "open"
         (is (str/includes? (page true) "class=\"chat-side open\"")))
@@ -88,9 +88,9 @@
                 server/view-state       (fn [_] {:scope "nido" :surface :development})
                 server/needs-screen     (constantly {:needs-count 0})]
     (let [body (fn [uri] (:body (server/handle-request {:request-method :get :uri uri :headers {}})))]
-      (is (str/includes? (body "/_catalog") "id=\"catalog-chat-toggle\""))
-      (is (not (str/includes? (body "/_catalog") "nido-chat-toggle")))
-      (is (str/includes? (body "/development") "id=\"nido-chat-toggle\"")))))
+      (is (str/includes? (body "/_catalog") "id=\"chat:catalog-chat:toggle\""))
+      (is (not (str/includes? (body "/_catalog") "chat:nido-chat:toggle")))
+      (is (str/includes? (body "/development") "id=\"chat:nido-chat:toggle\"")))))
 
 
 (deftest the-place-a-page-shows-chooses-the-conversation
@@ -120,7 +120,7 @@
     (fn [c]
       (fake-core/seed! c :brian "ws-1" [{:command :post-chat :message "m0" :text "earlier"}])
       (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-1/send"
-                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"nidochatText\": \"where does it stand?\"}"))})
+                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"where does it stand?\"}}}"))})
       (let [st (get @(:states c) "brian/ws-1")]
         (is (= ["earlier" "where does it stand?"] (map :text (:chat st))))
         (is (= :person (:from (last (:chat st)))))

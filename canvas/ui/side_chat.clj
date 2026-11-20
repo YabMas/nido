@@ -7,7 +7,7 @@
             [canvas.session.chat :as chat]
             [canvas.ui.chat-host :as host]
             [canvas.ui.place :as place]
-            [canvas.ui.surface :refer [side signals]]
+            [canvas.libraries.ui :refer [render signal]]
             [fukan.common.typing.malli]))
 
 (Module ui-side-chat
@@ -26,7 +26,7 @@
     "The chat's side panel for a dashboard page showing a place — a workstream, or none — open or
      closed."
     {:signature [:=> [:catn [:open? :boolean] [:place [:maybe :map]]] :any]
-     :delegates [side signals chat/transcript]})
+     :delegates [render signal host/router chat/transcript]})
   (Operation handle!
     "One request under /_chat, of the conversation its path names, or nil for any other path and
      for a workstream's chat path that names no open workstream."

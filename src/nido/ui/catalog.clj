@@ -25,6 +25,7 @@
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.ui.catalog.scenes :as scenes]
+            [nido.libraries.ui.block :as block]
             [nido.ui.components.chat :as chat]
             [nido.libraries.ui.wire :as wire]
             [nido.ui.registry :as registry]))
@@ -84,12 +85,11 @@
         .cat-rail { display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start; }
         .cat-rail-i { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
         .cat-pair { display:flex; gap:14px; align-items:baseline; }
-        /* A side panel in a scene: a box of fixed height it fills, at its width open or closed. */
-        .cat-sidepanel { display:flex; justify-content:flex-end; height:380px; }
-        .cat-sidepanel .chat-side { position:static; height:100%; width:420px; }
-        .cat-sidepanel .chat-side:not(.open) { width:58px; }
+        /* A side panel in a scene: a box of fixed height it fills, at its width open or closed,
+           against the frame's right edge as it sits against the page's. */
+        .cat-frame > .chat-side { position:static; height:420px; width:420px; margin-left:auto; }
+        .cat-frame > .chat-side:not(.open) { width:58px; }
         .cat-pair .cat-scene-fn { min-width:190px; }
-        .cat-scroll-box { display:flex; flex-direction:column; height:260px; }
         .cat-picking .cat-frame * { cursor:crosshair; }
         .cat-pick-hover { outline:2px dashed var(--accent); outline-offset:1px; }
         .cat-pick-mark { outline:2px solid var(--accent); outline-offset:1px; position:relative; }
@@ -412,16 +412,18 @@
 (defn ^{:malli/schema [:=> [:cat :Conversation :string :map :boolean :any] :any]}
   chat-page
   "The catalog with its chat: the scene page in a frame at `frame-src`, and the chat panel over
-   `transcript`, with `panel` its id and routes (see `nido.ui.components.chat`; `:picks-url` is
-   where the picks are posted for their chips), under `change-bar` — the conversation's unlanded
-   change, as `nido.ui.components.chat/change-bar` renders it. The panel is
-   `nido.ui.components.chat/side`: closed — `open?` false — it narrows to its toggle beside the
+   `transcript`, on the panel `view` (see `nido.ui.components.chat`; the panel's `:sync-picks` action
+   posts the picks for their chips), under `change-bar` — the conversation's unlanded
+   change, as the `nido.ui.components.chat/change-bar` block renders it. The panel is
+   `nido.ui.components.chat/panel`: closed — `open?` false — it narrows to its toggle beside the
    frame; open, it slides in with Pick, which puts the frame into select mode. Hiccup for the content area of the
    dashboard's page chrome, which fills that area; the chrome is the caller's. Reads nothing: the
    conversation, its change, where the frame points and whether the chat starts open are its
    caller's."
-  [transcript frame-src panel open? change-bar]
-  (let [{:keys [picks open]} (chat/signals (:id panel))]
+  [transcript frame-src view open? change-bar]
+  (let [kit   (block/kit chat/panel (:id view) {} {} (:router view))
+        picks ((:signal kit) :picks)
+        open  ((:signal kit) :open)]
     (list
         [:style (h/raw (str "@layer app {\n" chrome-css "\n}"))]
         [:div.catc {:class (when open? "open")
@@ -429,8 +431,12 @@
                     "data-class:open" (str "$" open)
                     "data-effect" "$catcFrame && window.nidoReloadFrame($catcFrame)"}
          [:iframe#catc-frame.catc-frame {:src frame-src :title "Components"}]
-         (chat/side transcript panel
-                    {:open?  open?
+         (block/render chat/panel (:id view)
+                    {:transcript transcript
+                     :open?  open?
+                     :attach? (boolean (:attach? view))
+                     :reset? true
+                     :live?  true
                      :bar    [[:button#catc-pick.catc-tool.catc-pick
                                {:type "button" :aria-pressed "false" :aria-label "Pick elements"
                                 :title "Pick elements of a scene to talk about (Esc to stop)"}
@@ -440,7 +446,8 @@
                               change-bar]
                      :extra  [[:input#catc-picks {:type "hidden" "data-bind" picks}]
                               [:button#catc-picks-sync {:type "button" :hidden true
-                                                        "data-on:click" (str "@post('" (:picks-url panel) "')")}]]})
+                                                        "data-on:click" ((:action kit) :sync-picks)}]]}
+                    {} (:router view))
          [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.open($" open ")")}]
          [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.marks($" picks ")")}]]
         [:script (h/raw host-js)])))

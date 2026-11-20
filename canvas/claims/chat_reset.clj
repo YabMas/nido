@@ -9,7 +9,7 @@
             [canvas.ui.chat-host :refer [ui-chat-host changed-events handle!]]
             [canvas.ui.side-chat :refer [ui-side-chat]]
             [canvas.ui.catalog-chat :refer [ui-catalog-chat]]
-            [canvas.ui.surface :refer [side]]))
+            [canvas.ui.surface :refer [ui-components-chat]]))
 
 (Claim reset-forgets-the-conversation
   "An accepted reset leaves the chat as one never started: no agent process held, no id file, an empty transcript that every subscriber is told of, and started? false. The next send starts a new ACP session and writes its id; no agent is started for the chat before that send. Notes and errors nido put in the transcript go with it, so every panel shows an empty log."
@@ -32,9 +32,9 @@
   {:about [changed-events] :evidence "round"})
 
 (Claim new-conversation-is-confirmed-and-withheld-while-busy
-  "A side panel whose routes carry :reset-url shows a 'New conversation' control in its bar; choosing it asks in place, saying the conversation cannot be brought back, before anything posts, and the control and its confirm are hidden while the panel's busy signal is set. A panel without :reset-url shows none, and the block still reads nothing but its arguments."
-  {:about [side] :evidence "round"})
+  "A side panel whose props carry :reset? shows a 'New conversation' control in its bar; choosing it asks in place, saying the conversation cannot be brought back, before anything posts, and the control and its confirm are hidden while the panel's busy signal is set. A panel without it shows none, and the block still reads nothing but its arguments."
+  {:about [ui-components-chat] :evidence "round"})
 
 (Claim checks-pass-when-landed
   "The change is on main only with bb nido:test, bb nido:design:check and bb nido:land:check passing at the commit that put it there."
-  {:about [session-chat ui-chat-host side] :evidence "round"})
+  {:about [session-chat ui-chat-host ui-components-chat] :evidence "round"})

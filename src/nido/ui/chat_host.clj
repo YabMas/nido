@@ -9,15 +9,17 @@
    how a request's path and body are read, which images the conversation has staged for its next
    message, and how an uploaded file becomes an image (`parse-image`, the one place that happens).
 
-   A panel whose routes carry `:attach-url` is answered three more requests: attach (POST, the
+   A panel whose view offers attaching (`:attach?`) is answered three more requests: attach (POST, the
    image's raw bytes as the body), unattach/<digest> (POST) and image/<digest> (GET, a staged or
    sent image's bytes). Staged images are the conversation's, not a page's: held per path prefix
    beside the streams, shown on every panel through them, taken by the next accepted send, and
    dropped when the conversation is started over.
 
-   A host is a value naming its conversation (a `nido.session.chat` chat), its panel's routes (see
-   `nido.ui.components.chat`), the path segments its routes live under, and `:refs`, a function of
-   the send request giving what a sent message carries besides its words. A caller may assoc three
+   A host is a value naming its conversation (a `nido.session.chat` chat), its panel's view (see
+   `nido.ui.components.chat`), the path segments its panel's actions are routed under — `router`
+   makes the router that routes them there — and `:refs`, a function of the send request giving
+   what a sent message carries besides its words. Every post a panel's action makes is read
+   through the panel's own decoder, and nothing here spells a field it posts. A caller may assoc three
    more: `:on-sent`, events to send after a message is accepted; `:guard`, a function of one
    thunk that runs the send's acceptance inside whatever exclusion the caller needs and returns
    what it returned — a guard that waits delays a send, it never refuses one; `:opening`, events a
@@ -28,8 +30,10 @@
             [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.session.chat :as chat]
-            [nido.ui.components.chat :as panel]
+            [nido.libraries.ui.block :as block]
+            [nido.libraries.ui.names :as names]
             [nido.libraries.ui.wire :as wire]
+            [nido.ui.components.chat :as panel]
             [org.httpkit.server :as http])
   (:import (java.io ByteArrayOutputStream InputStream)
            (java.security MessageDigest)
@@ -67,16 +71,50 @@
   "How many images one message may carry."
   4)
 
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  router
+  "The router for a panel whose actions are served under the path `base`: each action at
+   `<base>/<action>`, its params' values following as path segments in the order of their keys —
+   `permission/<item>/<option>`, `unpick/<index>`, `unattach/<digest>`, `image/<digest>`."
+  [base]
+  (fn [action params]
+    (str base "/" (name action)
+         (apply str (for [[_ v] (sort-by key params)] (str "/" v))))))
+
+(defn ^{:malli/schema [:=> [:cat :map :keyword :map] :any]}
+  part
+  "One part of the panel `view` — `:log`, `:item`, `:status`, `:picks` or `:attachments` — over
+   `props` (the transcript, the item, the picks or the staged images it renders), as the panel
+   renders it: what a stream patches in place."
+  [{:keys [id router attach?]} k props]
+  (block/render panel/panel id (merge {:transcript {:items []} :attach? (boolean attach?) :part k} props)
+                {} router))
+
+(defn ^{:malli/schema [:=> [:cat :string :map] :string]}
+  signals-patch
+  "The JSON a patch-signals event carries to set the panel `id`'s signals in `m`, e.g.
+   `{:busy true}`."
+  [id m]
+  (json/generate-string (assoc-in {} (names/signal-root (:id panel/panel) id) m)))
+
+(defn ^{:malli/schema [:=> [:cat :keyword :string :map]
+                       [:or [:map {:closed true} [:ok :map]] [:map {:closed true} [:failure [:= :unparseable]]] [:map {:closed true} [:failure [:= :missing]] [:key :keyword]] [:map {:closed true} [:failure [:= :invalid]] [:key :keyword] [:why :some]]]]}
+  decode
+  "The request `req`'s body read against the panel's action `k` for the panel `id` — what
+   `nido.libraries.ui.block/decode-action` answers."
+  [k id req]
+  (block/decode-action panel/panel k (some-> (:body req) slurp) id))
+
 (defn ^{:malli/schema [:=> [:cat :map :map [:sequential :string] :any] :map]}
   host
-  "A host for `chat`, whose panel has `routes`, answering under the path segments `prefix`.
-   `refs` is called with the send request when a message is sent — its posted JSON body, string
-   keys, attached as `:json` — and returns its references, each `{:label :detail}`. What the
-   request itself states, its headers among them, is the caller's to read as well as what the
-   client posted. Two hosts under one prefix share its open streams, which
-   is what keeps a page's stream reached across a reload that rebuilds its host."
-  [chat routes prefix refs]
-  {:chat chat :routes routes :prefix (vec prefix) :refs refs :streams (streams-under (vec prefix))
+  "A host for `chat`, whose panel has `view`, answering under the path segments `prefix`.
+   `refs` is called with the send request when a message is sent — the fields its decoder read,
+   attached as `:fields` — and returns its references, each `{:label :detail}`. What the request
+   itself states, its headers among them, is the caller's to read as well as what the client
+   posted. Two hosts under one prefix share its open streams, which is what keeps a page's stream
+   reached across a reload that rebuilds its host."
+  [chat view prefix refs]
+  {:chat chat :view view :prefix (vec prefix) :refs refs :streams (streams-under (vec prefix))
    :staged (staged-under (vec prefix))})
 
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
@@ -98,12 +136,6 @@
   {:status 200
    :headers {"Content-Type" "text/event-stream" "Cache-Control" "no-cache"}
    :body (apply str events)})
-
-(defn ^{:malli/schema [:=> [:cat :map] :map]}
-  body-json
-  "The request's JSON body with string keys; empty when there is none or it does not parse."
-  [req]
-  (try (json/parse-string (slurp (:body req))) (catch Exception _ {})))
 
 (defn- starts-with? [^bytes bs offset ^String sig]
   (let [sig (.getBytes sig "ISO-8859-1")]
@@ -148,14 +180,18 @@
           (recur))))
     (.toByteArray out)))
 
-(defn- attachments-event [{:keys [routes staged]}]
-  (wire/patch-elements-event (html (panel/attachments (:id routes) @staged routes))))
+(defn- attachments-event [{:keys [view staged]}]
+  (wire/patch-elements-event (html (part view :attachments {:staged @staged}))))
 
-(defn- status-event [id t]
-  (wire/patch-elements-event (html (panel/turn-status id t))))
+(defn- status-of [view t] (part view :status {:transcript t}))
 
-(defn- busy-event [id t]
-  (wire/patch-signals-event (json/generate-string {(:busy (panel/signals id)) (boolean (:busy? t))})))
+(defn- status-event [view t]
+  (wire/patch-elements-event (html (status-of view t))))
+
+(defn- busy-event [{:keys [id]} t]
+  (wire/patch-signals-event (signals-patch id {:busy (boolean (:busy? t))})))
+
+(defn- log-of [view items] (part view :log {:transcript {:items items}}))
 
 (defn ^{:malli/schema [:=> [:cat :map :Conversation :Conversation] :any]}
   changed-events
@@ -165,77 +201,76 @@
    appended within a conversation, so position is identity; a `new` with fewer items than `old`
    is a conversation started over, and re-renders the whole log, the status row and the busy
    signal."
-  [{:keys [id] :as routes} old new]
+  [{:keys [id] :as view} old new]
   (let [old-items (:items old)]
     (if (< (count (:items new)) (count old-items))
-      [(wire/patch-elements-event (html (panel/chat-log id (:items new) routes)))
-       (status-event id new)
-       (busy-event id new)]
+      [(wire/patch-elements-event (html (log-of view (:items new))))
+       (status-event view new)
+       (busy-event view new)]
       (concat
        (for [[i item] (map-indexed vector (:items new))
              :let [before (get old-items i)]
              :when (not= before item)]
-         (let [markup (html (panel/chat-item item routes))]
+         (let [markup (html (part view :item {:item item}))]
            (if before
              (wire/patch-elements-event markup)
-             (wire/patch-elements-event markup {:selector (str "#" (panel/log-id id)) :mode "append"}))))
-       (when (not= (panel/turn-status id old) (panel/turn-status id new))
-         [(status-event id new)])
+             (wire/patch-elements-event markup {:selector (names/selector (:id panel/panel) id :log) :mode "append"}))))
+       (when (not= (status-of view old) (status-of view new))
+         [(status-event view new)])
        (when (not= (:busy? old) (:busy? new))
-         [(busy-event id new)])))))
+         [(busy-event view new)])))))
 
-(defn- stream [{:keys [chat routes streams opening staged] :as h} req]
-  (let [id (:id routes)]
-    (http/as-channel
-     req
-     {:on-open  (fn [ch]
-                  (http/send! ch {:status 200 :headers {"Content-Type"  "text/event-stream"
-                                                        "Cache-Control" "no-cache"}} false)
-                  (let [t ((via chat :transcript chat/transcript) chat)]
-                    ;; Under the stage's lock, which every stage change broadcasts under: the
-                    ;; staged images this stream opens with are current until it is registered.
-                    (locking staged
-                      (http/send! ch (str (wire/patch-elements-event
-                                           (html (panel/chat-log id (:items t) routes)))
-                                          (status-event id t)
-                                          (busy-event id t)
-                                          (when (:attach-url routes) (attachments-event h))
-                                          (apply str (when opening (opening))))
-                                  false)
-                      (swap! streams assoc ch {:sent t}))
-                    (let [unsub ((via chat :subscribe! chat/subscribe!)
-                                 chat
-                                 (fn [t']
-                                   (let [{:keys [sent]} (get @streams ch)]
-                                     (when sent
-                                       (swap! streams assoc-in [ch :sent] t')
-                                       (doseq [e (changed-events routes sent t')] (http/send! ch e false))))))]
-                      (swap! streams assoc-in [ch :unsubscribe] unsub))))
-      :on-close (fn [ch _]
-                  (when-let [unsub (:unsubscribe (get @streams ch))] (unsub))
-                  (swap! streams dissoc ch))})))
+(defn- stream [{:keys [chat view streams opening staged] :as h} req]
+  (http/as-channel
+   req
+   {:on-open  (fn [ch]
+                (http/send! ch {:status 200 :headers {"Content-Type"  "text/event-stream"
+                                                      "Cache-Control" "no-cache"}} false)
+                (let [t ((via chat :transcript chat/transcript) chat)]
+                  ;; Under the stage's lock, which every stage change broadcasts under: the
+                  ;; staged images this stream opens with are current until it is registered.
+                  (locking staged
+                    (http/send! ch (str (wire/patch-elements-event
+                                         (html (log-of view (:items t))))
+                                        (status-event view t)
+                                        (busy-event view t)
+                                        (when (:attach? view) (attachments-event h))
+                                        (apply str (when opening (opening))))
+                                false)
+                    (swap! streams assoc ch {:sent t}))
+                  (let [unsub ((via chat :subscribe! chat/subscribe!)
+                               chat
+                               (fn [t']
+                                 (let [{:keys [sent]} (get @streams ch)]
+                                   (when sent
+                                     (swap! streams assoc-in [ch :sent] t')
+                                     (doseq [e (changed-events view sent t')] (http/send! ch e false))))))]
+                    (swap! streams assoc-in [ch :unsubscribe] unsub))))
+    :on-close (fn [ch _]
+                (when-let [unsub (:unsubscribe (get @streams ch))] (unsub))
+                (swap! streams dissoc ch))}))
 
 (defn- send-message
   "Send the posted draft with its references and the conversation's staged images. Sent, the
    draft is cleared, the images it took leave the stage on every panel, and whatever `:on-sent`
-   adds (events) follows; refused — a turn is running, or there are no words — nothing changes, so
-   the draft and the staged images are kept. The acceptance runs inside the caller's `:guard`."
-  [{:keys [chat routes refs on-sent guard staged] :as h} req]
-  (let [{:keys [text]} (panel/signals (:id routes))
-        body   (body-json req)
-        words  (str/trim (str (get body text)))
+   adds (events) follows; refused — a turn is running, there are no words, or the panel's decoder
+   refused the body — nothing changes, so the draft and the staged images are kept. The
+   acceptance runs inside the caller's `:guard`."
+  [{:keys [chat view refs on-sent guard staged] :as h} req]
+  (let [fields (:ok (decode :send (:id view) req))
+        words  (str/trim (str (:text fields)))
         ;; Under the stage's lock, so no attach or unattach falls between the images this
         ;; message takes, its acceptance and their leaving the stage.
         images (locking staged
                  (let [images @staged]
                    (when (and (seq words)
-                              (let [accept #((via chat :send! chat/send!) chat words (vec (refs (assoc req :json body))) images)]
+                              (let [accept #((via chat :send! chat/send!) chat words (vec (refs (assoc req :fields fields))) images)]
                                 (if guard (guard accept) (accept))))
                      (reset! staged [])
                      (when (seq images) (broadcast! h (attachments-event h)))
                      images)))]
     (if images
-      (do (apply sse (wire/patch-signals-event (json/generate-string {text ""}))
+      (do (apply sse (wire/patch-signals-event (signals-patch (:id view) {:text ""}))
                  (when on-sent (on-sent))))
       (sse))))
 
@@ -276,12 +311,12 @@
 (defn ^{:malli/schema [:=> [:cat :map :map] [:maybe :map]]}
   handle!
   "The response to a request under the host's prefix — `stream` (GET), `send`, `cancel`, `reset`,
-   `permission/<item>/<option>` (POST), and for a panel whose routes carry `:attach-url`,
+   `permission/<item>/<option>` (POST), and for a panel whose view offers attaching,
    `attach`, `unattach/<digest>` (POST) and `image/<digest>` (GET) — or nil for any other request,
    including another verb under the same prefix, which is the caller's to answer. A reset refused
    because a turn runs changes nothing and answers the same; every open panel hears an accepted
    one through its stream, the images it had staged dropped with it."
-  [{:keys [chat prefix routes staged] :as host} {:keys [uri request-method] :as req}]
+  [{:keys [chat prefix view staged] :as host} {:keys [uri request-method] :as req}]
   (let [segs (vec (remove str/blank? (str/split (str uri) #"/")))
         n    (count prefix)]
     (when (= prefix (take n segs))
@@ -299,7 +334,7 @@
         [:post "permission"] (do (when (= (+ n 3) (count segs))
                                    ((via chat :answer-permission! chat/answer-permission!) chat (get segs (inc n)) (get segs (+ n 2))))
                                  {:status 204})
-        (when (:attach-url routes)
+        (when (:attach? view)
           (case [request-method (get segs n)]
             [:post "attach"]   (attach host req)
             [:post "unattach"] (do (locking staged

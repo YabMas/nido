@@ -31,6 +31,7 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [nido.coordinator.control :as control]
+            [nido.libraries.ui.block :as block]
             [nido.session.change :as change]
             [nido.session.chat :as chat]
             [nido.session.preview :as preview]
@@ -121,23 +122,10 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
       sealed (assoc :landing (try (change/landing project design-session sealed)
                                                  (catch Exception _ nil))))))
 
-(def ^:private routes
-  {:id         panel-id
-   :send-url   "/_catalog/chat/send"
-   :cancel-url "/_catalog/chat/cancel"
-   :reset-url  "/_catalog/chat/reset"
-   :stream-url "/_catalog/chat/stream"
-   :answer-url (fn [item option] (str "/_catalog/chat/permission/" item "/" option))
-   :unpick-url (fn [i] (str "/_catalog/chat/unpick/" i))
-   :picks-url  "/_catalog/chat/picks"
-   ;; Images, as the dashboard's own chat takes them: the host answers these three itself.
-   :attach-url   "/_catalog/chat/attach"
-   :unattach-url (fn [digest] (str "/_catalog/chat/unattach/" digest))
-   :image-url    (fn [digest] (str "/_catalog/chat/image/" digest))})
-
-(def ^:private change-routes
-  {:publish-url "/_catalog/chat/publish"
-   :revert-url  "/_catalog/chat/revert"})
+(def ^:private view
+  "The panel's view: every action of the panel and its change bar under /_catalog/chat. It offers
+   attaching images, as the dashboard's own chat does; the host answers those requests itself."
+  {:id panel-id :router (host/router "/_catalog/chat") :attach? true})
 
 (def ^:private html host/html)
 
@@ -154,9 +142,15 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   []
   (try (change/pending project design-session (:sealed @publishing)) (catch Exception _ nil)))
 
+(defn- change-bar
+  "The change bar as it stands: the design session's unlanded change and how the last publish
+   went."
+  []
+  (block/render panel/change-bar panel-id {:change (pending-change) :publishing (bar-value)}
+                {} (:router view)))
+
 (defn- bar-event []
-  (wire/patch-elements-event
-   (html (panel/change-bar panel-id (pending-change) (bar-value) change-routes))))
+  (wire/patch-elements-event (html (change-bar))))
 
 (defn- reload-frames!
   "Reload every open page's frame. The value only has to change: the page keeps the scene it was
@@ -201,23 +195,28 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
                 (when (seq text) (str "its text: " text "\n"))
                 "it rendered as: " html)}))
 
-(defn- posted-picks
-  "The picks signal a request posted, as a vector of string-keyed maps; empty when absent or not
-   an array of objects."
-  [body]
-  (let [v (try (some-> (get body (:picks (panel/signals panel-id))) not-empty json/parse-string)
-               (catch Exception _ nil))]
+(defn- parse-picks
+  "The picks signal's JSON text as a vector of string-keyed maps; empty when absent or not an
+   array of objects."
+  [text]
+  (let [v (try (some-> text not-empty json/parse-string) (catch Exception _ nil))]
     (if (and (sequential? v) (every? map? v)) (vec v) [])))
+
+(defn- posted-picks
+  "The picks a request posted through the panel's action `k`, read by the panel's decoder; empty
+   when the decoder refused the body."
+  [k req]
+  (parse-picks (:picks (:ok (host/decode k panel-id req)))))
 
 (defn- picks-event [ps]
   (wire/patch-elements-event
-   (html (panel/picks panel-id (mapv #(select-keys (pick-ref %) [:label :title]) ps) routes))))
+   (html (host/part view :picks {:picks (mapv #(select-keys (pick-ref %) [:label :title]) ps)}))))
 
 (def ^:private chat-host
-  (assoc (host/host design-chat routes ["_catalog" "chat"] (fn [{:keys [json]}] (mapv pick-ref (posted-picks json))))
+  (assoc (host/host design-chat view ["_catalog" "chat"]
+                    (fn [{:keys [fields]}] (mapv pick-ref (parse-picks (:picks fields)))))
          ;; A sent message took its picks with it.
-         :on-sent (fn [] [(wire/patch-signals-event
-                           (json/generate-string {(:picks (panel/signals panel-id)) "[]"}))
+         :on-sent (fn [] [(wire/patch-signals-event (host/signals-patch panel-id {:picks "[]"}))
                           (picks-event [])])
          ;; A send waits while a seal or a rejoin holds the worktree; a landing never refuses one.
          :guard   with-worktree-lock
@@ -225,11 +224,10 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
          :opening (fn [] (rejoin!) [(bar-event)])))
 
 (defn- unpick [req i]
-  (let [ps   (posted-picks (host/body-json req))
+  (let [ps   (posted-picks :unpick req)
         kept (vec (keep-indexed (fn [j p] (when (not= j i) p)) ps))]
-    (host/sse (wire/patch-signals-event
-          (json/generate-string {(:picks (panel/signals panel-id)) (json/generate-string kept)}))
-         (picks-event kept))))
+    (host/sse (wire/patch-signals-event (host/signals-patch panel-id {:picks (json/generate-string kept)}))
+              (picks-event kept))))
 
 (def ^:private step-line #"^land · (.+)$")
 (def ^:private refused-line #"^(?:land|land:record) REFUSED · (.+)$")
@@ -375,9 +373,9 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
     (if (params "embed=1")
       (catalog/catalog-page query-string)
       (views/shell (assoc (chrome) :title "UI Catalog" :bleed? true)
-                   (catalog/chat-page (chat/transcript design-chat) frame-src routes
+                   (catalog/chat-page (chat/transcript design-chat) frame-src view
                                       (boolean (params "chat=1"))
-                                      (panel/change-bar panel-id (pending-change) (bar-value) change-routes))))))
+                                      (change-bar))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   handle!
@@ -392,7 +390,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
       (or (host/handle! chat-host req)
           (when (= ["_catalog" "chat"] (take 2 segs))
             (case [request-method (get segs 2)]
-              [:post "picks"]   (host/sse (picks-event (posted-picks (host/body-json req))))
+              [:post "picks"]   (host/sse (picks-event (posted-picks :sync-picks req)))
               [:post "unpick"]  (if-let [i (some-> (get segs 3) parse-long)]
                                   (unpick req i)
                                   {:status 404 :body ""})

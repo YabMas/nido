@@ -6,7 +6,8 @@
             [canvas.session.chat :as chat]
             [canvas.ui.chat-host :as host]
             [canvas.libraries.ui :refer [patch-signals-event]]
-            [canvas.ui.surface :refer [catalog-page chat-page change-bar shell picks signals]]
+            [canvas.libraries.ui :refer [render]]
+            [canvas.ui.surface :refer [catalog-page chat-page shell]]
             [fukan.common.typing.malli]))
 
 (Module ui-catalog-chat
@@ -21,7 +22,7 @@
     "/_catalog: the scene page alone when it is the frame, else the catalog with its chat —
      closed unless the query string opens it — inside the dashboard's page chrome."
     {:signature [:=> [:catn [:query-string [:maybe :string]] [:chrome [:=> [:catn] :map]]] :string]
-     :delegates [catalog-page chat-page shell change-bar chat/transcript chat/started?
+     :delegates [catalog-page chat-page shell render chat/transcript chat/started?
                  chat/pending chat/landing control/latest-landing]})
   (Operation handle!
     "One request under /_catalog/chat: the stream, a send, a cancel, a permission answer, the
@@ -29,7 +30,7 @@
      request, forwarded to the design session's preview once the conversation exists; nil for
      any other."
     {:signature [:=> [:catn [:req :map]] [:maybe :map]]
-     :delegates [host/host host/handle! host/broadcast! host/sse host/body-json host/html picks
-                 signals patch-signals-event change-bar chat/refresh! chat/note-error! chat/note!
+     :delegates [host/host host/handle! host/broadcast! host/sse host/html host/router host/part
+                 host/signals-patch host/decode patch-signals-event render chat/refresh! chat/note-error! chat/note!
                  chat/forward! chat/pending chat/landing chat/seal! chat/publish! chat/onto-main! chat/revert!
                  control/latest-landing]}))

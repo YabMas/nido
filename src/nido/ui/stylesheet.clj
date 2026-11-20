@@ -568,7 +568,7 @@
                          overflow:hidden; text-overflow:ellipsis; }
         .chat-status > .chat-spin, .chat-elapsed { flex:none; }
         .chat-elapsed { color:var(--text-faint); font-variant-numeric:tabular-nums; }
-        /* The side panel (see nido.ui.components.chat/side). Its width is its page's; closed, only
+        /* The side panel (see nido.ui.components.chat/panel). Its width is its page's; closed, only
            the toggle at the head of its bar shows. The toggle's two icons are stacked by absolute
            position in a fixed box, which every engine lays out the same. */
         .chat-side { border-left:1px solid var(--border); display:flex; flex-direction:column; background:var(--bg);

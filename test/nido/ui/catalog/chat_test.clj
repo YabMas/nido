@@ -11,7 +11,7 @@
             [nido.ui.components.chat :as panel]
             [org.httpkit.server :as http]))
 
-(defn- changed-events [old new] (host/changed-events @#'catalog-chat/routes old new))
+(defn- changed-events [old new] (host/changed-events @#'catalog-chat/view old new))
 
 (deftest a-stream-patches-only-what-changed
   (let [t0 {:items [{:id "i0" :kind :user :text "hi"}] :busy? true :started-at 1000}
@@ -23,9 +23,9 @@
       (let [[e status & more] (changed-events t0 t1)]
         (is (nil? more))
         (is (str/includes? e "data: mode append"))
-        (is (str/includes? e "data: selector #catalog-chat-log"))
-        (is (str/includes? e "catalog-chat-i1"))
-        (is (str/includes? status "catalog-chat-status"))
+        (is (str/includes? e "data: selector #chat\\:catalog-chat\\:log"))
+        (is (str/includes? e "chat:catalog-chat:item-i1"))
+        (is (str/includes? status "chat:catalog-chat:status"))
         (is (str/includes? status "Writing"))))
     (testing "a changed item is morphed in place by its id, and an unchanged status is not resent"
       (let [[e & more] (changed-events t1 t2)]
@@ -35,10 +35,9 @@
     (testing "a turn ending empties the status row and clears the busy signal"
       (let [events (changed-events t2 t3)]
         (is (= 3 (count events)))
-        (is (some #(str/includes? % "catalog-chat-status") events))
+        (is (some #(str/includes? % "chat:catalog-chat:status") events))
         (is (some #(and (str/includes? % "datastar-patch-signals")
-                        (str/includes? % (:busy (panel/signals "catalog-chat")))
-                        (str/includes? % "false"))
+                        (str/includes? % "{\"chat\":{\"catalog_chat\":{\"busy\":false}}}"))
                   events))))
     (is (empty? (changed-events t3 t3)))))
 
@@ -59,13 +58,13 @@
                 change/pending (constantly nil)]
     (let [closed (catalog-chat/page nil chrome)
           open   (catalog-chat/page "chat=1" chrome)]
-      (is (str/includes? closed "catalogchatOpen: false"))
+      (is (str/includes? closed "&quot;open&quot;:false"))
       (is (not (str/includes? closed "class=\"catc open\"")))
-      (is (str/includes? closed "id=\"catalog-chat-toggle\"") "one toggle opens the chat")
+      (is (str/includes? closed "id=\"chat:catalog-chat:toggle\"") "one toggle opens the chat")
       (is (str/includes? closed "aria-expanded=\"false\""))
       (is (not (str/includes? closed "catc-close")) "and nothing else closes it")
       (is (str/includes? open "aria-expanded=\"true\""))
-      (is (str/includes? open "catalogchatOpen: true"))
+      (is (str/includes? open "&quot;open&quot;:true"))
       (is (str/includes? open "class=\"catc open\"")))))
 
 (deftest picks-become-chips-and-a-chip-removes-its-pick
@@ -73,13 +72,13 @@
                 "text" "yours" "html" "<span>yours</span>"}
                {"block" "chat-panel" "scene" "empty" "path" "section.chat:0" "text" "" "html" "<section>"}]
         body  (fn [ps] (java.io.ByteArrayInputStream.
-                        (.getBytes (cheshire.core/generate-string {(:picks (panel/signals "catalog-chat"))
-                                                         (cheshire.core/generate-string ps)})
+                        (.getBytes (cheshire.core/generate-string
+                                    {"chat" {"catalog_chat" {"picks" (cheshire.core/generate-string ps)}}})
                                    "UTF-8")))
         posted (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/picks"
                                       :body (body picks)})]
     (is (= 200 (:status posted)))
-    (is (str/includes? (:body posted) "catalog-chat-picks"))
+    (is (str/includes? (:body posted) "chat:catalog-chat:picks"))
     (is (str/includes? (:body posted) "chat-pick-l\">span<")
         "a chip names the element by tag alone; the path is the agent's")
     (is (str/includes? (:body posted) "title=\"position-chip · every position · span\"")
@@ -111,7 +110,7 @@
       (is (str/includes? (first @sent) "datastar-patch-signals"))
       (is (str/includes? (first @sent) "catcFrame"))
       (is (not (str/includes? (first @sent) "localhost")) "the frame reloads from the dashboard's own origin")
-      (is (str/includes? (second @sent) "catalog-chat-change") "the change bar follows the turn"))))
+      (is (str/includes? (second @sent) "chat-change:catalog-chat:root") "the change bar follows the turn"))))
 
 (deftest a-frame-open-before-a-reload-is-still-refreshed-after-it
   ;; `require :reload` rebuilds the host; a page whose stream opened before it must still be
@@ -335,8 +334,8 @@
   (let [t0 {:items [{:id "i0" :kind :user :text "hi"} {:id "i1" :kind :agent :text "done"}] :busy? false}
         es (changed-events t0 {:items [] :busy? false})]
     (is (= 3 (count es)) "the log, the status row and the busy signal")
-    (is (str/includes? (first es) "id=\"catalog-chat-log\""))
-    (is (not (str/includes? (first es) "catalog-chat-i0")) "no earlier item is left on the page")
+    (is (str/includes? (first es) "id=\"chat:catalog-chat:log\""))
+    (is (not (str/includes? (first es) "chat:catalog-chat:item-i0")) "no earlier item is left on the page")
     (is (not (str/includes? (first es) "mode append")))))
 
 (deftest a-reset-is-the-hosts-to-answer

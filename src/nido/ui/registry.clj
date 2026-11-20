@@ -9,6 +9,7 @@
   (:require [nido.libraries.ui.style :as style]
             [nido.ui.catalog.scenes :as scenes]
             [nido.ui.components.ask :as ask]
+            [nido.ui.components.chat :as chat]
             [nido.ui.components.row :as row]
             [nido.ui.stylesheet :as css]))
 
@@ -27,7 +28,8 @@
   []
   {:title    "nido dashboard"
    :surfaces surfaces
-   :blocks   [ask/card ask/bar row/board-row row/gate-row row/winddown-row row/arc-row]
+   :blocks   [ask/card ask/bar row/board-row row/gate-row row/winddown-row row/arc-row
+             chat/panel chat/change-bar]
    :groups   (scenes/groups)})
 
 (def ^:private assembled

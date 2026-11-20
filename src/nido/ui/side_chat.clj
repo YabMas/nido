@@ -18,6 +18,8 @@
    turns do, by the same commands a surface's controls send."
   (:require [clojure.string :as str]
             [nido.coordinator.work.core :as wcore]
+            [nido.libraries.ui.block :as block]
+            [nido.libraries.ui.names :as names]
             [nido.session.chat :as chat]
             [nido.ui.chat-host :as host]
             [nido.ui.components.chat :as panel]
@@ -56,20 +58,13 @@ itself looks wrong, say so. Never push, fast-forward or move main, and never rec
 
 Answer briefly, and name workstreams and tickets as the dashboard does.")
 
-(defn- routes-under
-  "The panel's routes for a conversation served under the path segments `prefix`."
+(defn- view-under
+  "The panel's view for a conversation served under the path segments `prefix`: it offers
+   attaching."
   [prefix]
-  (let [base (str "/" (str/join "/" prefix))]
-    {:id         panel-id
-     :send-url   (str base "/send")
-     :cancel-url (str base "/cancel")
-     :reset-url  (str base "/reset")
-     :stream-url (str base "/stream")
-     :answer-url (fn [item option] (str base "/permission/" item "/" option))
-     :unpick-url   (fn [i] (str base "/unpick/" i))
-     :attach-url   (str base "/attach")
-     :unattach-url (fn [digest] (str base "/unattach/" digest))
-     :image-url    (fn [digest] (str base "/image/" digest))}))
+  {:id      panel-id
+   :router  (host/router (str "/" (str/join "/" prefix)))
+   :attach? true})
 
 (def ^:private operator-chat
   {:project "nido" :session "operator" :name "operator" :instructions instructions})
@@ -137,17 +132,23 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
    closed, and ⌘I/Ctrl+I to open and close it. It holds nothing about the page — the place a
    message names is read from the send."
   [open? place]
-  (let [{:keys [open]} (panel/signals panel-id)
-        {:keys [chat prefix heading]} (conversation place)]
-    (panel/side ((host/via chat :transcript chat/transcript) chat) (routes-under prefix)
-                {:open?   open?
+  (let [open (names/signal (:id panel/panel) panel-id :open)
+        {:keys [chat prefix heading]} (conversation place)
+        {:keys [router]} (view-under prefix)]
+    (block/render panel/panel panel-id
+                {:transcript ((host/via chat :transcript chat/transcript) chat)
+                 :open?   open?
                  :heading heading
+                 :reset?  true
+                 :attach? true
+                 :live?   true
                  :extra   [[:span {:hidden true
                                    "data-effect" (str "document.cookie = '" cookie "=' + ($" open " ? 1 : 0)"
                                                       " + '; path=/; max-age=31536000; samesite=lax'")
                                    "data-on:keydown__window"
                                    (str "if ((evt.metaKey || evt.ctrlKey) && (evt.key === 'i' || evt.key === 'I'))"
-                                        " { evt.preventDefault(); $" open " = !$" open " }")}]]})))
+                                        " { evt.preventDefault(); $" open " = !$" open " }")}]]}
+                {} router)))
 
 (defn- place-of
   "The place a request under /_chat is for, read off its path: {:project :ws-id} for one under
@@ -168,4 +169,4 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
           {:keys [chat prefix]} (conversation place)]
       ;; A workstream path whose workstream has no chat to offer would otherwise be the operator's.
       (when (= (boolean place) (not= ["_chat"] prefix))
-        (host/handle! (host/host chat (routes-under prefix) prefix (comp place/references place/place)) req)))))
+        (host/handle! (host/host chat (view-under prefix) prefix (comp place/references place/place)) req)))))

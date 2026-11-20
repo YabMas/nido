@@ -155,62 +155,18 @@
    two sides.")
 
 (Module ui-components-chat
-  "A conversation with an agent, as a panel.
+  "A conversation with an agent, registered with the UI library as two blocks: `panel`, the side
+   panel — a bar with its toggle and New conversation, the transcript, the turn's status row and
+   the composer with its picks and staged images — and `change-bar`, the conversation's unlanded
+   change with Publish and Cancel, each confirmed in place.
 
-   HIDES how a transcript reads — item order, what opens and what folds, the turn's status row
-   and the phase it names, the permission prompt's buttons, a message's images shown by URL, the
-   composer and its attach controls, and the pick chips on
-   it. Takes a transcript value plus where its controls post, so the catalog, a workstream pane
-   or a question card can each host one without the panel knowing which."
-  (Operation signals
-    "The names of a panel's page-state signals — its draft, its picks, whether a turn runs and
-     whether a side panel is open — which a server reading a send reads back by the same names."
-    {:signature [:=> [:catn [:id :string]] :map]})
-  (Operation chat-item "One transcript item, under the DOM id the panel gives it."
-    {:signature [:=> [:catn [:item :map] [:routes :map]] :any]})
-  (Operation log-id "The DOM id of a panel's log, which a stream appends new items to."
-    {:signature [:=> [:catn [:id :string]] :string]})
-  (Operation chat-log
-    "The transcript, under the DOM id a stream re-renders it by, in a log that scrolls the way a
-     chat reads: opened at the bottom, a sent message pinned to its top with room for the reply,
-     and let go when the person scrolls."
-    {:signature [:=> [:catn [:id :string] [:items [:sequential :map]] [:routes :map]] :any]
-     :delegates [log-id chat-item]})
-  (Operation turn-status
-    "The status row: while a turn runs, the phase it is in — waiting, thinking, running a named
-     tool, writing, or waiting for an answer — and the seconds since it started; empty otherwise."
-    {:signature [:=> [:catn [:id :string] [:transcript acp/Conversation]] :any]})
-  (Operation picks
-    "The pick chips, numbered as the page marks them, each with a control that removes it."
-    {:signature [:=> [:catn [:id :string] [:picks [:sequential :map]] [:routes :map]] :any]})
-  (Operation attachments
-    "The images staged for the next message, as thumbnails from the panel's image route, each
-     with a control that unstages it; empty when none are."
-    {:signature [:=> [:catn [:id :string] [:images [:sequential :map]] [:routes :map]] :any]})
-  (Operation change-bar
-    "The conversation's unlanded change and what can be done with it — Publish or Cancel, each
-     confirmed in place, both withheld while a turn runs — or how the last publish ended; and,
-     whether or not there is either, the latest landing the publishing value carries. An empty
-     element only when there is none of the three."
-    {:signature [:=> [:catn [:id :string] [:change [:maybe :map]] [:publishing :map] [:routes :map]] :any]
-     :delegates [signals]})
-  (Operation composer "The composer: the pick chips, the staged images and attach control where routes offer attaching, the text box, and Send or Stop."
-    {:signature [:=> [:catn [:id :string] [:routes :map]] :any]
-     :delegates [signals picks]})
-  (Operation chat-panel
-    "The whole panel: its transcript, the status row, then the composer. `opts` carries the
-     panel's id, where sending, cancelling, answering and removing a pick post, and the stream
-     URL that keeps it live."
-    {:signature [:=> [:catn [:transcript acp/Conversation] [:opts :map]] :any]
-     :delegates [chat-log turn-status composer signals]})
-  (Operation side
-    "The panel as a side panel: a bar led by the one toggle that opens and closes it, over the
-     panel. Closed, the toggle is all that shows, so it rides the panel's left edge. Declares and
-     follows the panel's open signal; how wide the panel is, open or closed, is its page's. Where
-     its routes carry a reset URL the bar also offers a new conversation, confirmed in place and
-     hidden while a turn runs."
-    {:signature [:=> [:catn [:transcript acp/Conversation] [:routes :map] [:opts :map]] :any]
-     :delegates [chat-panel signals]}))
+   HIDES how a transcript reads: item order, folding, the status row, the composer and its picks.
+   Each renders over a transcript value as props, the explicit context and a caller's router;
+   every control is an action the panel declares — send, stop, reset, the stream, a permission
+   answer, a pick removed, an image unstaged, the picks synced — and its draft, picks, busy flag,
+   open state and pending reset are signals its morph contract seeds where missing. The panel
+   renders one part alone when its props name it, on the same instance, which is how a stream
+   patches an item, the status row, the chips, the staged images or the log in place.")
 
 (Module ui-views
   "The dashboard's pages and fragments, and the twenty per-kind cards a ledger record reads as.
@@ -438,6 +394,6 @@
      its toggle alone; open, the panel with Pick, which puts the frame into select mode, under the
      conversation's change bar, and the picks marked on the scenes. Reads nothing: the
      conversation, its change, where the frame points and whether it starts open are its caller's."
-    {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:panel :map]
+    {:signature [:=> [:catn [:transcript acp/Conversation] [:frame-src :string] [:view :map]
                             [:open? :boolean] [:change-bar :any]] :any]
-     :delegates [side signals]}))
+     :delegates [lib/render lib/kit]}))
