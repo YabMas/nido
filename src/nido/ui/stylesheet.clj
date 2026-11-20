@@ -72,6 +72,16 @@
           --src-scratch: #9a9ac0; --src-scratch-bg: #252540;
         }
         *, *::before, *::after { box-sizing: border-box; }
+        /* Scrollbars: a thin thumb in the border hue on no track, so a scrolling pane reads as
+           the surface it sits on rather than as the browser's grey chrome. */
+        * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+        @supports not (scrollbar-color: auto) {
+          ::-webkit-scrollbar { width: 8px; height: 8px; }
+          ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px;
+                                      border: 2px solid transparent; background-clip: padding-box; }
+          ::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+        }
         body { font-family: var(--font-prose);
                font-size:var(--fs-md); line-height: 1.6; color: var(--text);
                background: var(--bg); margin: 0; padding: 20px 40px; }
