@@ -61,6 +61,10 @@
     "Read the daemon's files and derive what, if anything, blocks an envelope for this trigger."
     {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword]] [:maybe :keyword]]
      :delegates [queue-blocker]})
+  (Operation coordinator-pid
+    "The live coordinator's pid, or nil when no coordinator runs — what a host reading needs to
+     find the coordinator's process among the others."
+    {:signature [:=> [:catn] [:maybe :int]]})
   (Operation halted?
     "Whether the coordinator is paused."
     {:signature [:=> [:catn] :boolean]})

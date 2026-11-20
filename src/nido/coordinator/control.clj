@@ -118,6 +118,14 @@
 
 ;; ── the levers ───────────────────────────────────────────────────────────────
 
+(defn ^{:malli/schema [:=> [:cat] [:maybe :int]]}
+  coordinator-pid
+  "The live coordinator's pid, or nil when none runs — a pid file left by a coordinator that died
+   answers nil, not the dead pid. What a host reading needs to find the coordinator's process
+   among the others; the file itself stays here."
+  []
+  (when (pid/alive?) (pid/read)))
+
 (defn ^{:malli/schema [:=> [:cat] :boolean]}
   halted?
   "True iff the coordinator is paused."
