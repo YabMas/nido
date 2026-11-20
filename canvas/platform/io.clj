@@ -23,10 +23,19 @@
   (Operation file-stamp
     "What changes whenever a file does — inode, mtime, size — or nil when there is none."
     {:signature [:=> [:catn [:path :string]] :any]})
+  (Operation cache-lookup
+    "The value a key holds in a cache `cache-store` keeps, or nil; a hit on the older half moves
+     to the younger."
+    {:signature [:=> [:catn [:cache :any] [:key :any]] :any]})
+  (Operation cache-store
+    "Keep a value under a key in a two-half cache bounded at twice its cap: a full younger half
+     becomes the older and the previous older half is dropped, so a working set past the cap
+     keeps what it read last instead of starting cold."
+    {:signature [:=> [:catn [:cache :any] [:cap :int] [:key :any] [:value :any]] :any]})
   (Operation read-edn-cached
     "`read-edn` that does not parse a file again until its stamp moves."
     {:signature [:=> [:catn [:path :string]] :any]
-     :delegates [file-stamp read-edn]})
+     :delegates [file-stamp read-edn cache-lookup cache-store]})
   (Operation write-edn!
     "Atomically write EDN: a unique temp file, then a rename. A reader sees the old content or
      the new one, never a partial."

@@ -184,9 +184,10 @@
 
 (defn- log-rows
   "The log as written: a message is {:id :generation :from :to :text :at}, a delivery
-   {:delivered <message id> :at}."
+   {:delivered <message id> :at}. Parsed once per change of the file: every conductor pass asks
+   it of each carried workstream, several times, and a log runs to hundreds of KB."
   [project ws-id]
-  (or (io/read-edn (log-path project ws-id)) []))
+  (or (io/read-edn-cached (log-path project ws-id)) []))
 
 (defn- with-deliveries
   "The log's messages, oldest first, each with :deliveries — its recorded deliveries, oldest

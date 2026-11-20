@@ -61,9 +61,23 @@
   (inc (count (openings entries))))
 
 (defn- span-of
-  "The index rows of generation `g`, with every entry that belongs to no generation."
+  "The index rows of generation `g`, with every entry that belongs to no generation.
+
+   One pass over `entries`: generation `g` is the seqs from its opening (none for the first) up to
+   but excluding the next opening, so membership is a bounds check rather than `generation-at` per
+   row — which, rescanning the ledger for each row, made a ledger of n entries cost n² and held the
+   coordinator for seconds on ledgers of thousands of entries."
   [entries g]
-  (filterv #(or (spanless? entries %) (= g (generation-at entries (:seq %)))) entries))
+  (let [ops     (openings entries)
+        kind-of (into {} (map (juxt :seq :kind)) entries)
+        exists? (<= 1 g (inc (count ops)))
+        lo      (when (>= g 2) (nth ops (- g 2) nil))
+        hi      (nth ops (dec g) nil)
+        in-g?   (fn [n] (and exists? (or (nil? lo) (>= n lo)) (or (nil? hi) (< n hi))))
+        free?   (fn [row] (or (contains? spanless-kinds (:kind row))
+                              (and (= :retraction (:kind row))
+                                   (contains? spanless-kinds (kind-of (:retracts row))))))]
+    (filterv #(or (free? %) (in-g? (:seq %))) entries)))
 
 (defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:sequential :map]]}
   current-span

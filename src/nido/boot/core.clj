@@ -345,6 +345,30 @@
       (println (str "nido tick: slow step " label " took " ms " ms")))
     r))
 
+;; Whether the slow pollers run beside the loop. `run!` turns it on; a tick! driven by a test
+;; polls in line, so what a poll emits is in the queue when tick! returns.
+(defonce ^:private !poll-in-background? (atom false))
+
+;; Each background poller's future, by key: one in flight per key, never two.
+(defonce ^:private !background (atom {}))
+
+(defn- off-the-loop
+  "Run `f` timed as `label`: on its own thread while `!poll-in-background?`, unless the last run
+   under `key` is still going, in which case nothing starts; else in line. A poll waits on the
+   network for seconds at a time — Notion's departed pages are fetched one by one — and in line
+   it held every hand-back, conduct pass and dispatch behind it. What throws is printed under
+   `label`, never thrown into the loop."
+  [key label f]
+  (let [run #(try (timed label f)
+                  (catch Throwable t
+                    (binding [*err* *err*]
+                      (.println ^java.io.PrintWriter *err* (str "WARN: " label " threw — " (ex-message t))))))]
+    (if-not @!poll-in-background?
+      (run)
+      (let [prior (get @!background key)]
+        (when (or (nil? prior) (realized? prior))
+          (swap! !background assoc key (future (run))))))))
+
 (defn- settle-drive-home!
   "Settle a :merge-mode Run's /drive-home turn: a slice's landing Run (:drain-land) from its slice's
    own records (`drain-lane/settle-landing!`), every other by the merge lane's."
@@ -1523,22 +1547,18 @@
         (let [now-ms (System/currentTimeMillis)]
           (doseq [[hash inst] @!source-instances
                   :when (>= (- now-ms (:last-polled-ms inst)) (:poll-ms inst))]
-            (try
-              (timed (str "poll " (name (get-in inst [:source-config :type] :unknown)) " " hash)
-                     (:poll! inst))
-              (catch Exception e
-                (binding [*err* *err*]
-                  (.println ^java.io.PrintWriter *err*
-                            (str "WARN: source " hash " poll! threw — " (ex-message e))))))
+            (off-the-loop [:source hash]
+                          (str "poll " (name (get-in inst [:source-config :type] :unknown)) " " hash)
+                          (:poll! inst))
             (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms))
           ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
           (timed "reclaim" #(maybe-reclaim! now-ms))
           (timed "adopt" #(maybe-adopt! now-ms))
           (timed "settle-reviews" #(maybe-settle-reviews! now-ms))
           (timed "expire-inbox" #(maybe-expire-inbox! now-ms))
-          (timed "github-merges" #(maybe-poll-github-merges! now-ms))
-          (timed "github-issues" #(maybe-poll-github-issues! now-ms))
-          (timed "notion-sync" #(maybe-poll-notion-sync! now-ms))
+          (off-the-loop :github-merges "github-merges" #(maybe-poll-github-merges! now-ms))
+          (off-the-loop :github-issues "github-issues" #(maybe-poll-github-issues! now-ms))
+          (off-the-loop :notion-sync "notion-sync" #(maybe-poll-notion-sync! now-ms))
           (timed "titles" #(maybe-refresh-titles! now-ms)))
         ;; After draining + polling, check anomaly thresholds.
         (when-let [trip (anomaly/check @!detector anomaly-thresholds)]
@@ -1643,6 +1663,7 @@
   (review-queue-nightly-source/register!)             ; register the nightly review-queue grooming
   (start-failures-source/register!)                   ; register the failed-session-start source
   (drain-source/register!)                            ; register the drains' census and slice-start source
+  (reset! !poll-in-background? true)
   (loop []
     (tick!)
     (Thread/sleep poll-ms)

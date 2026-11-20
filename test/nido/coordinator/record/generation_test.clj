@@ -362,3 +362,36 @@
         (is (= [{:claim "one-summing-path" :by "the invoice renderer sums independently"}]
                (:falsified (ws/entry-at-seq :brian id (count g))))
             "a verdict's broken invariant crosses by value; an unmet one falsifies no claim")))))
+
+(defn- quadratic-span
+  "The span read the plain way — each row's generation counted afresh — to hold the one-pass read
+   to."
+  [entries g]
+  (let [ops      (->> entries (filter #(= :generation (:kind %))) (map :seq) sort)
+        gen-at   (fn [n] (inc (count (filter #(<= % n) ops))))
+        kind-at  (fn [n] (:kind (some #(when (= n (:seq %)) %) entries)))
+        free     #{:intent :baseline :baseline-review}
+        spanless (fn [row] (or (free (:kind row))
+                               (and (= :retraction (:kind row)) (free (kind-at (:retracts row))))))]
+    (filterv #(or (spanless %) (= g (gen-at (:seq %)))) entries)))
+
+(deftest the-current-span-is-every-generations-span-read-in-one-pass
+  (let [kinds [:intent :baseline :baseline-review :design :generation :design-decision :retraction :notion-status]
+        rng   (java.util.Random. 7)]
+    (dotimes [_ 300]
+      (let [n       (.nextInt rng 40)
+            entries (vec (for [i (range 1 (inc n))
+                               :let [k (nth kinds (.nextInt rng (count kinds)))]]
+                           (cond-> {:seq i :kind k}
+                             (= :retraction k) (assoc :retracts (inc (.nextInt rng (max 1 n)))))))
+            gens    (inc (count (filter #(= :generation (:kind %)) entries)))]
+        (is (= (quadratic-span entries gens) (generation/current-span entries)) (pr-str entries))
+        (doseq [g (range 0 (+ 2 gens))]
+          (is (= (quadratic-span entries g) (#'generation/span-of entries g)) (pr-str [g entries])))))))
+
+(deftest a-long-ledger-reads-its-span-in-linear-time
+  (let [entries (vec (for [i (range 1 20001)]
+                       {:seq i :kind (if (zero? (mod i 5000)) :generation :notion-status)}))
+        t       (System/nanoTime)]
+    (is (= 1 (count (generation/current-span entries))))
+    (is (< (/ (- (System/nanoTime) t) 1e6) 2000) "20k rows read in well under two seconds")))

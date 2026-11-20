@@ -1,7 +1,7 @@
 (ns nido.platform.io-test
   (:require
    [babashka.fs :as fs]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.platform.io :as io]))
 
 (deftest write-edn!-round-trip
@@ -123,3 +123,19 @@
   ;; listing the directory.
   (is (= "/a/b/.links.edn.lock" (io/lock-path-for "/a/b/links.edn")))
   (is (= (io/lock-path-for "/a/b/links.edn") (io/lock-path-for "/a/b/links.edn"))))
+
+(deftest a-full-cache-keeps-what-was-read-last
+  (let [!c (atom {})]
+    (doseq [k (range 7)] (io/cache-store !c 3 k (* 10 k)))
+    (testing "two turnovers: the oldest half is gone, the last two halves are kept"
+      (is (= [nil nil nil 30 40 50 60] (mapv #(io/cache-lookup !c %) (range 7)))))
+    (testing "a hit on the older half survives the next turnover; what was not hit does not"
+      (let [!c (atom {})]
+        (doseq [k (range 7)] (io/cache-store !c 3 k (* 10 k)))
+        (io/cache-lookup !c 3)
+        (doseq [k [100 101]] (io/cache-store !c 3 k k))
+        (is (= 30 (io/cache-lookup !c 3)))
+        (is (nil? (io/cache-lookup !c 4)))))
+    (testing "bounded at twice the cap"
+      (doseq [k (range 1000)] (io/cache-store !c 3 k k))
+      (is (<= (+ (count (:young @!c)) (count (:old @!c))) 6)))))

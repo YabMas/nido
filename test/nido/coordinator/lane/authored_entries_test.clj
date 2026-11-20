@@ -101,6 +101,32 @@
                  (mapv :status (ws/entries-of :brian id :notion-status)))
               "reopened, it is fetched again"))))))
 
+(deftest views-that-last-saw-a-closed-workstreams-page-differently-record-nothing
+  ;; Two views each keep the status they last saw for a page whose workstream then closed. Were
+  ;; either recorded, each poll would record the opposite of the other's: one closed ticket
+  ;; collected ten thousand entries that way.
+  (with-tmp
+    (fn []
+      (let [id    (:id (ws/create! :brian {:stage :in-progress
+                                           :external-refs [{:adapter :notion :id "BR-1" :page-id "p1"}]}))
+            view  (fn [v status]
+                    (let [pages (atom {"p1" {:status status :br "BR-1"}})
+                          poll! (:poll! (notion-src/start-instance! {:type :notion-view :project :brian :view v}
+                                                                    (fn [_]) {:token "t"}))]
+                      [pages poll!]))
+            [pa a!] (view :a "In progress")
+            [pb b!] (view :b "Review")]
+        (with-redefs [notion-src/poll-once!       (fn [cfg _ _] {:last-poll-result :ok
+                                                                 :pages @(if (= :a (:view cfg)) pa pb)})
+                      notion-client/retrieve-page (fn [_ _] (throw (ex-info "a closed page is not fetched" {})))]
+          (a!) (b!)
+          (reset! pa {}) (reset! pb {})
+          (ws/close! :brian id :done)
+          (let [before (count (ws/entries-of :brian id :notion-status))]
+            (dotimes [_ 3] (a!) (b!))
+            (is (= before (count (ws/entries-of :brian id :notion-status)))
+                "neither view's remembered status is recorded")))))))
+
 (deftest a-poll-reads-the-ledgers-once-however-many-pages-left-its-view
   ;; Every page that ever left a view is asked about on every poll; finding each one's workstream
   ;; by scanning every ledger held the coordinator's loop for most of each poll.

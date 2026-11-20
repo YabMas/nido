@@ -76,6 +76,33 @@
       [(.fileKey a) (str (.lastModifiedTime a)) (.size a)])
     (catch NoSuchFileException _ nil)))
 
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  cache-lookup
+  "The value `k` holds in `!cache`, a cache `cache-store` keeps, or nil. A hit on the older half
+   is moved to the younger, so what is still being read survives the next turnover."
+  [!cache k]
+  (let [{:keys [young old]} @!cache]
+    (if (contains? young k)
+      (get young k)
+      (when (contains? old k)
+        (let [v (get old k)]
+          (swap! !cache (fn [c] (-> c (update :young assoc k v) (update :old dissoc k))))
+          v)))))
+
+(defn ^{:malli/schema [:=> [:cat :any :int :any :any] :any]}
+  cache-store
+  "Keep `v` under `k` in `!cache` (an atom, empty or as `cache-store` left it) and answer `v`.
+   Bounded at twice `cap`: once the younger half holds `cap` entries it becomes the older half and
+   the previous older half is dropped. A reader whose working set is past `cap` keeps the half it
+   read last rather than starting cold — dropping everything at the bound re-parsed every file on
+   every pass once a pass read more than the bound."
+  [!cache cap k v]
+  (swap! !cache (fn [{:keys [young] :as c}]
+                  (if (>= (count young) cap)
+                    {:young {k v} :old young}
+                    (assoc-in c [:young k] v))))
+  v)
+
 (defonce ^:private edn-cache (atom {}))
 
 (def ^:private edn-cache-cap 16384)
@@ -86,17 +113,15 @@
 
    For readers that re-read the same many files on a loop — the board and the
    dashboard read every workstream and session record on every render, ~3000
-   files, nearly all unchanged since the last time. Bounded: past
-   `edn-cache-cap` the cache is dropped whole and refills from what is read."
+   files, nearly all unchanged since the last time. Bounded as `cache-store` is."
   [path]
   (let [p (str path)]
     (when-let [stamp (file-stamp p)]
-      (let [hit (get @edn-cache p)]
+      (let [hit (cache-lookup edn-cache p)]
         (if (= stamp (:stamp hit))
           (:value hit)
           (let [v (read-edn p)]
-            (swap! edn-cache #(assoc (if (>= (count %) edn-cache-cap) {} %)
-                                     p {:stamp stamp :value v}))
+            (cache-store edn-cache edn-cache-cap p {:stamp stamp :value v})
             v))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :any] :any]}

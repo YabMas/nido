@@ -205,8 +205,8 @@
   [project pages wss]
   (let [carrying (by-ref wss)]
     (into []
-          (keep (fn [[page-id {:keys [status br]}]]
-                  (when-let [w (and status br (carrying br))]
+          (keep (fn [[page-id {:keys [status br stale?]}]]
+                  (when-let [w (and status br (not stale?) (carrying br))]
                     (when-not (= status (:status (last (ws/entries-of project (:id w) :notion-status))))
                       (ws/append-entry! project (:id w) {:kind :notion-status}
                                         (pr-str {:format :notion-status :page-id page-id
@@ -255,7 +255,9 @@
    page that stays outside its view still has each edit recorded, until the page returns to the
    view. A page no open workstream carries — its workstream closed, or not yet created — is kept
    as last seen and not asked about, so the BR it maps to is still known when a workstream
-   reopens or first claims it. A page Notion no longer has (404) is left out; any other failure
+   reopens or first claims it; it is marked :stale?, and a status nobody observed is never
+   recorded — views that last saw such a page at different statuses would otherwise record
+   each other's, alternately, on every poll. A page Notion no longer has (404) is left out; any other failure
    to fetch throws, so the poll keeps its baseline and asks again. `wss` is the project's
    workstreams as the poll read them once (`read-all`)."
   [prior-pages pages token wss]
@@ -265,7 +267,7 @@
                 (when (and br (not (contains? pages page-id)))
                   (let [w (carrying br)]
                     (if (or (nil? w) (ws/closure w))
-                      [page-id (select-keys prior [:status :br])]
+                      [page-id (assoc (select-keys prior [:status :br]) :stale? true)]
                       (let [p (notion/retrieve-page page-id token)]
                         (cond
                           (not (:error p))    [page-id {:status (:status (notion/normalise-page p)) :br br}]

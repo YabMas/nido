@@ -348,21 +348,18 @@
    key anyway, so a file that did change is re-read rather than trusted.
 
    Bounded, because the daemon lives for days and the ledgers run to ~100MB of
-   EDN between them: past `parsed-entry-cap` the cache is dropped whole and
-   refills from what is actually being read."
+   EDN between them: as `io/cache-store` bounds it, at twice `parsed-entry-cap`."
   (atom {}))
 
-(def ^:private parsed-entry-cap 4096)
+(def ^:private parsed-entry-cap 8192)
 
 (defn- parse-entry-file
   "`report/parse-event` of the entry file `f` as `kind`, through `parsed-entries`.
    Throws as an uncached read would — a failure is never cached."
   [kind f]
   (let [k [f kind (io/file-stamp f)]]
-    (or (get @parsed-entries k)
-        (let [v (report/parse-event kind (io/read-edn f))]
-          (swap! parsed-entries #(assoc (if (>= (count %) parsed-entry-cap) {} %) k v))
-          v))))
+    (or (io/cache-lookup parsed-entries k)
+        (io/cache-store parsed-entries parsed-entry-cap k (report/parse-event kind (io/read-edn f))))))
 
 (defn- read-entry-at
   "Parse the entry at `seq-n` on the workstream record `w`, through the READ
