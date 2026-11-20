@@ -8,6 +8,17 @@ A project overrides this file with its own `conductor-guidance.md` beside its wo
 (`~/.nido/projects/<project>/conductor-guidance.md`). Edit either to tune where the line falls;
 no code changes.
 
+## While a blocker is open, hold
+
+A workstream with an open blocker is on the person's Needs you list, and that list means the
+workstream is waiting on them. Nothing moves under it: nido refuses an instruction while a blocker
+the person owes is open. Answer each hand-back meanwhile with a hold (`:hold true`), which sends
+nothing; the person's answer comes back to you as a hand-back, and you instruct from there.
+
+The one exception is nido's own stand-in question — the blocker nido parks when you end your turns
+without deciding a hand-back. It is nido's guess, not the person's question: your next instruction
+or escalation withdraws it, so decide the matter yourself when it is yours to decide.
+
 ## Decide it yourself
 
 - The next stage of the recipe is not a person's: write the baseline, the design, run a review,

@@ -684,12 +684,21 @@
          :refused        (update r :refused conj (assoc who :because a))
          :held           (update r :held conj (assoc who :since a))
          (:send :wake)
-         (let [ok (if (= :send kind)
-                    (:delivered? (substrate/send! row a))
-                    (try (:woke? (substrate/wake! sid a (assoc opts :cwd (:cwd row))))
-                         (catch Exception e e)))
+         (let [send!   #(if (= :send kind)
+                          (:delivered? (substrate/send! row a))
+                          (try (:woke? (substrate/wake! sid a (assoc opts :cwd (:cwd row))))
+                               (catch Exception e e)))
+               giving! (get-in opts [:mail :giving!])
+               ok      (if (and message-ids giving!)
+                         (giving! project ws-id session-name message-ids send!)
+                         (send!))
                running (when (instance? Throwable ok) (left-running ok))]
            (cond
+             ;; No longer owed when it was to be sent — a blocker opened since it was read: nothing
+             ;; was given, so it waits where it was, owed still.
+             (= :nido.coordinator.lane.seats/withheld ok)
+             (do (session/update-claude! project ws-id session-name #(assoc % :pending nil))
+                 r)
              (true? ok)
              (do (given! message-ids b)
                  (update r :delivered conj (assoc who :via kind :token b)))
@@ -718,10 +727,12 @@
    — past the position its record keeps for it, decide on the driven one, record the decision and
    the positions, then deliver what it calls for. `opts` may carry :projects, :hold-sends? (true
    while the account is at its usage limit) and :mail — {:owed (fn [project ws-id session-name]
-   [{:id :text} …]) :delivered! (fn [project ws-id id token])}, where the seat messages a session
-   is owed are kept. A message is given like any instruction, tokened, once nothing is queued; it
-   is marked delivered only once the substrate took it, so one whose delivery failed is owed
-   again. Without :mail no session is owed any.
+   [{:id :text} …]) :delivered! (fn [project ws-id id token]) :giving! (fn [project ws-id
+   session-name ids give])}, where the seat messages a session is owed are kept. A message is
+   given like any instruction, tokened, once nothing is queued, its send made through :giving!,
+   which answers ::withheld (`nido.coordinator.lane.seats`), sending nothing, for messages no
+   longer owed by then; it is marked delivered only once the substrate took it, so one whose
+   delivery failed or was withheld is owed again. Without :mail no session is owed any.
 
    Answers what the pass saw, by kind — :named (starts the listing has now named), :turn-ends
    (each Stop read, once, with its :conversation, the :instruction it ended — nil for a turn

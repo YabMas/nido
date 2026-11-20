@@ -1995,6 +1995,10 @@
    ;; answered by prompting that session again. No person's act gave it, so it is handed back as
    ;; no act.
    [:by          {:optional true} [:= :nido]]
+   ;; nido's withdrawal of its own stand-in question — an escalation it parked when the conductor
+   ;; left a hand-back undecided — once the conductor decided a later hand-back: that hand-back and
+   ;; the :conduct-decision entry deciding it. Always :by :nido.
+   [:superseded  {:optional true} [:map {:closed true} [:hand-back [:string {:min 1}]] [:seq int?]]]
    ;; The prompt that answered an escalation decided on a person's turn: the session it was typed
    ;; into, its conversation and when.
    [:prompt      {:optional true} [:map {:closed true}
@@ -2005,7 +2009,10 @@
     (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]
    [:fn {:error/message "an answer carries :summary or :answers, exactly one, and :answers no letter"}
     (fn [{:keys [summary answers letter]}]
-      (and (not= (some? summary) (some? answers)) (not (and answers letter))))]])
+      (and (not= (some? summary) (some? answers)) (not (and answers letter))))]
+   [:fn {:error/message "a withdrawal is nido's, and carries no branch, answers or grants"}
+    (fn [{:keys [superseded by letter answers grants]}]
+      (or (nil? superseded) (and (= :nido by) (nil? letter) (nil? answers) (nil? grants))))]])
 
 (def TriageAnswer
   "The answer to one question of an accepted triage: the question's words when it had any, and
@@ -4105,13 +4112,15 @@
    [:note    {:optional true} string?]])
 
 (def ConductDecision
-  "The conductor's answer to one hand-back: instructions to one or more seats, or an escalation
-   naming what the person is needed for. :position and :next are what the pipeline derived when it
+  "The conductor's answer to one hand-back: instructions to one or more seats, an escalation
+   naming what the person is needed for, or a hold naming the open blocker the workstream waits
+   on, which sends nothing. :position and :next are what the pipeline derived when it
    was decided — a reading kept for the record, never the workstream's current position. :by is
    :nido for what nido writes when a conductor turn ends leaving its hand-back unanswered: a
    :covered naming the later hand-back that supersedes it — the same session's, decided, or the
    person's act that overtook an escalation decided on it (`conductor/decide!`) — or an
-   escalation once the conductor was offered it again and still decided nothing. An escalation's :summary and :options are those of the blocker it parks on, when it
+   escalation once the conductor was offered it again and still decided nothing — or a hold, in
+   place of that escalation, while a blocker is open. An escalation's :summary and :options are those of the blocker it parks on, when it
    parks one. An escalation cites the :blocker it parked the workstream on, which is appended
    before it, so no accepted escalation is ever without its blocker."
   [:map {:closed true}
@@ -4148,7 +4157,10 @@
                                               [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]]
                                             [:fn {:error/message "an escalation asks in :needs or in :questions, exactly one of them, and top-level :options only beside :needs"}
                                              (fn [b] (and (one-question-form? b) (not (and (:questions b) (:options b)))))]]]
-                    [:tuple [:= :covered] [:map {:closed true} [:by [:string {:min 1}]]]]]]
+                    [:tuple [:= :covered] [:map {:closed true} [:by [:string {:min 1}]]]]
+                    ;; Answered while blocked: nothing is sent, and the workstream waits on the
+                    ;; open blocker it names.
+                    [:tuple [:= :hold] [:map {:closed true} [:blocker int?]]]]]
    [:parked    {:optional true} [:map {:closed true} [:seq int?]]]])
 
 ;; ── drains ──────────────────────────────────────────────────────────────────
@@ -5343,6 +5355,7 @@
                (concat [(case verb
                           :instruct "# Conductor instructs"
                           :covered  "# Hand-back covered"
+                          :hold     "# Conductor holds"
                           "# Conductor escalates")
                         ""
                         (str "_" (if (= :nido by) "nido, for a conductor turn that reached no decision"
@@ -5353,6 +5366,8 @@
                          :instruct (map #(str "- **" (addressee->text (:seat %)) "** — " (:text %)) body)
                          :covered  [(str "The later hand-back `" (:by body)
                                          "` supersedes this one; nothing is asked.")]
+                         :hold     [(str "Nothing is sent: the workstream waits on the blocker at entry "
+                                         (:blocker body) ".")]
                          [(let [qs (blocker-questions body)]
                             (if (next qs)
                               (str/join "\n" (for [{:keys [id question]} qs]
@@ -6133,6 +6148,7 @@
                                 (case verb
                                   :instruct (str "Conductor instructs " (str/join ", " (map (comp addressee->text :seat) body)))
                                   :covered  "Hand-back covered by a later one"
+                                  :hold     (str "Conductor holds on the blocker at entry " (:blocker body))
                                   (str "Conductor escalates: " (first-line (blocker-question-text body)))))
     :issue                    (str "Issue " (:id report))
     :triage-accepted          (let [answers (accepted-answers report)

@@ -271,12 +271,22 @@
               hand-back-offers)
            (not (:delivered? m))))))
 
+(defn- blocked?
+  "Whether workstream `w`'s current generation holds a :blocker no :blocker-answered names — the
+   workstream is waiting on the person, so no instruction is given to its seats."
+  [project ws-id w]
+  (let [span (into #{} (comp (filter #(= :blocker (:kind %))) (map :seq)) (generation/current-span (:entries w)))]
+    (boolean (and (seq span)
+                  (seq (remove (into #{} (map :blocker-seq) (ws/entries-of project ws-id :blocker-answered)) span))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:sequential :map]]}
   owed
   "The seat messages the session `session-name` is owed, oldest first, each {:id :kind :text} with
    its sender named in the text — and, for a hand-back, its id, which is what the conductor's
    decision names it by — and :kind as logged (:hand-back, :instruction, or nil): for a seat's occupant, those the log addresses to the seat it
-   occupies in the current generation with no delivery recorded; for the conductor, those
+   occupies in the current generation with no delivery recorded — an :instruction only while no
+   blocker of the current generation is open, so one queued before a blocker waits out its
+   answer; for the conductor, those
    `owed-to-conductor?` says. Derived each time, so a replaced occupant's successor is owed what
    it was, and a session that is no seat's or conductor's is owed nothing. Empty for a workstream
    or record not there.
@@ -303,8 +313,27 @@
         (into [] (comp (filter #(owed-to-conductor? % w answered conversation)) as-owed)
               (with-deliveries (log-rows project ws-id))))
       :else
-      (into [] (comp (filter #(and (= to (:to %)) (not (:delivered? %)))) as-owed)
-            (traffic project ws-id g)))))
+      (let [held? (delay (blocked? project ws-id w))]
+        (into [] (comp (filter #(and (= to (:to %)) (not (:delivered? %))
+                                     (not (and (= :instruction (:kind %)) @held?))))
+                       as-owed)
+              (traffic project ws-id g))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:sequential :string] [:=> [:cat] :any]] :any]}
+  giving!
+  "Answer `(give)` — the send that gives session `session-name` the seat messages `ids` — holding
+   the workstream's append lock, and only while `owed` still owes it every one of them, read
+   under that lock; ::withheld, giving nothing, otherwise. Every blocker is appended under this
+   lock, so none opens between the check and the send: an instruction `owed` answered before a
+   blocker opened is not given while it stands, on a first delivery or a retry. `give` appends
+   to no ledger."
+  [project ws-id session-name ids give]
+  (ws/holding-ledger
+   project ws-id
+   (fn [_]
+     (if (every? (set (map :id (owed project ws-id session-name))) ids)
+       (give)
+       ::withheld))))
 
 (defn- conversation-given
   "The conversation of the workstream's session whose outstanding instruction carries `token` —

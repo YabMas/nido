@@ -919,6 +919,27 @@
           (is (= 1 (count (:delivered (conduct/conduct! {:projects [:nido] :mail mail}))))))
         (is (= ["m1" "m2"] @delivered) "both given in the one turn, each marked")))))
 
+(deftest a-seat-message-withheld-at-the-send-is-not-sent
+  ;; What was owed when the record was read may be owed no more when it is sent (a blocker opened):
+  ;; :giving! withholds it, nothing reaches the substrate, nothing is marked, and it stays owed.
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 2)))
+      (let [delivered (atom [])
+            sent      (atom 0)
+            mail {:owed (fn [_ _ n] (if (= "kid" n) [{:id "m1" :text "first"}] []))
+                  :delivered! (fn [_ _ id _] (swap! delivered conj id))
+                  :giving! (fn [_ _ _ ids _] (is (= ["m1"] ids)) :nido.coordinator.lane.seats/withheld)}]
+        (with-redefs [substrate/listing (constantly [done-row])
+                      substrate/send!   (fn [_ _] (swap! sent inc) {:delivered? true})]
+          (let [r (conduct/conduct! {:projects [:nido] :mail mail})]
+            (is (empty? (:delivered r)))
+            (is (empty? (:failed r)))))
+        (is (zero? @sent) "nothing reaches the session")
+        (is (= [] @delivered) "nothing is marked given")
+        (is (nil? (:pending (facet))) "and nothing is outstanding")))))
+
 (deftest outstanding-is-what-the-next-fold-would-leave
   (with-tmp
     (fn []

@@ -9,6 +9,7 @@
    [clojure.string :as str]
    [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.embodied-strata :as embodied]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.seats :as rseats]
@@ -72,11 +73,13 @@
    :recommendation \"…\" only when the conductor genuinely holds a view, and :options
    '[{:label … :summary …} …]' when it names the branches;
    :seat <id> :text \"…\" for one instruction, or :instruct '[{:seat … :text …} …]' for several —
-   a drain's coordinator naming {:slice <ws-id> :text …} for a slice's whole seat. Refused from any
-   session but the conductor's."
-  [{:keys [hand-back escalate summary after recommendation options seat text instruct] :as opts}]
+   a drain's coordinator naming {:slice <ws-id> :text …} for a slice's whole seat; :hold true while
+   the workstream waits on an open blocker, which sends nothing. Refused from any session but the
+   conductor's."
+  [{:keys [hand-back escalate summary after recommendation options seat text instruct hold] :as opts}]
   (let [[p id] (here opts)
         decision (cond
+                   hold     [:hold {:blocker (or (pipeline/owed-blocker p id) 0)}]
                    escalate [:escalate (cond-> {:needs (str escalate)}
                                          summary        (assoc :summary (str summary))
                                          after          (assoc :after (str after))
@@ -94,7 +97,7 @@
                                                                   (:id (first (filter :whole (rseats/seats p slice)))))))
                                                  (update i :seat (partial seat-id p id))))
                                              (edn/read-string (str instruct)))]
-                   :else    (throw (ex-info "Pass :escalate \"…\", :seat <id> :text \"…\", or :instruct [{:seat :text} …]"
+                   :else    (throw (ex-info "Pass :escalate \"…\", :seat <id> :text \"…\", :instruct [{:seat :text} …], or :hold true"
                                             {:opts opts})))]
     (conductor/decide! p id {:hand-back (str hand-back) :decision decision})))
 
@@ -140,7 +143,7 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   replace-cmd [& args] (run* replace* args #{:seat}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  decide-cmd [& args] (run* decide* args #{:hand-back :escalate :summary :after :recommendation :options :seat :text :instruct}))
+  decide-cmd [& args] (run* decide* args #{:hand-back :escalate :summary :after :recommendation :options :seat :text :instruct :hold}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   record-cmd [& args]
   (run* record* args #{:to :about :statement :terms :note :ids :why :tensions}))

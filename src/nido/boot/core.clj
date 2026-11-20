@@ -596,7 +596,7 @@
   [now-ms]
   (let [projects (registered-projects)
         r        (timed "conduct read" #(conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)
-                                                           :mail {:owed seats/owed :delivered! seats/delivered!}}))]
+                                                           :mail {:owed seats/owed :delivered! seats/delivered! :giving! seats/giving!}}))]
     (when-not (:skipped r)
       (timed "conduct settle-turn-ends" #(settle-turn-ends! r))
       (timed "conductor pass" #(conductor-pass! r now-ms))

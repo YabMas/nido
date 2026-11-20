@@ -20,19 +20,21 @@
             [fukan.common.typing.malli]))
 
 (Kind ConductDecision
-  "The conductor's answer to one hand-back: instructions to one or more seats, or an escalation
-   naming what the person is needed for."
+  "The conductor's answer to one hand-back: instructions to one or more seats, an escalation
+   naming what the person is needed for, or a hold naming the open blocker the workstream waits on."
   [:map [:hand-back :string]
         [:decision [:or [:tuple [:enum :instruct]
                                 [:vector {:min 1} [:map [:seat SeatId] [:text :string]]]]
-                        [:tuple [:enum :escalate] [:map [:needs :string]]]]]])
+                        [:tuple [:enum :escalate] [:map [:needs :string]]]
+                        [:tuple [:enum :hold] [:map [:blocker :int]]]]]])
 
 (Kind DecideResult
   "What decide! answers: the decision accepted with the entry it appended, or refused by a named
    reason."
   [:or [:tuple [:enum :accepted] :map]
        [:tuple [:enum :refused] [:enum :not-the-conductor :not-a-hand-back :already-answered
-                                    :already-asked :overtaken :not-a-seat]]])
+                                    :already-asked :overtaken :not-a-seat
+                                    :blocked :not-blocked]]])
 
 (Module lane-conductor
   "Who decides what a workstream's seats do next, and what reaches the person.
@@ -159,9 +161,7 @@
      open, or a dead-turn blocker still standing: a blocker nido wrote
      that no longer asks anything is answered by nido, saying why — a review stage's halt, at any
      outcome, once a record of the kind that stage reviews that no review loop's amender wrote is
-     on the ledger after it, and
-     nido's escalation of a hand-back the conductor did not decide once the conductor decides a later
-     hand-back from the same session; a dialog a driven session has stood on for
+     on the ledger after it; a dialog a driven session has stood on for
      two minutes becomes a :blocker nido writes for a person, worded with what the dialog asks and
      answered by nido once it closes; on an activated workstream not paused, an open turn whose
      process every witness says is gone becomes a :blocker for a person carrying the command that
@@ -183,10 +183,14 @@
     "Record the conductor's answer to a hand-back and carry it out, as one step under the ledger's
      append lock, so no seat it names can be removed between: everything is checked before
      anything is written, an escalation parks the workstream on the blocker it then cites, and an
-     instruction is posted to each seat it names once the decision is recorded. Refused, by name,
-     from any session but the conductor's, for no hand-back or one already answered, and for an
-     addressee that is not a seat when it is recorded; a decision the ledger refuses writes and
-     posts nothing."
+     instruction is posted to each seat it names once the decision is recorded. A workstream on
+     Needs you is stalled: an instruction is refused while the workstream, or the slice it
+     instructs, holds an open blocker other than nido's stand-in escalations, and an instruction or
+     escalation withdraws those stand-ins as superseded in the same step — an escalation then
+     parking its own blocker in their place. A hold answers a hand-back while blocked and posts
+     nothing, and is refused when nothing is open. Refused, by name, from any session but the
+     conductor's, for no hand-back or one already answered, and for an addressee that is not a seat
+     when it is recorded; a decision the ledger refuses writes and posts nothing."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:decision ConductDecision]] DecideResult]
      :delegates [drive/of drive/park-held! seats/post-held! workstream/appending!]})
   (Operation awaiting-answer?
@@ -221,8 +225,9 @@
   (Operation close-unanswered!
     "When a conductor turn ends, escalate the hand-back delivered to it for that turn — the one
      delivered under the ended instruction's token — if the turn left it unanswered, naming that
-     the conductor reached no decision. A hand-back not yet delivered, or delivered for a turn that
-     has not ended, stays owed."
+     the conductor reached no decision; while a blocker is open, hold it instead, naming that
+     blocker, since the person is already asked. A hand-back not yet delivered, or delivered for a
+     turn that has not ended, stays owed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session SessionName]
                      [:instruction [:maybe :map]]] [:sequential :map]]
      :delegates [seats/traffic drive/park-held! workstream/appending!]})

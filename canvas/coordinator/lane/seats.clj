@@ -167,8 +167,17 @@
      addressed to the current generation's whole seat once it fixes ids; for the conductor, a
      hand-back no decision answers counts as undelivered until its running conversation was given
      it, so one a stopped conversation took is owed again. An occupant's successor is owed what it
-     was."
+     was. A seat's occupant is owed no instruction while the workstream's current generation holds
+     an open blocker: a workstream on Needs you is stalled."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] [:sequential :map]]})
+  (Operation giving!
+    "Make the send that gives a session the seat messages it was read as owed, holding the
+     workstream's append lock, only while it is owed every one of them still, read under that
+     lock; withheld, giving nothing, otherwise. Every blocker is appended under that lock, so none
+     opens between the check and the send: an instruction is given to no seat once a blocker
+     stands, on a first delivery or a retry."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]
+                      [:ids [:sequential :string]] [:give [:=> [:cat] :any]]] :any]})
   (Operation delivered!
     "Record that a seat message was given to its addressee's session under a token, and to the
      conversation whose outstanding instruction carries that token — read from the session's

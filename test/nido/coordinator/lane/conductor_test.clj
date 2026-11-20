@@ -1769,3 +1769,190 @@
           (reset! posted [])
           (with-redefs [project/landing (constantly :pr-auto)]
             (is (empty? (conductor/instruct-landing! :brian)) "a spent grant is instructed no more")))))))
+
+;; ── a workstream on Needs you is stalled ────────────────────────────────────
+
+(defn- hand-back-from!
+  "Post one hand-back to workstream `id`'s conductor from its session `n` — a turn nido gave there
+   that ended, a fresh one per call."
+  [id n]
+  (when-not (session/read-session :brian id n)
+    (session/create! :brian id {:name n :weight :heavy :autonomy nil}))
+  (first (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session n :event {:last-message "done"}
+                                             :instruction {:token (str (random-uuid))} :run nil}]})))
+
+(defn- person-blocker!
+  "Park workstream `id` on a blocker a person owes; answers its seq."
+  [id]
+  (parse-long (second (re-find #"/(\d+)-blocker\.edn$"
+                               (ws/append-entry! :brian id {:kind :blocker}
+                                                 (pr-str {:format :blocker :summary "A question only the person answers."
+                                                          :needs "Which way should it go?"
+                                                          :after "The work resumes on the answer."}))))))
+
+(defn- stand-in!
+  "Have nido escalate hand-back `hb` as its stand-in, the conductor `c` ending two turns on it
+   undecided; answers the blocker it parked."
+  [id c hb]
+  (doseq [tok ["tok" "tok-2"]]
+    (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] tok))
+    (seats/delivered! :brian id (:id hb) tok))
+  (get-in (first (conductor/close-unanswered! :brian id c {:token "tok-2"})) [:parked :seq]))
+
+(defn- instructions [id] (filter #(= :instruction (:kind %)) (seats/traffic :brian id (generation/current (:entries (ws/read-ws :brian id))))))
+
+(deftest an-instruction-is-held-while-a-blocker-is-open
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (let [b       (person-blocker! id)
+              hb      (hand-back! id)
+              decided #(count (ws/entries-of :brian id :conduct-decision))]
+          (is (= [:refused :blocked]
+                 (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:instruct [{:seat 1 :text "go on"}]]}))))
+          (is (zero? (decided)) "nothing is written")
+          (is (empty? (instructions id)) "and nothing is posted")
+          (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:hold {:blocker b}]})))))
+          (is (empty? (instructions id)) "a hold sends nothing")
+          (is (empty? (ws/entries-of :brian id :blocker-answered)) "and answers no blocker")
+          (ws/append-entry! :brian id {:kind :blocker-answered} (pr-str {:format :blocker-answered :blocker-seq b :summary "this way"}))
+          (let [hb2 (hand-back! id)]
+            (is (= [:refused :not-blocked]
+                   (in-session c #(conductor/decide! :brian id {:hand-back (:id hb2) :decision [:hold {:blocker b}]})))
+                "a hold names an open blocker")
+            (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back (:id hb2) :decision [:instruct [{:seat 1 :text "go on"}]]})))))
+            (is (= ["go on"] (map :text (instructions id))) "answered, the instruction goes out")))))))
+
+(deftest the-conductors-instruction-withdraws-nidos-stand-in-from-any-session
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
+        (let [parked (stand-in! id c (hand-back! id))
+              hb     (hand-back-from! id "elsewhere")]
+          (is (some? parked) "nido's stand-in parked the workstream")
+          (is (= parked (pipeline/owed-blocker :brian id)))
+          (let [[verdict e] (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:instruct [{:seat 1 :text "go on"}]]}))
+                at (:seq (last (ws/entries-of :brian id :conduct-decision)))
+                w  (first (filter #(= parked (:blocker-seq %)) (ws/entries-of :brian id :blocker-answered)))]
+            (is (= :accepted verdict))
+            (is (= {:hand-back (:id hb) :seq at} (:superseded w)) "withdrawn, naming the hand-back and the decision")
+            (is (= :nido (:by w)))
+            (is (every? nil? ((juxt :letter :label :answers :grants) w)) "and no answer of the person's")
+            (is (> (:seq w) at) "after the decision it is superseded by")
+            (is (nil? (pipeline/owed-blocker :brian id)) "so it leaves Needs you")
+            (is (= ["go on"] (map :text (instructions id))))))))))
+
+(deftest a-hand-back-left-undecided-while-blocked-is-held
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
+        (let [b  (person-blocker! id)
+              hb (hand-back! id)]
+          (doseq [tok ["tok" "tok-2"]]
+            (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] tok))
+            (seats/delivered! :brian id (:id hb) tok))
+          (let [[e] (conductor/close-unanswered! :brian id c {:token "tok-2"})]
+            (is (= [:hold {:blocker b}] (:decision e)) "the person is already asked: nido holds")
+            (is (= :nido (:by e)))
+            (is (nil? (:parked e)))
+            (is (= [b] (map :seq (ws/entries-of :brian id :blocker))) "no second copy of the question")))))))
+
+(deftest an-unreadable-blocker-holds-an-instruction
+  ;; Needs you finds blockers on the index (`pipeline/owed-blocker`); one whose payload no longer
+  ;; reads is still open there, so it holds the conductor's instruction too.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (let [path (ws/append-entry! :brian id {:kind :blocker}
+                                     (pr-str {:format :blocker :summary "s" :needs "n?" :after "a"}))
+              b    (parse-long (second (re-find #"/(\d+)-blocker\.edn$" path)))
+              _    (spit path "{:format :blocker")
+              hb   (hand-back! id)]
+          (is (= b (pipeline/owed-blocker :brian id)) "Needs you shows it")
+          (is (= [:refused :blocked]
+                 (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:instruct [{:seat 1 :text "go on"}]]}))))
+          (is (empty? (ws/entries-of :brian id :conduct-decision)) "nothing is written")
+          (is (empty? (instructions id)) "and nothing is posted"))))))
+
+(deftest a-hold-names-the-blocker-open-when-it-is-recorded
+  ;; The conductor's :hold names the blocker it read outside the lock (`bb nido:seats:decide :hold
+  ;; true` passes 0 when it read none); recorded, it names the blocker open under the lock.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (let [b  (person-blocker! id)
+              hb (hand-back! id)
+              [v e] (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:hold {:blocker 0}]}))]
+          (is (= :accepted v))
+          (is (= [:hold {:blocker b}] (:decision e)) "it names the open blocker"))))))
+
+(deftest a-blocker-opening-while-nido-settles-a-hand-back-is-not-asked-twice
+  ;; A blocker opened by another writer while close-unanswered! settles the hand-back: whether to
+  ;; hold or escalate is chosen under the append lock that records it, so the escalation is made
+  ;; only with nothing open, and no blocker other than its own precedes it.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
+        (let [hb     (hand-back! id)
+              esc    @#'conductor/unanswered-escalation
+              writer (atom nil)]
+          (doseq [tok ["tok" "tok-2"]]
+            (session/update-substrate! :brian id c #(assoc-in % [:claude :pending :token] tok))
+            (seats/delivered! :brian id (:id hb) tok))
+          (with-redefs [conductor/unanswered-escalation
+                        (fn [m offers]
+                          (when (nil? @writer)
+                            (reset! writer (future (person-blocker! id)))
+                            (deref @writer 1500 nil))
+                          (esc m offers))]
+            (let [[e] (conductor/close-unanswered! :brian id c {:token "tok-2"})
+                  at  (:seq (last (ws/entries-of :brian id :conduct-decision)))]
+              @@writer
+              (is (some? e))
+              (is (every? #(= (get-in e [:parked :seq]) (:seq %))
+                          (filter #(< (:seq %) at) (ws/entries-of :brian id :blocker)))
+                  "no blocker but its own was open when nido escalated"))))))))
+
+(deftest the-02c84d-shape-leaves-no-stale-question
+  ;; nido ws-20261117-02c84d: the person approved the design (102); the conductor left that act's
+  ;; hand-back — posted under the conductor's own session — undecided, so nido parked its stand-in
+  ;; (105); the conductor then instructed the seat's hand-backs 21 times while 105 stayed on Needs
+  ;; you. The first such instruction now withdraws it.
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (driving id c "conv-1" {:token "tok" :at "t" :via :send :seen? false})
+        (let [act    (#'conductor/post-hand-back! :brian id "act:2"
+                                                   {:what "the person's design-approved at entry 2" :session c :said "go"})
+              parked (stand-in! id c act)]
+          (is (some? parked))
+          (dotimes [_ 3]
+            (let [hb (hand-back-from! id "the-seat")]
+              (is (= :accepted (first (in-session c #(conductor/decide! :brian id {:hand-back (:id hb) :decision [:instruct [{:seat 1 :text "build it"}]]})))))))
+          (is (nil? (pipeline/owed-blocker :brian id)) "nothing stale on Needs you")
+          (let [entries (:entries (ws/read-ws :brian id))
+                answered (into {} (map (juxt :blocker-seq identity)) (ws/entries-of :brian id :blocker-answered))]
+            (doseq [b (ws/entries-of :brian id :blocker)
+                    d (ws/entries-of :brian id :conduct-decision)
+                    :when (and (= :instruct (first (:decision d))) (> (:seq d) (:seq b)))
+                    :let [a (answered (:seq b))]]
+              (is (and a (or (< (:seq a) (:seq d)) (= (:seq d) (get-in a [:superseded :seq]))))
+                  "no instruction falls between a blocker and its answer but the one that withdrew it"))
+            (is (seq entries))))))))

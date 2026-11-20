@@ -726,3 +726,59 @@
                                       (catch Exception e e))))))
         (is (= :conductor (:to (in-session mine #(seats/record! :brian id {:format :tension :to :conductor
                                                                           :about ["agg"] :statement "s"})))))))))
+
+(deftest an-instruction-posted-before-a-blocker-waits-until-it-is-answered
+  ;; A workstream on Needs you is stalled: an instruction already in a seat's log when a blocker
+  ;; opens is given to no seat until that blocker is answered. A seat's own message is not held.
+  (with-tmp
+    (fn []
+      (let [[id] (ledger strata)
+            ledger-seat (str id "--canvas_dstrata_sledger-g1")
+            seats-seat  (str id "--canvas_dstrata_sseats-g1")]
+        (launching [_ _]
+          (embodied/carry! :brian id)
+          (seats/conductor! :brian id "conduct it"))
+        (seats/post! :brian id {:key "d1" :kind :instruction :to "canvas.strata/ledger" :text "settle it"})
+        (in-session ledger-seat #(seats/send! :brian id {:to "canvas.strata/seats" :text "your read is mine"}))
+        (let [b (ws/append-entry! :brian id {:kind :blocker}
+                                  (pr-str {:format :blocker :summary "A question only the person answers."
+                                           :needs "Which way should it go?" :after "The work resumes on the answer."}))
+              b (parse-long (second (re-find #"/(\d+)-blocker\.edn$" b)))]
+          (is (= [] (seats/owed :brian id ledger-seat)) "the instruction waits while the blocker stands")
+          (is (= ["[seat message from seat canvas.strata/ledger]\n\nyour read is mine"]
+                 (mapv :text (seats/owed :brian id seats-seat)))
+              "a seat's own message is not an instruction, and is still given")
+          (ws/append-entry! :brian id {:kind :blocker-answered}
+                            (pr-str {:format :blocker-answered :blocker-seq b :summary "this way"}))
+          (is (= ["[seat message from nido]\n\nsettle it"] (mapv :text (seats/owed :brian id ledger-seat)))
+              "and is given once the blocker is answered"))))))
+
+(deftest an-instruction-read-as-owed-is-not-sent-once-a-blocker-opens
+  ;; Conduct reads what a seat is owed, then sends it later: the send is made through giving!,
+  ;; under the append lock every blocker takes, and only while it is still owed then.
+  (with-tmp
+    (fn []
+      (let [[id] (ledger strata)
+            ledger-seat (str id "--canvas_dstrata_sledger-g1")]
+        (launching [_ _]
+          (embodied/carry! :brian id)
+          (seats/conductor! :brian id "conduct it"))
+        (seats/post! :brian id {:key "d1" :kind :instruction :to "canvas.strata/ledger" :text "settle it"})
+        (let [ids  (mapv :id (seats/owed :brian id ledger-seat))
+              sent (atom 0)
+              give #(swap! sent inc)]
+          (is (= 1 (count ids)) "read as owed")
+          (testing "no blocker opens while it is being given"
+            (let [opened (atom nil)
+                  r (seats/giving! :brian id ledger-seat ids
+                                   (fn []
+                                     (let [f (future (ws/append-entry! :brian id {:kind :blocker}
+                                                                       (pr-str {:format :blocker :summary "s" :needs "n?" :after "a"})))]
+                                       (reset! opened f)
+                                       (is (= ::waiting (deref f 500 ::waiting)) "the blocker waits for the send")
+                                       (give))))]
+              @@opened
+              (is (= 1 r))))
+          (is (= :nido.coordinator.lane.seats/withheld (seats/giving! :brian id ledger-seat ids give))
+              "once a blocker stands, what was read as owed is withheld")
+          (is (= 1 @sent) "and nothing more is sent"))))))

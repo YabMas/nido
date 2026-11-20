@@ -78,7 +78,8 @@
      session marked with whether its workstream is activated — or, when the listing cannot be
      read, that the pass was skipped and decided nothing. Seat
      messages are asked of the mail its caller supplies — what each session is owed, oldest first
-     — given tokened once nothing is queued, and marked delivered, with the token given, only once
+     — given tokened once nothing is queued, each send made through the mail's giving, which
+     withholds what is owed no more by then, and marked delivered, with the token given, only once
      the substrate took them; conduct keeps none itself."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [decide baseline-shown events/events-since events/conversations substrate/listing substrate/send! substrate/wake!]})

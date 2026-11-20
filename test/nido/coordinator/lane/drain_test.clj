@@ -21,6 +21,7 @@
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.report :as report]
    [nido.platform.core :as core]
    [nido.review.stages :as stages]
    [tasks.nido-review :as review]
@@ -181,6 +182,35 @@
           (is (= :accepted (first (in-session c #(conductor/decide! p d go)))))
           (is (= ["carry on"] (mapv :text (filter #(= :instruction (:kind %)) (seats/traffic p slice 1))))
               "the instruction reaches the slice's own seat"))))))
+
+(deftest no-blocker-opens-on-a-slice-between-its-check-and-the-decision
+  ;; A slice's blocker opened by another writer while the drain's decision is being recorded:
+  ;; the slice's own append lock is held from its check through the drain's appends, so that
+  ;; writer waits until the decision is taken, and the decision was made on an unblocked slice.
+  (with-tmp
+    (fn []
+      (let [[d c] (coordinated-drain)
+            census (:seq (drain/newest-census (ws/read-ws p d)))
+            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            _      (deliver-wakes! d)
+            {:keys [slice session]} (launching [_] (lane/start-slice! p d plan))
+            hb     (:id (first (conductor/hand-backs! {:turn-ends [{:project p :ws-id slice :session session :event {}
+                                                                    :instruction {:token "t1"} :run nil}]})))
+            payload report/entry-payload
+            raced  (atom nil)
+            writer (atom nil)]
+        (with-redefs [report/entry-payload
+                      (fn [kind content]
+                        (when (and (= :conduct-decision kind) (nil? @writer))
+                          (reset! writer (future (ws/append-entry! p slice {:kind :blocker}
+                                                                   (pr-str {:format :blocker :summary "s" :needs "n?" :after "a"}))))
+                          (reset! raced (deref @writer 1500 ::waited)))
+                        (payload kind content))]
+          (let [r (in-session c #(conductor/decide! p d {:hand-back hb :decision [:instruct [{:slice slice :seat 1 :text "go"}]]}))]
+            @@writer
+            (is (some? @writer) "the other writer ran")
+            (is (or (= [:refused :blocked] r) (= ::waited @raced))
+                "the slice's blocker landed only once the decision was taken")))))))
 
 (deftest an-instruction-to-a-slice-behind-the-recipe-carries-its-brief
   (with-tmp

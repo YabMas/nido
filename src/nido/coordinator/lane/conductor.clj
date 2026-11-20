@@ -213,6 +213,11 @@
          "be granted: closing stays the person's. No option approves a design: a design is built "
          "once its decision round proceeds, and a person's answer to a design question is read by "
          "the next round.\n\n"
+         "A workstream with an open blocker is waiting on the person, and nothing moves under it: "
+         "while one is open an instruction is refused, and you answer each hand-back with "
+         "`:hold true`, which sends nothing — unless the only open blockers are nido's own stand-in "
+         "questions, asked because you left a hand-back undecided, which your instruction or "
+         "escalation withdraws. The person's answer comes back to you as a hand-back.\n\n"
          "Seats: " (seats-line (rseats/seats project ws-id)) "\n"
          "Governing design: " (design-line design) "\n"
          "Position: " (name position) (when next (str ", next " (pr-str next))) "\n\n"
@@ -451,11 +456,15 @@
   (boolean (and s (or (:dispatching s) (= :nido (get-in s [:claude :driver]))))))
 
 (defn- taken?
-  "Whether a live session nido drives is owed seat message `m` of the workstream."
+  "Whether seat message `m` of the workstream has a taker: a live session nido drives occupies the
+   seat it is addressed to, so it is given the message once nothing holds it. Read off the seat, not
+   off what `seats/owed` answers now — an instruction waiting out an open blocker is held, not
+   undeliverable, and reading it as untaken would leave this module's own blocker unanswerable."
   [project ws-id m]
-  (boolean (some (fn [{:keys [session]}]
-                   (and (driven-session? (session/read-session project ws-id session))
-                        (some #(= (:id m) (:id %)) (seats/owed project ws-id session))))
+  (boolean (some (fn [{:keys [session seat]}]
+                   (and (= seat (:to m))
+                        (not (:delivered? m))
+                        (driven-session? (session/read-session project ws-id session))))
                  (seats/occupants project ws-id))))
 
 (defn- undelivered-blocker
@@ -730,11 +739,17 @@
 
 (defn- open-blockers
   "The current generation's blockers no :blocker-answered answers, oldest first — an earlier
-   generation's blocker is none a person's act now can answer."
+   generation's blocker is none a person's act now can answer. Found on the index, as
+   `pipeline/owed-blocker` finds them, so this is the set Needs you shows: a blocker whose payload
+   no longer reads was still raised, and stands here as {:seq <n> :unread true}: it asks nothing
+   nido can read, so it is none of nido's stand-ins (`stand-in?`) and waits for the person."
   [project ws-id]
-  (let [span     (into #{} (map :seq) (generation/current-span (:entries (ws/read-ws project ws-id))))
-        answered (set (map :blocker-seq (ws/entries-of project ws-id :blocker-answered)))]
-    (filterv #(and (span (:seq %)) (not (answered (:seq %)))) (ws/entries-of project ws-id :blocker))))
+  (let [answered (into #{} (keep :blocker-seq) (ws/entries-of project ws-id :blocker-answered))]
+    (into []
+          (comp (filter #(= :blocker (:kind %)))
+                (remove #(answered (:seq %)))
+                (map #(or (ws/entry-at-seq project ws-id (:seq %)) {:seq (:seq %) :unread true})))
+          (sort-by :seq (generation/current-span (:entries (ws/read-ws project ws-id)))))))
 
 (defn- answered? [project ws-id id]
   (boolean (some #(= id (:hand-back %)) (ws/entries-of project ws-id :conduct-decision))))
@@ -775,60 +790,130 @@
   (boolean (when-let [slice (:slice m)]
              (some #(= slice (:slice %)) (some-> (ws/read-ws project ws-id) drain/open-misfits)))))
 
+(defn- stand-in?
+  "Whether open blocker `b` is one of nido's stand-ins: parked by an escalation nido wrote for a
+   hand-back the conductor ended its turns without deciding — a guess at a question, not one the
+   conductor or a review asked. A blocker whose payload does not read (:unread) is never one: what
+   it asks cannot be told, so the person owes it."
+  [decisions b]
+  (boolean (and (not (:unread b)) (some #(and (= :nido (:by %)) (= :escalate (first (:decision %))) (= (:seq b) (get-in % [:parked :seq])))
+                      decisions))))
+
+(defn- withdrawal
+  "nido's answer withdrawing stand-in blocker `b`, superseded by the decision on `hand-back` that
+   the ledger holds at entry `at`."
+  [b hand-back at]
+  {:format :blocker-answered :blocker-seq (:seq b) :resumed nil :by :nido
+   :superseded {:hand-back hand-back :seq at}
+   :summary (str "it no longer asks anything: the conductor has since decided hand-back " hand-back
+                 " at entry " at ", which supersedes nido's stand-in question")})
+
+(defn- holding-ledgers
+  "Answer `(f)` holding the append lock of each workstream in `ws-ids`, taken in that order.
+   `f` appends to none of them."
+  [project ws-ids f]
+  (if-let [[id & more] (seq ws-ids)]
+    (ws/holding-ledger project id (fn [_] (holding-ledgers project more f)))
+    (f)))
+
 (defn- record-decision!
   "Append the :conduct-decision `entry` and carry it out, as one step under the ledger's append lock
-   (`ws/appending!`), so no opening or design approval falls between: everything is checked before
-   anything is written — the seats an instruction names, the decision itself, and an escalation's
-   blocker — and each effect runs only once what it depends on is taken. An escalation parks the
-   workstream on its blocker, which the decision then cites; an instruction is posted to each seat
-   it names once the decision is recorded. An escalation made while the position owes a person a
-   move parks nothing: that move's card already asks them, and the decision rides on it as a note.
-   A seat that is gone, or a decision or blocker the ledger refuses, throws with nothing written or
-   posted. Answers the entry."
-  [project ws-id {:keys [hand-back decision position next] :as entry}]
-  (let [[verb body] decision
-        ;; A person who already owes a move has that move's card in front of them; a second
-        ;; blocker re-asking it is a second copy of one question, and answering the card would
-        ;; leave the copy owed. So an escalation at a person's move parks nothing: the decision is
-        ;; its record, and the card shows its question as a note.
-        ;; The question form is copied whole — one :needs or several :questions — since the
-        ;; blocker asks exactly what the escalation asked.
-        halt        (when (and (= :escalate verb) (parks? next))
-                      (merge {:stage :conduct :outcome :escalated
-                              :summary (:summary body)
-                              :after   (:after body)}
-                             (select-keys body [:needs :questions :recommendation :options])))]
-    (ws/appending!
-     project ws-id
-     (fn [{:keys [check! append!]}]
+   (`ws/appending!`), so no opening, design approval or answer falls between: everything is checked
+   before anything is written — the seats an instruction names, the decision itself, the open
+   blockers and an escalation's blocker — and each effect runs only once what it depends on is
+   taken.
+
+   A workstream on Needs you is stalled. Its open blockers split into nido's stand-ins
+   (`stand-in?`) and what a person owes. An instruction is refused (:blocked) while the workstream
+   — or a slice it instructs — holds anything a person owes; otherwise the decision is appended,
+   then each stand-in is withdrawn as superseded by it, and only then are the seats posted to. An
+   escalation withdraws the stand-ins the same way, and with nothing a person owes left open it
+   parks its own blocker in their place; otherwise an escalation made while the position owes a
+   person a move parks nothing: that move's card already asks them, and the decision rides on it as
+   a note. A :hold posts nothing and is refused (:not-blocked) when no blocker is open. A seat that
+   is gone, or a decision or blocker the ledger refuses, throws with nothing written or posted.
+
+   Each slice an instruction names has its own ledger, so its append lock is held too, taken after
+   the drain's as a slice's start takes them, from the check of its blockers until the drain's
+   appends are made: no blocker opens on it between. Its posts follow once that lock is released,
+   since briefing a slice appends to it; a blocker opening on it then is waited out by `owed`.
+
+   `decision` may be a function of the open blockers answering the decision, so a decision whose
+   kind turns on whether one is open is chosen under the lock that records it. A :hold names the
+   newest open blocker when the one it names is open no longer. Answers the entry."
+  [project ws-id {:keys [hand-back next] :as entry}]
+  (ws/appending!
+   project ws-id
+   (fn [{:keys [check! append!]}]
+     (let [open     (open-blockers project ws-id)
+           decision (let [d (:decision entry)] (if (fn? d) (d open) d))
+           decision (if (and (= :hold (first decision)) (seq open)
+                             (not-any? #(= (:blocker (second decision)) (:seq %)) open))
+                      [:hold (assoc (second decision) :blocker (:seq (last open)))]
+                      decision)
+           entry    (assoc entry :decision decision)
+           [verb body] decision
+           ;; Only the drain's own slices: a name that is none is refused below as no seat.
+           slice-ids (when (= :instruct verb)
+                       (let [ours (set (map :ws-id (some-> (ws/read-ws project ws-id) drain/slices)))]
+                         (sort (filter ours (distinct (keep :slice body))))))
+           recorded
+           (holding-ledgers
+            project slice-ids
+            (fn []
+             (let [decisions   (ws/entries-of project ws-id :conduct-decision)
+                   stand-ins   (filterv #(stand-in? decisions %) open)
+                   owed        (remove #(stand-in? decisions %) open)
+                   withdraws   (when (#{:instruct :escalate} verb) stand-ins)
+                   ;; A person who already owes a move has that move's card in front of them; a second
+                   ;; blocker re-asking it is a second copy of one question, and answering the card would
+                   ;; leave the copy owed. A stand-in is no such move: the escalation replaces it.
+                   ;; The question form is copied whole — one :needs or several :questions — since the
+                   ;; blocker asks exactly what the escalation asked.
+                   halt        (when (and (= :escalate verb)
+                                          (or (parks? next) (and (seq stand-ins) (empty? owed))))
+                                 (merge {:stage :conduct :outcome :escalated
+                                         :summary (:summary body)
+                                         :after   (:after body)}
+                                        (select-keys body [:needs :questions :recommendation :options])))]
+               (when (= :instruct verb)
+                 (let [seat-ids (set (map :id (rseats/seats project ws-id)))
+                       slices   (set (map :ws-id (some-> (ws/read-ws project ws-id) drain/slices)))]
+                   (when-not (every? (fn [{:keys [seat slice]}]
+                                       (if slice
+                                         (and (slices slice) (some #(= seat (:id %)) (rseats/seats project slice)))
+                                         (seat-ids seat)))
+                                     body)
+                     (throw (ex-info "An instruction names no current seat" {:reason :not-a-seat})))
+                   (when (or (seq owed) (some #(seq (open-blockers project %)) slice-ids))
+                     (throw (ex-info "An instruction is held while a blocker the person owes is open" {:reason :blocked})))))
+               (when (and (= :hold verb) (empty? open))
+                 (throw (ex-info "A hold names an open blocker, and none is open" {:reason :not-blocked})))
+               ;; Stamped: decide! and close-unanswered! are its only writers, and the generic appends
+               ;; refuse it. Checked whole before the blocker joins; the :parked it then gains cites that
+               ;; blocker, which is all the check could not yet see.
+               (check! {:kind :conduct-decision} (pr-str entry))
+               (doseq [b withdraws]
+                 (check! {:kind :blocker-answered} (pr-str (withdrawal b hand-back 0))))
+               (let [parked (when halt
+                              (let [{:keys [seq refused]} (drive/park-held! halt append!)]
+                                (when refused (throw (ex-info "The escalation could not be parked" {:reason refused})))
+                                seq))
+                     entry  (cond-> entry parked (assoc :parked {:seq parked}))
+                     at     (some->> (append! {:kind :conduct-decision} (pr-str entry))
+                                     (re-find #"/(\d+)-conduct-decision\.edn$") second parse-long)]
+                 (doseq [b withdraws]
+                   (append! {:kind :blocker-answered} (pr-str (withdrawal b hand-back at))))
+                 entry))))]
        (when (= :instruct verb)
-         (let [seat-ids (set (map :id (rseats/seats project ws-id)))
-               slices   (set (map :ws-id (some-> (ws/read-ws project ws-id) drain/slices)))]
-           (when-not (every? (fn [{:keys [seat slice]}]
-                               (if slice
-                                 (and (slices slice) (some #(= seat (:id %)) (rseats/seats project slice)))
-                                 (seat-ids seat)))
-                             body)
-             (throw (ex-info "An instruction names no current seat" {:reason :not-a-seat})))))
-       ;; Stamped: decide! and close-unanswered! are its only writers, and the generic appends
-       ;; refuse it. Checked whole before the blocker joins; the :parked it then gains cites that
-       ;; blocker, which is all the check could not yet see.
-       (check! {:kind :conduct-decision} (pr-str entry))
-       (let [parked (when halt
-                      (let [{:keys [seq refused]} (drive/park-held! halt append!)]
-                        (when refused (throw (ex-info "The escalation could not be parked" {:reason refused})))
-                        seq))
-             entry  (cond-> entry parked (assoc :parked {:seq parked}))]
-         (append! {:kind :conduct-decision} (pr-str entry))
-         (when (= :instruct verb)
-           (let [w (ws/read-ws project ws-id)]
-             (doseq [[i {:keys [seat slice text]}] (map-indexed vector body)
-                     :let [k (str "decision:" hand-back ":" i)]]
-               (if slice
-                 (seats/post! project slice {:key k :kind :instruction :to seat
-                                             :text (slice-instruction project slice text)})
-                 (seats/post-held! project ws-id w {:key k :kind :instruction :to seat :text text})))))
-         entry)))))
+         (let [w (ws/read-ws project ws-id)]
+           (doseq [[i {:keys [seat slice text]}] (map-indexed vector body)
+                   :let [k (str "decision:" hand-back ":" i)]]
+             (if slice
+               (seats/post! project slice {:key k :kind :instruction :to seat
+                                           :text (slice-instruction project slice text)})
+               (seats/post-held! project ws-id w {:key k :kind :instruction :to seat :text text})))))
+       recorded))))
 
 (declare person-kinds persons-act?)
 
@@ -858,9 +943,11 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :ConductDecision] :DecideResult]}
   decide!
   "Record the conductor's answer to a hand-back — {:hand-back <message id> :decision [:instruct
-   [{:seat :text} …]] | [:escalate {:needs (:summary) (:options)}]} — with the position the pipeline derives now, and
-   carry it out. Refused, by name, from any session but the conductor's (:not-the-conductor), for
-   an id that is no hand-back (:not-a-hand-back) or one already answered (:already-answered), and
+   [{:seat :text} …]] | [:escalate {:needs (:summary) (:options)}] | [:hold {:blocker <seq>}]} — with
+   the position the pipeline derives now, and carry it out (`record-decision!`). Refused, by name,
+   from any session but the conductor's (:not-the-conductor), for an id that is no hand-back
+   (:not-a-hand-back) or one already answered (:already-answered), for an instruction while a
+   blocker the person owes is open (:blocked) and a hold while none is (:not-blocked), and
    for an instruction to anything that is not a current seat (:not-a-seat) — a drain's coordinator
    instructs a slice's seat by naming the slice too — and, for a drain's coordinator, for a
    hand-back from a slice whose misfit is open (:open-misfit), which it answers through lane-drain
@@ -910,8 +997,8 @@
                                                         next (assoc :next next)
                                                         owes (assoc :owes owes)))]
           (catch clojure.lang.ExceptionInfo e
-            (if (= :not-a-seat (:reason (ex-data e)))
-              [:refused :not-a-seat]
+            (if-let [r (#{:not-a-seat :blocked :not-blocked} (:reason (ex-data e)))]
+              [:refused r]
               (throw e))))))))
 
 (defn- excerpt [s n]
@@ -979,7 +1066,12 @@
             (cond
               cover                            (decide [:covered {:by (:id cover)}])
               (< offer seats/hand-back-offers) []
-              :else                            (decide [:escalate (unanswered-escalation m offer)])))))
+              ;; Blocked, the person is already asked: a stand-in would be a second copy. Chosen
+              ;; under the append lock that records it, so no blocker opens between.
+              :else                            (decide (fn [open]
+                                                         (if (seq open)
+                                                           [:hold {:blocker (:seq (last open))}]
+                                                           [:escalate (unanswered-escalation m offer)])))))))
       [])))
 
 ;; ── stops: a dialog nobody can answer, a turn whose process is gone, and work that stalled ──
@@ -1258,35 +1350,21 @@
           (str "the " (name stage) " stage it halted at " (name outcome) " now reviews the newer "
                (name kind) " at entry " (:seq newer)))))))
 
-(defn- moot-escalation
-  "Why the open blocker `b` no longer asks anything, when nido parked it escalating a hand-back the
-   conductor ended its turns without deciding, and the conductor has since decided a later
-   hand-back from the same session — instructing the seats, or escalating in its own words: either
-   way it has taken that seat's situation up, and nido's stand-in question is superseded. Nil for
-   every other blocker, the conductor's own escalations among them."
-  [project ws-id b decisions]
-  (let [session-of #(:session (hand-back-message project ws-id (:hand-back %)))]
-    (when-let [esc (some #(when (and (= :nido (:by %)) (= (:seq b) (get-in % [:parked :seq]))) %) decisions)]
-      (when-let [session (session-of esc)]
-        (when-let [d (some #(when (and (= :conductor (:by %)) (> (:seq %) (:seq b)) (= session (session-of %))) %)
-                           decisions)]
-          (str "the conductor has since decided " session "'s later hand-back, at entry " (:seq d)))))))
-
 (defn- answer-moot!
-  "Answer, as nido, each of the workstream's open blockers that nido wrote and that no longer ask
-   anything (`moot-halt`, `moot-escalation`), its summary saying why. A blocker a person owes for
-   any other reason is left for them. Answers [{:ws-id :blocker :wrote :blocker-answered} …]."
+  "Answer, as nido, each of the workstream's open blockers that a review stage's halt wrote and
+   that no longer asks anything (`moot-halt`), its summary saying why. nido's stand-in escalations
+   are withdrawn by the conductor's next decision (`record-decision!`), not here. A blocker a person
+   owes for any other reason is left for them. Answers [{:ws-id :blocker :wrote :blocker-answered} …]."
   [project ws-id]
   (deciding
    project ws-id
-   #(let [decisions (ws/entries-of project ws-id :conduct-decision)]
-      (vec (for [b    (open-blockers project ws-id)
-                 :let [why (or (moot-halt project ws-id b) (moot-escalation project ws-id b decisions))]
-                 :when why]
+   #(vec (for [b    (open-blockers project ws-id)
+               :let [why (moot-halt project ws-id b)]
+               :when why]
              (do (ws/append-entry! project ws-id {:kind :blocker-answered}
                                    (pr-str {:format :blocker-answered :blocker-seq (:seq b) :resumed nil :by :nido
                                             :summary (str "it no longer asks anything: " why)}))
-                 {:ws-id ws-id :blocker (:seq b) :wrote :blocker-answered}))))))
+                 {:ws-id ws-id :blocker (:seq b) :wrote :blocker-answered})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :int] [:sequential :map]]}
   stops!
