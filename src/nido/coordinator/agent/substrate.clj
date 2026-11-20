@@ -256,13 +256,26 @@
                                200)})))))
     (catch Exception _ nil)))
 
+(defn- socket-candidates
+  "Where Claude Code may have bound the inbox of process `pid`, most specific first: `cc-socks` in
+   the user's runtime directory where there is one (Linux: `$XDG_RUNTIME_DIR`, else
+   `/run/user/<uid>`), else `/tmp/cc-socks`, or `/tmp/cc-socks-<uid>` when the shared one is
+   refused (macOS). `runtime-dir` may be nil."
+  [pid {:keys [runtime-dir uid]}]
+  (->> [(when-not (str/blank? runtime-dir) (str runtime-dir "/cc-socks"))
+        (str "/run/user/" uid "/cc-socks")
+        "/tmp/cc-socks"
+        (str "/tmp/cc-socks-" uid)]
+       (remove nil?)
+       distinct
+       (mapv #(str % "/" pid ".sock"))))
+
 (defn- socket-path
-  "Where a live session's inbox is: Claude Code binds `<pid>.sock` in its per-user socket
-   directory, `/tmp/cc-socks` or `/tmp/cc-socks-<uid>` when the shared one is refused."
+  "Where a live session's inbox is: the first of `socket-candidates` that exists, or nil."
   [pid]
   (first (filter fs/exists?
-                 [(str "/tmp/cc-socks/" pid ".sock")
-                  (str "/tmp/cc-socks-" (str/trim (:out (p/shell {:out :string} "id" "-u"))) "/" pid ".sock")])))
+                 (socket-candidates pid {:runtime-dir (System/getenv "XDG_RUNTIME_DIR")
+                                         :uid (str/trim (:out (p/shell {:out :string} "id" "-u")))}))))
 
 (defn- attested
   "`text` in the envelope a session's inbox reads a peer message from, declaring the sender's

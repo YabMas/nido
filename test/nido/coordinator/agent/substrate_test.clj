@@ -84,6 +84,17 @@
         (is (= 2 @reads))))
     (reset! @#'sub/!last-listing nil)))
 
+(deftest an-inbox-is-looked-for-where-each-platform-binds-it
+  (testing "Linux binds it in the user's runtime directory, which is looked at first"
+    (is (= ["/run/user/1000/cc-socks/42.sock" "/tmp/cc-socks/42.sock" "/tmp/cc-socks-1000/42.sock"]
+           (#'sub/socket-candidates 42 {:runtime-dir "/run/user/1000" :uid "1000"}))))
+  (testing "without a runtime directory, /run/user/<uid> is still tried before /tmp"
+    (is (= ["/run/user/501/cc-socks/7.sock" "/tmp/cc-socks/7.sock" "/tmp/cc-socks-501/7.sock"]
+           (#'sub/socket-candidates 7 {:runtime-dir nil :uid "501"}))))
+  (testing "an elsewhere runtime directory comes first"
+    (is (= "/var/run/u/cc-socks/7.sock"
+           (first (#'sub/socket-candidates 7 {:runtime-dir "/var/run/u" :uid "501"}))))))
+
 (deftest send-needs-a-live-process-with-an-inbox
   (is (= {:delivered? false :because :no-process} (sub/send! {:id "x"} "hi")))
   (stubbing [#'sub/socket-path (constantly nil)]
