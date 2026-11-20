@@ -37,7 +37,7 @@
             [nido.ui.catalog :as catalog]
             [nido.ui.chat-host :as host]
             [nido.ui.components.chat :as panel]
-            [nido.ui.datastar :as datastar]
+            [nido.libraries.ui.wire :as wire]
             [nido.ui.views :as views]))
 
 (def ^:private project "nido")
@@ -155,14 +155,14 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
   (try (change/pending project design-session (:sealed @publishing)) (catch Exception _ nil)))
 
 (defn- bar-event []
-  (datastar/patch-elements-event
+  (wire/patch-elements-event
    (html (panel/change-bar panel-id (pending-change) (bar-value) change-routes))))
 
 (defn- reload-frames!
   "Reload every open page's frame. The value only has to change: the page keeps the scene it was
    on and loads it from its own origin."
   []
-  (host/broadcast! chat-host (datastar/patch-signals-event
+  (host/broadcast! chat-host (wire/patch-signals-event
                (json/generate-string {:catcFrame (str "#" (System/currentTimeMillis))}))))
 
 (defn- refresh-frame!
@@ -210,13 +210,13 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
     (if (and (sequential? v) (every? map? v)) (vec v) [])))
 
 (defn- picks-event [ps]
-  (datastar/patch-elements-event
+  (wire/patch-elements-event
    (html (panel/picks panel-id (mapv #(select-keys (pick-ref %) [:label :title]) ps) routes))))
 
 (def ^:private chat-host
   (assoc (host/host design-chat routes ["_catalog" "chat"] (fn [{:keys [json]}] (mapv pick-ref (posted-picks json))))
          ;; A sent message took its picks with it.
-         :on-sent (fn [] [(datastar/patch-signals-event
+         :on-sent (fn [] [(wire/patch-signals-event
                            (json/generate-string {(:picks (panel/signals panel-id)) "[]"}))
                           (picks-event [])])
          ;; A send waits while a seal or a rejoin holds the worktree; a landing never refuses one.
@@ -227,7 +227,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
 (defn- unpick [req i]
   (let [ps   (posted-picks (host/body-json req))
         kept (vec (keep-indexed (fn [j p] (when (not= j i) p)) ps))]
-    (host/sse (datastar/patch-signals-event
+    (host/sse (wire/patch-signals-event
           (json/generate-string {(:picks (panel/signals panel-id)) (json/generate-string kept)}))
          (picks-event kept))))
 

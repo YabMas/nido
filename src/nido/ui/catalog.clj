@@ -9,7 +9,7 @@
    query-string names it reads its selection from.
 
    It holds no copy of anything it shows. A scene is rendered by calling the same function the
-   dashboard calls, in the stylesheet `nido.ui.stylesheet` holds, so a scene that looks wrong is
+   dashboard calls, in the stylesheet every nido chrome emits, so a scene that looks wrong is
    the block being wrong rather than this page disagreeing with the app.
 
    It parses its own query string instead of going through `nido.ui.view-state`, and that is the
@@ -26,8 +26,8 @@
             [hiccup2.core :as h]
             [nido.ui.catalog.scenes :as scenes]
             [nido.ui.components.chat :as chat]
-            [nido.ui.datastar :as datastar]
-            [nido.ui.stylesheet :as css]))
+            [nido.libraries.ui.wire :as wire]
+            [nido.ui.registry :as registry]))
 
 ;; ---------------------------------------------------------------------------
 ;; The selection, and the one table that names it
@@ -38,7 +38,7 @@
    blocks name, and nothing in the dashboard names any of these.
 
    It declares no custom property and writes no colour or size of its own: every value is a token
-   `nido.ui.stylesheet` declares, which is what keeps `one-token-block` true of this file too.
+   resources/nido/tokens.edn declares, which is what keeps `one-token-block` true of this file too.
    The scene frame's three backgrounds ARE the three the blocks sit on in the app, which is what
    makes the surface selector a reading of the app rather than a palette of its own.
 
@@ -319,9 +319,9 @@
         [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
         [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
         [:title (:title group) " — nido components"]
-        (datastar/datastar-script)
-        [:style (h/raw (css/stylesheet))]
-        [:style (h/raw chrome-css)]]
+        (wire/script)
+        [:style (h/raw (registry/assembled-stylesheet))]
+        [:style (h/raw (str "@layer app {\n" chrome-css "\n}"))]]
        [:body
         (when (:embed? sel) [:script (h/raw picker-js)])
         [:div.cat
@@ -423,7 +423,7 @@
   [transcript frame-src panel open? change-bar]
   (let [{:keys [picks open]} (chat/signals (:id panel))]
     (list
-        [:style (h/raw chrome-css)]
+        [:style (h/raw (str "@layer app {\n" chrome-css "\n}"))]
         [:div.catc {:class (when open? "open")
                     "data-signals" "{catcFrame: ''}"
                     "data-class:open" (str "$" open)

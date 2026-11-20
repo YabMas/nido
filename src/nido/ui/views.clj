@@ -9,8 +9,8 @@
             [nido.coordinator.control :as control]
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
-            [nido.ui.datastar :as datastar]
-            [nido.ui.stylesheet :as css]
+            [nido.libraries.ui.wire :as wire]
+            [nido.ui.registry :as registry]
             [nido.ui.components.state :as state]
             [nido.ui.components.row :as row]
             [nido.ui.components.ask :as ask]
@@ -250,8 +250,8 @@
       [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
       [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
       [:title (or title "nido") " — nido"]
-      (datastar/datastar-script)
-      [:style (h/raw (css/stylesheet))]]
+      (wire/script)
+      [:style (h/raw (registry/assembled-stylesheet))]]
      [:body {:data-signals__ifmissing "{opsOpen: false}"}
       (topbar ctx)
       (sidebar ctx)

@@ -4,8 +4,8 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.integration.acp :as acp]
             [canvas.session.chat :as chat]
-            [canvas.ui.surface :refer [chat-item chat-log log-id turn-status signals
-                                       patch-elements-event patch-signals-event]]
+            [canvas.libraries.ui :refer [patch-elements-event patch-signals-event]]
+            [canvas.ui.surface :refer [chat-item chat-log log-id turn-status signals]]
             [fukan.common.typing.malli]))
 
 (Module ui-chat-host

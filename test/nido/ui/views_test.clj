@@ -7,7 +7,7 @@
             [nido.ui.components.ask :as ui-ask]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]
-            [nido.ui.stylesheet :as stylesheet]
+            [nido.ui.registry :as registry]
             [nido.ui.views :as views]))
 
 (def ^:private sample-gate
@@ -1965,7 +1965,7 @@
   (let [html (views/workstream-pane sample-ws {})]
     (is (str/includes? html (str "href=\"/workstreams/" (:project sample-ws) "/" (:ws-id sample-ws) "\"")))
     (is (str/includes? html "pane-open")))
-  (is (str/includes? (stylesheet/stylesheet) ".ws-page .pane-open { display:none; }")))
+  (is (str/includes? (registry/assembled-stylesheet) ".ws-page .pane-open { display:none; }")))
 
 (deftest workstream-page-is-the-pane-alone-at-full-width
   (let [screen {:scope "brian"

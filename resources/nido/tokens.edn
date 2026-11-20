@@ -1,0 +1,129 @@
+;; nido's design tokens: the one place a colour, a type size, a spacing, a radius, a shadow or a
+;; duration the dashboard renders is stated. nido.ui.stylesheet reads this file and hands it to
+;; nido.libraries.ui.style, which emits it as the single :root block; every rule reads a token
+;; through var(--…), and the library's lint holds them to that.
+;;
+;; A value is a CSS value string, or a keyword naming another token (emitted as var(--that)).
+;; The :space, :radius, :shadow and :motion groups are named by the value they held when they
+;; became tokens, which keeps the dashboard pixel-identical; folding them into a coarser scale
+;; is a visual change of its own.
+{:colour
+  ;; What a colour IS: surfaces, borders, controls, text.
+  {:bg "#1a1a2e"
+   :surface "#16213e"
+   :surface-raised "#13132a"
+   :surface-sunken "#0f0f1e"
+   :surface-hover "#1b1b33"
+   :surface-selected "#1a2238"
+   :surface-code "#1c1c33"
+   :border "#2a2a4a"
+   :border-subtle "#20203a"
+   :border-strong "#3a3a5a"
+   :control-bg "#2a2a4a"
+   :control-bg-hover "#3a3a5a"
+   :text-strong "#f0f0f8"
+   :text "#dcdce8"
+   :text-muted "#9a9ac0"
+   :text-faint "#75758f"
+   ;; An action's emphasis: links, the primary button, the selected row.
+   :accent "#7eb8da"
+   :accent-strong "#aee0ff"
+   :accent-bg "#2a4a6a"
+   :accent-border "#3a5a7a"
+   ;; What a colour MARKS: one hue per state — a foreground, a dimmer one, and a tint.
+   :needs "#facc15"   ; a person owes a move
+   :needs-dim "#c9a227"
+   :needs-bg "#2a2a1a"
+   :waiting "#d4b483" ; nido waits, or a record went stale
+   :waiting-dim "#8a7a50"
+   :waiting-bg "#3a2e14"
+   :working "#7dd3fc" ; nido is working
+   :working-dim "#7a9ad0"
+   :working-bg "#16304a"
+   :ok "#4ade80"      ; done, healthy, approved
+   :ok-dim "#6a9a6a"
+   :ok-bg "#1a3a2a"
+   :failed "#f87171"  ; failed, halted, refused
+   :failed-dim "#d9776a"
+   :failed-bg "#3a1a1a"
+   :failed-border "#6a3a3a"
+   :failed-strong "#ffaeae"
+   :warning "#fb923c" ; caution: a breaker, a finding
+   :warning-dim "#e0a34a"
+   :warning-bg "#3a2a1a"
+   :dormant "#c084fc" ; asleep, resumable
+   :dormant-bg "#2a1a2a"
+   :neutral "#9aa3ad" ; finished, asks nothing
+   :neutral-bg "#22223a"
+   :recommended "#7edaa8" ; the answer nido recommends
+   :recommended-bg "#16352a"
+   ;; Where a workstream came from.
+   :src-notion "#aee0ff"
+   :src-notion-bg "#2a3a4a"
+   :src-github "#facc15"
+   :src-github-bg "#2a2a1a"
+   :src-slack "#e0a0e0"
+   :src-slack-bg "#3a2a3a"
+   :src-scratch "#9a9ac0"
+   :src-scratch-bg "#252540"}
+
+ :type
+  ;; Five sizes, each with a role — never a size between them.
+  {:fs-xs "12px"     ; labels, metadata, chips
+   :fs-sm "13px"     ; secondary text, dense rows
+   :fs-md "15px"     ; body prose
+   :fs-lg "18px"     ; page and pane titles, a question's line, the big number on a card
+   :fs-icon "26px"   ; a glyph standing alone as a control, like the menu's gear
+   :font-prose "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+   :font-mono "ui-monospace, SFMono-Regular, Menlo, monospace"
+   :measure "72ch"}  ; the reading width of a prose block
+
+ :space
+  {:space-1 "1px"
+   :space-2 "2px"
+   :space-3 "3px"
+   :space-4 "4px"
+   :space-5 "5px"
+   :space-6 "6px"
+   :space-7 "7px"
+   :space-8 "8px"
+   :space-9 "9px"
+   :space-10 "10px"
+   :space-11 "11px"
+   :space-12 "12px"
+   :space-14 "14px"
+   :space-16 "16px"
+   :space-18 "18px"
+   :space-20 "20px"
+   :space-22 "22px"
+   :space-24 "24px"
+   :space-26 "26px"
+   :space-28 "28px"
+   :space-40 "40px"
+   :space-72 "72px"
+   :space-136 "136px"}
+
+ :radius
+  {:radius-2 "2px"
+   :radius-3 "3px"
+   :radius-4 "4px"
+   :radius-5 "5px"
+   :radius-6 "6px"
+   :radius-9 "9px"}
+
+ :shadow
+  {:glow-failed "0 0 6px var(--failed)"
+   :glow-needs "0 0 6px var(--needs)"
+   :glow-ok "0 0 6px var(--ok)"
+   :shadow-side "-8px 0 24px var(--surface-sunken)"}
+
+ :motion
+  {:dur-150 "150ms"
+   :dur-180 "180ms"
+   :dur-200 "200ms"
+   :dur-280 "280ms"
+   :dur-1000 "1000ms"
+   :dur-1200 "1200ms"
+   :dur-1400 "1400ms"
+   :dur-1500 "1500ms"
+   :dur-2000 "2000ms"}}

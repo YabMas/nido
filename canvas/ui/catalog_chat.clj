@@ -5,8 +5,8 @@
             [canvas.coordinator.control :as control]
             [canvas.session.chat :as chat]
             [canvas.ui.chat-host :as host]
-            [canvas.ui.surface :refer [catalog-page chat-page change-bar shell picks signals
-                                       patch-signals-event]]
+            [canvas.libraries.ui :refer [patch-signals-event]]
+            [canvas.ui.surface :refer [catalog-page chat-page change-bar shell picks signals]]
             [fukan.common.typing.malli]))
 
 (Module ui-catalog-chat

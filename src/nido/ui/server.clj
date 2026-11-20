@@ -12,6 +12,7 @@
             [nido.session.fleet :as fleet]
             [nido.ui.dev :as dev]
             [nido.coordinator.control :as control]
+            [nido.libraries.ui.wire :as wire]
             [nido.ui.catalog.chat :as catalog-chat]
             [nido.ui.place :as place]
             [nido.ui.side-chat :as side-chat]
@@ -39,12 +40,9 @@
                  "; Path=/; Max-Age=31536000; SameSite=Lax")))
 
 (defn- sse-fragment
-  "Format an SSE event that patches elements via datastar."
+  "One event patching `html-fragment` into the page by its ids."
   [html-fragment]
-  (let [lines (str/split-lines html-fragment)]
-    (str "event: datastar-patch-elements\n"
-         (str/join "\n" (map #(str "data: elements " %) lines))
-         "\n\n")))
+  (wire/patch-elements-event html-fragment))
 
 (defn- sse-response [body]
   {:status 200

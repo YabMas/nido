@@ -17,7 +17,7 @@
             [nido.design.check :as design]
             [nido.design.explorer :as explorer]
             [nido.platform.project :as project]
-            [nido.ui.stylesheet :as css]
+            [nido.ui.registry :as registry]
             [nido.platform.jj :as jj]))
 
 (def default-view
@@ -79,7 +79,7 @@
    :body    (str (h/html [:html
                           [:head [:meta {:charset "utf-8"}]
                            (when refresh? [:meta {:http-equiv "refresh" :content "1"}])
-                           [:style (h/raw (css/stylesheet))]]
+                           [:style (h/raw (registry/assembled-stylesheet))]]
                           [:body {:style "display:grid;place-items:center;height:100vh;margin:0"}
                            [:p.meta {:style "max-width:40em;white-space:pre-wrap"} text]]]))})
 

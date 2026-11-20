@@ -5,10 +5,11 @@
    is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.ui.catalog-chat :refer [ui-catalog-chat]]
+            [canvas.libraries.ui :refer [libraries-ui-wire]]
             [canvas.strata :refer [ui-blocks ui-state-marks ui-visual-language]]
             [canvas.ui.surface :refer [handle-request question-card shell status-heading
                                         ui-catalog ui-catalog-scenes ui-components-ask ui-components-row
-                                        ui-components-state ui-datastar ui-server ui-stylesheet
+                                        ui-components-state ui-server ui-stylesheet
                                         ui-views workstreams-fragment]]))
 
 (Claim blocks-render-from-a-value
@@ -40,8 +41,8 @@
   {:about [ui-catalog-scenes ui-components-state ui-components-row ui-components-ask] :evidence "test"})
 
 (Claim catalog-renders-what-the-app-renders
-  "GET /_catalog lists the registry's components in a sidebar and renders every scene of the selected one, with Datastar loaded from the one script element nido.ui.datastar publishes, which the dashboard's pages load it from too. The catalog holds no copy of anything it shows. Its page lists every block vocabulary in a sidebar and renders every scene of the selected one, each by calling the same function the dashboard calls, in the stylesheet nido.ui.stylesheet holds — so a scene that looks wrong is the block being wrong, never the catalog disagreeing with the app."
-  {:about [ui-catalog ui-catalog-scenes ui-stylesheet ui-datastar] :evidence "round"})
+  "GET /_catalog lists the registry's components in a sidebar and renders every scene of the selected one, with Datastar loaded from the one script element the UI library's wire publishes, which the dashboard's pages load it from too. The catalog holds no copy of anything it shows. Its page lists every block vocabulary in a sidebar and renders every scene of the selected one, each by calling the same function the dashboard calls, in the stylesheet every nido chrome emits — so a scene that looks wrong is the block being wrong, never the catalog disagreeing with the app."
+  {:about [ui-catalog ui-catalog-scenes ui-stylesheet libraries-ui-wire] :evidence "round"})
 
 (Claim catalog-is-unlinked
   "GET /_catalog is served by the one dashboard handler, on every dashboard, and the product reaches it only through the Development page's tile. Its scene page reads nothing but the registry and its query string. Of the catalog, only its chat reaches a process: through its conversation, the preview, and the verbs that publish or throw away its session's change."

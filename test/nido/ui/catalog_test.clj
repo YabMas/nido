@@ -21,7 +21,7 @@
    [hiccup2.core :as h]
    [nido.ui.catalog :as catalog]
    [nido.ui.catalog.scenes :as scenes]
-   [nido.ui.datastar :as datastar]
+   [nido.libraries.ui.wire :as wire]
    [nido.ui.components.ask :as ask]
    [nido.ui.components.row :as row]
    [nido.ui.components.state :as state]))
@@ -197,7 +197,7 @@
 (deftest the-catalog-page-renders-in-the-apps-stylesheet-with-datastar
   (let [html (catalog/catalog-page nil)]
     (is (str/includes? html ":root {") "the app's own token block, not a copy")
-    (is (str/includes? html (str (h/html (datastar/datastar-script))))
+    (is (str/includes? html (str (h/html (wire/script))))
         "Datastar from the one place a dashboard page loads it from, not a URL of its own")
     (is (str/includes? html ".cat-frame") "its own chrome rules")
     (is (str/includes? html "Components"))
@@ -225,7 +225,7 @@
 
 (deftest the-catalog-styles-nothing-itself
   ;; catalog-renders-what-the-app-renders, as far as a test can reach it. Every rule the catalog
-  ;; uses — the app's and its own chrome's — comes from nido.ui.stylesheet, so neither the page
+  ;; uses — the app's and its own chrome's — comes from the assembled stylesheet, so neither the page
   ;; nor a scene may style anything: no rule, and no inline style attribute either, because an
   ;; inline declaration on a block is the same defect wearing different syntax.
   (doseq [f ["src/nido/ui/catalog.clj" "src/nido/ui/catalog/scenes.clj"]]
@@ -235,14 +235,14 @@
         ;; own vocabulary and `[:style …]` is where the page emits a stylesheet, so the match
         ;; is on the string value alone.
         (is (empty? (re-seq #":style\s+\"" src))
-            "a scene that needs a style needs a class, in nido.ui.stylesheet")
+            "a scene that needs a style needs a class, in the stylesheet")
         (is (empty? (re-seq #"--[a-z][a-z-]*\s*:" src))
             "and a custom property it declares is a token block it is starting"))))
-  (is (str/includes? (slurp "src/nido/ui/catalog.clj") "nido.ui.stylesheet")
-      "the page's rules come from the one module that holds them")
+  (is (str/includes? (slurp "src/nido/ui/catalog.clj") "nido.ui.registry")
+      "the page's rules come from the one stylesheet every chrome emits")
   (doseq [f ["src/nido/ui/catalog.clj" "src/nido/ui/views.clj"]]
     (is (not (str/includes? (slurp f) "cdn.jsdelivr.net"))
-        (str f " writes a Datastar URL of its own; nido.ui.datastar holds the one"))))
+        (str f " writes a Datastar URL of its own; the UI library's wire holds the one"))))
 
 ;; ---------------------------------------------------------------------------
 ;; The blocks are reachable at all

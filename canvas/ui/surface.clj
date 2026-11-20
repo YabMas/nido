@@ -14,6 +14,7 @@
             [canvas.coordinator.report :as report]
             [canvas.coordinator.work :as work :refer [Screen]]
             [canvas.integration.acp :as acp]
+            [canvas.libraries.ui :as lib]
             [canvas.session.chat :as chat]
             [canvas.ui.structure :as structure]
             [canvas.platform.project :refer [ProjectName]]
@@ -40,36 +41,46 @@
                  [:=> [:catn [:s [:maybe :string]] [:opts [:map [:links? {:optional true} :boolean]]]] :any]]}))
 
 (Module ui-stylesheet
-  "The dashboard's stylesheet, as text a page chrome emits.
+  "nido's visual language, as the UI library takes it.
 
-   HIDES which hue, which size and which rule. Out of `ui-views` because a second chrome — the
-   component catalog's — has to render blocks in the same visual language, and with the block
-   inside `shell` the only way to get it was to copy it. A copy is the second stored set of hues
-   the token test exists to prevent.
-
-   What it holds is the tokens and the class rules the dashboard's pages and blocks name. The
-   catalog's chrome is not a dashboard page: its rules are the catalog's, written over these
-   tokens through var(--…), as every level above writes its colours and sizes."
+   HIDES which hue, which size and which rule: the token values, read from resources/nido/tokens.edn
+   — colour, type, space, radius, shadow, motion — and every class rule no block registration
+   carries. It assembles nothing; `ui-registry` hands these to the library beside the
+   registrations, so no chrome can emit a stylesheet of its own."
   (Operation stylesheet
-    "The stylesheet every dashboard chrome emits: the one :root custom-property block, and every
-     class rule the dashboard's pages and blocks name."
-    {:signature [:=> [:catn] :string]}))
+    "nido's inputs to the library's stylesheet call: `:tokens`, the token map, and `:rules`, the
+     text of every rule no block registration carries."
+    {:signature [:=> [:catn] :map]}))
 
-(Module ui-datastar
-  "The Datastar runtime a dashboard chrome loads.
+(Module ui-catalog-scenes
+  "The state functions' named renderings over literal sample data. A block's scenes are carried by
+   its own registration; these are the scenes of the functions that stay plain functions.
 
-   HIDES which Datastar bundle — which pinned version, from where — a chrome loads. It is not
-   part of the visual language: it is the runtime a block's data- attributes are written for, and
-   the dashboard's pages and the component catalog both take it from here, so they cannot load
-   two different ones."
-  (Operation datastar-script
-    "The script element every dashboard chrome loads Datastar with: the one pinned bundle."
-    {:signature [:=> [:catn] :any]})
-  (Operation patch-elements-event
-    "One server-sent event patching markup into a page, by id or appended under a selector."
-    {:signature [:=> [:catn [:html :string] [:opts [:? :map]]] :string]})
-  (Operation patch-signals-event "One server-sent event merging signals into page state."
-    {:signature [:=> [:catn [:json :string]] :string]}))
+   HIDES the sample data — which values make a state mark show the state worth looking at. A scene is
+   a literal value and a router that goes nowhere, which is what the catalog and its test both
+   need, and what makes the blocks' independence checkable rather than asserted."
+  (Operation groups
+    "The registry: one group per block vocabulary, each naming its blocks and holding their
+     scenes in reading order — a title, a note saying what the scene is for, and a thunk
+     returning hiccup."
+    {:signature [:=> [:catn] :any]}))
+
+(Module ui-registry
+  "nido's registry of blocks, and the stylesheet assembled over it.
+
+   HIDES which block registrations nido publishes and that the stylesheet is assembled from them
+   once, not per request. It collects every block registration of nido's component namespaces with
+   the scenes each carries, adds the state functions' scenes `ui-catalog-scenes` supplies, and
+   makes the library's one stylesheet call over the token values and rules `ui-stylesheet`
+   supplies and those registrations. Every chrome takes the assembled text from here, so
+   `ui-stylesheet` never reads a registration."
+  (Operation registry
+    "nido's registry: each block registration with its scenes, and the state functions' scenes —
+     what the library's catalog-page reads."
+    {:signature [:=> [:catn] :map] :delegates [groups]})
+  (Operation assembled-stylesheet
+    "The stylesheet every nido chrome emits, assembled once by the library."
+    {:signature [:=> [:catn] :string] :delegates [stylesheet registry]}))
 
 (Module ui-components-state
   "A workstream's state as a reader sees it: the words each facet is said in, and the mark that
@@ -250,7 +261,7 @@
   (Operation shell
     "The page chrome every page sits inside: a top bar for what spans projects, a sidebar of the
      focused project's slices."
-    {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [stylesheet datastar-script]})
+    {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [assembled-stylesheet lib/script]})
   (Operation needs-fragment "The needs-you column."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [gate-row]})
   (Operation gate-action-confirm-fragment "The immediate confirmation a gate action swaps in."
@@ -427,18 +438,6 @@
                             [:action :keyword]] :any]
      :delegates [set-app-state!]}))
 
-(Module ui-catalog-scenes
-  "Each block's named renderings over literal sample data, and the registry that indexes them.
-
-   HIDES the sample data — which values make a block show the state worth looking at. A scene is
-   a literal value and a router that goes nowhere, which is what the catalog and its test both
-   need, and what makes the blocks' independence checkable rather than asserted."
-  (Operation groups
-    "The registry: one group per block vocabulary, each naming its blocks and holding their
-     scenes in reading order — a title, a note saying what the scene is for, and a thunk
-     returning hiccup."
-    {:signature [:=> [:catn] :any]}))
-
 (Module ui-catalog
   "The component catalog: /_catalog.
 
@@ -458,7 +457,7 @@
      picker, which names a picked element by block, scene and path and hands it to the page
      around it, and marks the elements the page around it says are picked."
     {:signature [:=> [:catn [:query-string [:maybe :string]]] :string]
-     :delegates [stylesheet datastar-script groups]})
+     :delegates [assembled-stylesheet lib/script groups]})
   (Operation chat-page
     "The catalog with its chat: the scene page in a frame beside the chat's side panel — closed,
      its toggle alone; open, the panel with Pick, which puts the frame into select mode, under the

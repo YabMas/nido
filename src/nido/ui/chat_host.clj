@@ -29,7 +29,7 @@
             [hiccup2.core :as h]
             [nido.session.chat :as chat]
             [nido.ui.components.chat :as panel]
-            [nido.ui.datastar :as datastar]
+            [nido.libraries.ui.wire :as wire]
             [org.httpkit.server :as http])
   (:import (java.io ByteArrayOutputStream InputStream)
            (java.security MessageDigest)
@@ -149,13 +149,13 @@
     (.toByteArray out)))
 
 (defn- attachments-event [{:keys [routes staged]}]
-  (datastar/patch-elements-event (html (panel/attachments (:id routes) @staged routes))))
+  (wire/patch-elements-event (html (panel/attachments (:id routes) @staged routes))))
 
 (defn- status-event [id t]
-  (datastar/patch-elements-event (html (panel/turn-status id t))))
+  (wire/patch-elements-event (html (panel/turn-status id t))))
 
 (defn- busy-event [id t]
-  (datastar/patch-signals-event (json/generate-string {(:busy (panel/signals id)) (boolean (:busy? t))})))
+  (wire/patch-signals-event (json/generate-string {(:busy (panel/signals id)) (boolean (:busy? t))})))
 
 (defn ^{:malli/schema [:=> [:cat :map :Conversation :Conversation] :any]}
   changed-events
@@ -168,7 +168,7 @@
   [{:keys [id] :as routes} old new]
   (let [old-items (:items old)]
     (if (< (count (:items new)) (count old-items))
-      [(datastar/patch-elements-event (html (panel/chat-log id (:items new) routes)))
+      [(wire/patch-elements-event (html (panel/chat-log id (:items new) routes)))
        (status-event id new)
        (busy-event id new)]
       (concat
@@ -177,8 +177,8 @@
              :when (not= before item)]
          (let [markup (html (panel/chat-item item routes))]
            (if before
-             (datastar/patch-elements-event markup)
-             (datastar/patch-elements-event markup {:selector (str "#" (panel/log-id id)) :mode "append"}))))
+             (wire/patch-elements-event markup)
+             (wire/patch-elements-event markup {:selector (str "#" (panel/log-id id)) :mode "append"}))))
        (when (not= (panel/turn-status id old) (panel/turn-status id new))
          [(status-event id new)])
        (when (not= (:busy? old) (:busy? new))
@@ -195,7 +195,7 @@
                     ;; Under the stage's lock, which every stage change broadcasts under: the
                     ;; staged images this stream opens with are current until it is registered.
                     (locking staged
-                      (http/send! ch (str (datastar/patch-elements-event
+                      (http/send! ch (str (wire/patch-elements-event
                                            (html (panel/chat-log id (:items t) routes)))
                                           (status-event id t)
                                           (busy-event id t)
@@ -235,7 +235,7 @@
                      (when (seq images) (broadcast! h (attachments-event h)))
                      images)))]
     (if images
-      (do (apply sse (datastar/patch-signals-event (json/generate-string {text ""}))
+      (do (apply sse (wire/patch-signals-event (json/generate-string {text ""}))
                  (when on-sent (on-sent))))
       (sse))))
 
