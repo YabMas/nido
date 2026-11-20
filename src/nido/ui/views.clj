@@ -2362,6 +2362,49 @@
                    (str (:approved counts) " approved · " (:skipped counts) " skipped"))
                  more]})))
 
+(def ^:private host-kind-label
+  {:claude   "Claude sessions"
+   :mcp      "MCP servers (node/npm)"
+   :repl     "REPLs and app servers"
+   :postgres "postgres"
+   :other    "other processes"})
+
+(defn- host-figures
+  "The host's figures as lines, shared by the card and its page so the two cannot disagree. A
+   figure the host did not give says so rather than reading as zero."
+  [{:keys [cores load memory disk coordinator kinds]}]
+  (let [bytes process/human-bytes]
+    [(if load
+       (format "load %.1f · 15m %.1f / %d cores" (:one load) (:fifteen load) cores)
+       (str cores " cores · load, memory and processes cannot be read on this host"))
+     (when memory
+       (str "memory " (bytes (:used-bytes memory)) " used · " (bytes (:available-bytes memory)) " available"
+            (when (pos? (:swap-used-bytes memory)) (str " · swap " (bytes (:swap-used-bytes memory))))))
+     (if disk
+       (str "disk " (bytes (:used-bytes disk)) " / " (bytes (:total-bytes disk)))
+       "disk cannot be read")
+     (when coordinator
+       (if-let [share (:cpu-share coordinator)]
+         (format "coordinator %d%% of a core" (Math/round (* 100.0 share)))
+         "coordinator CPU: measuring…"))
+     (when kinds
+       (str/join " · " (for [{:keys [kind rss-bytes] n :count} kinds]
+                         (str (name kind) " " n " (" (bytes rss-bytes) ")"))))]))
+
+(defn- host-card
+  "The host card: what the machine nido runs on has left, and what nido's processes cost. Toned
+   only when a threshold in `nido.coordinator.view.host` is crossed; the reasons are its headline."
+  [{:keys [unreadable need] :as host}]
+  (ops-card
+   {:href     "/operations/host"
+    :title    "Host"
+    :headline (cond unreadable  "could not be read"
+                    need        (str/join " · " (:reasons need))
+                    (:load host) (format "load %.1f / %d cores" (:one (:load host)) (:cores host))
+                    :else        (str (:cores host) " cores"))
+    :tone     (:tone need)
+    :lines    (when-not unreadable (host-figures host))}))
+
 (defn- notice-card
   "An operational notice: something to know that asks no move on any workstream. Not a link —
    it has no page of its own; its lines say what to do, or link to the workstream it is about."
@@ -2395,7 +2438,7 @@
                 [:a {:href (ws-page-href project ws-id)}
                  (or label ws-id) " — latest: " (or (:tool-name (peek denials)) "?")])}))
 
-(defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]] [:maybe :map]] :any]}
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]] [:maybe :map] :HostModel] :any]}
   operations-home-cards
   "The card for each operational concern, read from the same values their own
    pages render — so a card and the page behind it cannot disagree about a count.
@@ -2404,8 +2447,10 @@
 
    `notices` — {:casualties [..] :denials [..]} — are what nido wants a person to know that is no
    workstream's question, so they are here and never in the needs-you list. Shown only when there
-   is one: a notice of nothing is noise."
-  [proposals recovery holds queues {:keys [casualties denials]}]
+   is one: a notice of nothing is noise.
+
+   `host` is `nido.coordinator.view.host/host-model`'s answer, `{:unreadable :host}` included."
+  [proposals recovery holds queues {:keys [casualties denials]} host]
   (let [{:keys [open queued waiting]} (group-by proposal-band proposals)
         stuck (count (filter #(#{:stuck :waiting-on-you} (:state %)) holds))
         {:keys [needs-you recovering waiting-rec]}
@@ -2441,6 +2486,7 @@
        (if (nil? queues)
          (review-queue-card [{:stage nil}])
          (review-queue-card queues)))
+     (host-card host)
      (when (seq casualties) (casualties-notice casualties))
      (when (seq denials) (denials-notice denials))]))
 
@@ -2491,6 +2537,48 @@
     ;; as a surface with nothing on it.
     (h/raw (sweep-fragment holds))
     (h/raw (operations-fragment proposals))]))
+
+(defn ^{:malli/schema [:=> [:cat :HostModel] :string]}
+  host-fragment
+  "The host page's body, patched under #host by its poll: the card's figures, then each kind's
+   processes, heaviest first."
+  [{:keys [unreadable need kinds coordinator] :as host}]
+  (str
+   (h/html
+    [:div {:id "host"}
+     (if unreadable
+       [:p.ops-empty "The host could not be read."]
+       (list
+        (when need
+          [:div.ops-head [:strong {:style "color:var(--needs)"} (str "Needs you: " (str/join " · " (:reasons need)))]])
+        (for [l (host-figures host) :when l] [:div.meta l])
+        (when coordinator
+          [:div.meta (str "coordinator pid " (:pid coordinator)
+                          (when-let [r (:rss-bytes coordinator)] (str " · " (process/human-bytes r))))])
+        [:p.meta {:style "margin-top:10px"}
+         "Grouped from every process your account runs, by command and parent: a process that is "
+         "none of these counts as the kind of its nearest parent that is. Claude Code's own "
+         "spare sessions count as Claude sessions; what no kind claims is listed under other."]
+        (for [{:keys [kind rss-bytes processes] n :count} kinds]
+          (list
+           [:h3 (str (host-kind-label kind) " — " n " · " (process/human-bytes rss-bytes))]
+           (when (seq processes)
+             [:table
+              [:tr [:th "pid"] [:th "memory"] [:th "command"]]
+              (for [{:keys [pid rss-bytes command]} processes]
+                [:tr [:td pid] [:td (process/human-bytes rss-bytes)]
+                 [:td.mono {:title command}
+                  (if (> (count command) 140) (str (subs command 0 140) "…") command)]])])))))])))
+
+(defn ^{:malli/schema [:=> [:cat :map :HostModel] :any]}
+  host-page
+  "The host on its own page — what the Host card summarises, down to each process."
+  [ctx host]
+  (shell
+   (assoc ctx :active :operations :title "Host")
+   [:div.ops-col {:data-on-interval__duration.5s "@get('/_fragment/operations/host')"}
+    (ops-crumb "Host")
+    (h/raw (host-fragment host))]))
 
 (defn ^{:malli/schema [:=> [:cat :map [:maybe :map]] :any]}
   recovery-page

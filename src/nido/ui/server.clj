@@ -4,6 +4,9 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [nido.notion.client :as client]
+            [nido.coordinator.view.host :as host-view]
+            [nido.platform.core :as core]
+            [nido.platform.host :as host]
             [nido.platform.process :as proc]
             [nido.platform.project :as project]
             [nido.session.fleet :as fleet]
@@ -324,13 +327,57 @@
   (let [qs (review-queues)]
     (sse-response (sse-fragment (views/review-queue-fragment qs (requested-projects qs))))))
 
+;; ── the host ─────────────────────────────────────────────────────────────────
+
+(def ^:private host-max-age-ms
+  "How old a host reading may be when a request is answered from it. Under the home's 5 s poll, so
+   each poll sees a fresh reading, and every viewer and the page within it share one."
+  4000)
+
+(def ^:private host-rate-window-ms
+  "How old the previous reading may be and still measure the coordinator's CPU share against. A
+   page opened after an hour unwatched would otherwise show the hour's average as now."
+  30000)
+
+(defonce ^:private host-readings
+  ;; {:read-ns <System/nanoTime of the last attempt> :current <HostReading or nil> :previous <HostReading>}
+  ;; — the last attempt and the last two reads, kept only because a CPU share is a rate. The attempt
+  ;; is timed apart from the reading, so a read that failed is served as unreadable until the
+  ;; interval passes rather than retried on every request; it is timed on the monotonic clock, so a
+  ;; wall clock set back cannot keep a reading fresh. Read on the request path, never on the
+  ;; coordinator's tick.
+  (atom nil))
+
+(defn- host-model
+  "The host card's model, from a read attempted no more than `host-max-age-ms` before. A read that
+   throws costs the card its figures, never the page."
+  []
+  (let [pid (try (control/coordinator-pid) (catch Throwable _ nil))
+        {:keys [current previous]}
+        (locking host-readings
+          (let [{:keys [read-ns current] :as held} @host-readings
+                now-ns (System/nanoTime)
+                age-ms (when read-ns (quot (- now-ns read-ns) 1000000))]
+            (if (and age-ms (< age-ms host-max-age-ms))
+              held
+              (let [r (try (host/read-host {:path (core/nido-home) :cpu-pids (if pid #{pid} #{})})
+                           (catch Throwable _ nil))]
+                (reset! host-readings
+                        {:read-ns  now-ns
+                         :current  r
+                         :previous (when (and current (< age-ms host-rate-window-ms))
+                                     current)})))))]
+    (try (host-view/host-model current previous pid)
+         (catch Throwable _ {:unreadable :host}))))
+
 (defn- operations-home-cards []
   ;; Notices are no workstream's question, so they are here rather than in the needs-you list. An
   ;; unreadable record costs its notice, never the page.
   (views/operations-home-cards (all-proposals) (session-recovery nil) (improvement-holds)
                                (review-queues)
                                {:casualties (try (:casualties (work/shown-revivals)) (catch Throwable _ []))
-                                :denials    (try (work/all-denials) (catch Throwable _ []))}))
+                                :denials    (try (work/all-denials) (catch Throwable _ []))}
+                               (host-model)))
 
 (defn- operations-home-fragment-response []
   (sse-response (sse-fragment (views/operations-home-fragment (operations-home-cards)))))
@@ -873,6 +920,15 @@
 
       ["_fragment" "operations" "improvements"]
       (improvements-fragment-response)
+
+      ;; GET /operations/host — the host card's page, down to each process
+      ["operations" "host"]
+      (html-response 200 (views/host-page
+                          (let [vs (view-state req)] (rail-ctx req :operations (:scope vs) (needs-screen vs)))
+                          (host-model)))
+
+      ["_fragment" "operations" "host"]
+      (sse-response (sse-fragment (views/host-fragment (host-model))))
 
       ;; GET /operations/recovery — session recovery and its activity feed
       ["operations" "recovery"]

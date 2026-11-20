@@ -9,6 +9,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.control :as control]
+            [canvas.coordinator.view.host :refer [HostModel]]
             [canvas.coordinator.record.state :refer [SessionName WorkstreamId]]
             [canvas.coordinator.report :as report]
             [canvas.coordinator.work :as work :refer [Screen]]
@@ -296,7 +297,7 @@
      when there is one: what nido wants a person to know that is no workstream's question."
     {:signature [:=> [:catn [:proposals :any] [:recovery [:maybe :map]]
                   [:holds [:maybe [:vector :map]]] [:queues [:maybe [:vector :map]]]
-                  [:notices [:maybe :map]]] :any]})
+                  [:notices [:maybe :map]] [:host HostModel]] :any]})
   (Operation review-queue-fragment
     "Each project's latest review-queue grooming: where it stands, the levers that fit that
      stage (run, approve the undecided, apply the approved), the queue in rank order with each
@@ -318,6 +319,13 @@
     "What holds the improvement sweep, then every proposal the review analyses have made."
     {:signature [:=> [:catn [:ctx :map] [:proposals :any] [:holds [:maybe [:vector :map]]]] :any]
      :delegates [shell sweep-fragment operations-fragment]})
+  (Operation host-fragment
+    "The host page's body: the card's figures, then each kind's processes, heaviest first."
+    {:signature [:=> [:catn [:host HostModel]] :string]})
+  (Operation host-page
+    "The host on its own page: the card's figures, then each kind's processes, heaviest first."
+    {:signature [:=> [:catn [:ctx :map] [:host HostModel]] :any]
+     :delegates [shell host-fragment]})
   (Operation recovery-page "Session recovery on its own page."
     {:signature [:=> [:catn [:ctx :map] [:recovery [:maybe :map]]] :any]
      :delegates [shell recovery-fragment]})

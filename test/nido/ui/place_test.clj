@@ -23,7 +23,7 @@
    one surface, are listed one by one. The catalog is not here: it carries its own chat."
   ["/" "/workstreams" "/workstreams?sel=nido:ws-1" "/workstreams/nido/ws-1"
    "/domain" "/functionality" "/structure" "/structure/drains"
-   "/operations" "/operations/improvements" "/operations/recovery" "/operations/review-queue"
+   "/operations" "/operations/improvements" "/operations/recovery" "/operations/review-queue" "/operations/host"
    "/development"])
 
 (deftest every-page-carrying-the-chat-has-a-declared-place
@@ -40,7 +40,7 @@
   ;; one, and the catalog's drops the panel. A count that moves means a page was added or removed:
   ;; list its route in chat-pages above, then move this number.
   (let [src (slurp (io/file "src/nido/ui/server.clj"))]
-    (is (= 12 (count (re-seq #"\(rail-ctx req" src))))))
+    (is (= 13 (count (re-seq #"\(rail-ctx req" src))))))
 
 (deftest a-selected-workstream-is-named-with-its-gate-and-open-entry
   (with-redefs [work/workstream

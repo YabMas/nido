@@ -1860,12 +1860,13 @@
   (let [cards (str (views/operations-home-fragment
                     (views/operations-home-cards [] nil [] [] {:casualties [{:project "brian" :session "s1"}]
                                                                :denials [{:project "nido" :ws-id "ws-9" :label "Fix it"
-                                                                          :denials [{:session "s" :tool-name "Bash"}]}]})))]
+                                                                          :denials [{:session "s" :tool-name "Bash"}]}]}
+                                                               {:unreadable :host})))]
     (is (str/includes? cards "nido session:revive"))
     (is (str/includes? cards "brian/s1"))
     (is (str/includes? cards "/workstreams/nido/ws-9") "a denial links to its workstream")
     (is (str/includes? cards "latest: Bash")))
-  (is (not (str/includes? (str (views/operations-home-fragment (views/operations-home-cards [] nil [] [] {})))
+  (is (not (str/includes? (str (views/operations-home-fragment (views/operations-home-cards [] nil [] [] {} {:unreadable :host})))
                           "Permission denials"))
       "no notice when there is nothing to know")
   (is (str/includes? (views/needs-fragment {:gates [] :selection nil :scope "all" :casualties [{:project "brian"}]})

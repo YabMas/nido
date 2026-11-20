@@ -4,7 +4,9 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
+   [nido.coordinator.control :as control]
    [nido.coordinator.work :as work]
+   [nido.platform.host :as host]
    [nido.coordinator.record.proposal]
    [nido.coordinator.record.workstream :as ws]
    [nido.ui.server :as server]))
@@ -309,3 +311,17 @@
           (is (str/includes? body "could not be read")
               "an empty section would read as a free sweep")
           (is (str/includes? body "the clean path forgets")))))))
+
+(deftest a-failed-host-read-is-not-retried-inside-the-interval
+  (let [readings @#'server/host-readings
+        calls    (atom 0)]
+    (reset! readings nil)
+    (try
+      (with-redefs [control/coordinator-pid (constantly nil)
+                    host/read-host          (fn [_] (swap! calls inc) (throw (ex-info "boom" {})))]
+        (let [first-model (#'server/host-model)]
+          (#'server/host-model)
+          (#'server/host-model)
+          (is (= 1 @calls) "a failed read is served as unreadable until the interval passes")
+          (is (= first-model (#'server/host-model)))))
+      (finally (reset! readings nil)))))
