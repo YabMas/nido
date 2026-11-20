@@ -239,7 +239,6 @@
         .pos .pos-at { font-size:var(--fs-xs); color:var(--text-muted); }
         .pos.pos-you .pos-at { color:var(--needs-dim); }
         .st-mark { flex:none; font-size:var(--fs-xs); line-height:1; }
-        .st-mark.live { color:var(--working); }
         .st-mark.paused { color:var(--dormant); }
         .st-mark.stalled { color:var(--failed); }
         .pause-line { display:flex; align-items:center; gap:8px; margin:-4px 0 10px;
@@ -315,9 +314,9 @@
         /* An agent working in a stage: a breathing dot in the working colour in place of its
            glyph — activity, not a load in progress. A stage whose next move is a person's
            carries the needs-you dot instead, which outranks it. */
-        .arc-live { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--working);
-                    animation:pulse 1.4s ease-in-out infinite; }
-        @media (prefers-reduced-motion: reduce) { .arc-live { animation:none; } }
+        .arc-live, .st-mark.live { display:inline-block; width:7px; height:7px; border-radius:50%;
+                                   background:var(--working); animation:pulse 1.4s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .arc-live, .st-mark.live { animation:none; } }
         .arc-row.awaiting .arc-n { color:var(--needs); }
         .arc-sub { padding:2px 0 8px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); }
         .hist-head { display:inline-flex; gap:7px; align-items:baseline; cursor:pointer;
@@ -629,7 +628,11 @@
         .chat-status { display:flex; gap:8px; align-items:center; min-height:20px; font-size:var(--fs-xs);
                        color:var(--text-muted); }
         .chat-status:empty { display:none; }
-        .chat-status-l { color:var(--text); }
+        /* One line, however long the phase's words run — a tool call's title can be a whole
+           script; the rest is cut with an ellipsis and stays readable on hover. */
+        .chat-status-l { color:var(--text); flex:1 1 auto; min-width:0; white-space:nowrap;
+                         overflow:hidden; text-overflow:ellipsis; }
+        .chat-status > .chat-spin, .chat-elapsed { flex:none; }
         .chat-elapsed { color:var(--text-faint); font-variant-numeric:tabular-nums; }
         /* The side panel (see nido.ui.components.chat/side). Its width is its page's; closed, only
            the toggle at the head of its bar shows. The toggle's two icons are stacked by absolute

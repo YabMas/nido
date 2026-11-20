@@ -432,9 +432,9 @@
          (chat/side transcript panel
                     {:open?  open?
                      :bar    [[:button#catc-pick.catc-tool.catc-pick
-                               {:type "button" :aria-pressed "false"
+                               {:type "button" :aria-pressed "false" :aria-label "Pick elements"
                                 :title "Pick elements of a scene to talk about (Esc to stop)"}
-                               [:span.catc-tool-i {:aria-hidden "true"} "⌖"] "Pick"]]
+                               [:span.catc-tool-i {:aria-hidden "true"} "⌖"]]]
                      :top    [[:p.catc-hint "Click elements in the scene to attach them. Click again to remove one; "
                                [:kbd "Esc"] " to stop."]
                               change-bar]

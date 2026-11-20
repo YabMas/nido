@@ -157,7 +157,7 @@
    (when busy?
      (let [[ph label] (phase transcript)]
        (list [:span {:class (str "chat-spin chat-spin-" (name ph)) :aria-hidden "true"}]
-             [:span.chat-status-l label]
+             [:span.chat-status-l {:title label} label]
              (when started-at
                [:span.chat-elapsed {:data-since (str started-at)
                                     "data-init" elapsed-js

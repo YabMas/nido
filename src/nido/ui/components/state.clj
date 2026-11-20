@@ -142,8 +142,8 @@
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] :any]}
   state-mark
-  "Whether anything is happening in a workstream, as one mark and no words: a dot in the running
-   colour while something is live; ‖ in the dormant colour while a person's pause stands; ⚠ in
+  "Whether anything is happening in a workstream, as one mark and no words: the breathing dot in
+   the working colour while something is live — the one the arc's running stage carries; ‖ in the dormant colour while a person's pause stands; ⚠ in
    the failed colour when it is stalled — an agent owes the move, nothing runs, no question was
    recorded and nobody paused it, which is a fault and never a resting state; nothing otherwise
    (a workstream waiting on a person says so by its lit position chip). What runs, and who owes
@@ -157,7 +157,7 @@
       paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
       stalled                    [:span.st-mark.stalled {:title (str "stalled — nothing runs and nothing asks you"
                                                                      (when (seq tip) (str " · " tip)))} "⚠"]
-      (or live what)             [:span.st-mark.live {:title (if (seq tip) tip "running")} "●"])))
+      (or live what)             [:span.st-mark.live {:title (if (seq tip) tip "running")}])))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
   round-label
