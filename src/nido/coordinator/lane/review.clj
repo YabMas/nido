@@ -5,6 +5,7 @@
    occupying its trigger's in-flight budget."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.record.live :as live]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as cws]))
@@ -44,7 +45,7 @@
    session — once the human has resolved the ticket the review surface is no
    longer needed. Returns the number transitioned."
   []
-  (->> (runs/list-run-ids)
+  (->> (live/unfinished-run-ids)
        (keep runs/read-run)
        (filter #(and (= :awaiting-review (:state %))
                      (#{:triage-bug :triage-slack} (:skill %))))

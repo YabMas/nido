@@ -46,8 +46,9 @@
     {:signature [:=> [:catn] [:vector RunId]]
      :delegates [state/runs-dir]})
   (Operation in-progress-count-by-trigger
-    "How many runs are in flight, per trigger — the scheduler's backpressure reading."
-    {:signature [:=> [:catn] [:map-of :keyword :int]]
+    "How many runs are in flight, per trigger — the scheduler's backpressure reading — over every
+     run, or over the run ids given."
+    {:signature [:=> [:catn [:run-ids [:? [:sequential RunId]]]] [:map-of :keyword :int]]
      :delegates [list-run-ids read-run]})
   (Operation find-for-session
     "The newest run owning this session, or nil."

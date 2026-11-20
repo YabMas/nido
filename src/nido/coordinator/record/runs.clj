@@ -144,18 +144,20 @@
   (boolean (when (and project workstream-id)
              (some-> (cws/read-ws project workstream-id) cws/closure))))
 
-(defn ^{:malli/schema [:=> [:cat] [:map-of :keyword :int]]}
+(defn ^{:malli/schema [:=> [:cat [:? [:sequential :RunId]]] [:map-of :keyword :int]]}
   in-progress-count-by-trigger
   "Map {trigger-kw → count} of runs in an in-progress state — working, or parked for a person's
-   review — grouped by :trigger, leaving out runs on a settled workstream. Scans the runs dir.
+   review — grouped by :trigger, leaving out runs on a settled workstream.
    The scheduler reads this to enforce per-trigger :max-in-flight caps; recomputed each tick so
-   it is restart-safe."
-  []
-  (->> (list-run-ids)
-       (keep read-run)
-       (filter #(contains? in-progress-states (:state %)))
-       (remove settled-workstream?)
-       (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {})))
+   it is restart-safe. Given `run-ids`, only those are read — the running coordinator passes the
+   Runs it holds as unfinished, since a finished one is in no in-progress state."
+  ([] (in-progress-count-by-trigger (list-run-ids)))
+  ([run-ids]
+   (->> run-ids
+        (keep read-run)
+        (filter #(contains? in-progress-states (:state %)))
+        (remove settled-workstream?)
+        (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {}))))
 
 (declare runs-of)
 

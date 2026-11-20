@@ -18,6 +18,7 @@
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.report :as report]
+   [nido.coordinator.record.live :as live]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.session :as session]
@@ -618,7 +619,7 @@
              (and (= :drive (:trigger r))
                   (= ws-id (:workstream-id r))
                   (contains? claimed-states (:state r)))))
-         (runs/list-run-ids))))
+         (live/unfinished-run-ids))))
 
 (defn ^{:malli/schema [:=> [:cat [:? :any]] :any]}
   tick!

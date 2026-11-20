@@ -65,6 +65,29 @@
                    (drop from lines))
      :cursor (max from (count lines))}))
 
+(defonce ^:private !index (atom nil))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe fn?]] :any]}
+  use-index!
+  "Answer which logs were written since a time from `f` — (fn [since-ms] ids-or-nil) — rather than
+   by listing the directory, or list it again given nil. The running coordinator's record of
+   live state installs one: with tens of thousands of logs, statting every one on every pass was
+   the cost, and that record already knows each one's time."
+  [f]
+  (reset! !index f)
+  nil)
+
+(defn- written-since
+  "The conversation ids whose logs were written at or after `since-ms`."
+  [since-ms]
+  (or (some-> @!index (apply [since-ms]))
+      (let [dir (fs/parent (cstate/session-events-path "_"))]
+        (if-not (fs/directory? dir)
+          []
+          (for [^java.io.File f (.listFiles (fs/file dir))
+                :when (and (str/ends-with? (.getName f) ".edn") (>= (.lastModified f) since-ms))]
+            (str/replace (.getName f) #"\.edn$" ""))))))
+
 (defn ^{:malli/schema [:=> [:cat :int] [:vector :map]]}
   prompts-since
   "Every prompt recorded at or after `since-ms`, epoch milliseconds, in any conversation, as
@@ -72,20 +95,15 @@
    recent activity, not every conversation ever recorded. A prompt whose time does not parse is
    left out."
   [since-ms]
-  (let [dir (fs/parent (cstate/session-events-path "_"))]
-    (if-not (fs/directory? dir)
-      []
-      (->> (for [^java.io.File f (.listFiles (fs/file dir))
-                 :when (and (str/ends-with? (.getName f) ".edn") (>= (.lastModified f) since-ms))
-                 :let  [id (str/replace (.getName f) #"\.edn$" "")]
-                 ev    (:events (events-since id nil))
-                 :when (= :prompt (:event ev))
-                 :let  [ms (try (.toEpochMilli (java.time.Instant/parse (str (:at ev))))
-                                (catch Exception _ nil))]
-                 :when (and ms (>= ms since-ms))]
-             (select-keys ev [:at :cwd :prompt]))
-           (sort-by :at)
-           vec))))
+  (->> (for [id (written-since since-ms)
+             ev (:events (events-since id nil))
+             :when (= :prompt (:event ev))
+             :let  [ms (try (.toEpochMilli (java.time.Instant/parse (str (:at ev))))
+                            (catch Exception _ nil))]
+             :when (and ms (>= ms since-ms))]
+         (select-keys ev [:at :cwd :prompt]))
+       (sort-by :at)
+       vec))
 
 (defn ^{:malli/schema [:=> [:cat [:? :int]] [:vector :map]]}
   conversations
@@ -99,11 +117,12 @@
    (let [dir (fs/parent (cstate/session-events-path "_"))]
      (if-not (fs/directory? dir)
        []
-       (vec (for [^java.io.File f (.listFiles (fs/file dir))
-                  :when (and (str/ends-with? (.getName f) ".edn")
-                             (or (nil? since-ms) (>= (.lastModified f) since-ms)))
-                  :let  [id   (str/replace (.getName f) #"\.edn$" "")
-                         ev   (->> (:events (events-since id nil)) (filter :cwd) last)
+       (vec (for [id   (if since-ms
+                         (written-since since-ms)
+                         (for [^java.io.File f (.listFiles (fs/file dir))
+                               :when (str/ends-with? (.getName f) ".edn")]
+                           (str/replace (.getName f) #"\.edn$" "")))
+                  :let  [ev   (->> (:events (events-since id nil)) (filter :cwd) last)
                          ms   (try (.toEpochMilli (java.time.Instant/parse (:at ev)))
                                    (catch Exception _ nil))]
                   :when ms]

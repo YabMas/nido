@@ -56,6 +56,7 @@
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.live :as live]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.drain :as source-drain]
    [nido.platform.core :as core]
@@ -295,7 +296,7 @@
      ;; Sessions and the seat-message log are read first, and a ledger only where they leave a
      ;; conductor to start or retire or the workstream is an open drain: reading every ledger
      ;; costs seconds a pass.
-     (for [ws-id (ws/list-ids project)
+     (for [ws-id (live/subjects project)
            :let  [c (conductor-of project ws-id)]
            :when (or c (drains ws-id) (seq (seats/hand-backs project ws-id)))
            :let  [w        (ws/read-ws project ws-id)
@@ -1487,7 +1488,7 @@
                                       ;; No turn ended: what the person said is the act as recorded.
                                       :session (:name c) :said (pr-str e)})
                     :ws-id ws-id))))))
-    (ws/list-ids project))))
+    (live/subjects project))))
 
 ;; ── refusing the person's acts ──────────────────────────────────────────────
 

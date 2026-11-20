@@ -26,6 +26,7 @@
             [nido.coordinator.record.session-events :as events]
             [nido.coordinator.record.standing :as standing]
             [nido.coordinator.record.state :as cstate]
+            [nido.coordinator.record.live :as live]
             [nido.coordinator.record.workstream :as ws]
             [nido.platform.io :as io]
             [nido.platform.project :as project]
@@ -377,7 +378,7 @@
    the record's conversations are read, which `outstanding` reads."
   [opts]
   (for [p      (projects opts)
-        ws-id  (ws/list-ids p)
+        ws-id  (live/subjects p)
         s      (session/list-sessions p ws-id)
         :when  (:claude s)]
     {:project p :ws-id ws-id :session-name (:name s) :facet (:claude s) :reading (:reading s)}))
@@ -400,7 +401,7 @@
    `opts`, as {:project :ws-id :session-name :dispatching}."
   [opts]
   (for [p      (projects opts)
-        ws-id  (ws/list-ids p)
+        ws-id  (live/subjects p)
         s      (session/list-sessions p ws-id)
         :when  (:dispatching s)]
     {:project p :ws-id ws-id :session-name (:name s) :dispatching (:dispatching s)}))
@@ -584,23 +585,29 @@
 
 (defn- every-record [opts]
   (for [p      (projects opts)
-        ws-id  (ws/list-ids p)
+        ws-id  (live/subjects p)
         s      (session/list-sessions p ws-id)]
     {:project p :ws-id ws-id :record s}))
 
 (defn- reachable?
   "Whether a pass has anything to read or give on `record`: its session's home still stands,
-   or the conversation its facet drives is one Claude Code still lists (`listed`, a set of
-   session ids) — a session can run in a worktree whose home is gone. A record with neither
-   is a session torn down: it runs nothing that could record an event, has no inbox to give
-   to and no listed directory a wake could resume in, whatever seat it held. Its position
-   stays on the record, so a session brought back up is read on from where it was left.
-
-   Stopgap: every record is still listed to be filtered."
+   the conversation its facet drives is one Claude Code still lists (`listed`, a set of
+   session ids) — a session can run in a worktree whose home is gone — or something a pass acts
+   on is left on it: an instruction outstanding, a turn open, a dialog or an error recorded. A
+   record with none of these is a session torn down: it runs nothing that could record an
+   event, has no inbox to give to and no listed directory a wake could resume in, and owes
+   nothing a pass would settle, whatever seat it held. Its position stays on the record, so a
+   session brought back up is read on from where it was left. The records listed are those of
+   the workstreams a pass is given, which in the daemon are record-live's subjects and what
+   moved — a subject can still hold torn-down sessions."
   [listed {:keys [project record]}]
   (boolean (or (contains? listed (get-in record [:claude :session-id]))
                (and (:name record)
-                    (fs/exists? (session-state/session-home-dir (name project) (:name record)))))))
+                    (fs/exists? (session-state/session-home-dir (name project) (:name record))))
+               (some? (get-in record [:claude :pending]))
+               (seq (get-in record [:reading :turns]))
+               (some? (get-in record [:claude :waiting]))
+               (some? (get-in record [:autonomy :error])))))
 
 (defn- other-actions
   "What a conversation the facet does not drive reports: each Stop a turn end that ended no
@@ -740,6 +747,7 @@
             now      (clock/now-iso)
             named    (name-dispatched! listing opts)
             listed   (into #{} (keep :sessionId) listing)
+            _        (live/listed! listed)
             records  (vec (filter #(reachable? listed %) (every-record opts)))
             owned    (session/conversation-sessions (events/conversations (scan-from records began-ms)))
             activated? (memoize (fn [project ws-id] (boolean (some-> (ws/read-ws project ws-id) standing/activated?))))

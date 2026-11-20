@@ -1459,3 +1459,9 @@
         "ten minutes: listed, and only what status prints is kept")
     (is (= 1 (count (#'core/held-past-bound [(h "not a time")] now bound)))
         "a hold that cannot be timed is shown rather than lost")))
+
+(deftest a-tick-runs-the-passes-only-on-movement-or-at-the-backstop
+  (let [due? #'core/pass-due?]
+    (is (true? (due? true 1000 999)) "the census found something moved")
+    (is (false? (due? false 1000 999)) "nothing moved, inside the period: no pass")
+    (is (true? (due? false 31000 1000)) "nothing moved, but the period came round")))

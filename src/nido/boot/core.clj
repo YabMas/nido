@@ -30,6 +30,7 @@
    [nido.coordinator.record.drain :as drain-record]
    [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.source.registry :as sources]
+   [nido.coordinator.record.live :as live]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.source.notion :as nsource]
    [nido.coordinator.source.slack :as slack-source]
@@ -345,6 +346,19 @@
       (println (str "nido tick: slow step " label " took " ms " ms")))
     r))
 
+;; When the tick last ran the conduct pass, and how long it may go without one. What changes
+;; with no write — a process dying, a bound elapsing — is acted on within the period; a write is
+;; acted on at the census after it.
+(defonce ^:private !last-pass-ms (atom 0))
+
+(def ^:private backstop-ms 30000)
+
+(defn- pass-due?
+  "Whether a tick runs the conduct pass: the census found something `moved?`, or `backstop-ms`
+   has passed since `last-ms`."
+  [moved? now-ms last-ms]
+  (boolean (or moved? (>= (- now-ms last-ms) backstop-ms))))
+
 ;; Whether the slow pollers run beside the loop. `run!` turns it on; a tick! driven by a test
 ;; polls in line, so what a poll emits is in the queue when tick! returns.
 (defonce ^:private !poll-in-background? (atom false))
@@ -354,10 +368,10 @@
 
 (defn- off-the-loop
   "Run `f` timed as `label`: on its own thread while `!poll-in-background?`, unless the last run
-   under `key` is still going, in which case nothing starts; else in line. A poll waits on the
-   network for seconds at a time — Notion's departed pages are fetched one by one — and in line
-   it held every hand-back, conduct pass and dispatch behind it. What throws is printed under
-   `label`, never thrown into the loop."
+   under `key` is still going, in which case nothing starts; else in line. For a step that waits
+   on the network — Notion's departed pages are fetched one by one — or reads every record nido
+   keeps: in line, it held every hand-back, conduct pass and dispatch behind it. What throws is
+   printed under `label`, never thrown into the loop."
   [key label f]
   (let [run #(try (timed label f)
                   (catch Throwable t
@@ -542,7 +556,7 @@
         (timed (str "drain wakes " (name p))
                #(logged (str "waking " (name p) "'s drain coordinators") (fn [] (drain-lane/wakes! p))))
         (timed (str "conductor reseat " (name p))
-               #(doseq [ws-id (ws/list-ids p)]
+               #(doseq [ws-id (live/subjects p)]
                   (logged (str "re-seating " ws-id) (fn [] (conductor/reseat! p ws-id typed-in)))
                   ;; Whatever reseat! decided: an instruction no driven session can take is raised.
                   (logged (str "raising " ws-id "'s undelivered instructions")
@@ -1488,7 +1502,7 @@
         halt-info           (halt/read-halt-info)]
     ;; Before the halt branch: a halted daemon still has gates waiting on a
     ;; person, and the halt itself is one of the things to announce.
-    (timed "notify-attention" #(maybe-notify-attention! (System/currentTimeMillis) halt-info))
+    (off-the-loop :notify-attention "notify-attention" #(maybe-notify-attention! (System/currentTimeMillis) halt-info))
     (if halt-info
       (heartbeat/write! (cond-> {:status       :halted
                                  :halted-by    (:source halt-info)
@@ -1505,9 +1519,10 @@
         (timed "reconcile-sources" #(reconcile-sources! triggers-by-project))
         ;; Drain queue first — this consumes envelopes emitted on the PREVIOUS
         ;; tick by source polls. Keeps each tick's unit of work small.
-        (timed "dispatch-queue"
-               #(doseq [env (queue/drain!)]
-                  (dispatch-envelope! env triggers-by-project)))
+        ;; A dispatch starts sessions and finds workstreams by ref: off the loop, one at a time.
+        (off-the-loop :dispatch "dispatch-queue"
+                      #(doseq [env (queue/drain!)]
+                         (dispatch-envelope! env triggers-by-project)))
         ;; Reap finished executor futures and promote waiting Runs into
         ;; free slots. on-spawn dispatches :merge Runs to drive-home!
         ;; and everything else to run-blocking!.
@@ -1532,14 +1547,20 @@
                  (.println ^java.io.PrintWriter *err*
                            (str "nido drive: tick failed — " (ex-message t))))))
         ;; The background sessions, before anything is promoted: a turn that ended
-        ;; frees its slot in the same tick, and the working count is current.
-        (try (timed "conduct" #(conduct-pass! (System/currentTimeMillis)))
-             (catch Throwable t
-               (binding [*err* *err*]
-                 (.println ^java.io.PrintWriter *err*
-                           (str "nido conduct: pass failed — " (ex-message t))))))
+        ;; frees its slot in the same tick, and the working count is current. Only when the
+        ;; census found something moved, or the backstop period came round: a pass with nothing
+        ;; new to read decides what the last one did, and costs what reading it costs.
+        (timed "census" live/census!)
+        (let [now-ms (System/currentTimeMillis)]
+          (when (pass-due? (live/moved?) now-ms @!last-pass-ms)
+            (reset! !last-pass-ms now-ms)
+            (try (timed "conduct" #(conduct-pass! now-ms))
+                 (catch Throwable t
+                   (binding [*err* *err*]
+                     (.println ^java.io.PrintWriter *err*
+                               (str "nido conduct: pass failed — " (ex-message t))))))))
         (let [on-spawn  (fn [rid] (execute! rid))
-              in-flight (timed "in-flight-count" runs/in-progress-count-by-trigger)]
+              in-flight (timed "in-flight-count" #(runs/in-progress-count-by-trigger (live/unfinished-run-ids)))]
           ;; Under a usage hold the queue waits: nothing is promoted, so no Run
           ;; starts only to be rejected. Reaping is skipped with it, which is
           ;; harmless — a finished future is reaped on the first tick after.
@@ -1555,10 +1576,17 @@
                           (:poll! inst))
             (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms))
           ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
-          (timed "reclaim" #(maybe-reclaim! now-ms))
-          (timed "adopt" #(maybe-adopt! now-ms))
-          (timed "settle-reviews" #(maybe-settle-reviews! now-ms))
-          (timed "expire-inbox" #(maybe-expire-inbox! now-ms))
+          ;; Hygiene sweeps read every record nido keeps, at their throttles of minutes; off the
+          ;; loop, so what they cost holds up nothing. One thread, in this order, as they ran in
+          ;; line: each decides on what the one before it wrote, and none runs beside another.
+          (off-the-loop :hygiene "hygiene"
+                        #(doseq [[label f] [["reclaim" maybe-reclaim!] ["adopt" maybe-adopt!]
+                                            ["settle-reviews" maybe-settle-reviews!]
+                                            ["expire-inbox" maybe-expire-inbox!]]]
+                           (try (timed label (fn [] (f now-ms)))
+                                (catch Throwable t
+                                  (binding [*err* *err*]
+                                    (.println ^java.io.PrintWriter *err* (str "WARN: " label " threw — " (ex-message t))))))))
           (off-the-loop :github-merges "github-merges" #(maybe-poll-github-merges! now-ms))
           (off-the-loop :github-issues "github-issues" #(maybe-poll-github-issues! now-ms))
           (off-the-loop :notion-sync "notion-sync" #(maybe-poll-notion-sync! now-ms))
@@ -1639,6 +1667,10 @@
        (catch Throwable t
          (println "nido coordinator: recovering background sessions failed —" (ex-message t))))
   (resubmit-queued! (load-all-triggers))
+  ;; Before the first tick: the passes visit what can change and what the census finds moved.
+  (try (live/start! (registered-projects))
+       (catch Throwable t
+         (println "nido coordinator: reading live state failed, passes visit every record —" (ex-message t))))
   (reset! !dashboard-lifecycle dashboard)
   (let [{:keys [enabled? port]} (dashboard-config opts)
         start!                  (:start! dashboard)]
