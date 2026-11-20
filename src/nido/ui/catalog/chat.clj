@@ -84,7 +84,11 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
    :stream-url "/_catalog/chat/stream"
    :answer-url (fn [item option] (str "/_catalog/chat/permission/" item "/" option))
    :unpick-url (fn [i] (str "/_catalog/chat/unpick/" i))
-   :picks-url  "/_catalog/chat/picks"})
+   :picks-url  "/_catalog/chat/picks"
+   ;; Images, as the dashboard's own chat takes them: the host answers these three itself.
+   :attach-url   "/_catalog/chat/attach"
+   :unattach-url (fn [digest] (str "/_catalog/chat/unattach/" digest))
+   :image-url    (fn [digest] (str "/_catalog/chat/image/" digest))})
 
 (def ^:private change-routes
   {:publish-url "/_catalog/chat/publish"
