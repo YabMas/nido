@@ -600,6 +600,11 @@ for the text and keep the tint, so it still reads as **yours** without competing
            {:path "src/nido/ui/stylesheet.clj" :status :modified}
            {:path "src/nido/ui/catalog/new_scene.clj" :status :added}]})
 
+(def ^:private a-newer-change
+  {:description "Give the composer's Send a quieter border"
+   :files [{:path "src/nido/ui/stylesheet.clj" :status :modified}]
+   :rev "fedcba9876543210"})
+
 (defn- chat-scenes []
   [{:name "chat-panel"
     :note "A conversation with an agent: its transcript, the turn's status, then the composer.
@@ -681,35 +686,50 @@ for the text and keep the tint, so it still reads as **yours** without competing
               :note "Publish waits: an undescribed change would land unnamed."
               :render #(chat/change-bar "scene-change-3" (assoc a-change :description "") {} change-routes)}
              {:title "publishing"
-              :note "The landing verb's current step, until it ends."
-              :render #(chat/change-bar "scene-change-4" a-change {:running? true :step "running bb nido:test at 0123456789ab"}
+              :note "The landing verb's current step and the change it lands, which stays shown until the
+                     worktree is back on main. Nothing
+                     has been made since Publish, so there is nothing pending beside it."
+              :render #(chat/change-bar "scene-change-4" nil {:running? true :step "running bb nido:test at 0123456789ab"
+                                                              :landing a-change}
                                         change-routes)}
+             {:title "publishing, with newer edits"
+              :note "The chat stays open while a change lands: what the agent made since Publish is
+                     listed apart, and waits for the landing before it can be published."
+              :render #(chat/change-bar "scene-change-10" a-newer-change
+                                        {:running? true :step "running bb nido:test at 0123456789ab"
+                                         :landing a-change}
+                                        change-routes)}
+             {:title "conflicting with main"
+              :note "Brought onto main after a landing, the newer edits conflict: the paths are named,
+                     and Publish waits for the agent to resolve them."
+              :render #(chat/change-bar "scene-change-11" (assoc a-newer-change :conflicts ["src/nido/ui/stylesheet.clj"])
+                                        {} change-routes)}
              {:title "refused"
               :note "Why it did not land, with the change still there to fix and publish again."
               :render #(chat/change-bar "scene-change-5" a-change {:refused "bb nido:test is red at the tip"}
                                         change-routes)}
              {:title "published"
-              :note "Landed: no change left, and the commit it landed as."
+              :note "Landed: the commit it landed as, and nothing made since."
               :render #(chat/change-bar "scene-change-6" nil {:landed "0123456789abcdef"} change-routes)}
              {:title "published, restart owed"
               :note "The landing's restart is owed, and the bar names what the daemon waits for."
               :render #(chat/change-bar "scene-change-7" nil
                                         {:landed  "0123456789abcdef"
-                                         :landing {:landing {:state :owed :commit "0123456789abcdef"
+                                         :restart {:landing {:state :owed :commit "0123456789abcdef"
                                                              :owed-at "2026-11-17T12:00:00Z" :by-pid 4242}
                                                    :waits ["1 run(s) to finish: 2026-11-17-nido-review-1a2b"]}}
                                         change-routes)}
              {:title "running the landing"
               :note "After the restart: the bar says which commit the dashboard runs, with no publish in its memory."
               :render #(chat/change-bar "scene-change-8" nil
-                                        {:landing {:landing {:state :running :commit "0123456789abcdef"
+                                        {:restart {:landing {:state :running :commit "0123456789abcdef"
                                                              :owed-at "2026-11-17T12:00:00Z"
                                                              :since "2026-11-17T12:03:10Z" :pid 5151}}}
                                         change-routes)}
              {:title "landing unreadable"
               :note "A record nobody can read is said, never taken for no landing."
               :render #(chat/change-bar "scene-change-9" nil
-                                        {:landing {:unreadable "restart-owed.edn does not hold a landing"}}
+                                        {:restart {:unreadable "restart-owed.edn does not hold a landing"}}
                                         change-routes)}]}
    {:name "turn-status"
     :note "The status row at the foot of the log: from Send to the turn's end it names what the

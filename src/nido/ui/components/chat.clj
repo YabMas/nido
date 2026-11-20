@@ -425,68 +425,98 @@
       [:p.chat-change-done {:role "status"} "The dashboard runs " (short (:commit landing))
        " since " (:since landing) "."])))
 
+(defn- files-summary
+  "A change's files folded away under `label`."
+  [label files]
+  (let [n (count files)]
+    [:details.chat-change-files
+     [:summary (str n (if (= 1 n) " file" " files") " " label)]
+     [:ul (for [{:keys [path status]} files]
+            [:li [:span.chat-change-st (name status)] " " [:code path]])]]))
+
+(defn- landing-summary
+  "The change a publish sealed (`{:description :files}`), its files folded away under `label`; nil
+   for none."
+  [label landing]
+  (when landing
+    (list (files-summary label (:files landing))
+          [:p.chat-change-desc (or (first-line (:description landing)) [:em "Not described."])])))
+
 (defn ^{:malli/schema [:=> [:cat :string [:maybe :map] :map :map] :any]}
   change-bar
   "The conversation's unlanded change, under the DOM id `<id>-change`, and the two things a person
    can do with it: publish it to main or throw it away, each asked to confirm first. Renders from
-   `change` — `{:description :files}`, see `nido.session.change`, or nil for none — and
-   `publishing`: `{:running? :step}` while a publish runs, its last `land · ` step as the status;
-   `{:landed <commit>}` or `{:refused <why>}` for how the last one ended; `{:reverted? true}` after a
-   throw-away; or {} for nothing to say. Beside any of these, `:landing` carries the latest landing
-   as `nido.coordinator.control/latest-landing` answers it, shown whether or not there is a change
-   or a publish result: owed with what it waits for, running since a time, or unreadable.
+   `change` — `{:description :files :rev :conflicts}`, see `nido.session.change`, or nil for none —
+   and `publishing`: `{:running? :step :landing}` while a publish runs, its last `land · ` step as
+   the status and `:landing` the change being landed (`{:description :files}`); `{:landed <commit>
+   :landing}` or `{:refused <why>}` for how the last one ended, `:landing` shown until the worktree
+   is back on main; `{:reverted? true}` after a throw-away; or {}
+   for nothing to say. Beside any of these, `:restart` carries the latest landing as
+   `nido.coordinator.control/latest-landing` answers it, shown whether or not there is a change or a
+   publish result: owed with what it waits for, running since a time, or unreadable.
 
-   No change, nothing to say and no landing renders the empty element, which takes no space. Publish is
-   withheld while the change has no description, since it would land unnamed, and both actions
-   are withheld while a turn runs (the panel's busy signal) — a change the agent is still making is
-   not one to land or lose. The confirm state is the page's alone: one signal, `<id>Confirm`."
-  [id change {:keys [running? step landed refused reverted? landing]} {:keys [publish-url revert-url]}]
+   While a change is being landed or awaits the worktree's return to main, `change` is what the
+   conversation made since — it stays editable, and is listed apart from what is landing. Publish posts the change's `:rev`, so it
+   lands only the change this bar showed; it is withheld while a publish runs, while the change has
+   no description (it would land unnamed) or holds a conflict, and both actions are withheld while
+   a turn runs (the panel's busy signal) — a change the agent is still making is not one to land or
+   lose. No change, nothing to say and no landing renders the empty element, which takes no space.
+   The confirm state is the page's alone: one signal, `<id>Confirm`."
+  [id change {:keys [running? step landing landed refused reverted? restart]} {:keys [publish-url revert-url]}]
   (let [{:keys [busy]} (signals id)
-        confirm  (str (str/replace id "-" "") "Confirm")
-        n        (count (:files change))
-        desc     (first-line (:description change))
-        asking   (fn [v] (str "$" confirm " === '" v "'"))]
+        confirm   (str (str/replace id "-" "") "Confirm")
+        desc      (first-line (:description change))
+        conflicts (seq (:conflicts change))
+        held      (or running? (nil? desc) conflicts)
+        asking    (fn [v] (str "$" confirm " === '" v "'"))
+        publish   (str publish-url "?rev=" (:rev change))]
     [:section.chat-change {:id (str id "-change") "data-signals" (str "{" confirm ": ''}")}
      (cond
        running?
-       [:p.chat-change-status {:role "status"} [:span.chat-spin {:aria-hidden "true"}]
-        "Publishing · " (or step "starting")]
+       (list
+        [:p.chat-change-status {:role "status"} [:span.chat-spin {:aria-hidden "true"}]
+         "Publishing · " (or step "starting")]
+        (landing-summary "landing" landing))
 
        landed
-       [:p.chat-change-done {:role "status"} "Published " [:code (subs landed 0 (min 12 (count landed)))]
-        " to main. The frame shows main now."]
+       (list
+        [:p.chat-change-done {:role "status"} "Published " [:code (subs landed 0 (min 12 (count landed)))]
+         " to main."]
+        (landing-summary "landed" landing))
 
        refused
        [:p.chat-change-refused {:role "alert"} "Not published: " refused]
 
        reverted?
        [:p.chat-change-done {:role "status"} "Edits thrown away. The frame shows main."])
-     (landing-line landing)
-     (when (and change (not running?))
+     (landing-line restart)
+     (when change
        (list
-        [:details.chat-change-files
-         [:summary (str n (if (= 1 n) " file" " files") " changed, not on main")]
-         [:ul (for [{:keys [path status]} (:files change)]
-                [:li [:span.chat-change-st (name status)] " " [:code path]])]]
+        (files-summary (if landing "changed since Publish" "changed, not on main") (:files change))
+        (when conflicts
+          [:p.chat-change-refused {:role "alert"} "Conflicts with main in "
+           (interpose ", " (for [p conflicts] [:code p]))
+           " — the agent resolves them in its next turn; Publish waits until then."])
         [:p.chat-change-desc
          (or desc [:em "Not described yet — the agent describes its change as it works."])]
         [:div.chat-change-acts {"data-show" (str "$" confirm " === ''")}
-         [:button.btn {:type "button" "data-attr:disabled" (str "$" busy)
+         [:button.btn {:type "button" "data-attr:disabled" (if running? "true" (str "$" busy))
                        "data-on:click" (str "$" confirm " = 'revert'")} "Cancel"]
          [:button.btn.btn-primary (cond-> {:type "button"
-                                           "data-attr:disabled" (if desc (str "$" busy) "true")
+                                           "data-attr:disabled" (if held "true" (str "$" busy))
                                            "data-on:click" (str "$" confirm " = 'publish'")}
-                                    (nil? desc) (assoc :title "Publish waits for the change's description"))
+                                    (nil? desc) (assoc :title "Publish waits for the change's description")
+                                    running?    (assoc :title "Publish waits for the landing that is running"))
           "Publish"]]
         [:div.chat-change-ask {"data-show" (asking "publish")}
          [:span "Land this on main? Tests and the landing check run first."]
          [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
-         [:button.btn.btn-primary {:type "button" "data-attr:disabled" (str "$" busy)
-                                   "data-on:click" (str "$" confirm " = ''; @post('" publish-url "')")}
+         [:button.btn.btn-primary {:type "button" "data-attr:disabled" (if held "true" (str "$" busy))
+                                   "data-on:click" (str "$" confirm " = ''; @post('" publish "')")}
           "Publish"]]
         [:div.chat-change-ask {"data-show" (asking "revert")}
          [:span "Throw these edits away? The conversation stays."]
          [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
-         [:button.btn.btn-danger {:type "button" "data-attr:disabled" (str "$" busy)
+         [:button.btn.btn-danger {:type "button" "data-attr:disabled" (if running? "true" (str "$" busy))
                                   "data-on:click" (str "$" confirm " = ''; @post('" revert-url "')")}
           "Throw away"]]))]))

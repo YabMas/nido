@@ -17,11 +17,11 @@
    how a request's path and body are read, which images a conversation has staged, and how an
    untrusted upload becomes an Image. A host names its conversation, its panel's routes, the
    path its routes live under and what a sent message carries besides its words. Its caller may also
-   name whether a send is accepted (`:holds?`, true while none may be), what an accepted send's
+   name what a send's acceptance runs inside (`:guard`, which may make it wait but never refuses it), what an accepted send's
    response patches besides clearing the draft (`:on-sent`), and what a new stream gets after the
    log, status row and busy signal (`:opening`); the page around the panel and any request beyond
    the five it answers are its caller's."
-  (Operation host "A host for one conversation, its panel's routes and the path they live under; its caller assocs :holds?, :on-sent and :opening onto it when it needs them."
+  (Operation host "A host for one conversation, its panel's routes and the path they live under; its caller assocs :guard, :on-sent and :opening onto it when it needs them."
     {:signature [:=> [:catn [:chat :map] [:routes :map] [:prefix [:sequential :string]] [:refs :any]] :map]})
   (Operation html "Hiccup as markup text."
     {:signature [:=> [:catn [:hiccup :any]] :string]})

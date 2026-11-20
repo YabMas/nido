@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [cheshire.core]
+            [nido.coordinator.control :as control]
             [nido.session.change :as change]
             [nido.session.chat :as chat]
             [nido.session.preview :as preview]
@@ -156,46 +157,161 @@
     (while (and (:running? @@#'catalog-chat/publishing) (< (System/currentTimeMillis) deadline))
       (Thread/sleep 10))))
 
-(deftest publish-follows-the-verb-and-says-how-it-ended
-  (let [notes (atom [])]
-    (with-open-panel
-      (fn [sent]
-        (reset! @#'catalog-chat/publishing {})
-        (with-redefs [chat/transcript  (constantly {:items [] :busy? false})
-                      chat/note!       (fn [_ text] (swap! notes conj text))
-                      change/pending   (constantly nil)
-                      preview/refresh! (constantly nil)
-                      change/publish!  (fn [_ _ on-line]
-                                         (doseq [l ["land · fetching origin" "land · running bb nido:test at abc"
-                                                    "Ran 12 tests" "land ok · 0123456789ab is on origin's main"]]
-                                           (on-line l))
-                                         0)]
-          (is (= 204 (:status (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/publish"}))))
-          (settle-publish))
-        (is (= {:landed "0123456789ab"} @@#'catalog-chat/publishing))
-        (is (some #(str/includes? % "running bb nido:test") @sent) "each step reaches the bar as it starts")
-        (is (= ["Published to main as 0123456789ab."] @notes))))))
+(defn- publish-req [rev]
+  {:request-method :post :uri "/_catalog/chat/publish" :query-string (str "rev=" rev)})
 
-(deftest a-refused-publish-names-why
+(defmacro ^:private with-catalog
+  "A quiet catalog: no turn running, the worktree already on main, notes collected in `notes`."
+  [[notes] & body]
+  `(let [~notes (atom [])]
+     (reset! @#'catalog-chat/publishing {})
+     (reset! @#'catalog-chat/noted-conflicts nil)
+     (with-redefs [chat/transcript   (constantly {:items [] :busy? false})
+                   chat/note!        (fn [_# text#] (swap! ~notes conj text#))
+                   change/pending    (constantly nil)
+                   change/landing    (constantly nil)
+                   change/onto-main! (constantly [])
+                   preview/refresh!  (constantly nil)]
+       ~@body)))
+
+(deftest publish-lands-the-revision-it-was-shown-and-says-how-it-ended
+  (with-open-panel
+    (fn [sent]
+      (with-catalog [notes]
+        (let [landed-rev (atom nil)]
+          (with-redefs [change/seal!    (fn [_ _ rev] (when (= "abc1" rev) "s1"))
+                        change/publish! (fn [_ _ rev on-line]
+                                          (reset! landed-rev rev)
+                                          (doseq [l ["land · fetching origin" "land · running bb nido:test at abc"
+                                                     "Ran 12 tests" "land pushed · 0123456789ab"
+                                                     "land ok · 0123456789ab is on origin's main"]]
+                                            (on-line l))
+                                          0)]
+            (is (= 204 (:status (catalog-chat/handle! (publish-req "abc1")))))
+            (settle-publish))
+          (is (= "s1" @landed-rev) "the verb is told the sealed revision")
+          (is (= {:landed "0123456789ab"} @@#'catalog-chat/publishing) "back on main, the seal is forgotten")
+          (is (some #(str/includes? % "running bb nido:test") @sent) "each step reaches the bar as it starts")
+          (is (= ["Published to main as 0123456789ab."] @notes)))))))
+
+(deftest a-change-that-moved-since-the-bar-showed-it-is-not-sealed
   (with-open-panel
     (fn [_]
-      (reset! @#'catalog-chat/publishing {})
-      (with-redefs [chat/transcript  (constantly {:items [] :busy? false})
-                    chat/note!       (constantly nil)
-                    change/pending   (constantly nil)
-                    preview/refresh! (constantly nil)
-                    change/publish!  (fn [_ _ on-line] (on-line "land REFUSED · bb nido:test is red at the tip") 1)]
-        (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/publish"})
-        (settle-publish))
-      (is (= {:refused "bb nido:test is red at the tip"} @@#'catalog-chat/publishing)))))
+      (with-catalog [_]
+        (let [published (atom 0)]
+          (with-redefs [change/seal!    (constantly nil)
+                        change/publish! (fn [& _] (swap! published inc) 0)]
+            (catalog-chat/handle! (publish-req "dead"))
+            (settle-publish))
+          (is (zero? @published))
+          (is (not (:running? @@#'catalog-chat/publishing)))
+          (testing "a press that names no revision publishes nothing"
+            (with-redefs [change/seal! (fn [& _] (swap! published inc) "s")]
+              (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/publish"})
+              (settle-publish))
+            (is (zero? @published))))))))
+
+(deftest a-message-is-accepted-while-the-change-lands
+  (with-open-panel
+    (fn [_]
+      (with-catalog [_]
+        (let [lock     @#'catalog-chat/worktree-lock
+              accepted (atom [])
+              guard    (:guard @#'catalog-chat/chat-host)]
+          (with-redefs [change/seal!    (constantly "s1")
+                        change/publish! (fn [_ _ _ on-line]
+                                          (swap! accepted conj [:before-load (.tryAcquire lock)])
+                                          (on-line "land · fetching origin")
+                                          (swap! accepted conj [:after-load (guard (constantly :sent))])
+                                          (on-line "land pushed · abc")
+                                          0)]
+            (catalog-chat/handle! (publish-req "abc1"))
+            (settle-publish))
+          (is (= [[:before-load false] [:after-load :sent]] @accepted)
+              "a send waits only while the verb loads its code from the sealed tree"))))))
+
+(deftest a-refused-publish-names-why-and-keeps-every-edit
+  (with-open-panel
+    (fn [_]
+      (with-catalog [notes]
+        (with-redefs [change/seal!    (constantly "s1")
+                      change/publish! (fn [_ _ _ on-line]
+                                        (on-line "land · fetching origin")
+                                        (on-line "land REFUSED · bb nido:test is red at the tip") 1)]
+          (catalog-chat/handle! (publish-req "abc1"))
+          (settle-publish))
+        (is (= {:refused "bb nido:test is red at the tip"} @@#'catalog-chat/publishing))
+        (is (str/includes? (first @notes) "Nothing was pushed"))
+        (is (str/includes? (first @notes) "the ones made since Publish included"))))))
+
+(deftest a-push-origin-took-is-a-landing-whatever-failed-after-it
+  (with-open-panel
+    (fn [_]
+      (with-catalog [notes]
+        (with-redefs [change/seal!    (constantly "s1")
+                      change/publish! (fn [_ _ _ on-line]
+                                        (on-line "land pushed · 0123456789ab")
+                                        (on-line "land:record REFUSED · the design no longer stands") 1)]
+          (catalog-chat/handle! (publish-req "abc1"))
+          (settle-publish))
+        (is (= "0123456789ab" (:landed @@#'catalog-chat/publishing)))
+        (is (str/includes? (first @notes) "Published to main as 0123456789ab."))
+        (is (str/includes? (first @notes) "the design no longer stands"))))))
+
+(deftest the-bar-shows-the-sealed-arc-until-the-worktree-rejoins
+  (with-catalog [_]
+    (with-redefs [change/landing          (fn [_ _ sealed] {:description (str "landing " sealed) :files []})
+                  control/latest-landing  (constantly nil)]
+      (doseq [p [{:running? true :step "pushing main" :sealed "s1"} {:landed "0123456789ab" :sealed "s1"}]]
+        (reset! @#'catalog-chat/publishing p)
+        (is (= {:description "landing s1" :files []} (:landing (#'catalog-chat/bar-value))) (pr-str p)))
+      (reset! @#'catalog-chat/publishing {:landed "0123456789ab"})
+      (is (nil? (:landing (#'catalog-chat/bar-value))) "back on main, nothing is shown as landing"))))
+
+(deftest a-rejoin-waits-for-the-turn-and-says-its-conflicts-once
+  (with-open-panel
+    (fn [_]
+      (with-catalog [notes]
+        (let [rebased (atom 0)]
+          (with-redefs [change/onto-main! (fn [& _] (swap! rebased inc) ["a.clj"])]
+            (testing "not while a turn runs"
+              (with-redefs [chat/transcript (constantly {:items [] :busy? true})]
+                (#'catalog-chat/rejoin!))
+              (is (zero? @rebased)))
+            (testing "not while a publish runs"
+              (swap! @#'catalog-chat/publishing assoc :running? true)
+              (#'catalog-chat/rejoin!)
+              (swap! @#'catalog-chat/publishing dissoc :running?)
+              (is (zero? @rebased)))
+            (swap! @#'catalog-chat/publishing assoc :sealed "s1")
+            (#'catalog-chat/refresh-frame! nil)
+            (#'catalog-chat/refresh-frame! nil)
+            (is (= 2 @rebased) "every turn's end asks")
+            (is (nil? (:sealed @@#'catalog-chat/publishing)))
+            (is (= 1 (count @notes)) "the same conflicts are said once")
+            (is (str/includes? (first @notes) "a.clj"))))))))
+
+(deftest a-rejoin-that-finds-the-worktree-held-is-made-when-it-is-released
+  (with-open-panel
+    (fn [_]
+      (with-catalog [_]
+        (let [rebased (atom 0)]
+          (with-redefs [change/onto-main! (fn [& _] (swap! rebased inc) [])]
+            ;; A send holds the worktree while a turn ends, then starts no turn of its own.
+            (#'catalog-chat/with-worktree-lock
+             (fn []
+               (#'catalog-chat/refresh-frame! nil)
+               (is (zero? @rebased) "not while the send holds the worktree")))
+            (is (= 1 @rebased) "the turn's rejoin is made once the send releases it")))))))
 
 (deftest nothing-is-published-or-thrown-away-while-a-turn-runs
   (let [touched (atom [])]
     (reset! @#'catalog-chat/publishing {})
     (with-redefs [chat/transcript (constantly {:items [] :busy? true})
+                  change/seal!    (fn [& _] (swap! touched conj :seal) "s")
                   change/publish! (fn [& _] (swap! touched conj :publish) 0)
                   change/revert!  (fn [& _] (swap! touched conj :revert))]
-      (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/publish"})
+      (catalog-chat/handle! (publish-req "abc1"))
       (catalog-chat/handle! {:request-method :post :uri "/_catalog/chat/revert"}))
     (is (empty? @touched))))
 

@@ -59,7 +59,8 @@
       (is (not (str/includes? msg "/u/0"))))))
 
 (def ^:private change-routes {:publish-url "/pub" :revert-url "/rev"})
-(def ^:private a-change {:description "Name the thing\n\nbody" :files [{:path "a.clj" :status :modified}]})
+(def ^:private a-change {:description "Name the thing\n\nbody" :files [{:path "a.clj" :status :modified}]
+                         :rev "r1" :conflicts []})
 
 (deftest the-change-bar-renders-what-is-unlanded-and-how-a-publish-went
   (testing "no change and nothing to say is an empty element"
@@ -70,16 +71,37 @@
       (is (str/includes? out "1 file changed"))
       (is (str/includes? out "Name the thing"))
       (is (not (str/includes? out "body")) "only the subject line")
-      (is (str/includes? out "@post(&apos;/pub&apos;)"))
+      (is (str/includes? out "@post(&apos;/pub?rev=r1&apos;)") "Publish carries the revision it showed")
       (is (str/includes? out "@post(&apos;/rev&apos;)"))
       (is (str/includes? out "data-attr:disabled=\"$pBusy\"") "withheld while a turn runs")))
   (testing "an undescribed change cannot be published"
     (is (str/includes? (html (chat/change-bar "p" (assoc a-change :description " ") {} change-routes))
                        "data-attr:disabled=\"true\"")))
-  (testing "a running publish shows its step and offers nothing"
-    (let [out (html (chat/change-bar "p" a-change {:running? true :step "pushing main"} change-routes))]
+  (testing "a running publish shows its step and what it lands, apart from what was made since"
+    (let [out (html (chat/change-bar "p" (assoc a-change :description "Newer")
+                                     {:running? true :step "pushing main"
+                                      :landing {:description "Landing it" :files [{:path "b.clj" :status :added}]}}
+                                     change-routes))]
       (is (str/includes? out "Publishing · pushing main"))
-      (is (not (str/includes? out "/pub")))))
+      (is (str/includes? out "1 file landing"))
+      (is (str/includes? out "Landing it"))
+      (is (str/includes? out "1 file changed since Publish"))
+      (is (str/includes? out "Newer"))
+      (is (not (str/includes? out "data-attr:disabled=\"$pBusy\"")) "nothing can be published or thrown away meanwhile")))
+  (testing "a landed publish keeps what it landed apart from what was made since, until the worktree rejoins"
+    (let [out (html (chat/change-bar "p" (assoc a-change :description "Newer")
+                                     {:landed "0123456789abcdef"
+                                      :landing {:description "Landing it" :files [{:path "b.clj" :status :added}]}}
+                                     change-routes))]
+      (is (str/includes? out "Published <code>0123456789ab"))
+      (is (str/includes? out "1 file landed"))
+      (is (str/includes? out "Landing it"))
+      (is (str/includes? out "1 file changed since Publish"))
+      (is (str/includes? out "Newer"))))
+  (testing "a conflicted change names its paths and cannot be published"
+    (let [out (html (chat/change-bar "p" (assoc a-change :conflicts ["a.clj"]) {} change-routes))]
+      (is (str/includes? out "Conflicts with main in <code>a.clj</code>"))
+      (is (not (re-find #"btn-primary\" data-attr:disabled=\"\$pBusy" out)))))
   (testing "how the last publish ended"
     (is (str/includes? (html (chat/change-bar "p" nil {:landed "0123456789abcdef"} change-routes)) "0123456789ab<"))
     (is (str/includes? (html (chat/change-bar "p" a-change {:refused "red"} change-routes)) "Not published: red"))))
@@ -89,19 +111,19 @@
                  :waits ["1 run(s) to finish: r1"]}
         running {:landing {:state :running :commit "0123456789abcdef" :owed-at "t" :since "s1" :pid 2}}]
     (testing "owed: the commit and what it waits for, beside a publish result"
-      (let [out (html (chat/change-bar "p" nil {:landed "0123456789abcdef" :landing owed} change-routes))]
+      (let [out (html (chat/change-bar "p" nil {:landed "0123456789abcdef" :restart owed} change-routes))]
         (is (str/includes? out "restarts onto"))
         (is (str/includes? out "1 run(s) to finish: r1"))))
     (testing "running: shown with no change and no publish result"
-      (let [out (html (chat/change-bar "p" nil {:landing running} change-routes))]
+      (let [out (html (chat/change-bar "p" nil {:restart running} change-routes))]
         (is (str/includes? out "The dashboard runs"))
         (is (str/includes? out "since s1"))))
     (testing "unreadable is said, not dropped"
-      (is (str/includes? (html (chat/change-bar "p" nil {:landing {:unreadable "bad"}} change-routes))
+      (is (str/includes? (html (chat/change-bar "p" nil {:restart {:unreadable "bad"}} change-routes))
                          "cannot be read: bad")))
     (testing "no landing and nothing else: still the empty element"
       (is (= (html (chat/change-bar "p" nil {} change-routes))
-             (html (chat/change-bar "p" nil {:landing {:none true}} change-routes)))))))
+             (html (chat/change-bar "p" nil {:restart {:none true}} change-routes)))))))
 
 (deftest a-note-is-a-quiet-line
   (is (str/includes? (html (chat/chat-item {:id "i0" :kind :note :text "Edits thrown away."} routes))

@@ -18,8 +18,10 @@
    A host is a value naming its conversation (a `nido.session.chat` chat), its panel's routes (see
    `nido.ui.components.chat`), the path segments its routes live under, and `:refs`, a function of
    the send request giving what a sent message carries besides its words. A caller may assoc three
-   more: `:on-sent`, events to send after a message is accepted; `:holds?`, true while no message
-   may be sent; `:opening`, events a new stream gets after the log, status and busy signal. What
+   more: `:on-sent`, events to send after a message is accepted; `:guard`, a function of one
+   thunk that runs the send's acceptance inside whatever exclusion the caller needs and returns
+   what it returned — a guard that waits delays a send, it never refuses one; `:opening`, events a
+   new stream gets after the log, status and busy signal. What
    the page around the panel is, and any request beyond the five it answers, stay its caller's."
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
@@ -209,9 +211,9 @@
 (defn- send-message
   "Send the posted draft with its references and the conversation's staged images. Sent, the
    draft is cleared, the images it took leave the stage on every panel, and whatever `:on-sent`
-   adds (events) follows; refused — a turn is running, `:holds?` says so, or there are no words —
-   nothing changes, so the draft and the staged images are kept."
-  [{:keys [chat routes refs on-sent holds? staged] :as h} req]
+   adds (events) follows; refused — a turn is running, or there are no words — nothing changes, so
+   the draft and the staged images are kept. The acceptance runs inside the caller's `:guard`."
+  [{:keys [chat routes refs on-sent guard staged] :as h} req]
   (let [{:keys [text]} (panel/signals (:id routes))
         body   (body-json req)
         words  (str/trim (str (get body text)))
@@ -219,8 +221,9 @@
         ;; message takes, its acceptance and their leaving the stage.
         images (locking staged
                  (let [images @staged]
-                   (when (and (seq words) (not (and holds? (holds?)))
-                              (chat/send! chat words (vec (refs (assoc req :json body))) images))
+                   (when (and (seq words)
+                              (let [accept #(chat/send! chat words (vec (refs (assoc req :json body))) images)]
+                                (if guard (guard accept) (accept))))
                      (reset! staged [])
                      (when (seq images) (broadcast! h (attachments-event h)))
                      images)))]

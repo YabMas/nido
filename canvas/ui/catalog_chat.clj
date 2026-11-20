@@ -22,7 +22,7 @@
      closed unless the query string opens it — inside the dashboard's page chrome."
     {:signature [:=> [:catn [:query-string [:maybe :string]] [:chrome [:=> [:catn] :map]]] :string]
      :delegates [catalog-page chat-page shell change-bar chat/transcript chat/started?
-                 control/latest-landing]})
+                 chat/pending chat/landing control/latest-landing]})
   (Operation handle!
     "One request under /_catalog/chat: the stream, a send, a cancel, a permission answer, the
      picks posted for their chips or one removed, a publish or a revert; or the frame's own
@@ -31,5 +31,5 @@
     {:signature [:=> [:catn [:req :map]] [:maybe :map]]
      :delegates [host/host host/handle! host/broadcast! host/sse host/body-json host/html picks
                  signals patch-signals-event change-bar chat/refresh! chat/note-error! chat/note!
-                 chat/forward! chat/pending chat/publish! chat/revert!
+                 chat/forward! chat/pending chat/landing chat/seal! chat/publish! chat/onto-main! chat/revert!
                  control/latest-landing]}))
