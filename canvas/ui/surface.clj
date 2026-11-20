@@ -61,9 +61,10 @@
    a literal value and a router that goes nowhere, which is what the catalog and its test both
    need, and what makes the blocks' independence checkable rather than asserted."
   (Operation groups
-    "The registry: one group per block vocabulary, each naming its blocks and holding their
-     scenes in reading order — a title, a note saying what the scene is for, and a thunk
-     returning hiccup."
+    "How the catalog groups its scenes: one group per vocabulary, in reading order — each
+     registered block's scenes as its registration carries them, and the scenes this module
+     supplies for each public function of the state marks. ui-registry is the registry; this is
+     only its grouping."
     {:signature [:=> [:catn] :any]}))
 
 (Module ui-registry

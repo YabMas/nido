@@ -6,7 +6,7 @@
   (:refer-clojure :exclude [reset!])
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.session.chat :refer [session-chat reset! send!]]
-            [canvas.ui.chat-host :refer [ui-chat-host changed-events handle!]]
+            [canvas.ui.chat-host :refer [changed-events handle!]]
             [canvas.ui.side-chat :refer [ui-side-chat]]
             [canvas.ui.catalog-chat :refer [ui-catalog-chat]]
             [canvas.ui.surface :refer [ui-components-chat]]))
@@ -34,7 +34,3 @@
 (Claim new-conversation-is-confirmed-and-withheld-while-busy
   "A side panel whose props carry :reset? shows a 'New conversation' control in its bar; choosing it asks in place, saying the conversation cannot be brought back, before anything posts, and the control and its confirm are hidden while the panel's busy signal is set. A panel without it shows none, and the block still reads nothing but its arguments."
   {:about [ui-components-chat] :evidence "round"})
-
-(Claim checks-pass-when-landed
-  "The change is on main only with bb nido:test, bb nido:design:check and bb nido:land:check passing at the commit that put it there."
-  {:about [session-chat ui-chat-host ui-components-chat] :evidence "round"})

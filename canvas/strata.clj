@@ -34,7 +34,7 @@
             [canvas.core.ask-tool :refer [core-ask-tool]]
             [canvas.core.reconcile :refer [core-reconcile]]
             [canvas.ui.surface :refer [ui-stylesheet ui-components-state ui-components-row
-                                       ui-components-ask ui-components-chat]]))
+                                       ui-components-ask ui-components-chat ui-components-dialog]]))
 
 ;; ── the record machinery, floor first ────────────────────────────────────────
 
@@ -129,9 +129,11 @@
 ;; what, not a constraint on anything the extractor can see.
 
 (Stratum ui-visual-language
-  "The dashboard's visual language: the custom properties every colour and font size is named by, and
-   the class rules the dashboard's pages and blocks name. One token block, one palette, and every
-   chrome that renders dashboard markup emits it."
+  "The dashboard's visual language: nido's token values — colour, type, spacing, radius, shadow
+   and motion — which the UI library emits as the one :root block, and every class rule no block
+   registration carries: the state marks', the pages', and those blocks and pages share. ui-registry
+   assembles it with every registration's rules once, and every chrome that renders dashboard
+   markup emits what it holds."
   {:provided-by [ui-stylesheet]})
 
 (Stratum ui-state-marks
@@ -143,12 +145,12 @@
    :rests-on    [ui-visual-language]})
 
 (Stratum ui-blocks
-  "The composable regions a page is built from: a scannable list row, one Ask offered for answer,
-   and a chat panel over a transcript — each over a value plus how a click on it is routed,
-   reading nothing. The level the
+  "The composable regions a page is built from, each a block value registered with the UI library:
+   a scannable list row, one Ask offered for answer, a chat panel over a transcript and a dialog —
+   each rendered over props, the explicit context and the caller's router, reading nothing. The level the
    dashboard's pages and its component catalog are both written in, which is what lets the
    catalog be a preview of the app rather than a second implementation of it."
-  {:provided-by [ui-components-row ui-components-ask ui-components-chat]
+  {:provided-by [ui-components-row ui-components-ask ui-components-chat ui-components-dialog]
    :rests-on    [ui-state-marks ui-visual-language]})
 
 ;; ── the coordination core, floor first ──────────────────────────────────────

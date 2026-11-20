@@ -48,10 +48,6 @@
   "GET /_catalog is served by the one dashboard handler, on every dashboard, and the product reaches it only through the Development page's tile. Its scene page reads nothing but the registry and its query string. Of the catalog, only its chat reaches a process: through its conversation, the preview, and the verbs that publish or throw away its session's change."
   {:about [ui-catalog ui-catalog-chat handle-request] :evidence "round"})
 
-(Claim markup-unchanged
-  "The split changes no page main's dashboard renders: for every page and every fragment main serves, the markup produced over given arguments is what main produces over the same arguments. No assertion the existing ui tests make is removed, relaxed or re-aimed at something weaker."
-  {:about [ui-views shell handle-request ui-components-ask] :evidence "round"})
-
 (Claim lands-on-green
   "On this change's tip, bb nido:test shows no failure and no error beyond the three conductor_test errors main already has, bb nido:design:check reports ok, and bb nido:land:check passes."
   {:about [ui-stylesheet ui-components-state ui-components-row ui-components-ask ui-catalog-scenes ui-catalog ui-views ui-server] :evidence "round"})
