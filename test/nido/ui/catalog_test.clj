@@ -29,7 +29,7 @@
 
 (def ^:private component-namespaces
   ['nido.ui.components.state 'nido.ui.components.row 'nido.ui.components.ask
-   'nido.ui.components.chat])
+   'nido.ui.components.chat 'nido.ui.components.dialog])
 
 (defn- blocks []
   (mapcat :blocks (scenes/groups)))

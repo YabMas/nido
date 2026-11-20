@@ -168,6 +168,17 @@
    renders one part alone when its props name it, on the same instance, which is how a stream
    patches an item, the status row, the chips, the staged images or the log in place.")
 
+(Module ui-components-dialog
+  "A dialog, registered with the UI library as one block: a native <dialog> opened by its own
+   trigger, with a title that labels it, a body, and optionally a footer of closing controls.
+
+   HIDES how a dialog is opened, labelled and closed: the trigger names it in commandfor and asks
+   for show-modal, so the platform owns the top layer, focus moving in and back out, and Escape,
+   and whether it is open lives in the DOM alone — no script and no signal holds it. Its parts
+   carry data-scope and data-part, and their ids and ARIA derive from one instance id, so its
+   title labels it. The slots — trigger, body, footer — are render functions each handed the
+   attrs its part must spread; which control closed it is its one signal, `returned`.")
+
 (Module ui-views
   "The dashboard's pages and fragments, and the twenty per-kind cards a ledger record reads as.
 

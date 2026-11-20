@@ -10,6 +10,7 @@
             [nido.ui.catalog.scenes :as scenes]
             [nido.ui.components.ask :as ask]
             [nido.ui.components.chat :as chat]
+            [nido.ui.components.dialog :as dialog]
             [nido.ui.components.row :as row]
             [nido.ui.stylesheet :as css]))
 
@@ -29,7 +30,7 @@
   {:title    "nido dashboard"
    :surfaces surfaces
    :blocks   [ask/card ask/bar row/board-row row/gate-row row/winddown-row row/arc-row
-             chat/panel chat/change-bar]
+             chat/panel chat/change-bar dialog/dialog]
    :groups   (scenes/groups)})
 
 (def ^:private assembled

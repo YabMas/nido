@@ -17,6 +17,7 @@
   (:require [nido.libraries.ui.block :as block]
             [nido.ui.components.ask :as ask]
             [nido.ui.components.chat :as chat]
+            [nido.ui.components.dialog :as dialog]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]))
 
@@ -252,4 +253,7 @@
     :note "One decision, offered for answer. Datastar is live on this page, so the stepper, the
            choices and the answered-markers work exactly as they do on a real gate; the buttons
            post to a dead end."
-    :blocks [(registered "card" ask/card) (registered "bar" ask/bar)]}])
+    :blocks [(registered "card" ask/card) (registered "bar" ask/bar)]}
+   {:id "dialog" :title "Dialog"
+    :note "A native dialog the platform opens, focuses and closes. Open one and press Escape."
+    :blocks [(registered "dialog" dialog/dialog)]}])
