@@ -545,7 +545,7 @@
     (is (str/includes? html "href=\"/operations\""))
     (is (str/includes? html "href=\"/development\""))
     ;; the sidebar: every slice, the active one highlighted
-    (doseq [label ["Domain" "Functionality" "Structure" "Scratch"]]
+    (doseq [label ["Domain" "Functionality" "Structure" "Presentation" "Scratch"]]
       (is (str/includes? html label)))
     (is (str/includes? html "side-link active"))
     (is (not (str/includes? html "All projects")) "there is no all-project view")

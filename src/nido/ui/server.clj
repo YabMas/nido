@@ -16,6 +16,7 @@
             [nido.ui.catalog.chat :as catalog-chat]
             [nido.ui.place :as place]
             [nido.ui.side-chat :as side-chat]
+            [nido.ui.presentation :as presentation]
             [nido.ui.structure :as structure]
             [nido.libraries.ui.block :as block]
             [nido.ui.components.ask :as ask]
@@ -877,6 +878,13 @@
                                     (structure/ensure! (:scope vs))
                                     structure/default-view)))
 
+      ;; GET /presentation — the focused project's component catalog, as its own app serves it
+      ["presentation"]
+      (let [vs (view-state req)]
+        (page-response (:scope vs) (views/presentation-page
+                                    (rail-ctx req :presentation (:scope vs) (needs-screen vs))
+                                    (presentation/target (:scope vs)))))
+
       ;; GET /domain, /functionality — the focused project's other slices.
       ;; Nothing populates them yet; Scratch (/workstreams) holds the board meanwhile.
       (["domain"] ["functionality"])
@@ -1008,11 +1016,34 @@
         :else
         (html-response 404 (views/not-found-page))))))
 
+(defn- presentation-forward
+  "A request under /presentation/app/<project>/, whatever its method, answered by that project's
+   catalog app; nil for any other. The bare prefix redirects to its slash, because a catalog's
+   requests are relative and resolve under it only then."
+  [{:keys [uri request-method query-string body headers]}]
+  (let [segs (parse-path uri)]
+    (when (and (<= 3 (count segs)) (= ["presentation" "app"] (subvec segs 0 2)))
+      (cond
+        (and (= 3 (count segs)) (not (str/ends-with? uri "/")))
+        {:status 302 :headers {"Location" (str uri "/" (some->> query-string (str "?")))}}
+
+        (not (#{:get :post} request-method))
+        {:status 405 :headers {"Allow" "GET, POST"} :body ""}
+
+        :else
+        (presentation/forward (java.net.URLDecoder/decode ^String (nth segs 2) "UTF-8")
+                              {:method       request-method
+                               :path         (str/join "/" (drop 3 segs))
+                               :query-string query-string
+                               :body         (some-> body slurp)
+                               :content-type (get headers "content-type")})))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   handle-request [{:keys [request-method] :as req}]
   ;; The chats' requests first: their streams are the responses that stay open.
   (or (catalog-chat/handle! req)
       (side-chat/handle! req)
+      (presentation-forward req)
       (case request-method
         :post (handle-post req)
         (handle-get req))))

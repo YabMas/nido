@@ -14,15 +14,15 @@
 (deftest the-table-declares-every-surface-a-view-state-can-name
   ;; One path per branch of view-state's surface reading, the catch-all included.
   (let [named (set (map #(:surface (view-state/parse {:uri % :query-string nil}))
-                        ["/" "/workstreams" "/domain" "/functionality" "/structure" "/operations"
-                         "/development" "/nowhere-the-dashboard-names"]))]
+                        ["/" "/workstreams" "/domain" "/functionality" "/structure" "/presentation"
+                         "/operations" "/development" "/nowhere-the-dashboard-names"]))]
     (is (= named (set (keys table))))))
 
 (def ^:private chat-pages
   "Every route whose page carries the side chat — each route, so the Operations pages, which share
    one surface, are listed one by one. The catalog is not here: it carries its own chat."
   ["/" "/workstreams" "/workstreams?sel=nido:ws-1" "/workstreams/nido/ws-1"
-   "/domain" "/functionality" "/structure" "/structure/drains"
+   "/domain" "/functionality" "/structure" "/structure/drains" "/presentation"
    "/operations" "/operations/improvements" "/operations/recovery" "/operations/review-queue" "/operations/host"
    "/development"])
 
@@ -40,7 +40,7 @@
   ;; one, and the catalog's drops the panel. A count that moves means a page was added or removed:
   ;; list its route in chat-pages above, then move this number.
   (let [src (slurp (io/file "src/nido/ui/server.clj"))]
-    (is (= 13 (count (re-seq #"\(rail-ctx req" src))))))
+    (is (= 14 (count (re-seq #"\(rail-ctx req" src))))))
 
 (deftest a-selected-workstream-is-named-with-its-gate-and-open-entry
   (with-redefs [work/workstream

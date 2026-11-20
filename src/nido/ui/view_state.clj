@@ -21,6 +21,7 @@
       "domain"        :domain
       "functionality" :functionality
       "structure"     :structure
+      "presentation"  :presentation
       "operations"    :operations
       "development"   :development
       :other)))
@@ -93,7 +94,7 @@
 (defn ^{:malli/schema [:=> [:cat :map] :ViewState]}
   parse
   "Request map -> view-state:
-     {:surface :needs|:workstreams|:domain|:functionality|:structure
+     {:surface :needs|:workstreams|:domain|:functionality|:structure|:presentation
                |:operations|:development|:other
       :scope   <project>|nil   — the focused project; see `focus`
       :selection {:project _ :ws-id _}|nil — from ?sel= or a deep-link path

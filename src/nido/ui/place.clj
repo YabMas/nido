@@ -61,6 +61,7 @@
    :domain        {:title "Domain"        :subject nil}
    :functionality {:title "Functionality" :subject nil}
    :structure     {:title structure-title :subject nil}
+   :presentation  {:title "Presentation"  :subject nil}
    :operations    {:title operations-title :subject nil}
    :development   {:title "Development"   :subject nil}
    :other         {:title "A page the dashboard does not name" :subject nil}})

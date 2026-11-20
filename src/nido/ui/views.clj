@@ -38,14 +38,16 @@
 
    Scratch is the workstream board, standing in until the other three have
    content — Domain and Functionality render a placeholder (see
-   `slice-page`); Structure frames fukan's explorer (`structure-page`). It comes first and stands apart from them, because it is not
+   `slice-page`); Structure frames fukan's explorer (`structure-page`); Presentation frames the
+   project's component catalog as its own app serves it (`presentation-page`). It comes first and stands apart from them, because it is not
    a perspective on the system but the work as it was listed before there were
    any. It keeps the /workstreams path because every workstream link in the
    dashboard already points there."
   [[:workstreams   "/workstreams"   "Scratch"]
    [:domain        "/domain"        "Domain"]
    [:functionality "/functionality" "Functionality"]
-   [:structure     "/structure"     "Structure"]])
+   [:structure     "/structure"     "Structure"]
+   [:presentation  "/presentation"  "Presentation"]])
 
 (def ^:private slice-path (into {} (map (juxt first second)) slices))
 
@@ -307,6 +309,19 @@
            [:p.meta (if (= :no-main status)
                       (str scope " has no main bookmark to read a design from.")
                       (str scope " declares no design on main — nothing for fukan to draw."))])))
+
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  presentation-page
+  "The Presentation slice: the focused project's component catalog, framed edge to edge at the
+   `:src` its `target` names (see `nido.ui.presentation/target`), or the target's `:why` when there
+   is nothing to frame."
+  [{:keys [scope] :as ctx} {:keys [src why]}]
+  (if src
+    (shell (assoc ctx :active :presentation :title "Presentation" :bleed? true)
+           [:iframe.presentation-frame {:src src :title (str scope "'s component catalog")}])
+    (shell (assoc ctx :active :presentation :title "Presentation")
+           [:h1 "Presentation"]
+           [:p.meta why])))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   development-page

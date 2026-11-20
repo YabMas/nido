@@ -338,7 +338,7 @@
      .side-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
      .content { grid-area:main; padding:var(--space-20) var(--space-28); overflow:auto; }
      .content.bleed { padding:0; overflow:hidden; display:grid; }
-     .structure-frame { width:100%; height:100%; border:0; display:block; }
+     .structure-frame, .presentation-frame { width:100%; height:100%; border:0; display:block; }
      .structure-wrap { display:grid; grid-template-rows:auto 1fr; height:100%; min-height:0; }
      .structure-tabs { display:flex; gap:var(--space-18); padding:var(--space-10) var(--space-20); border-bottom:1px solid var(--border); }
      .content:not(.bleed) > .structure-tabs { padding:0 0 var(--space-10); margin:0 0 var(--space-18); }
