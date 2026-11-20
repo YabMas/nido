@@ -31,6 +31,7 @@
             [nido.platform.project :as project]
             [babashka.process :as p]
             [nido.platform.process :as process]
+            [nido.session.state :as session-state]
             [babashka.fs :as fs]))
 
 ;; ── tokens ──────────────────────────────────────────────────────────────────
@@ -587,6 +588,17 @@
         s      (session/list-sessions p ws-id)]
     {:project p :ws-id ws-id :record s}))
 
+(defn- reachable?
+  "Whether a pass has anything to read or give on `record`: a conductor's or a seat's, which
+   may be woken wherever it is, or a session whose home still stands. A session torn down
+   runs nothing that could record an event and has no inbox to give to; its position stays
+   on the record, so a session brought back up is read on from where it was left.
+
+   Stopgap: what a pass reads still grows with every record that has a home or a seat."
+  [{:keys [project record]}]
+  (boolean (or (:conductor record) (:seat record)
+               (fs/exists? (session-state/session-home-dir (name project) (:name record))))))
+
 (defn- other-actions
   "What a conversation the facet does not drive reports: each Stop a turn end that ended no
    instruction — nido gives a conversation it does not drive none — and each prompt a person
@@ -724,7 +736,7 @@
       (let [began-ms (System/currentTimeMillis)
             now      (clock/now-iso)
             named    (name-dispatched! listing opts)
-            records  (vec (every-record opts))
+            records  (vec (filter reachable? (every-record opts)))
             owned    (session/conversation-sessions (events/conversations (scan-from records began-ms)))
             activated? (memoize (fn [project ws-id] (boolean (some-> (ws/read-ws project ws-id) standing/activated?))))
             report

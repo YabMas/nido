@@ -2,6 +2,7 @@
   "Integration smoke test: envelope → executor → run-blocking! → terminal state.
    Also covers the triage pre-spawn gate (Task 4)."
   (:require
+   [nido.session.state :as sstate]
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is use-fixtures]]
@@ -232,6 +233,7 @@
       ;; skill-resolution gate doesn't probe the real ~/Code/<project>/.claude.
       ;; The gate tests override resolve-profile with their own symlink target.
       (with-redefs [nido-core/nido-root (constantly (str tmp))
+                    sstate/sessions-root (constantly (str (fs/path tmp "sessions")))
                     project/list-projects (constantly test-projects)
                     runs/teardown-session-for-run! (fn [_] nil)
                     ;; Same reason as teardown: stopping a parked run's session
@@ -1289,6 +1291,8 @@
   (runs/write-run! (assoc (runs/read-run id) :limits {:budget "1h"}))
   (reported-complete! id)
   (session/create! :brian "ws-1" {:name sname :weight :light :autonomy nil})
+  ;; Up, as a Run's session is while its turn runs: conduct reads no torn-down session.
+  (fs/create-dirs (sstate/session-home-dir "brian" sname))
   (let [sid (str "sid-" id)]
     (events/append! sid {:event :session-start :cwd "/w" :source "startup"})
     (events/append! sid {:event :prompt :cwd "/w" :permission-mode "bypassPermissions"

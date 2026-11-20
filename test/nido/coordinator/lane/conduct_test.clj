@@ -266,6 +266,8 @@
                        clock/now-iso        (constantly "2026-10-16T09:00:00Z")]
            (cstate/ensure-dirs!)
            (session/create! :nido "ws-1" {:name "kid" :weight :light :autonomy nil})
+           ;; A session that is up has a home; conduct reads no other unseated record.
+           (fs/create-dirs (sstate/session-home-dir "nido" "kid"))
            (f))
          (finally (fs/delete-tree tmp)))))
 
@@ -1155,3 +1157,23 @@
                       substrate/wake!   (fn [sid _ _] (reset! woke sid) {:woke? true})]
           (conduct/conduct! {:projects [:nido]}))
         (is (= "s" @woke) "so a queued instruction still wakes it")))))
+
+(deftest a-torn-down-session-is-not-read-but-a-conductor-is
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 2)))
+      (conduct/instruct! :nido "ws-1" "kid" "/drive-home" "run-7")
+      (fs/delete-tree (sstate/session-home-dir "nido" "kid"))
+      (let [sent (atom 0)]
+        (with-redefs [substrate/listing (constantly [done-row])
+                      substrate/send!   (fn [_ _] (swap! sent inc) {:delivered? true})]
+          (testing "its home gone, nothing is given and its record is left as it was"
+            (let [before (session/read-session :nido "ws-1" "kid")]
+              (conduct/conduct! {:projects [:nido]})
+              (is (zero? @sent))
+              (is (= before (session/read-session :nido "ws-1" "kid")))))
+          (testing "a conductor or a seat is read wherever it is"
+            (is (true? (#'conduct/reachable? {:project :nido :record {:name "kid" :conductor true}})))
+            (is (true? (#'conduct/reachable? {:project :nido :record {:name "kid" :seat "s1"}})))
+            (is (false? (#'conduct/reachable? {:project :nido :record {:name "kid"}})))))))))
