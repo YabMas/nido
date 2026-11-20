@@ -164,10 +164,9 @@
 (deftest an-arc-row-scene-marks-what-waits-on-a-person
   (is (str/includes? (html-of "arc-row" "waiting on you") "class=\"needs\""))
   (is (str/includes? (html-of "arc-row" "revisited") "3 visits"))
-  (let [stale (html-of "arc-row" "stale, and skipped")]
-    (is (str/includes? stale "no longer stands")
-        "a stale stage says what happened to its records rather than counting them")
-    (is (str/includes? stale "no record"))))
+  (is (str/includes? (html-of "arc-row" "stale") "no longer stands")
+      "a stale stage says what happened to its records rather than counting them")
+  (is (str/includes? (html-of "arc-row" "skipped") "no record")))
 
 (deftest a-question-card-scene-asks-its-question-and-offers-every-answer
   (let [one (html-of "card" "one question")]
@@ -255,8 +254,10 @@
 
 (deftest a-block-renders-outside-any-page
   (is (str/includes? (str (h/html (state/origin-badge :notion))) "b-notion"))
-  (is (str/includes? (str (h/html (row/board-row "nido" {:ws-id "w" :origin :notion :label "x"}
-                                                 {:href "/x"})))
+  (is (str/includes? (str (h/html (nido.libraries.ui.block/render
+                                   row/board-row "w" {:project "nido" :row {:ws-id "w" :origin :notion :label "x"}
+                                                      :href "/x"}
+                                   {} (fn [& _] "#"))))
                      "href=\"/x\""))
   (is (= "Status — Approved" (state/status-heading {:at :design-approved})))
   (is (= "ask.ws_1.step" (nido.libraries.ui.names/signal (:id ask/card) "ws-1" :step))))

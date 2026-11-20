@@ -131,34 +131,15 @@
     {:signature [:=> [:catn [:state :any] [:now :any]] :any]}))
 
 (Module ui-components-row
-  "The scannable list rows: the Workstreams board row, the needs-you row, the winding-down row
-   and the arc row.
+  "The scannable list rows, registered with the UI library as four blocks: `board-row`, one
+   selectable Workstreams row; `gate-row`, one needs-you row previewing the question it asks;
+   `winddown-row`, a closed workstream still holding live sessions, with one action; and
+   `arc-row`, one stage of a workstream's arc, whose click is an action the pane routes.
 
-   HIDES what a row puts where and how dense it is. Each takes the row's value plus how a click
-   on it is routed — a URL, or the expression a click evaluates — so a row names no page's URL
-   scheme and any surface can list one. Written in `ui-components-state`'s marks."
-  (Operation board-row
-    "One selectable Workstreams row: its origin, its title, its tag, where the pipeline says it
-     is, whether anything is happening in it, and — on a gate — what the gate waits on. `opts`
-     carries the URL the row links to and whether it is the open one."
-    {:signature [:=> [:catn [:project ProjectName] [:row :map] [:opts :map]] :any]
-     :delegates [origin-badge position-chip state-mark phase-chip]})
-  (Operation gate-row
-    "One needs-you row, linking to the workstream the gate is answered on, previewing the
-     question it asks."
-    {:signature [:=> [:catn [:gate :map] [:href :string]] :any]
-     :delegates [origin-badge stage-chip state-mark]})
-  (Operation winddown-row
-    "One winding-down row: a closed workstream still holding live sessions. Muted, one action.
-     `post-url` is where its one button posts."
-    {:signature [:=> [:catn [:row :map] [:post-url :string]] :any]
-     :delegates [origin-badge]})
-  (Operation arc-row
-    "One stage of a workstream's arc: its mark, its name, the one line of detail it carries, and
-     its re-entry count when the work left the stage and came back. `opts` carries whether it is
-     expanded and the expression a click on it evaluates, or nothing where it holds no records."
-    {:signature [:=> [:catn [:facet :map] [:round-label [:maybe :string]] [:opts :map]] :any]
-     :delegates [arc-name arc-mark]}))
+   HIDES what a row puts where and how dense it is. Each renders over the row's value as props
+   and the page's router, so a row names no page's URL scheme and any surface can list one.
+   Written in `ui-components-state`'s marks; its rules are nido's, because the classes it is
+   drawn with are shared with the pages around it.")
 
 (Module ui-components-ask
   "One Ask, offered for answer, registered with the UI library as two blocks: `card`, the Ask
@@ -257,7 +238,7 @@
      focused project's slices."
     {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [assembled-stylesheet lib/script]})
   (Operation needs-fragment "The needs-you column."
-    {:signature [:=> [:catn [:ctx :map]] :any] :delegates [gate-row]})
+    {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation gate-action-confirm-fragment "The immediate confirmation a gate action swaps in."
     {:signature [:=> [:catn [:action-id :any] [:project ProjectName] [:ws-id WorkstreamId]
                             [:pane-id :string]] :any]})
@@ -268,10 +249,10 @@
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
      :delegates [shell needs-fragment workstream-pane]})
   (Operation workstreams-fragment "The selected tab's stage groups."
-    {:signature [:=> [:catn [:ctx :map]] :any] :delegates [board-row winddown-row]})
+    {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation workstream-pane "The read-only ledger pane for one workstream."
     {:signature [:=> [:catn [:ws :map] [:session-dev-states [:? :any]]] :any]
-     :delegates [status-heading state-mark arc-row
+     :delegates [status-heading state-mark
                  report/report->markdown render]})
   (Operation pickup-bar "The paste-a-ticket bar."
     {:signature [:=> [:catn [:project ProjectName]] :any]})

@@ -5,15 +5,20 @@
    HIDES what a row puts where and how dense it is — which facts get a line of their own, which
    become a mark, and which are left to a mark's title.
 
-   Each takes the row's value plus how a click on it is routed: a URL for a row that navigates,
-   the expression a click evaluates for one that patches a fragment in place. None of them
-   builds its own — a link carrying the view-state, and the reading position inside a pane, are
-   the page's vocabulary, and a row that reached for either could be listed by exactly one page.
-   That inversion is what lets the same row appear on the board, in a scene, and in whatever
-   lists one next.
+   Each is a block registration rendered over the row's value as props, plus how a click on it
+   is routed: a URL in the props for a row that navigates, the page's router for one whose click
+   is an action it declares. None of them builds its own — a link carrying the view-state, and
+   the reading position inside a pane, are the page's vocabulary, and a row that reached for
+   either could be listed by exactly one page. That inversion is what lets the same row appear on
+   the board, in a scene, and in whatever lists one next.
+
+   Their rules are nido's own, in nido.ui.stylesheet: `.gate-card` and its parts are shared by
+   three of them and by the pages around them, and a shared class's rules sit in nido's layer,
+   above every block's.
 
    Written in `nido.ui.components.state`: a row asks for a mark and never for a word."
   (:require [clojure.string :as str]
+            [nido.libraries.ui.block :as block]
             [nido.ui.components.state :as state]))
 
 (defn- status-slot
@@ -34,17 +39,14 @@
 ;; ---------------------------------------------------------------------------
 ;; The lists
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :map :map] :any]}
-  board-row
-  "One selectable Workstreams row. `opts` is {:href :selected?}: where clicking it goes, and
-   whether it is the open one. The row builds neither — a link that carries the view-state is
-   the page's business, and a row that reached for the screen to build its own could only ever
-   be listed by that page."
-  [project {:keys [ws-id label tag needs-you open-findings position phase stage]
-            :as row}
-   {:keys [href selected?]}]
-  [:a {:class (str "gate-card" (when selected? " sel"))
-       :href  href}
+(defn- render-board-row
+  "One selectable Workstreams row. `:href` is where clicking it goes and `:selected?` whether it
+   is the open one. The row builds neither — a link that carries the view-state is the page's
+   business, and a row that reached for the screen to build its own could only ever be listed
+   by that page."
+  [{:keys [part] {:keys [project href selected?]
+                  {:keys [label tag needs-you open-findings position phase stage] :as row} :row} :props}]
+  [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
    [:div.gate-top
     (status-slot (cond needs-you                      (state/needs-mark)
                        (= :merge (:source (:doing row))) nil
@@ -67,9 +69,8 @@
      (when-let [c (get-in phase [:exit :criterion])]
        [:div.gate-criterion [:span.meta "gate: "] c]))])
 
-(defn ^{:malli/schema [:=> [:cat :map :string] :any]}
-  gate-row
-  "One needs-you row, linking to `href` — where the page opens the gate's workstream — and marked
+(defn- render-gate-row
+  "One needs-you row, linking to `:href` — where the page opens the gate's workstream — and marked
    as the open one when the gate carries `:selected?`. A
    `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'.
    `:error-msg` (a gate action that came back failed) renders on the row — the
@@ -77,9 +78,10 @@
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [project stage label tag report ask session resume-error pending? error-msg doing denials selected?]} href]
-  [:a {:class (str "gate-card" (when selected? " sel"))
-       :href  href}
+  [{:keys [part] {:keys [href]
+                  {:keys [project stage label tag report ask session resume-error pending? error-msg
+                          doing denials selected?]} :gate} :props}]
+  [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
    [:div.gate-top (status-slot (state/needs-mark)) [:span.lbl label]]
    (tag-line tag)
    [:div.gate-sub [:span project] (state/stage-chip stage)
@@ -102,18 +104,17 @@
      [:div.gate-err "⚠ " (count denials) " permission denial" (when (< 1 (count denials)) "s")
       " — latest: " (or (:tool-name (peek denials)) "?")])])
 
-(defn ^{:malli/schema [:=> [:cat :map :string] :any]}
-  winddown-row
+(defn- render-winddown-row
   "One winding-down row: a closed workstream still holding live sessions. Muted;
-   one action, posting to `post-url` — which the page builds, so the scope the reader
-   is on rides along instead of the response resetting the view. A :pending? row
+   one action, :bring-down, routed by the page — so the scope the reader is on rides
+   along instead of the response resetting the view. A :pending? row
    shows 'stopping…' (no re-clickable button); the 5s poll drops the row once its
    sessions are down. An
    :error-msg (from a failed bring-down!) renders inline AND keeps the button —
    clicking retry sets :stopping, which overwrites the :failed entry, so retry
    self-clears the error."
-  [{:keys [project label outcome sessions rss-str pending? error-msg]} post-url]
-  [:div.gate-card.winddown
+  [{:keys [part action] {{:keys [project ws-id label outcome sessions rss-str pending? error-msg]} :row} :props}]
+  [:div.gate-card.winddown (part :root)
    [:div.gate-top (status-slot nil) [:span.lbl label]]
    [:div.gate-sub
     [:span project]
@@ -125,7 +126,7 @@
       (list
        (when error-msg [:div.error-msg error-msg])
        [:button.btn.btn-danger
-        {"data-on:click" (str "@post('" post-url "')")}
+        {"data-on:click" (action :bring-down {:params {:project project :ws-id ws-id}})}
         "Bring down"]))]])
 
 ;; ---------------------------------------------------------------------------
@@ -146,26 +147,25 @@
     (= :skipped state) "no record"
     :else nil))
 
-(defn ^{:malli/schema [:=> [:cat :map [:maybe :string] :map] :any]}
-  arc-row
-  "One stage of the arc. `opts` is {:open? :on-click}: whether this stage's records are
-   expanded, and the expression a click on it evaluates — the pane's, because where a reader is
-   in a pane is the pane's own vocabulary and a row that named it could be listed by nothing
-   else. Clickable only when it holds records — an empty stage has
-   nothing to expand, and offering the click would promise a section that opens
-   empty.
+(defn- render-arc-row
+  "One stage of the arc. `:open?` says whether this stage's records are expanded; a click on it
+   is its :open action, routed by the pane — because where a reader is in a pane is the pane's
+   own vocabulary and a row that named it could be listed by nothing else. Clickable only when it
+   holds records — an empty stage has nothing to expand, and offering the click would promise a
+   section that opens empty.
 
    The re-entry count renders only above one, and in the colour the pane already
    uses for `needs you`. A stage entered once is the ordinary case and saying so
    on every row would bury the case that matters: `2 visits` on a baseline means a
    later stage sent the work back to it, which is the fact the ledger index cannot
    show and a forward-only track cannot show either."
-  [{:keys [stage state visits now] :as facet} round-label {:keys [open? on-click]}]
+  [{:keys [part action] {:keys [round-label open?] {:keys [stage state visits now] :as facet} :facet} :props}]
   (let [live? (pos? (:entries facet))]
-    [:div (cond-> {:class (str "arc-row " (name state)
-                              (when (= :awaiting now) " awaiting")
-                              (when live? " live") (when open? " open"))}
-            (and live? on-click) (assoc "data-on:click" on-click))
+    [:div (cond-> (merge (part :root)
+                         {:class (str "arc-row " (name state)
+                                      (when (= :awaiting now) " awaiting")
+                                      (when live? " live") (when open? " open"))})
+            live? (assoc "data-on:click" (action :open {:params {:stage stage}})))
      [:span.arc-g (state/arc-mark state now)]
      [:span.arc-n (state/arc-name stage)]
      (when-let [m (arc-meta facet)] [:span.arc-m m])
@@ -173,3 +173,188 @@
      (when (> visits 1)
        [:span.arc-v {:title "the work left this stage and came back"}
         (str "· " visits " visits")])]))
+
+;; ---------------------------------------------------------------------------
+;; Scenes: literal rows
+
+(def ^:private a-board-row
+  {:ws-id "ws-20261113-609f4c" :origin :notion
+   :label "BR-7285 · checkout is off by a cent"
+   :tag "BR-7285" :stage :in-progress
+   :position {:at :designed :next {:stage :decide-design :mode :authoring}}
+   :status {:owed-by :agent :live true}})
+
+(def ^:private a-gate
+  {:project "brian" :ws-id "ws-1" :origin :notion :stage :triage
+   :label "BR-7285 · checkout is off by a cent" :tag "BR-7285"
+   :ask {:question "Accept the triage of “Checkout off by a cent”?"}
+   :session "auto"})
+
+(defn- board [row & {:as more}] (merge {:project "nido" :row row :href "#"} more))
+
+(defn- gate [g] {:gate g :href "#"})
+
+(def ^:private a-winddown
+  {:project "nido" :ws-id "ws-wd" :origin :scratch :label "component-catalog" :outcome :done})
+
+(defn- arc [facet & {:as more}] (merge {:facet facet :open? false} more))
+
+;; ---------------------------------------------------------------------------
+;; The registrations
+
+(def ^{:malli/schema :map}
+  board-row
+  "One selectable Workstreams row."
+  (block/block
+   {:id      :board-row
+    :doc     "One selectable Workstreams row. It leads with where the workstream stands, as one
+              icon — needs you, working, paused or stalled — and never with where it came from.
+              The page gives it the URL and whether it is the open one; everything else is the
+              row's value."
+    :render  render-board-row
+    :props   [:map [:project :string] [:row :map] [:href :string]
+              [:selected? {:optional true} [:maybe :boolean]]]
+    :css     ""
+    :actions {}
+    :morph   {}
+    :scenes
+    [{:title "the ordinary row"
+      :note  "Nothing owes a person anything and something is running. This is most of the board,
+              and it is the one the others have to stand out against."
+      :props (board a-board-row)}
+     {:title "selected"
+      :note  "The open row. The highlight has to survive a poll, so it is given rather than
+              derived — a row cannot know which one the reader opened."
+      :props (board a-board-row :selected? true)}
+     {:title "it needs you"
+      :note  "A lit position chip and the needs dot. Compare against the ordinary row above: this
+              is the comparison a board is scanned for."
+      :props (board (assoc a-board-row :needs-you true
+                           :position {:at :blocked :next {:stage :answer-blocker :mode :human}}))}
+     {:title "open findings"
+      :note  "A shipped workstream a staging round reopened."
+      :props (board (assoc a-board-row :open-findings 3
+                           :position {:at :findings-open :next {:stage :address-findings :mode :authoring}}))}
+     {:title "a gate and its criterion"
+      :note  "The only row that gets a second line: what the gate waits on, where the person owing
+              it will look."
+      :props (board (assoc a-board-row :stage :awaiting-gate :needs-you true
+                           :position {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}
+                           :phase {:current 2 :of 3
+                                   :exit {:criterion "the dashboard serves /_catalog on a daemon that has been up for an hour"}}))}
+     {:title "shipping, phased"
+      :note  "The merge phase arrives through the state mark, which the projection folds
+              ship-substate into — so it is never said twice on one row."
+      :props (board (assoc a-board-row :stage :shipping
+                           :position {:at :shipped :next {:stage :land :mode :human}}
+                           :phase {:current 3 :of 3}
+                           :doing {:source :merge :phase :blocked}))}
+     {:title "a long title"
+      :note  "The row has to survive a generated label that does not fit. If it wraps to three
+              lines or pushes the marks off the end, the row is wrong, not the ticket."
+      :props (board (assoc a-board-row :label "A really quite long generated workstream title that nobody wrote on purpose and which keeps going well past the width of any column it will ever be shown in"))}]}))
+
+(def ^{:malli/schema :map}
+  gate-row
+  "One needs-you row."
+  (block/block
+   {:id      :gate-row
+    :doc     "One needs-you row. It previews the question, so a reader scanning the list sees what
+              each one wants of them."
+    :render  render-gate-row
+    :props   [:map [:gate :map] [:href :string]]
+    :css     ""
+    :actions {}
+    :morph   {}
+    :scenes
+    [{:title "one question"
+      :note  "The ordinary needs-you row: the question it asks, under the workstream it is on."
+      :props (gate a-gate)}
+     {:title "working"
+      :note  "Its agent was resumed and is mid-resolve. No action is offered anywhere until it
+              comes back."
+      :props (gate (assoc a-gate :pending? true))}
+     {:title "a failed action"
+      :note  "The resolve is async, so this line is the only trace a failed Apply leaves."
+      :props (gate (assoc a-gate :error-msg "apply refused: the design no longer stands"))}
+     {:title "a resume that failed"
+      :note  "The parked session could not be resumed, and the row says why."
+      :props (gate (assoc a-gate :resume-error {:reason :no-session}))}
+     {:title "permission denials"
+      :note  "A session nido drives hit auto-mode denials. The row counts them and names the
+              latest tool."
+      :props (gate (assoc a-gate :denials [{:tool-name "Bash"} {:tool-name "WebFetch"}]))}
+     {:title "no Ask, only a report"
+      :note  "An older gate whose question was never written as an Ask. The preview falls back to
+              the report's first prose line."
+      :props (gate (-> a-gate (dissoc :ask :session)
+                       (assoc :report {:markdown "# Verdict\n\nbug — reproduced against the running app."})))}
+     {:title "something running in it"
+      :note  "Waiting on a person and having something underway are separate facts, and a gate can
+              hold both at once."
+      :props (gate (assoc a-gate :doing {:source :claim :kind :diff-review}))}]}))
+
+(def ^{:malli/schema :map}
+  winddown-row
+  "One winding-down row."
+  (block/block
+   {:id      :winddown-row
+    :doc     "A closed workstream still holding live sessions. Muted, one action."
+    :render  render-winddown-row
+    :props   [:map [:row [:map [:project :string] [:ws-id :string]]]]
+    :css     ""
+    :actions {:bring-down [:post :winddown {}]}
+    :morph   {}
+    :scenes
+    [{:title "live sessions"
+      :note  "Its sessions and what they cost, beside the one thing to do about them."
+      :props {:row (assoc a-winddown :sessions [{} {}] :rss-str "3.9 GB")}}
+     {:title "stopping"
+      :note  "No re-clickable button while a bring-down is in flight; the 5s poll drops the row
+              once its sessions are down."
+      :props {:row (assoc a-winddown :sessions [{}] :pending? true)}}
+     {:title "a bring-down that failed"
+      :note  "The error renders inline AND the button stays, because clicking retry overwrites the
+              failed entry — retry self-clears the error."
+      :props {:row (assoc a-winddown :outcome :dropped :sessions [{}]
+                          :error-msg "pg_ctl: could not create lock file")}}]}))
+
+(def ^{:malli/schema :map}
+  arc-row
+  "One stage of a workstream's arc."
+  (block/block
+   {:id      :arc-row
+    :doc     "One stage of a workstream's arc. Clickable only when it holds records."
+    :render  render-arc-row
+    :props   [:map [:facet :map] [:open? :boolean] [:round-label {:optional true} [:maybe :string]]]
+    :css     ""
+    :actions {:open [:get :stage {}]}
+    :morph   {}
+    :scenes
+    [{:title "running"
+      :note  "A stage an agent is working in, with where its review round has got."
+      :props (arc {:stage :design :state :current :visits 1 :entries 2 :now :running}
+                  :round-label "design round 3 · judging · 0 findings")}
+     {:title "waiting on you"
+      :note  "The needs dot outranks the record state beneath it. A stage a person is being waited
+              on at is the one fact a reader scans an arc for."
+      :props (arc {:stage :design :state :done :visits 1 :entries 2 :now :awaiting})}
+     {:title "revisited"
+      :note  "`3 visits` means a later stage sent the work back here — the fact the ledger index
+              cannot show and a forward-only track cannot show either. It renders only above one,
+              so the ordinary case stays quiet."
+      :props (arc {:stage :baseline :state :done :visits 3 :entries 5})}
+     {:title "stale"
+      :note  "A stale stage must not say how many records it has as though they counted; it says
+              they no longer stand."
+      :props (arc {:stage :baseline :state :stale :visits 1 :entries 4})}
+     {:title "skipped"
+      :note  "A skipped stage says there is no record."
+      :props (arc {:stage :design :state :skipped :visits 0 :entries 0})}
+     {:title "expanded"
+      :note  "The stage whose records are open beneath it."
+      :props (arc {:stage :intent :state :done :visits 1 :entries 1} :open? true)}
+     {:title "ahead, and unclickable"
+      :note  "An empty stage offers no click at all: offering one would promise a section that
+              opens empty."
+      :props (arc {:stage :implementation :state :ahead :visits 0 :entries 0})}]}))

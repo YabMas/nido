@@ -9,6 +9,7 @@
   (:require [nido.libraries.ui.style :as style]
             [nido.ui.catalog.scenes :as scenes]
             [nido.ui.components.ask :as ask]
+            [nido.ui.components.row :as row]
             [nido.ui.stylesheet :as css]))
 
 (def ^:private surfaces
@@ -26,7 +27,7 @@
   []
   {:title    "nido dashboard"
    :surfaces surfaces
-   :blocks   [ask/card ask/bar]
+   :blocks   [ask/card ask/bar row/board-row row/gate-row row/winddown-row row/arc-row]
    :groups   (scenes/groups)})
 
 (def ^:private assembled

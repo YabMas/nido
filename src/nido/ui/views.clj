@@ -412,14 +412,23 @@
     stage        (conj (str "stage=" (name stage)))
     history?     (conj "history=1")))
 
-(defn- pane-fragment
-  "`@get(…)` expression for the pane fragment at reading position `pos`. Omits
-   whatever is at rest, so a pane nobody has opened anything in polls the bare
-   URL."
+(defn- pane-fragment-url
+  "The URL of the pane fragment at reading position `pos`. Omits whatever is at rest, so a pane
+   nobody has opened anything in polls the bare URL."
   [{:keys [project ws-id] :as pos}]
   (let [ps (position-params pos)]
-    (str "@get('/_fragment/workstream/" project "/" ws-id
-         (when (seq ps) (str "?" (str/join "&" ps))) "')")))
+    (str "/_fragment/workstream/" project "/" ws-id
+         (when (seq ps) (str "?" (str/join "&" ps))))))
+
+(defn- pane-fragment
+  "`@get(…)` expression for the pane fragment at reading position `pos`."
+  [pos]
+  (str "@get('" (pane-fragment-url pos) "')"))
+
+(defn- no-router
+  "The router for a block that declares no action: nothing is ever routed through it."
+  [action _params]
+  (throw (ex-info (str "no route for " action) {:action action})))
 
 (defn- pane-location
   "Expression replacing the page's location with the URL of reading position `pos`,
@@ -496,9 +505,11 @@
        (for [g gates
              :let [sel (str (:project g) ":" (:ws-id g))]]
          (list
-          (row/gate-row (assoc g :selected? (and (= (:project g) (:project selection))
-                                                 (= (:ws-id g) (:ws-id selection))))
-                        (str "/" (screen-query screen {:sel sel})))
+          (block/render row/gate-row sel
+                        {:gate (assoc g :selected? (and (= (:project g) (:project selection))
+                                                        (= (:ws-id g) (:ws-id selection))))
+                         :href (str "/" (screen-query screen {:sel sel}))}
+                        {} no-router)
           ;; A drain its slices raised escalations through: their questions are answered on
           ;; the drains page, which lists them beside the drain's own.
           (when (seq (:raised-by g))
@@ -1427,13 +1438,16 @@
             [:div.ws-section-rows {:data-class (str "{'ws-open': !$" sig "}")}
              (for [r rows]
                (case stage
-                 :winding-down (row/winddown-row
-                                (assoc r :project project)
-                                (str "/workstreams/" project "/" (:ws-id r) "/winddown" wd-q))
-                 (row/board-row project r
-                                {:href (str "/workstreams"
-                                            (screen-query screen {:sel (str project ":" (:ws-id r))}))
-                                 :selected? (= sel-id (:ws-id r))})))]]))]))))
+                 :winding-down (block/render row/winddown-row (str project ":" (:ws-id r))
+                                             {:row (assoc r :project project)}
+                                             {} (fn [_ {:keys [project ws-id]}]
+                                                  (str "/workstreams/" project "/" ws-id "/winddown" wd-q)))
+                 (block/render row/board-row (str project ":" (:ws-id r))
+                               {:project project :row r
+                                :href (str "/workstreams"
+                                           (screen-query screen {:sel (str project ":" (:ws-id r))}))
+                                :selected? (= sel-id (:ws-id r))}
+                               {} no-router)))]]))]))))
 
 (defn- session-dev-cell
   "DEV ENVIRONMENT controls (start/stop/restart/Open-app) for the workstream's
@@ -1599,9 +1613,11 @@
   [:div
    (into [:div.arc]
          (mapcat (fn [{:keys [stage seqs] :as facet}]
-                   (cond-> [(row/arc-row facet doing-label
-                                             {:open?    (= stage (:stage pos))
-                                              :on-click (pane-fragment (at-stage pos stage))})]
+                   (cond-> [(block/render row/arc-row (str (:ws-id pos) ":" (name stage))
+                                          {:facet facet :round-label doing-label
+                                           :open? (= stage (:stage pos))}
+                                          {} (fn [_ {:keys [stage]}]
+                                               (pane-fragment-url (at-stage pos stage))))]
                      (= stage (:stage pos))
                      (conj [:div.arc-sub
                             (arc-entry-rows pos entries seqs)

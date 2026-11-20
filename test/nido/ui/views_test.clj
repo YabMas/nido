@@ -71,7 +71,7 @@
   (let [html (views/needs-fragment {:gates [sample-gate (assoc sample-gate :ws-id "ws-2")]
                                     :selection {:project "brian" :ws-id "ws-2"} :scope "all"})]
     (is (= 1 (count (re-seq #"gate-card sel" html))) "exactly the selected row is marked")
-    (is (re-find #"class=\"gate-card sel\" href=\"/\?sel=brian:ws-2\"" html))))
+    (is (re-find #"class=\"gate-card sel\"[^>]* href=\"/\?sel=brian:ws-2\"" html))))
 
 (deftest a-slice-raised-drain-opens-in-place-and-points-at-the-drains-page
   (let [html (views/needs-fragment {:gates [(assoc sample-gate :raised-by ["ws-s1" "ws-s2"])]
@@ -1389,10 +1389,12 @@
 
 (defn- board-row
   [position]
-  (row/board-row "nido"
-   (cond-> {:ws-id "ws-1" :origin :notion :label "the pipeline" :stage :in-progress}
-     position (assoc :position position))
-   {:href (str "/workstreams" (#'views/screen-query a-board-screen {:sel "nido:ws-1"}))}))
+  (block/render row/board-row "nido:ws-1"
+                {:project "nido"
+                 :row (cond-> {:ws-id "ws-1" :origin :notion :label "the pipeline" :stage :in-progress}
+                        position (assoc :position position))
+                 :href (str "/workstreams" (#'views/screen-query a-board-screen {:sel "nido:ws-1"}))}
+                {} (fn [& _] "#")))
 
 (deftest a-row-states-its-position-and-what-would-move-it
   ;; The band could not: everything from authoring an intent to opening a draft
@@ -1641,9 +1643,11 @@
    :next {:claim "reads move" :exit {:kind :completion :criterion "nothing reads the old table"}}})
 
 (deftest a-phased-row-says-which-phase-and-an-awaiting-one-its-gate
-  (let [row  (fn [m] (str (h/html (row/board-row "nido"
-                                   (merge {:ws-id "ws-1" :origin :notion :label "migration"} m)
-                                   {:href "/workstreams"}))))
+  (let [row  (fn [m] (str (h/html (block/render row/board-row "nido:ws-1"
+                                                {:project "nido"
+                                                 :row (merge {:ws-id "ws-1" :origin :notion :label "migration"} m)
+                                                 :href "/workstreams"}
+                                                {} (fn [& _] "#")))))
         live (row {:stage :in-progress :phase (assoc awaiting-phase :landed? false)})
         gate (row {:stage :awaiting-gate :phase awaiting-phase
                    :position {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}})]

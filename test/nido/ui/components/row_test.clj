@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [hiccup2.core :as h]
+            [nido.libraries.ui.block :as block]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]))
 
@@ -23,9 +24,14 @@
 (deftest the-needs-you-rows-carry-the-state-modules-mark
   (let [mark (str (h/html (state/needs-mark)))]
     (testing "a board row whose next move is the person's"
-      (is (str/includes? (str (h/html (row/board-row "nido" {:ws-id "w" :label "L" :needs-you true}
-                                                     {:href "#"})))
+      (is (str/includes? (str (h/html (block/render row/board-row "w"
+                                                     {:project "nido" :row {:ws-id "w" :label "L" :needs-you true}
+                                                      :href "#"}
+                                                     {} (fn [& _] "#"))))
                          mark)))
     (testing "a needs-you row"
-      (is (str/includes? (str (h/html (row/gate-row {:project "nido" :label "L" :stage :triage
-                                                       :ask {:question "Q?"}} "#"))) mark)))))
+      (is (str/includes? (str (h/html (block/render row/gate-row "w"
+                                                     {:gate {:project "nido" :label "L" :stage :triage
+                                                             :ask {:question "Q?"}}
+                                                      :href "#"}
+                                                     {} (fn [& _] "#")))) mark)))))
