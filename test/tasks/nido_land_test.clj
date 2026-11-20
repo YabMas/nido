@@ -11,6 +11,7 @@
    [nido.platform.project :as project]
    [nido.review.layers :as layers]
    [nido.review.stages :as stages]
+   [nido.session.change :as change]
    [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]
    [tasks.nido-design :as nido-design]
@@ -65,9 +66,8 @@
                                (if fetch-fails? {:exit 1 :err "Error: failed to connect"} {:exit 0 :out ""})
                                (= "log" (first args)) {:exit 0 :out "feat: land it\n"}
                                :else {:exit 0 :out ""}))
-                    layers/resolve-rev (fn [_ rev] (cond (= rev "heads(::@ ~ empty())") sha
-                                                         held? rev
-                                                         :else nil))
+                    change/one-commit (fn [_ rev] (when (= rev (change/tip-of "@")) sha))
+                    layers/resolve-rev (fn [_ rev] (when held? rev))
                     cws/latest-entry (fn [& _] design)
                     standing/governing-design (fn [& _] design)
                     standing/of-design (constantly standing)

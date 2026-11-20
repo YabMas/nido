@@ -30,18 +30,23 @@
     "bb entry point: exits non-zero on a refusal, so a recipe that runs it before"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation record
-    "Record the landing of the worktree's tip once origin's main holds it: close the workstream and
-     append a :merged naming that commit and the design that stands, once however often it runs.
+    "Record the landing of the commit given, else the worktree's tip, once origin's main holds it:
+     close the workstream and append a :merged naming that commit and the design that stands, once however often it runs.
      A tip main does not hold, or a design that does not stand, is refused with its way out."
     {:signature [:=> [:catn [:args [:* :any]]] :int]})
   (Operation record-cmd
     "bb entry point: exits non-zero when the landing is not recorded, so the recipe's step stops there."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation gate!
-    "Land the worktree's arc on origin's main or refuse: fetch, rebase onto origin's main (undone
-     on a conflict), bb nido:test and the landing check at that tip, then push. {:landed} or
-     {:refused :way-out}; it records nothing."
-    {:signature [:=> [:catn [:cwd :string]] :map] :delegates [check]})
+    "Land one revision — the one named, else the cwd's tip read once — on origin's main or refuse:
+     fetch, duplicate its arc onto origin's main in a jj workspace of its own (the duplicate
+     abandoned on a conflict, and each copy main's content empties dropped — none left is nothing
+     to land, refused), bb nido:test there and the landing check over that workspace's files on the
+     cwd's workstream, push, then forget the workspace. When no revision was named, a push origin
+     took is followed by rebasing the cwd's arc onto origin's main, dropping what main's content
+     empties; a named revision leaves the cwd's commits where they were.
+     {:landed} or {:refused :way-out}; it records nothing."
+    {:signature [:=> [:catn [:cwd :string] [:rev [:? :string]]] :map] :delegates [check]})
   (Operation restart-daemon!
     "Put the coordinator on the code that landed: rebase the checkout the launchd daemon loads onto
      origin's main at once, then record the landing as owed for the daemon to pay on its tick, and
@@ -52,9 +57,10 @@
     {:signature [:=> [:catn [:landed :string]] :map]
      :delegates [daemon/owe! daemon/waits]})
   (Operation land
-    "bb nido:land: the gate, then the recording on the worktree's workstream when one owns it,
-     then a restart owed onto the landing for the coordinator to pay. No option of the verb skips
-     that step."
+    "bb nido:land: the gate over the revision given, else the worktree's tip read once; a line
+     saying origin's main took the push, once it has; then the recording, on the worktree's
+     workstream, of the commit the gate landed; then a restart owed onto the landing for the
+     coordinator to pay. No option of the verb skips that step."
     {:signature [:=> [:catn [:args [:* :any]]] :int] :delegates [gate! record restart-daemon!]})
   (Operation land-cmd
     "bb entry point for land: exits non-zero when nothing was landed, the landing was not recorded, or the restart failed."
