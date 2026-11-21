@@ -453,3 +453,12 @@
           @launch
           (is (= [] (runs/live-runs :brian "ws-1")) "a run whose agent exited is not live")))
       (finally (fs/delete-tree tmp)))))
+
+(deftest build-cmd-leaves-a-prompt-too-large-for-an-argument-to-stdin
+  (let [small (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})
+        big   (apply str (repeat 150000 "x"))
+        large (#'agent/build-cmd {:claude-bin "claude" :first-message big})]
+    (is (= ["--" "hi"] (take-last 2 small)))
+    (is (not-any? #{big "--"} large) "Linux refuses an argument over 128 KiB; stdin carries it")
+    (is (#'agent/prompt-on-stdin? big))
+    (is (not (#'agent/prompt-on-stdin? "hi")))))

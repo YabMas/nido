@@ -128,11 +128,23 @@
   [lock-path cmd]
   (into ["python3" "-c" hold-run-lock lock-path] cmd))
 
+(def ^:private max-prompt-arg-bytes
+  "The largest first message passed as an argument. Linux refuses any single argument over
+   128 KiB (MAX_ARG_STRLEN) — the exec fails with E2BIG before claude starts — so a message
+   past this goes to claude --print on stdin, which it reads as the prompt when none is given."
+  100000)
+
+(defn- prompt-on-stdin?
+  "Whether `first-message` is too large to pass as an argument."
+  [first-message]
+  (> (alength (.getBytes (str first-message) "UTF-8")) max-prompt-arg-bytes))
+
 (defn- build-cmd
   "Assemble the claude command vector. With :claude-session-id, the run is
    addressed by id: :resume? true CONTINUES that transcript (--resume) — a
    review loop resuming its own fixer; otherwise it RECORDS under it (--session-id).
-   first-message is the trailing positional argument."
+   first-message is the trailing positional argument, unless it is too large for one
+   (`prompt-on-stdin?`): then the vector carries no prompt and the caller writes it to stdin."
   [{:keys [claude-bin first-message system-prompt claude-session-id resume?
            mcp-config add-dirs tools allowed model settings]}]
   (cond-> (into [claude-bin
@@ -180,7 +192,7 @@
     ;; (<directories...>) and --mcp-config (<configs...>) variadic; without the
     ;; terminator they consume first-message as another dir/config, leaving claude
     ;; with no prompt → "Input must be provided … when using --print" (exit 1).
-    :always                                (into ["--" first-message])))
+    (not (prompt-on-stdin? first-message)) (into ["--" first-message])))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   launch!
@@ -272,9 +284,10 @@
         proc      (p/process cmd (cond-> {:dir cwd
                                           :env (merge (into {} (System/getenv)) (or env {})
                                                       headless-env)
-                                          ;; Close stdin so claude doesn't wait for input
+                                          ;; The prompt when it is too large for an argument;
+                                          ;; otherwise closed, so claude doesn't wait for input
                                           ;; (it emits a "no stdin in 3s" warning otherwise).
-                                          :in  ""
+                                          :in  (if (prompt-on-stdin? first-message) first-message "")
                                           :out :stream
                                           :err (if err-file :write :inherit)
                                           :shutdown nil}
