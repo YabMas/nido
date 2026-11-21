@@ -38,6 +38,17 @@
   {:prefix ["nido.session." "nido.bench."]
    :may-depend [Platform Integration Design]})
 
+(Band Core
+  "The coordination core: one daemon that is the single writer of one store, the Turns it runs
+   and the conductor that disposes of their asks. It replaces the work plane below, which the
+   cut-over retires.
+
+   A band of its own rather than a member of the work plane, because it is the work plane's
+   successor and shares none of its namespaces. Its reach starts at the floor and grows one
+   realised edge at a time, as everywhere in this file."
+  {:prefix ["nido.core."]
+   :may-depend [Platform]})
+
 ;; ── the work plane, floor first ──────────────────────────────────────────────
 ;;
 ;; The six strata that were one `Coordination` band until 2026-08-30. Fifty-two namespaces and

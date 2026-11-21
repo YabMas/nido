@@ -22,6 +22,8 @@
             [canvas.review.record :refer [review-record]]
             [canvas.review.settled :refer [review-settled]]
             [canvas.review.tree :refer [review-tree]]
+            [canvas.core.target :refer [core-domain core-store core-writer core-api core-feed
+                                        core-turn executor-claude core-ask-tool core-reconcile]]
             [canvas.ui.surface :refer [ui-stylesheet ui-components-state ui-components-row
                                        ui-components-ask ui-components-chat]]))
 
@@ -136,3 +138,37 @@
    catalog be a preview of the app rather than a second implementation of it."
   {:provided-by [ui-components-row ui-components-ask ui-components-chat]
    :rests-on    [ui-state-marks ui-visual-language]})
+
+;; ── the coordination core, floor first ──────────────────────────────────────
+;;
+;; core-release belongs to none: it is the composition root that starts, stops and upgrades the
+;; daemon, written in the levels below and providing a vocabulary nothing is written in. A
+;; composition root is not a level. core-buffer belongs to none either: the conductor is an
+;; application program written in core-outside's turns and core-commit's commands, and nothing
+;; is written in what it does.
+
+(Stratum core-rules
+  "What a workstream, its units, their turns and asks may be, and how each changes: a command
+   decided against current state to events or a refusal, an event folded into state. Pure."
+  {:provided-by [core-domain]})
+
+(Stratum core-persistence
+  "Committed state: a batch of events and the rows they fold to, made durable together, refused
+   where the store's own constraints are broken, rebuilt and checked from the ledgers on request,
+   and legacy ledgers imported as they were written."
+  {:provided-by [core-store]
+   :rests-on    [core-rules]})
+
+(Stratum core-commit
+  "Commands in, committed changes out: a keyed command submitted and answered with its committed
+   outcome, committed state read, and the change feed subscribed to from a position."
+  {:provided-by [core-writer core-api core-feed]
+   :rests-on    [core-persistence core-rules]})
+
+(Stratum core-outside
+  "The world nido does not own, as the core sees it: a Turn run, resumed, cancelled or taken back
+   with one outcome, the ask an agent raises, the external effects a commit recorded attempted
+   under their key, and observations that carry their age and expire."
+  {:provided-by [core-turn executor-claude core-ask-tool core-reconcile]
+   :rests-on    [core-commit core-rules]})
+

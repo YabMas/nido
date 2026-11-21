@@ -11,3 +11,6 @@
 
 # nido writes this into every session worktree (nido.session.agent-guidance)
 /AGENTS.override.md
+
+# the Clojure CLI classpath cache (deps.edn)
+/.cpcache
