@@ -45,8 +45,13 @@
 
    A band of its own rather than a member of the work plane, because it is the work plane's
    successor and shares none of its namespaces. Its reach starts at the floor and grows one
-   realised edge at a time, as everywhere in this file."
-  {:prefix ["nido.core."]
+   realised edge at a time, as everywhere in this file.
+
+   Its executor adapters (`nido.executor.*`) are in it too, under a prefix of their own so that
+   \"names no provider\" is checkable by prefix: a `nido.core.` namespace requiring one is
+   visible as exactly that. They are not a band apart, because nothing outside the core may
+   reach them and they reach nothing the core does not."
+  {:prefix ["nido.core." "nido.executor."]
    :may-depend [Platform]})
 
 ;; ── the work plane, floor first ──────────────────────────────────────────────

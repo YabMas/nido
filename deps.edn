@@ -4,7 +4,8 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure                 {:mvn/version "1.12.3"}
         org.xerial/sqlite-jdbc              {:mvn/version "3.54.1.0"}
-        com.github.seancorfield/next.jdbc   {:mvn/version "1.4.72"}}
+        com.github.seancorfield/next.jdbc   {:mvn/version "1.4.72"}
+        org.clojure/data.json               {:mvn/version "2.5.1"}}
  :aliases
  {;; JVM tests live in test-jvm/, apart from test/, so `bb nido:test`'s own discovery never
   ;; tries to load them under bb; it runs this alias for them instead.

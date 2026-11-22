@@ -22,8 +22,15 @@
             [canvas.review.record :refer [review-record]]
             [canvas.review.settled :refer [review-settled]]
             [canvas.review.tree :refer [review-tree]]
-            [canvas.core.target :refer [core-domain core-store core-writer core-api core-feed
-                                        core-turn executor-claude core-ask-tool core-reconcile]]
+            [canvas.core.domain :refer [core-domain]]
+            [canvas.core.store :refer [core-store]]
+            [canvas.core.writer :refer [core-writer]]
+            [canvas.core.api :refer [core-api]]
+            [canvas.core.feed :refer [core-feed]]
+            [canvas.core.turn :refer [core-turn]]
+            [canvas.core.executor-claude :refer [executor-claude]]
+            [canvas.core.ask-tool :refer [core-ask-tool]]
+            [canvas.core.reconcile :refer [core-reconcile]]
             [canvas.ui.surface :refer [ui-stylesheet ui-components-state ui-components-row
                                        ui-components-ask ui-components-chat]]))
 
