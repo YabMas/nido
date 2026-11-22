@@ -16,11 +16,16 @@
   []
   (str (fs/path (System/getProperty "user.home") ".config" "systemd" "user")))
 
+(def ^:dynamic *unit*
+  "The unit these functions act on, without its suffix; the coordinator's unless bound
+   (`nido.coordinator.daemon.supervisor/with-service`)."
+  "nido-coordinator")
+
 (defn ^{:malli/schema [:=> [:cat] :string]}
   unit-name
   "The unit's name, as systemctl addresses it."
   []
-  "nido-coordinator.service")
+  (str *unit* ".service"))
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
   unit-path
@@ -115,15 +120,15 @@
 
    RestartSec=10 matches launchd's ThrottleInterval, so a daemon that dies at once on start is
    retried every ten seconds rather than spun."
-  [{:keys [bb-path nido-dir log-path path-env nido-home]}]
+  [{:keys [bb-path nido-dir log-path path-env nido-home argv description]}]
   (str "[Unit]\n"
-       "Description=nido coordinator\n"
+       "Description=" (or description "nido coordinator") "\n"
        "After=network-online.target\n"
        "Wants=network-online.target\n"
        "\n"
        "[Service]\n"
        "Type=simple\n"
-       "ExecStart=" bb-path " nido:coordinator:run\n"
+       "ExecStart=" (str/join " " (or argv [bb-path "nido:coordinator:run"])) "\n"
        "WorkingDirectory=" nido-dir "\n"
        "Environment=PATH=" path-env "\n"
        (when nido-home (str "Environment=NIDO_HOME=" nido-home "\n"))

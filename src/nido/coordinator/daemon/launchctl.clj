@@ -13,11 +13,16 @@
   []
   (str (fs/path (System/getProperty "user.home") "Library" "LaunchAgents")))
 
+(def ^:dynamic *label*
+  "The LaunchAgent label of the service these functions act on; the coordinator's unless bound
+   (`nido.coordinator.daemon.supervisor/with-service`)."
+  "dev.nido.coordinator")
+
 (defn ^{:malli/schema [:=> [:cat] :string]}
   label
-  "LaunchAgent service label for the coordinator (used in plist + launchctl targets)."
+  "LaunchAgent service label (used in plist + launchctl targets)."
   []
-  "dev.nido.coordinator")
+  *label*)
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
   plist-path
@@ -119,7 +124,7 @@
    waiting on. Left unset, launchd applies its light resource limits — throttled
    CPU and I/O — and on a loaded machine (load 23 on 14 cores) the same page
    rendered in 0.3s standalone took 1.2–1.4s from the daemon."
-  [{:keys [bb-path nido-dir log-path path-env nido-home]}]
+  [{:keys [bb-path nido-dir log-path path-env nido-home argv]}]
   (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
        "<plist version=\"1.0\">\n"
@@ -128,8 +133,8 @@
        "    <string>" (label) "</string>\n"
        "    <key>ProgramArguments</key>\n"
        "    <array>\n"
-       "        <string>" bb-path "</string>\n"
-       "        <string>nido:coordinator:run</string>\n"
+       (apply str (for [a (or argv [bb-path "nido:coordinator:run"])]
+                    (str "        <string>" a "</string>\n")))
        "    </array>\n"
        "    <key>WorkingDirectory</key>\n"
        "    <string>" nido-dir "</string>\n"

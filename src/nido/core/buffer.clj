@@ -37,7 +37,7 @@
 (defn- conductor-turns [state]
   (filter #(nil? (:unit %)) (vals (:turns state))))
 
-(defn- bound? [state turn-id]
+(defn- call-bound? [state turn-id]
   (some #(contains? (:binds %) turn-id) (d/awaiting-person state)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]} person-input?
@@ -84,7 +84,7 @@
   (let [cts (conductor-turns state)]
     (concat
      (for [t cts
-           :when (and (= :asked (:status t)) (not (bound? state (:id t))))
+           :when (and (= :asked (:status t)) (not (call-bound? state (:id t))))
            :let [call (:call t)]]
        {:key (str "buffer/raise/" (:id t) "/" (:id call))
         :command {:command :raise-operator-ask

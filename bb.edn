@@ -63,6 +63,36 @@
    :doc "Unregister a project: <name>"
    :task (apply nido-project/remove-cmd *command-line-args*)}
 
+  nido:core:install
+  {:requires ([tasks.nido-core :as nido-core])
+   :doc "Install this checkout as a core release and the core's supervised service, and start it."
+   :task (nido-core/install)}
+
+  nido:core:upgrade
+  {:requires ([tasks.nido-core :as nido-core])
+   :doc "Make this checkout the running core release through a gated restart; the previous release is restored when the new one does not serve."
+   :task (nido-core/upgrade)}
+
+  nido:core:status
+  {:requires ([tasks.nido-core :as nido-core])
+   :doc "Which core release runs, and whether it answers on its socket."
+   :task (nido-core/status)}
+
+  nido:core:start
+  {:requires ([tasks.nido-core :as nido-core])
+   :doc "Start the core's supervised service."
+   :task (nido-core/start)}
+
+  nido:core:stop
+  {:requires ([tasks.nido-core :as nido-core])
+   :doc "Stop the core's supervised service."
+   :task (nido-core/stop)}
+
+  nido:session:provision
+  {:requires ([tasks.nido-session-provision :as nido-session-provision])
+   :doc "The session verb the core calls for a unit's session: :project <p> :want up|stopped|destroyed <session> [:path <worktree>]. Works through session-lifecycle alone — no workstream, conductor, seat or agent. Its last line is an EDN result."
+   :task (apply nido-session-provision/provision *command-line-args*)}
+
   nido:session:up
   {:requires ([tasks.nido-session :as nido-session])
    :doc "Bring a session up: :project <p> <session> [:ws-id <existing workstream>] [:wait true] — returns once the worktree and session home exist, services boot in the background (:wait true waits for them); prints session-home path. :ws-id puts the session on that workstream (a fork child, say) instead of minting a one-off; refused before provisioning when it cannot join."

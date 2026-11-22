@@ -11,6 +11,22 @@
    [nido.coordinator.daemon.launchctl :as lc]
    [nido.coordinator.daemon.systemd :as sd]))
 
+(def services
+  "The services nido supervises, by key: each one's launchd label and systemd unit. The
+   coordinator's is what every verb here acts on unless `with-service` names another."
+  {:coordinator {:label "dev.nido.coordinator" :unit "nido-coordinator"}
+   :core        {:label "dev.nido.core"        :unit "nido-core"}
+   :intake      {:label "dev.nido.intake"      :unit "nido-intake"}
+   :dashboard   {:label "dev.nido.dashboard"   :unit "nido-dashboard"}})
+
+(defn ^{:malli/schema [:=> [:cat :keyword fn?] :any]}
+  with-service
+  "Call `f` with every verb here acting on service `k` (a key of `services`)."
+  [k f]
+  (let [{:keys [label unit]} (get services k)]
+    (when-not label (throw (ex-info (str "no such service " k) {:service k})))
+    (binding [lc/*label* label sd/*unit* unit] (f))))
+
 (defn ^{:malli/schema [:=> [:cat] [:enum :launchd :systemd]]}
   manager
   "The service manager on this host. Wrapped so tests can pick one."
@@ -48,7 +64,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   install!
-  "Install the daemon's service from `spec` — {:bb-path :nido-dir :log-path :path-env} — and
+  "Install the daemon's service from `spec` — {:bb-path :nido-dir :log-path :path-env}, and
+   optionally :argv (what it runs, by default `bb nido:coordinator:run`) and :description — and
    start it, replacing a service already installed so the new definition takes effect. From then
    on the manager starts it again after it exits and at every boot or login."
   [spec]
