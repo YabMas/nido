@@ -11,7 +11,6 @@
    the coordinator already depends on nido.session.lifecycle, so the wiring is
    done at the task layer (tasks.nido-session) — the only place that sees both."
   (:require
-   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.session :as session]
    [nido.session.lifecycle :as lifecycle]
    [nido.coordinator.record.standing :as standing]
@@ -72,8 +71,7 @@
       (:id w)
       (catch clojure.lang.ExceptionInfo e
         (if (= :name-held (:reason (ex-data e)))
-          (do (seats/retire-conductor! project (:id w))
-              (workstream/delete! project (:id w))
+          (do (workstream/delete! project (:id w))
               (:holder (ex-data e)))
           (throw e))))))
 
@@ -182,6 +180,5 @@
                  (empty? (:external-refs w))
                  (bare? w)
                  (empty? others))
-        (seats/retire-conductor! project ws-id)
         (workstream/delete! project ws-id))))
   nil)

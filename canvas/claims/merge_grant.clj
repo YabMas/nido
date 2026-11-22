@@ -33,7 +33,3 @@
 (Claim grants-from-the-persons-words
   "A grant is given only by a person's act — their pick of an option carrying it, :grants they pass beside their words, or the gate's Land — and reaches coordination only as a core command [person-acts-by-command], which core-domain admits into the workstream's state. No ledger entry and no text is read for a grant."
   {:about [coordinator-work core-domain core-api] :evidence "round"})
-
-(Claim closing-and-approval-stay-the-persons
-  "Only :intent and :merge are grantable: a :grants naming any other kind is refused on write, and under any grant refusal still refuses a close, a design approval, an append of a :merged, :closed or :grant entry, and a landing record."
-  {:about [coordinator-report refusal] :evidence "test"})

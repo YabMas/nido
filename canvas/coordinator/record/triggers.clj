@@ -5,7 +5,6 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :as state]
             [canvas.platform.project :refer [ProjectName]]
-            
             [fukan.common.typing.malli]))
 
 (Kind Trigger

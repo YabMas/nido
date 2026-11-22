@@ -8,6 +8,7 @@
    [nido.boot.intake :as intake]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.work :as work]
    [nido.platform.core :as core]
    [nido.platform.project :as project]
    [nido.test.fake-core :as fake-core]))
@@ -32,7 +33,7 @@
 (deftest a-fire-opens-its-triggers-unit-with-the-skill-as-first-turn
   (with-home
     (fn [c]
-      (is (= :opened (intake/open-fire! (fire (assoc triage :skill :fix) {:id "BR-9" :title "Crash"}))))
+      (is (= :opened (work/open-fire! (fire (assoc triage :skill :fix) {:id "BR-9" :title "Crash"}))))
       (let [w (the-ws)
             st (get @(:states c) (str "brian/" (:id w)))
             [u & more] (vals (:units st))]
@@ -41,10 +42,10 @@
         (is (= {:spec {:executor :claude :instructions "/fix BR-9 Crash"}} (:first-turn u)))
         (is (= {:status :none} (:session u)) "the core provisions its session before the first turn")
         (testing "a re-emit while the unit is open opens nothing"
-          (is (= :running (intake/open-fire! (fire (assoc triage :skill :fix) {:id "BR-9" :title "Crash"}))))
+          (is (= :running (work/open-fire! (fire (assoc triage :skill :fix) {:id "BR-9" :title "Crash"}))))
           (is (= 1 (count (:units (get @(:states c) (str "brian/" (:id w)))))))))
       (testing "a source that works a ref once opens nothing on a ref it has a workstream for"
-        (is (= :settled (intake/open-fire! (fire (assoc triage :name :other)
+        (is (= :settled (work/open-fire! (fire (assoc triage :name :other)
                                                  {:id "BR-9" :once-per-ref? true}))))))))
 
 (deftest a-queue-mode-fire-pens-and-opens-nothing

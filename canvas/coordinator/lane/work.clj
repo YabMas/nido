@@ -6,7 +6,6 @@
    them holds state, and that is what lets the driver run them in any order it likes."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.session :refer [Session]]
             [canvas.coordinator.record.standing :as standing]
@@ -64,56 +63,6 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:item-ids :any] [:by :any]] :map]
      :delegates [workstream/read-ws workstream/append-entry! workstream/close!]}))
 
-(Module lane-intake
-  "Queue-mode intake: a fire that becomes a passive workstream instead of a session.
-
-   The difference from a live spawn is deliberate — an incoming item waits for a human to pick
-   it up, so nothing is provisioned until somebody decides it is worth provisioning."
-  (Operation enqueue-inbox!
-    "Create a session-less incoming workstream for a queued fire. One an earlier fire minted and
-     never penned is told by holding no entry and no session past its conductor's record."
-    {:signature [:=> [:catn [:opts :map]] :any] :delegates [workstream/create!]})
-  (Operation expire-stale!
-    "Close incoming workstreams nobody picked up. An inbox that never expires stops being an
-     inbox and becomes a list nobody reads."
-    {:signature [:=> [:catn [:project ProjectName] [:max-age-ms :int] [:now-ms :int]] :any]
-     :delegates [workstream/list-ids workstream/read-ws workstream/close!]}))
-
-(Module lane-pickup
-  "Turning a pasted reference into a started workstream.
-
-   Accepts a URL, a page id or a ticket id, because what a person has in their clipboard is
-   whichever of those they were looking at."
-  (Operation extract-page-id "The page id inside a Notion URL or uuid, dashed."
-    {:signature [:=> [:catn [:s [:maybe :string]]] [:maybe :string]]
-     :delegates [notion/extract-page-id]})
-  (Operation resolve-ref "What a pasted reference resolves to."
-    {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
-     :delegates [extract-page-id notion/retrieve-page notion/normalise-page]})
-  (Operation claim-and-drive!
-    "Open a resolved ticket's record and start it as a person's (lane-start's start-ticket!): its
-     workstream activated and its impl session brought up at once."
-    {:signature [:=> [:catn [:project ProjectName] [:ref :map]] :map]
-     :delegates [tickets/open! workstream/find-by-ref-id]})
-  (Operation pickup! "Resolve a reference and start its ticket."
-    {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
-     :delegates [resolve-ref tickets/held-by-gate? claim-and-drive!]}))
-
-(Module lane-promote
-  "Whether a ticket may be started, and starting it (lane-start's start-ticket!).
-
-   Gated on the ticket's own record rather than on the caller's intent, which is what stops a
-   re-emitted event promoting the same ticket twice."
-  (Operation promote! "Start a triaged ticket, or say why not."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :map]
-     :delegates [tickets/promote-decision tickets/read-meta]})
-  (Operation start-triage! "Promote a queued incoming workstream by running its deferred triage."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
-     :delegates [workstream/read-ws workstream/advance-stage!]})
-  (Operation promote-workstream! "Promote a workstream, dispatching on where it came from."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
-     :delegates [workstream/read-ws promote! start-triage!]}))
-
 (Module lane-phase
   "Opening a phased workstream's next phase once its gate has been met.
 
@@ -127,29 +76,6 @@
      settled between phases, and refused on blank evidence."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]
      :delegates [workstream/read-ws standing/governing-design workstream/open-phase!]}))
-
-(Module lane-resume
-  "Re-engaging a session waiting on a person with their answer, as the session's next instruction.
-   Which session waits is read off run records, the executor, status and the session's :claude
-   facet — no stored phase says it."
-  (Operation waiting-session
-    "The session waiting on a person's reply: no reply to it queued or pending, and its run parked
-     for review or a person owed the workstream's next move."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Session]]
-     :delegates [runs/find-for-session]})
-  (Operation resume!
-    "Give a session waiting on a person their input as its next instruction, admitted under the
-     global cap, recorded as given for the session's Run when that Run awaits review and for no Run
-     otherwise; refused for a conversation from before background sessions.
-
-     The session may be named by a caller that found it waiting before recording the person's
-     answer: the answer ends the workstream owing the person its next move, so looking again
-     after writing it finds nobody."
-    {:signature [:function
-                 [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:input :string]] :any]
-                 [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:input :string]
-                             [:waiting [:maybe Session]]] :any]]
-     :delegates [waiting-session]}))
 
 (Module lane-scratch
   "Which workstream a session a person started by hand belongs to: the one the start names, or
@@ -183,7 +109,7 @@
     {:signature [:function
                  [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]]] :any]
                  [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]] [:ws-id [:maybe WorkstreamId]]] :any]]
-     :delegates [joinable workstream/create! workstream/list-ids seats/retire-conductor! workstream/delete!]})
+     :delegates [joinable workstream/create! workstream/list-ids workstream/delete!]})
   (Operation settle-runtimes!
     "Move each live session onto the runtime it belongs on: its workstream's, or — for one no
      workstream holds — its own, keyed by its whole name. Returns the names it moved."
@@ -195,7 +121,7 @@
      conductor's record nor what its conductor decided keeps it, and the conductor is retired before
      it is deleted."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [scratch? workstream/list-ids workstream/read-ws seats/retire-conductor! workstream/delete!]}))
+     :delegates [scratch? workstream/list-ids workstream/read-ws workstream/delete!]}))
 
 (Module lane-backfill
   "Record as entries the status a workstream's mutable records already hold, so a status read off

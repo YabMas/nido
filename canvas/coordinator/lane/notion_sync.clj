@@ -28,8 +28,8 @@
     {:signature [:=> [:catn [:page :map] [:me :any]] [:maybe :string]]})
   (Operation notion-page-id "A workstream's Notion page id, or nil."
     {:signature [:=> [:catn [:ws Workstream]] [:maybe :string]]})
-  (Operation open-notion-workstreams "Every open workstream carrying a Notion page."
-    {:signature [:=> [:catn [:project ProjectName]] [:vector Workstream]]
+  (Operation open-notion-workstreams "Every open workstream carrying a Notion page: open as the core says when `core` is given, else as the ledger's closure does."
+    {:signature [:=> [:catn [:project ProjectName] [:core [:? [:maybe :map]]]] [:sequential Workstream]]
      :delegates [notion-page-id workstream/list-ids workstream/read-ws]})
   (Operation poll-and-react! "One reconcile poll for a project."
     {:signature [:=> [:catn [:project ProjectName] [:opts :map]] :any]

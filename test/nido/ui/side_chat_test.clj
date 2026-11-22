@@ -66,8 +66,7 @@
         (is (not (str/includes? (views/shell {:title "x"} [:p]) "<aside")))))))
 
 (deftest a-workstream-path-with-no-chat-is-not-the-operators
-  (with-redefs [work/chat-place (constantly nil)
-                chat/cancel!    (fn [_] (throw (ex-info "the operator's turn was cancelled" {})))]
+  (with-redefs [chat/cancel!    (fn [_] (throw (ex-info "the operator's turn was cancelled" {})))]
     (is (nil? (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-gone/cancel"})))))
 
 (deftest the-chat-answers-only-its-own-paths

@@ -4,7 +4,6 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as session]
@@ -40,37 +39,6 @@
 
 ;; ── The door names no stage ─────────────────────────────────────────────────
 
-(deftest attach-runs-what-the-position-names-without-being-told
-  (with-tmp
-    (fn []
-      (let [id (a-ws)
-            ran (atom nil)]
-        (baselined! id)
-        (with-redefs [activity/read-live (constantly nil)
-                      drive/run-stage! (fn [_p _w stage & _]
-                                         (reset! ran stage)
-                                         {:outcome :sufficient})]
-          (is (= :sufficient (attach/attach! :brian id "/wt/impl-1")))
-          (is (= :verify-baseline @ran)
-              "the ledger chose it — nothing in the call said which stage"))))))
-
-(deftest the-stage-runs-in-the-worktree-the-caller-is-standing-in
-  ;; Left to itself run-stage! takes the first session list-sessions hands it,
-  ;; ordered by nothing and filtered by liveness not at all. The door already
-  ;; resolved a worktree to find the workstream; the stage is for that one.
-  (with-tmp
-    (fn []
-      (let [id (a-ws)
-            against (atom nil)]
-        (baselined! id)
-        (with-redefs [activity/read-live (constantly nil)
-                      drive/run-stage! (fn [_p _w _stage opts]
-                                         (reset! against (:cwd opts))
-                                         {:outcome :sufficient})]
-          (is (= :sufficient (attach/attach! :brian id "/wt/the-one-i-am-in")))
-          (is (= "/wt/the-one-i-am-in" @against)
-              "the resolved worktree reaches the runner rather than being derived again"))))))
-
 (deftest attach-follows-a-live-holder-whatever-it-is-doing
   ;; No kind-and-target comparison: attach named no work, so any live work is
   ;; the answer to what it asked. join-or-refuse!'s comparison protects a caller
@@ -86,8 +54,7 @@
         (with-redefs [activity/read-live (constantly holder)
                       attach/follow-holder! (fn [_p _w h]
                                               (reset! followed (:run-id h))
-                                              :converged)
-                      drive/run-stage! (fn [& _] (throw (ex-info "must not run" {})))]
+                                              :converged)]
           (is (= :converged (attach/attach! :brian id "/wt/impl-1")))
           (is (= "r-1" @followed)
               "the position says :verify-baseline and a design round is live — it still follows"))))))
@@ -99,26 +66,8 @@
         (baselined! id)
         (ws/append-entry! :brian id {:kind :blocker}
                           (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
-        (with-redefs [activity/read-live (constantly nil)
-                      drive/run-stage! (fn [& _] (throw (ex-info "must not run" {})))]
+        (with-redefs [activity/read-live (constantly nil)]
           (is (= :waiting-on-a-human (attach/attach! :brian id "/wt/impl-1"))))))))
-
-(deftest a-holder-that-appears-after-the-read-is-followed-not-refused
-  ;; The claim, not the read, is what stops a second run. Losing it comes back
-  ;; as {:skip :claimed}, and the answer to that is to read again and follow.
-  (with-tmp
-    (fn []
-      (let [id (a-ws)
-            reads (atom [nil {:kind :diff-review :run-id "r-2" :pid 2
-                              :report-path "/nowhere/report.json"
-                              :started-at "2026-09-08T00:00:00Z"}])]
-        (baselined! id)
-        (with-redefs [activity/read-live (fn [_ _] (let [[h & t] @reads]
-                                                     (when t (reset! reads t))
-                                                     h))
-                      drive/run-stage! (fn [& _] {:skip :claimed})
-                      attach/follow-holder! (fn [_p _w h] (keyword (str "followed-" (:run-id h))))]
-          (is (= :followed-r-2 (attach/attach! :brian id "/wt/impl-1"))))))))
 
 (deftest a-holder-replaced-mid-follow-is-followed-not-reported-as-this-attachs-answer
   ;; read-live may hand back the PREVIOUS holder's payload while a replacement
@@ -159,7 +108,7 @@
         (ws/append-entry! :brian id {:kind :blocker}
                           (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
         (let [pos (pipeline/of :brian id)
-              out (str/join "\n" (attach/skip-lines :brian id pos (drive/fireable pos)))]
+              out (str/join "\n" (attach/skip-lines :brian id pos {:skip (#'attach/owed pos)}))]
           (is (str/includes? out "answer-blocker"))
           (is (str/includes? out "bb nido:ui"))
           (is (not (str/includes? out "session:enter"))
@@ -190,20 +139,9 @@
         (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id))) {:kind :design-cleared}
                              (pr-str {:format :design-cleared :design {:seq 4}}))
         (let [pos (pipeline/of :brian id)
-              out (str/join "\n" (attach/skip-lines :brian id pos (drive/fireable pos)))]
+              out (str/join "\n" (attach/skip-lines :brian id pos {:skip (#'attach/owed pos)}))]
           (is (str/includes? out "implement"))
           (is (str/includes? out "bb nido:session:enter :project brian impl-1")))))))
-
-(deftest an-unrunnable-mechanical-stage-says-so-rather-than-going-quiet
-  (with-tmp
-    (fn []
-      (let [id (a-ws)]
-        (baselined! id)
-        (with-redefs [drive/mechanical-stages {}]
-          (let [pos (pipeline/of :brian id)
-                out (str/join "\n" (attach/skip-lines :brian id pos (drive/fireable pos)))]
-            (is (str/includes? out "verify-baseline"))
-            (is (str/includes? out "mechanical-stages"))))))))
 
 (deftest a-moved-goal-names-every-record-the-amendment-owes
   ;; The position's next stage is only the first link; an author told only that
@@ -219,7 +157,7 @@
                           (pr-str {:format :intent :goal "wider" :done-when ["d"]
                                    :supersedes {:seq 1 :why "moved"}}))
         (let [pos (pipeline/of :brian id)
-              out (attach/skip-lines :brian id pos (drive/fireable pos))]
+              out (attach/skip-lines :brian id pos {:skip (#'attach/owed pos)})]
           (is (= :goal-superseded (:at pos)))
           (is (= (attach/amendment-lines (:owed (:next pos)))
                  (filterv #(or (str/starts-with? % "The goal amended") (re-find #"^  \d+\. " %)) out))
@@ -240,3 +178,13 @@
           "  1. bb nido:review:design (it decides the newest design, entry 7) — until it proceeds, which clears it"]
          (attach/amendment-lines [{:stage :decide-design :intent 4 :design 7}])))
   (is (= [] (attach/amendment-lines []))))
+
+(deftest a-mechanical-stage-is-the-conductors
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (baselined! id)
+        (with-redefs [activity/read-live (constantly nil)]
+          (let [out (with-out-str (is (= :conducted (attach/attach! :brian id "/wt/impl-1"))))]
+            (is (str/includes? out "verify-baseline"))
+            (is (str/includes? out "conductor"))))))))

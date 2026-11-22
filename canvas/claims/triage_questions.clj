@@ -4,14 +4,11 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.lane.conductor :refer [decide!]]
-            [canvas.coordinator.lane.drive :refer [halt-for]]
             [canvas.coordinator.record.tickets :refer [complete!]]
             [canvas.coordinator.report :refer [accepted-answers blocker-parts coordinator-report parse-event triage-questions validate-event]]
             [canvas.coordinator.report.ask :refer [Ask ask report-ask]]
             [canvas.coordinator.work :refer [apply! gate-actions gates resolve-gate! workstream]]
             [canvas.tasks.nido-review :refer [parked-blocker]]
-            [canvas.tasks.nido-seats :refer [decide*]]
             [canvas.ui.surface :refer [needs-fragment question-card ui-server workstream-pane]]))
 
 (Claim questions-write-shape
@@ -29,14 +26,6 @@
 (Claim legacy-blocker-is-body-text
   "report/blocker-parts reads a blocker in either era as {:question :context :recommendation? :after?}. A stored blocker with :after gives its :needs as the question. One without is legacy: its question is the fixed line 'This work is waiting on your answer.' and its :needs leads the context. A :summary that only says where the blocker came from — the escalation headline, or one starting 'Raised by the workstream's conductor' — is dropped from the context."
   {:about [blocker-parts ask] :evidence "test"})
-
-(Claim escalation-carries-parts
-  "A conductor :escalate decision that parks the workstream carries :needs as the one-sentence question, plus :summary and :after and, when the conductor genuinely holds one, :recommendation, and the blocker it parks copies them. `bb nido:seats:decide`, the conductor's one way to write a decision, carries :summary, :after and an optional :recommendation onto the :escalate body, and the conductor's brief names all three. One decided while the next move is already a person's parks nothing and is a note on that move's card, not held to the parts. The conductor never writes a provenance sentence as the summary: where a blocker came from is not context, and no :raised-by field records it."
-  {:about [decide! decide* validate-event] :evidence "test"})
-
-(Claim writers-emit-parts
-  "Every blocker nido's own code builds — each halt-for caller (the drive lane's halts and the conductor's seat and no-decision escalations) and the review loop's parked-blocker — carries a one-sentence question, a context and an :after, and a recommendation only where the writer genuinely holds a view, and passes the write contract. The asking guidance (resources/asking) and the skills that tell an agent to raise a blocker state the parts, and that a recommendation is given only when it is a genuine one."
-  {:about [halt-for parked-blocker decide!] :evidence "test"})
 
 (Claim ask-is-typed
   "An Ask is {:kind :question :questions :answer-does} plus optional :submit, :goal and :note. :question is its one-line headline. Each question is {:question :context [strings] :options} with an optional :recommendation and :after. Each option is letter, label, summary, an optional consequence and recommended?, and an optional :action. An Ask answers in one mode: without :submit, every option carries an :action and answers by itself; with :submit, no option carries one, there is at least one option, and :submit names the gate action that sends the choices. `ask` constructs no other Ask, and none whose :action or :submit names an action the gate does not offer."

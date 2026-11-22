@@ -6,7 +6,6 @@
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.report :refer [validate-event]]
             [canvas.coordinator.report.ask :refer [report-ask ask guidance Ask]]
-            [canvas.coordinator.lane.conductor :refer [lane-conductor decide! close-unanswered!]]
             [canvas.coordinator.lane.drive :refer [next-action]]
             [canvas.coordinator.work :refer [gates Gate owed-revivals]]
             [canvas.review.record :refer [design-prompt]]
@@ -19,14 +18,6 @@
 (Claim a-kind-is-one-entry
   "How a kind's record yields its Ask's question, context and options, and that kind's guidance addendum, are one entry of report.ask's registry plus the addendum's file; the generic ask, the work plane's building of a gate's Ask and the views' rendering of an Ask name no kind. The kind's record card renders the record as written and builds no part of the Ask."
   {:about [report-ask] :evidence "round"})
-
-(Claim authors-briefed-from-one-guidance
-  "There is one generic guidance on asking a person a question, and each kind's addendum extends it; the conductor's brief carries the guidance for an escalation and the design round's judge prompt the guidance for a design question, both from report.ask/guidance, and a task prints it for any kind. The conductor's escalation guidance states no asking rules of its own."
-  {:about [guidance lane-conductor design-prompt] :evidence "round"})
-
-(Claim escalation-does-not-reask
-  "An :escalate decision recorded after this change while the position already owes a person a move appends no :blocker and parks nothing new; its :needs is that move's Ask's :note. An escalation recorded when nothing is owed appends a blocker as before, whose :summary is never the text 'the conductor escalated a hand-back'."
-  {:about [decide! close-unanswered!] :evidence "round"})
 
 (Claim prose-choices-refused
   "The write contract refuses a blocker without :options whose :needs enumerates two distinct branches as 'option a/b/1/2', '(a)/(b)', '(1)/(2)' or 'a)/b)'; a single such marker is not refused."

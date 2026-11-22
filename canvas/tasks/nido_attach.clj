@@ -19,33 +19,19 @@
   "The door a person takes to a workstream, which chooses the stage for them.
 
    NAMES NO STAGE, and that is the whole interface claim: a caller says which workstream and the
-   ledger says what is due. The driver already selects this way for the `:mechanical` stages it
-   may run unasked, and the gate surface already reads the same `:next` for the `:human` ones;
-   this is the third door, and the only one that was reading an argument.
-
-   FOLLOWING IS ITS FIRST QUESTION, not a consequence of losing a race. It reads the live claim
-   before it reads the position, and follows whatever holds one — whatever kind, whatever target,
-   whatever mode the position names. Reaching the claim only by calling a runner would reach it
-   only for a `:mechanical` stage, so a live round on a workstream owing an approval would never
-   be found at all; and the join protocol's kind-and-target comparison exists to protect a caller
-   who NAMED work from watching something else finish, which a door that names none has no use
-   for. Following is a read and takes no claim.
-
-   It adds no judgement about what to RUN. `lane-drive/fireable` stays the single mapping from a
-   position to a stage anything runs, and what changes is that its `:skip` reasons — which the
-   driver discards into a log line — become the thing a person is told. Starting a second run
-   against a claimed workstream is still prevented by the claim rather than by the read: a holder
-   that appears after the read comes back as `{:skip :claimed}`, and the answer to that is to read
-   again and follow."
+   ledger says what is due. It follows whatever live run holds the workstream's claim, and
+   otherwise says what is owed: a `:human` stage names the gate, a `:mechanical` one is the
+   conductor's to run in the core. It runs nothing itself, and following is a read that takes no
+   claim."
   (Operation skip-lines
     "What to tell a person about a position nothing will fire for them: the stage, the mode, and
      the command that would supply it. Pure, and it is where the skip reasons stop being a
      driver's shrug and become an answer — a mode this phase cannot run names the session to
-     enter, never its conductor's, a `:human` one names the gate, `:no-runner` names the stage that has none.
+     enter, never its conductor's, a `:human` one names the gate, and a mechanical stage is named as the conductor's to run.
 
-     The stage is read off the POSITION rather than off the decision, because `fireable` carries
-     one only on the branches its own caller needs it for — :waiting-on-a-human has none, and
-     that is exactly where a person most needs telling what they owe."
+     The stage is read off the POSITION rather than off the decision, because the decision carries
+     one only on some branches — :waiting-on-a-human has none, and that is exactly where a person
+     most needs telling what they owe."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:position :any]
                             [:decision :map]] [:vector :string]]
      :delegates [session/list-sessions]})
@@ -71,13 +57,9 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:holder :any]] :any]
      :delegates [review/follow! activity/read-live]})
   (Operation attach!
-    "Follow what is live, or run what is due, or say what is owed — and run it against the
-     worktree the caller is standing in, which is why the resolved path comes this far rather
-     than being derived again. The driver's fallback takes the first session a workstream lists,
-     ordered and filtered by nothing, so a workstream with two of them could have the stage judge
-     a tree nobody asked about or halt over a session that is no longer there."
+    "Follow what is live, or say what is owed, for the workstream the caller is standing in."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:cwd Path]] :any]
-     :delegates [activity/read-live follow-holder! drive/fireable drive/run-stage! skip-lines]})
+     :delegates [activity/read-live follow-holder! skip-lines]})
   (Operation attach-cmd*
     "Resolve the workstream from where the caller is standing, then attach THERE — the resolved
      worktree is what a chosen stage runs against, not merely how the workstream was found.

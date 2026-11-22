@@ -26,9 +26,9 @@
     "The chat's side panel for a dashboard page showing a place — a workstream, or none — open or
      closed."
     {:signature [:=> [:catn [:open? :boolean] [:place [:maybe :map]]] :any]
-     :delegates [side signals chat/transcript work/chat-place]})
+     :delegates [side signals chat/transcript]})
   (Operation handle!
     "One request under /_chat, of the conversation its path names, or nil for any other path and
      for a workstream's chat path that names no open workstream."
     {:signature [:=> [:catn [:req :map]] [:maybe :map]]
-     :delegates [host/host host/handle! work/chat-place work/open-chat! place/place place/references]}))
+     :delegates [host/host host/handle! place/place place/references]}))

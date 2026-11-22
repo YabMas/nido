@@ -6,7 +6,6 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.lane.conductor :refer [carry! conductors! reseat! hand-backs!]]
             [canvas.coordinator.record.standing :refer [activated?]]
             [canvas.coordinator.lane.start :as start]
             [canvas.coordinator.record.workstream :refer [activate!]]
@@ -15,10 +14,6 @@
             [canvas.platform.process :refer [wait-within!]]
             [canvas.tasks.nido-activate :refer [nido-activate]]
             [canvas.ui.surface :refer [ui-tui]]))
-
-(Claim recipe-is-opt-in
-  "A workstream is activated exactly when its ledger holds an :activated entry. workstream/activate! — reached from the nido:activate verb and the TUI board's A key through work/activate!, and from start-ticket! when a person starts a ticket from a surface — is its one writer: it appends one at most once and never on a closed workstream, deciding both under the append lock, and every generic ledger append refuses the kind, as it refuses a :phase-gate. A session a person starts by hand (nido:session:up, the scratch intent bar) is not activated by starting it. On a workstream not activated: carry! does not carry a person's start (:start), answering :not-activated; conductors! starts no conductor and retires a running one; reseat! retires, occupies and escalates nothing; hand-backs! posts nothing to a conductor. A Run's start (given-by nil) is carried as before, whatever the ledger holds."
-  {:about [activated? activate! work/activate! carry! conductors! reseat! hand-backs! nido-activate ui-tui start/start-ticket!] :evidence "test"})
 
 (Claim activation-hands-over-understanding
   "work/activate! answers the instruction for the session's agent: write the records the recipe owes from what the session already understands — the review loops being what checks it — and then work the recipe as the whole seat's default embodiment says. nido:activate prints it; nido:owed reports a workstream not activated as owing nothing."

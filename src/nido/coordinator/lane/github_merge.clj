@@ -14,7 +14,6 @@
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.source.state :as sstate]
    [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.lane.pickup :as pickup]
    [nido.github.client :as gh]
    [nido.github.react :as react]
    [nido.notion.client :as notion]))
@@ -116,7 +115,7 @@
    a :notion ref with a :url and no :page-id. Reading (:page-id ref) as the whole
    answer classified those as having no Notion ticket at all."
   [ref]
-  (or (:page-id ref) (pickup/extract-page-id (:url ref))))
+  (or (:page-id ref) (notion/extract-page-id (:url ref))))
 
 (defn- names-pr?
   "True when the trail record `r` is about the PR `id` at `url`: a :pr-opened for

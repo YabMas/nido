@@ -6,11 +6,9 @@
    NAMES NO STAGE. Every other way into this pipeline takes one as an argument —
    `bb nido:review:baseline` says which round it wants before anything has
    looked at the workstream — so a verb is an unchecked assertion about state.
-   Here the caller says which workstream and `pipeline/of` says what is due,
-   which is the same thing the driver does for the stages it may run unasked and
-   the gate does for the ones only a person can take."
+   Here the caller says which workstream and `pipeline/of` says what is due; a
+   live round is followed, and what is owed is said with who runs it."
   (:require
-   [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as csession]
@@ -118,6 +116,16 @@
             (map-indexed (fn [i st] (str "  " (inc i) ". " (line st))))
             owed))))
 
+(defn- owed
+  "Who owes `position`'s next move, as skip-lines reads it: nobody (:terminal), a person
+   (:waiting-on-a-human), the conductor (:conducted, a mechanical stage), or a turn in the tree."
+  [position]
+  (case (get-in position [:next :mode])
+    nil         :terminal
+    :human      :waiting-on-a-human
+    :mechanical :conducted
+    :not-mechanical))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :map] [:vector :string]]}
   skip-lines
   "What to tell a person about a position nothing will fire for them.
@@ -153,15 +161,13 @@
        :not-mechanical
        (if sname
          [(str "this is a turn in the tree, not a task — nothing runs it for you")
-          (str "  take it: " (or (work/attach-command project sname)
-                                 (str "bb nido:session:enter :project " (name project) " " sname)))]
+          (str "  take it: bb nido:session:enter :project " (name project) " " sname)]
          [(str "this is a turn in the tree, and there is no session to take it in")
           (str "  bring one up: bb nido:session:up :project " (name project) " <name>")])
 
-       :no-runner
-       [(str "nothing can run " (when stage (name stage)) " — it is mechanical "
-             "and absent from mechanical-stages")
-        "  the driver parks a driven workstream here; wiring a runner is the fix"]
+       :conducted
+       [(str (when stage (name stage)) " is mechanical: the workstream's conductor runs it in the core")
+        "  watch it on the board: bb nido:ui"]
 
        :claimed
        ["something else holds this workstream's claim — try again"]
@@ -170,41 +176,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :Path] :any]}
   attach!
-  "Follow what is live, or run what is due, or say what is owed.
-
-   FOLLOWING IS THE FIRST QUESTION, not a consequence of losing a race. Reaching
-   the claim only by calling a runner would reach it only for a :mechanical
-   stage, so a live round on a workstream whose position is :human or :authoring
-   would never be found at all — and attach would report an approval as owed
-   while a review of that very workstream painted frames somewhere else.
-
-   Starting a second run against a claimed workstream is still prevented by the
-   CLAIM rather than by that read. A holder appearing in between comes back from
-   `run-stage!` as {:skip :claimed}, and the answer to it is to read again and
-   follow: the same follow, reached from the other side of the race.
-
-   AND IT RUNS WHERE THE CALLER IS STANDING, which is why `cwd` is carried this
-   far rather than resolved again below. Left to itself `run-stage!` takes the
-   first session `list-sessions` hands it, and that list is ordered by nothing
-   and filtered by liveness not at all — so a workstream with two sessions could
-   have a round, and every fixer it launches, judge a tree the person who asked
-   is not looking at, or halt :no-workstream over a dead first session while the
-   caller stood in a live one. The door had to resolve a worktree to find the
-   workstream at all; the stage it chooses is for that worktree."
-  [project ws-id cwd]
+  "Follow what is live, or say what is owed and who runs it. Nothing is run here: a stage the
+   machine runs is the workstream's conductor's, in the core, and following comes first so a live
+   round is found whatever the position says is next."
+  [project ws-id _cwd]
   (if-let [holder (activity/read-live project ws-id)]
     (follow-holder! project ws-id holder)
     (let [position (pipeline/of project ws-id)
-          decision (drive/fireable position)]
-      (if-let [stage (:fire decision)]
-        (let [res (drive/run-stage! project ws-id stage {:cwd cwd})]
-          (if (= :claimed (:skip res))
-            (if-let [holder (activity/read-live project ws-id)]
-              (follow-holder! project ws-id holder)
-              :claimed)
-            (:outcome res)))
-        (do (run! println (skip-lines project ws-id position decision))
-            (:skip decision))))))
+          skip     (owed position)]
+      (run! println (skip-lines project ws-id position {:skip skip}))
+      skip)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   attach-cmd*

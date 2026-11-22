@@ -15,7 +15,6 @@
    executed again as itself."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
@@ -168,7 +167,14 @@
                  :uncapped?       (boolean (:uncapped? run))
                  :workstream-id   (:workstream-id run)}
         next    (runs/create-run! routed {:fired-at (clock/now-iso) :fired-by "restore"})]
-    (spawn/create-session-for-run! next (:workstream-id run))
+    (session/create! (:project next) (:workstream-id run)
+                     {:name     (:session-name next)
+                      :weight   (if (= :lite (:session-profile next)) :light :heavy)
+                      :autonomy {:skill (:skill next) :first-message (:first-message next)
+                                 :agent (or (:agent next) :claude) :claude-session-id nil
+                                 :trigger (:trigger next) :limits (or (:limits next) {})
+                                 :priority (or (:priority next) 0) :uncapped? (boolean (:uncapped? next))
+                                 :on-promote (:on-promote next) :error nil}})
     (try
       (runs/spawn-session-for-run! next origin)
       next

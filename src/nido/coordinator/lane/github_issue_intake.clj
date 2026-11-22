@@ -12,7 +12,6 @@
    failures) opens it; while open the poll is skipped until breaker-cooldown-s,
    then one probe runs (success clears, failure re-arms)."
   (:require
-   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.standing :as standing]
@@ -82,7 +81,6 @@
           :let  [w  (ws/read-ws project ws-id)
                  id (some-> w issue-ref-id)]
           :when (and id (not (contains? assigned-ids id)) (unpromoted? project w))]
-    (seats/retire-conductor! project ws-id)
     (ws/delete! project ws-id)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}

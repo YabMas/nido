@@ -54,8 +54,7 @@
      conflicts or leaves the checkout without the landing is undone and owes nothing; a debt that
      cannot be written leaves the rebase in place and is a failure.
      {:owed <commit> :waits [<why>]} | {:skipped :way-out} | {:failed :way-out}."
-    {:signature [:=> [:catn [:landed :string]] :map]
-     :delegates [daemon/owe! daemon/waits]})
+    {:signature [:=> [:catn [:landed :string]] :map]})
   (Operation land
     "bb nido:land: the gate over the revision given, else the worktree's tip read once; a line
      saying origin's main took the push, once it has; then the recording, on the worktree's

@@ -24,5 +24,5 @@
      and admitted only as an unspent grant in the turn's workstream's core state, read through
      core-api, admits it. A turn the core does not run is the person's, and its acts are allowed.
      Pushing, whatever the branch, and opening or readying a PR are not a person's act."
-    {:signature [:=> [:catn [:input :map]] [:maybe :string]]
+    {:signature [:=> [:catn [:input :map] [:env [:? [:maybe :map]]]] [:maybe :string]]
      :delegates [gate/acts]}))

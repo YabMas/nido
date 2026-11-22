@@ -18,12 +18,10 @@
    [nido.boot.attention :as attention]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.daemon.halt :as halt]
-   [nido.coordinator.lane.drain :as drain-lane]
+   [nido.coordinator.daemon.heartbeat :as heartbeat]
    [nido.coordinator.lane.github-issue-intake :as github-issue-intake]
    [nido.coordinator.lane.github-merge :as github-merge]
-   [nido.coordinator.lane.intake :as intake]
    [nido.coordinator.lane.notion-sync :as notion-sync]
-   [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.lane.titles :as titles]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
@@ -61,7 +59,8 @@
    :inbox-expiry-ms         (* 3 24 60 60 1000)
    :inbox-sweep-interval-ms (* 30 60 1000)
    :titles-interval-ms      (* 5 60 1000)
-   :attention-interval-ms   15000})
+   :attention-interval-ms   15000
+   :drain-wakes-interval-ms 60000})
 
 (defn- warn [& parts]
   (binding [*out* *err*] (println (apply str "nido intake: " parts))))
@@ -78,46 +77,6 @@
 
 ;; ── a fire, as core commands ─────────────────────────────────────────────────
 
-(defn- goal-of
-  "The goal a fire's unit states: the trigger's skill on the event's title, or its id."
-  [routed]
-  (str/trim (str (name (-> routed :trigger :skill)) " "
-                 (or (-> routed :payload :title) (-> routed :payload :id) ""))))
-
-(defn- trigger-unit-running?
-  "Whether workstream `ws-id` already holds an open unit this trigger opened — a reconcile source
-   re-emitting a ticket whose unit is still at work."
-  [project ws-id trigger-name]
-  (some #(and (= :open (:status %)) (= (name trigger-name) (:trigger %)))
-        (vals (:units (wcore/state project ws-id)))))
-
-(defn ^{:malli/schema [:=> [:cat :map] :keyword]}
-  open-fire!
-  "Open the unit a spawning fire `routed` asks for: its workstream found by the event's ref or
-   made, then the trigger's unit opened in the core, keyed by the fire so a re-emit is answered
-   rather than repeated. Answers what happened: :opened, :running (a unit of this trigger is still
-   open there), :settled (the source works a ref once and it has a workstream) or :refused."
-  [routed]
-  (let [project (:project routed)
-        ref     (spawn/external-ref (:payload routed))
-        pre     (when ref (ws/find-by-ref project (:adapter ref) (:id ref)))
-        tname   (-> routed :trigger :name)]
-    (cond
-      (and pre (true? (:once-per-ref? (:payload routed)))) :settled
-      (and pre (trigger-unit-running? project (:id pre) tname)) :running
-      :else
-      (let [w    (or pre (spawn/ensure-workstream! project (:payload routed)))
-            unit (str (name tname) "-" (subs (str (random-uuid)) 0 8))
-            fire (or (some-> ref :id) (str (random-uuid)))
-            o    (wcore/act! project (:id w) (work/fire-unit routed unit (goal-of routed))
-                             {:key (str "intake/" (wcore/ws-key project (:id w)) "/" (name tname) "/" fire
-                                        "/" (count (:units (wcore/state project (:id w)))))})]
-        (if (wcore/admitted? o)
-          :opened
-          (do (warn "the core refused " (name project) "/" (:id w) " for " (name tname) ": "
-                    (pr-str (or (:refused o) (:error o))))
-              :refused))))))
-
 (defn- route-fire!
   "One routed fire: dropped with a word when its breaker is open or it is a dry run, penned when
    its trigger queues, skipped when its ticket is settled, else opened in the core."
@@ -128,11 +87,11 @@
       (:error routed) (warn "dropping envelope — " (pr-str routed))
       (breakers/tripped? (:project routed) tname) (warn "trigger breaker open — skipping " label)
       (-> routed :trigger :dry-run?) (println "nido intake: dry run —" label "would fire")
-      (= :queue (-> routed :trigger :intake)) (intake/enqueue-inbox! routed)
+      (= :queue (-> routed :trigger :intake)) (work/enqueue-inbox! routed)
       (and (= :triage-bug (-> routed :trigger :skill))
            (some->> (-> routed :payload :id) (tickets/gate-decision (:project routed)) (not= :spawn)))
       (println "nido intake: triage gate skip —" label (-> routed :payload :id))
-      :else (let [r (open-fire! routed)]
+      :else (let [r (work/open-fire! routed)]
               (when (#{:opened :running} r)
                 (println "nido intake:" label (name r) (or (-> routed :payload :id) "")))))))
 
@@ -148,7 +107,7 @@
     (warn "dropping a " (name (:type env)) " envelope: the core runs turns now")
 
     (= :drain (get-in env [:broadcast :type]))
-    (drain-lane/handle-fire! (get-in env [:broadcast :payload]))
+    (work/drain-fire! (get-in env [:broadcast :payload]))
 
     :else (doseq [routed (events/route env triggers-by-project)] (route-fire! routed))))
 
@@ -245,7 +204,9 @@
     (review-reconcile/settle-abandoned! {}))
   (when (due? :expire-inbox now-ms (:inbox-sweep-interval-ms defaults))
     (doseq [p (registered-projects)]
-      (intake/expire-stale! p (:inbox-expiry-ms defaults) now-ms))))
+      (work/expire-stale! p (:inbox-expiry-ms defaults) now-ms)))
+  (when (due? :drain-wakes now-ms (:drain-wakes-interval-ms defaults))
+    (doseq [p (registered-projects)] (work/drain-wakes! p))))
 
 (defonce ^:private !attention-seen (atom nil))
 
@@ -261,12 +222,21 @@
         (desk/request! (assoc n :kind :notify)))
       (reset! !attention-seen (set (keys current))))))
 
+(defn- heartbeat!
+  "Write the host's heartbeat — its pid, whether it runs or is halted, and when — where the
+   surfaces read the coordinator's liveness from."
+  [halted?]
+  (try (heartbeat/write! {:pid (.pid (java.lang.ProcessHandle/current))
+                          :status (if halted? :halted :running)})
+       (catch Throwable t (warn "heartbeat not written — " (ex-message t)))))
+
 (defn ^{:malli/schema [:=> [:cat] :any]}
   tick!
   "One pass of the loop. A halt stops intake — nothing is drained or polled — and nothing else."
   []
   (let [now-ms (System/currentTimeMillis)
         tbp    (load-all-triggers)]
+    (heartbeat! (boolean (halt/read-halt-info)))
     (off-the-loop :attention #(notify-attention! now-ms))
     (when-not (halt/read-halt-info)
       (reconcile-sources! tbp)

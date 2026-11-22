@@ -42,4 +42,18 @@
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
   (Operation violations
     "Every invariant a state breaks, as data; empty when the state is legal."
+    {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation session-want
+    "What a unit's session should be in a state: :up, :stopped or :destroyed."
+    {:signature [:=> [:catn [:state :map] [:unit :map]] [:maybe :keyword]]})
+  (Operation sessions-owed
+    "Every unit whose session is not what it should be and has no attempt pending, with the want. A
+     failed bring-up is not owed again until it is retried."
+    {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation attempts-pending
+    "Every provisioning attempt recorded and not yet resolved."
+    {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation first-turns-owed
+    "The first turns owed: each open unit opened with a first turn that no turn of it has started
+     yet and whose session is ready."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]}))

@@ -48,4 +48,20 @@
     {:signature [:=> [:catn [:buffer :map] [:changes [:sequential :map]]] :nil]})
   (Operation stop!
     "Stop applying the rules."
-    {:signature [:=> [:catn [:buffer :map]] :nil]}))
+    {:signature [:=> [:catn [:buffer :map]] :nil]})
+  (Operation person-input?
+    "Whether a state's inbox holds a person's input."
+    {:signature [:=> [:catn [:state :map]] :boolean]})
+  (Operation background-running
+    "How many of a state's conductor turns run hearing no person's input."
+    {:signature [:=> [:catn [:state :map]] :int]})
+  (Operation wake-owed?
+    "Whether a state owes its conductor a wake: its inbox holds items, it is not closed, no
+     conductor turn runs or waits to resume, and it is not stopped."
+    {:signature [:=> [:catn [:state :map] [:max-failures :int]] :boolean]})
+  (Operation wakes
+    "The conductor wakes to issue across every workstream: a wake for a person's input at once, the
+     rest only while fewer than the wake cap of background conductor turns run, in the order they
+     became owed. Nothing runs while idle."
+    {:signature [:=> [:catn [:opts :map] [:states [:map-of :string :map]] [:owed-order [:sequential :string]]]
+                 [:sequential :map]]}))

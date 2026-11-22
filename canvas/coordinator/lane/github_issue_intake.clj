@@ -2,7 +2,6 @@
   "Self-spec: `nido.coordinator.lane.github-issue-intake` — assigned issues as workstreams."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.integration.github :as github]
             [canvas.platform.project :refer [ProjectName]]
@@ -18,4 +17,4 @@
      still unpromoted — read past its conductor's record — its conductor retired before it is."
     {:signature [:=> [:catn [:project ProjectName] [:opts :map]] :any]
      :delegates [github/list-assigned-issues workstream/find-by-ref workstream/create!
-                 seats/retire-conductor! workstream/delete!]}))
+ workstream/delete!]}))

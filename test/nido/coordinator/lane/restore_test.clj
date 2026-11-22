@@ -4,7 +4,6 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.lane.restore :as restore]
-   [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.record.state :as cstate]
@@ -156,7 +155,7 @@
             w         (recovery-ws! f)
             spawned   (atom [])]
         (with-redefs [triggers/load-for-project (fn [p] (if (= :brian p) [trigger] []))
-                      spawn/create-session-for-run! (fn [& _] nil)
+                      nido.coordinator.record.session/create! (fn [& _] nil)
                       runs/spawn-session-for-run! (fn [run origin] (swap! spawned conj [(:id run) origin]))]
           (let [{:keys [outcomes]} (restore/restore! :nido w)
                 {:keys [continuation]} (first outcomes)
@@ -189,7 +188,7 @@
             f2        (keep-failure! {:session "run-b" :origin origin} "relation already exists")
             w         (recovery-ws! f1)]
         (with-redefs [triggers/load-for-project (fn [p] (if (= :brian p) [trigger] []))
-                      spawn/create-session-for-run! (fn [& _] nil)
+                      nido.coordinator.record.session/create! (fn [& _] nil)
                       runs/spawn-session-for-run! (fn [& _] nil)]
           (let [{:keys [outcomes closed?]} (restore/restore! :nido w)
                 {[minted] :restored [other] :withdrawn} (group-by :outcome outcomes)

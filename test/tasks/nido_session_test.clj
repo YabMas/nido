@@ -3,9 +3,6 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [babashka.fs :as fs]
-   [nido.coordinator.lane.conduct :as conduct]
-   [nido.coordinator.lane.conductor :as conductor]
-   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.work :as work]
@@ -157,9 +154,8 @@
     (is (not-any? #(str/includes? % "down one to make room") lines))))
 
 (defn- spawn-calls
-  "Run spawn with every effect recorded instead of performed — the child carried when `carried`
-   names its seat, else driven occupying none. Returns [calls printed-output]."
-  [{:keys [joinable warp? carried] :or {warp? true}} & args]
+  "Run spawn with every effect recorded instead of performed. Returns [calls printed-output]."
+  [{:keys [joinable warp?] :or {warp? true}} & args]
   (let [calls (atom [])
         brief (str (babashka.fs/create-temp-file))]
     (spit brief "Build the widget.")
@@ -168,13 +164,8 @@
                   lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
                   lifecycle/session-weight              (fn [_ _] :heavy)
                   lifecycle/link-add!                   (fn [s o] (swap! calls conj [:link s (select-keys o [:project :type :url :title])]))
-                  conductor/carry!                      (fn [_p _w s & [b m]]
-                                                          (swap! calls conj [:carry s b m])
-                                                          {:carried carried})
-                  seats/drive!                          (fn [_p _w s b & [m]] (swap! calls conj [:drive s b m]))
-                  work/activate!                        (fn [p w s & _] (swap! calls conj [:activate p w s]) {})
+                  work/activate!                        (fn [p w s & [o]] (swap! calls conj [:activate p w s (:brief o)]) {})
                   csession/workstream-id-for            (fn [_ _] (when (some #(= :birth (first %)) @calls) "ws-child"))
-                  csession/read-session                 (fn [_ _ _] {:claude {:session-id "sid-1"}})
                   lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o) (:command o)]))
                   state/session-home-dir                (fn [_ _] "/tmp/home")
                   scratch/joinable                      (or joinable (fn [& _] nil))
@@ -193,14 +184,6 @@
            (filterv #(#{:birth :up} (first %)) calls))
         ":ws-id reaches the workstream claim exactly as up passes it, and nowhere else")))
 
-(deftest spawn-activates-the-child-before-it-is-carried
-  ;; A session nido starts to work a brief is the recipe's from birth: its first turn end is the
-  ;; conductor's to read, never a plain conversation's.
-  (let [[calls _] (spawn-calls {} ":ws-id" "ws-child")]
-    (is (= [[:activate :nido "ws-child" "kid"] [:carry "kid"]]
-           (mapv #(vec (take (if (= :carry (first %)) 2 4) %))
-                 (filterv #(#{:activate :carry} (first %)) calls))))))
-
 (deftest spawn-refused-by-up-links-and-stages-nothing
   (let [[calls out] (spawn-calls {:joinable (fn [& _] {:reason :closed})} ":ws-id" "ws-child")]
     (is (str/includes? out "closed"))
@@ -214,27 +197,18 @@
                            :title "parent · agent parent-a1"}]}
            (set (filter #(= :link (first %)) calls))))))
 
-(deftest spawn-drives-the-child-on-a-brief-addressed-back-to-the-parent
-  (let [[calls _] (spawn-calls {})
-        [_ s b]   (first (filter #(= :drive (first %)) calls))]
-    (is (= "kid" s) "not carried, the child is driven on its brief all the same")
+(deftest spawn-hands-the-child-to-the-core-on-a-brief-addressed-back-to-the-parent
+  (let [[calls _] (spawn-calls {} ":ws-id" "ws-child")
+        [_ p w s b] (first (filter #(= :activate (first %)) calls))]
+    (is (= [:nido "ws-child" "kid"] [p w s]))
     (is (str/includes? b "SendMessage to `parent-a1`"))
     (is (str/ends-with? b "Build the widget.\n") "the brief verbatim, last")
-    (is (some #(and (= :tab (first %)) (= ["kid" :home] (subvec % 1 3))
-                    (str/ends-with? (nth % 3) "nido:session:attach :session-id sid-1"))
-              calls)
-        "the tab attaches to the driven conversation rather than starting one")))
-
-(deftest spawn-carried-is-not-driven-again
-  (let [[calls out] (spawn-calls {:carried {:seat 1 :session "kid"}})]
-    (is (some #(= :carry (first %)) calls))
-    (is (not-any? #(= :drive (first %)) calls) "carrying started its conversation")
-    (is (str/includes? out "whole seat"))))
+    (is (some #(= [:tab "kid" :home nil] %) calls) "its tab opens on its home")))
 
 (deftest spawn-outside-warp-opens-no-tab
   (let [[calls out] (spawn-calls {:warp? false})]
     (is (not-any? #(= :tab (first %)) calls))
-    (is (str/includes? out "nido:session:attach :session-id sid-1"))))
+    (is (str/includes? out "nido:session:enter :project nido kid"))))
 
 (deftest spawn-never-asks-the-budget-question
   (let [asked (atom 0)]
@@ -246,16 +220,10 @@
         (is (not (str/includes? out "Aborted")))
         (is (some #(= [:up "kid"] %) calls))))))
 
-(deftest spawn-hands-a-model-to-the-child-only-when-given
-  (let [model-of (fn [k calls] (last (first (filter #(= k (first %)) calls))))]
-    (is (nil? (model-of :drive (first (spawn-calls {})))))
-    (is (= "claude-opus-5-5" (model-of :carry (first (spawn-calls {} ":model" "claude-opus-5-5")))))
-    (is (= "claude-opus-5-5" (model-of :drive (first (spawn-calls {} ":model" "claude-opus-5-5")))))))
-
 (defn- start-calls
   "Run start with every effect recorded instead of performed, in a directory that is no session's.
    `held` is the workstream already holding the name, if any. Returns [calls printed-output]."
-  [{:keys [held carried] :or {carried {:seat 1 :session "goal"}}} & args]
+  [{:keys [held]} & args]
   (let [calls (atom [])]
     (with-redefs [lifecycle/session-from-cwd            (fn [] nil)
                   lifecycle/session-home-coords-from-cwd (fn [& _] nil)
@@ -263,10 +231,7 @@
                   lifecycle/session-weight              (fn [_ _] :heavy)
                   lifecycle/link-add!                   (fn [s _] (swap! calls conj [:link s]))
                   lifecycle/spawn-tab!                  (fn [s _] (swap! calls conj [:tab s]))
-                  conductor/carry!                      (fn [_p _w s & [b m]]
-                                                          (swap! calls conj [:carry s b m])
-                                                          {:carried carried})
-                  work/activate!                        (fn [p w s & _] (swap! calls conj [:activate p w s]) {})
+                  work/activate!                        (fn [p w s & [o]] (swap! calls conj [:activate p w s (:brief o)]) {})
                   csession/workstream-id-for            (fn [_ _] (or held
                                                                       (when (some #(= :birth (first %)) @calls) "ws-new")))
                   state/session-home-dir                (fn [_ _] "/tmp/home")
@@ -281,10 +246,9 @@
 (deftest start-brings-a-session-up-on-a-minted-activated-workstream
   (let [[calls out] (start-calls {} ":brief" "Make the widget; done when it renders.")]
     (is (= [[:birth :nido "goal" nil] [:up "goal"] [:birth :nido "goal" "ws-new"]
-            [:activate :nido "ws-new" "goal"]
-            [:carry "goal"]]
-           (mapv #(if (= :carry (first %)) (vec (take 2 %)) %) calls))
-        "up's path with no workstream named, activated before it is carried")
+            [:activate :nido "ws-new" "goal"]]
+           (mapv #(if (= :activate (first %)) (vec (take 4 %)) %) calls))
+        "up's path with no workstream named, then handed to the core")
     (is (str/includes? out "Started workstream ws-new"))))
 
 (deftest start-needs-no-session-to-run-in
@@ -297,11 +261,11 @@
   (let [f (str (babashka.fs/create-temp-file))]
     (spit f "From a file.")
     (is (str/ends-with?
-         (nth (first (filter #(= :carry (first %)) (first (start-calls {} ":brief-file" f)))) 2)
+         (nth (first (filter #(= :activate (first %)) (first (start-calls {} ":brief-file" f)))) 4)
          "\n\nFrom a file."))))
 
 (deftest start-tells-the-session-to-record-the-goal-before-working-it
-  (let [b (nth (first (filter #(= :carry (first %)) (first (start-calls {} ":brief" "Ship the widget.")))) 2)]
+  (let [b (nth (first (filter #(= :activate (first %)) (first (start-calls {} ":brief" "Ship the widget.")))) 4)]
     (is (str/includes? b ":intent"))
     (is (str/ends-with? b "\n\nShip the widget.") "the brief verbatim, last")))
 
@@ -314,11 +278,6 @@
   (let [[calls out] (start-calls {})]
     (is (= [] calls))
     (is (str/includes? out "Missing :brief-file"))))
-
-(deftest start-says-when-the-session-was-not-driven
-  (let [[_ out] (start-calls {:carried nil} ":brief" "Goal.")]
-    (is (str/includes? out "was not driven on the brief"))
-    (is (str/includes? out "exit 1"))))
 
 (defn- revive-world
   "Two casualties in temp worktrees — `quiz`, whose conversation is already running, and
@@ -341,7 +300,6 @@
                                                                :last-at-ms 2}
                                                               {:id "c-conf" :cwd (str (fs/path base "conflicted"))
                                                                :last-at-ms 1}])
-                    conduct/live-states          (constantly {"c-quiz" {:cwd "/running"}})
                     fleet/snapshot               (constantly [])
                     fleet/machine-bytes          (constantly (* 100 1024 1024 1024))
                     fleet/in-use-bytes           (constantly 0)
@@ -351,7 +309,7 @@
                     babashka.process/shell       (fn [opts & cmd]
                                                    {:exit 0 :out (if (str/ends-with? (:dir opts) "conflicted") "xyz" "")})
                     fs/exists?                   (fn [p & _] (or (str/ends-with? (str p) ".jj") (.exists (java.io.File. (str p)))))]
-        (f))
+        (with-redefs-fn {#'task/running-conversations (constantly {"c-quiz" {:cwd "/running"}})} f))
       (finally (fs/delete-tree tmp)))))
 
 (deftest revive-dry-run-changes-nothing

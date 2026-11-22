@@ -5,14 +5,9 @@
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.boot.attention :refer [boot-attention]]
-            [canvas.boot.core :refer [boot-core tick!]]
             [canvas.coordinator.daemon.brakes :refer [auto-tripped-triggers]]
             [canvas.coordinator.work :refer [all-gates owed-revivals]]
             [canvas.platform.desktop :refer [platform-desktop]]))
-
-(Claim attention-is-pushed
-  "With the notifier armed, the daemon makes every gate, halt or auto-tripped breaker known on the desktop within one attention interval of first observing it, without a person asking: either in a notification of its own, or counted in an aggregate notification. Two cases aggregate: the first look after a start posts one count of everything then present instead of one notification per item, and a look whose arrivals exceed the burst limit posts the first few individually and folds the rest into one count."
-  {:about [boot-core boot-attention] :evidence "round"})
 
 (Claim announced-from-the-inbox
   "Every condition the daemon announces is one a source reports: a gate from all-gates, a halt from the halt info, a tripped breaker from auto-tripped-triggers, a permission denial, a blocked session or a turn end on a workstream not activated from conduct's report, and a boot's casualties from owed-revivals. The daemon formats what a source reports and decides no condition of its own."
@@ -21,10 +16,6 @@
 (Claim announced-on-arrival
   "An item is announced when its key appears and again only after it has left the set, and the first look after a start posts at most one notification, a count."
   {:about [boot-attention] :evidence "round"})
-
-(Claim armed-only-by-run
-  "tick! posts nothing unless run! armed the notifier, so a test driving tick! posts nothing; and a failed look or post never throws out of tick! or makes it wait on the sender."
-  {:about [boot-core tick!] :evidence "round"})
 
 (Claim desktop-is-generic
   "The desktop module posts a title, subtitle, message and sound and knows nothing of gates, halts or breakers; it posts through the nido notifier app when that is installed and through osascript otherwise."

@@ -4,12 +4,10 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the modules
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.agent.substrate :refer [listing]]
-            [canvas.coordinator.lane.conduct :refer [live-states]]
-            [canvas.coordinator.lane.drive :refer [ensure-workstream! intake-kind lane-pipeline of status]]
+            [canvas.coordinator.lane.drive :refer [intake-kind lane-pipeline of status]]
             [canvas.coordinator.lane.github-issue-intake :refer [poll-and-reconcile!]]
             [canvas.coordinator.lane.notion-sync :refer [lane-notion-sync]]
-            [canvas.coordinator.lane.work :refer [birth! reap! scratch? waiting-session]]
+            [canvas.coordinator.lane.work :refer [birth! reap! scratch?]]
             [canvas.coordinator.record.activity :refer [read-live]]
             [canvas.coordinator.record.runs :refer [live? record-runs]]
             [canvas.coordinator.record.session :refer [record-session]]
@@ -32,10 +30,6 @@
   "An open workstream holding any blocker that no answer entry names is placed at :blocked, ahead of open findings and every arc position, and only closure outranks it; the question it waits on is the newest such blocker. Each blocker is cleared by an answer entry naming its seq and by nothing else: not a later entry of any kind, and not an answer naming another blocker — so answering a newer halt leaves an older unanswered one still holding the workstream at :blocked."
   {:about [lane-pipeline] :evidence "round"})
 
-(Claim live-is-a-held-lock
-  "Live is true only while something that ends with the working process says so: a lock held for the life of that process (the activity claim, or a run's lock taken by a wrapper that starts the agent and exits with it), the substrate's listing showing a session with a :claude facet, or one with a start in flight, with a live process mid-turn (state 'working'), or, for a human session without a :claude facet, its ports answering. No stored phase decides it, and the launcher's death does not release a run lock while its agent runs."
-  {:about [status live-states] :evidence "round"})
-
 (Claim index-is-rebuildable
   "The index splits at this change. Rows for entries written before it are frozen as part of the ledger, because their :at and :amended-by exist nowhere else; every entry written after it carries those facts in its own file. The index is a cache rebuilt from the directory plus the frozen rows: a record that lost it reads the rebuilt one, and deleting it changes no answer."
   {:about [record-workstream] :evidence "round"})
@@ -56,10 +50,6 @@
   "No mutable record holds a value status derives: a session has no autonomy phase, a workstream no stored :stage, findings tracker or :closed, and a ticket no :status; close, reopen, a person's choice of stage, and a ticket's acceptance or dismissal are entries. The one fact the stored :stage carried that status does not derive — that a one-off was born disposable — is the :scratch entry its birth appends, so retiring the field loses no answer the record gave."
   {:about [record-workstream record-session] :evidence "round"})
 
-(Claim scratch-is-a-birth-entry
-  "A one-off's disposability is a :scratch entry, a registered kind birth! appends as it mints the workstream — the ledger's record that it was born with no ticket and may be discarded with its session, as :fork records how a child arrived. birth! is the marker's one writer: ensure-workstream! births a fire's workstream unmarked whatever its trigger says, and no other path appends the kind but the one-time status backfill, which marks a one-off its stored :stage recorded as :scratch before births were entries. The position vocabulary reads the kind as an intake record: :scratch is one more member of the kinds of tells an empty ledger from an illegible one by, belonging to the intent stage as :ticket and :triage do, and it carries no position of its own — so a one-off whose only entry is its birth places at :intake, as an empty ledger does, and is never :unplaceable. scratch? answers from the kind; reap! and the orphan sweep's yield discard a one-off only while it is marked, holds no external ref, holds no entry but its birth and owns no other session; intake-kind answers :scratch from the kind, as it answers :triaged and :proposal, and ws-source buckets a workstream :scratch from the same kind, so a described-intent workstream — ref-less, unmarked, entry-less until its agent writes the intent — is kept by both reapers and buckets as it does today."
-  {:about [birth! scratch? reap! adopt-orphans! intake-kind ensure-workstream! of ws-source coordinator-report] :evidence "round"})
-
 (Claim issue-is-an-intake-entry
   "A workstream raised from a GitHub issue holds an :issue entry naming the issue: a registered kind the issue intake appends as it mints the workstream, and the backfill appends for one minted before this change. The position vocabulary reads it as an intake record, as it reads :triage and :scratch: :issue is a member of the kinds of tells an empty ledger from an illegible one by, belongs to the intent stage, and carries no position of its own, so a workstream whose only entry is its :issue places at :intake. intake-kind answers :issue from that kind. The position level reads no external ref of a workstream and calls no view function: intake-kind stops asking ws-source, and of's diagnostic :read stops reading the ticket status it reached through the workstream's Notion ref."
   {:about [poll-and-reconcile! intake-kind of coordinator-report] :evidence "round"})
@@ -71,10 +61,6 @@
 (Claim ticket-status-derived
   "A ticket's triage status is derived, never stored: status-of reads the workstream carrying it — dismissed while a dismissal stands; planning while a plan run is open or a choice to put it in progress holds; implementing once it is closed otherwise or records work past its triage; triaged once a person accepted its newest verdict, or the ticket as reported; investigating while an investigating run is open; awaiting input while a verdict waits — and nil otherwise, which is what makes it re-triable. A reopen that undoes a dismissal sets aside everything recorded before it."
   {:about [status-of] :evidence "round"})
-
-(Claim a-reply-waits-on-runs
-  "A session waits on a person's reply exactly when it is autonomous and not archived, no agent of its owning run holds that run's lock, no reply to it is queued in the executor or held as a background session's pending instruction, and its run is parked for review or the workstream's status owes a person its next move; resume and the gate's Reply read waiting-session and nothing stored."
-  {:about [waiting-session] :evidence "round"})
 
 (Claim board-stage-from-records
   "A non-bare board row's needs-you and engagement are read off its ledger closure and status. A row whose ledger closure settles it — any outcome but :between-phases — has needs-you off and engagement :settled; on any other non-bare row needs-you is whether status says a person owes the next move, and engagement is read off status."

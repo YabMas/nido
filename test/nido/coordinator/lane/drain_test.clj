@@ -1,70 +1,64 @@
 (ns nido.coordinator.lane.drain-test
-  "lane-drain: only the drain's coordinator pulls its levers and only a slice records a misfit;
-   a slice is briefed from its drain's recipe and starts only once the coordinator was given its
-   newest wake; the coordinator is kept while the drain is open, worked or not, is briefed from the
-   drain's records, answers every slice's hand-back, and is refused while that slice's misfit is
-   open; and a slice lands by its own landing Run, never before what it rests on."
+  "lane-drain: only the drain's coordinator — its conductor turn — pulls its levers and only a
+   slice's turn records a misfit; a slice is briefed from its drain's recipe and its unit opened
+   only once the coordinator heard its newest wake; and a slice lands by the person's grant,
+   never before what it rests on or its review."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [nido.boot.core :as boot]
-   [nido.coordinator.daemon.reconcile :as reconcile]
-   [nido.coordinator.executor :as executor]
-   [nido.coordinator.lane.conduct :as conduct]
-   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.drain :as lane]
    [nido.coordinator.lane.pipeline :as pipeline]
-   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.drain :as drain]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
-   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.report :as report]
    [nido.platform.core :as core]
    [nido.review.stages :as stages]
    [tasks.nido-review :as review]
    [nido.platform.project :as project]
-   [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as sstate]))
 
+(def ^:private p :brian)
+
+(def ^:dynamic ^:private *core*
+  "The fake core every test reaches through: {:states (atom {ws-id {:chat [] :inbox {}}})
+   :opened (atom [[slice unit brief]]) :landed (atom [slice])} plus the lane's `core` map."
+  nil)
+
+(defn- fake-core []
+  (let [states (atom {}) opened (atom []) landed (atom [])]
+    {:states states :opened opened :landed landed
+     :state       (fn [_ ws-id] (get @states ws-id {:chat [] :inbox {}}))
+     ;; As the core decides :post-chat: a message id already posted is refused, not posted again.
+     :post!       (fn [_ ws-id k text]
+                    (if (some #(= k (:id %)) (get-in @states [ws-id :chat]))
+                      {:refused {:reason :message-exists}}
+                      (do (swap! states update ws-id
+                                 (fn [st] (-> (or st {:chat [] :inbox {}})
+                                              (update :chat conj {:id k :from :person :text text})
+                                              (assoc-in [:inbox k] {:kind :chat :message k :text text}))))
+                          {:events [:chat-posted]})))
+     :open-slice! (fn [proj slice unit brief]
+                    (swap! opened conj [slice unit brief])
+                    (session/create! proj slice {:name unit :weight :heavy :autonomy nil}))
+     :land!       (fn [_ slice] (swap! landed conj slice) :granted)}))
+
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [core/nido-root       (constantly (str tmp))
-                       sstate/sessions-root (constantly (str (fs/path tmp "sessions")))]
-           (f))
+    (try (with-redefs [core/nido-root          (constantly (str tmp))
+                       sstate/sessions-root    (constantly (str (fs/path tmp "sessions")))
+                       project/list-projects   (fn [] {"brian" {:directory "/src/brian"}})
+                       lifecycle/session-coords (fn [n _] {:wt-path (str "/wt/" n) :instance-id "brian--ws"})]
+           (binding [*core* (fake-core)] (f)))
          (finally (fs/delete-tree tmp)))))
 
-(defmacro ^:private launching
-  "Run `body` with every side effect of starting a session stubbed, `launched` an atom collecting
-   [session-name prompt] per start."
-  [[launched] & body]
-  `(let [~launched (atom [])]
-     (with-redefs [lifecycle/up!             (fn [~'_ ~'_] nil)
-                   lifecycle/runtime-of      (fn [~'_ ~'_] {:instance-id "brian--ws" :key "ws"})
-                   lifecycle/session-coords  (fn [n# ~'_] {:wt-path (str "/wt/" n#) :instance-id "brian--ws"})
-                   launcher/session-briefing (fn [~'& ~'_] "briefing")
-                   launcher/nido-add-dirs    (fn [] [])
-                   project/list-projects     (fn [] {"brian" {:directory "/src/brian"}})
-                   conduct/start!            (fn [o#]
-                                               (swap! ~launched conj [(:session-name o#) (:prompt o#)])
-                                               (session/update-substrate! (:project o#) (:ws-id o#) (:session-name o#)
-                                                                          (fn [m#] (assoc m# :dispatching {:token "t" :at "now"})))
-                                               {})
-                   conduct/retire!           (fn [~'& ~'_] nil)
-                   conduct/live-states       (fn [~'_] {})]
-       ~@body)))
+(defn- in-turn
+  "Run `f` as if from inside a core turn on brian's workstream `ws-id` (nil: outside every turn)."
+  [ws-id f]
+  (with-redefs-fn {#'lane/turn-ws (fn [] (when ws-id ["brian" ws-id]))} f))
 
-(defn- in-session
-  "Run `f` as if from inside brian's nido session `n`, or outside every session for nil."
-  [n f]
-  (with-redefs [lifecycle/session-from-cwd (fn [& _] (when n {:project "brian" :session n}))
-                lifecycle/session-home-coords-from-cwd (fn [& _] nil)]
-    (f)))
-
-(def ^:private p :brian)
+(defn- start-slice! [d plan] (#'lane/start-slice! *core* p d plan))
 
 (def ^:private a-recipe
   {:steps ["move each call site behind the owning door"]
@@ -76,13 +70,13 @@
   (try (f) nil (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))
 
 (defn- coordinated-drain
-  "A drain with an approved recipe, a census of 4 and its coordinator started. [drain conductor]."
+  "A drain with an approved recipe and a census of 4. [drain drain] — the second is the workstream
+   its coordinator's turns run on."
   []
   (let [d (drain/start-drain! p {:established-by {:commit "abcdef1"} :exit "wrap-conn deleted"})]
     (drain/approve-recipe! p d (drain/propose-recipe! p d {:reason "r" :recipe a-recipe}))
     (drain/record-census! p d {:recipe (drain/version (ws/read-ws p d)) :remaining 4 :groups []})
-    (launching [_] (conductor/conductors! p :unread))
-    [d (str d "--conductor")]))
+    [d d]))
 
 (defn- passed-review!
   "Slice `slice`'s review under its recipe version, passed — its recipe's ready gates judged."
@@ -108,23 +102,13 @@
   (passed-review! slice)
   (ws/append-entry! p slice {:kind :closed} (pr-str {:format :closed :outcome :done :note "landed"})))
 
-(defn- deliver-wakes! [d]
-  (lane/wakes! p)
-  (doseq [m (seats/traffic p d 1) :when (= :wake (:kind m))]
-    (seats/delivered! p d (:id m) "tok")))
+(defn- wakes [d] (filterv #(str/starts-with? (str (:id %)) "wake:") (:chat ((:state *core*) p d))))
 
-(deftest a-drains-coordinator-is-kept-whether-or-not-anyone-typed
-  (with-tmp
-    (fn []
-      (let [d (drain/start-drain! p {:established-by {:commit "abcdef1"} :exit "x"})]
-        (launching [launched]
-          (is (= [{:ws-id d :act :started :session (str d "--conductor")}]
-                 (conductor/conductors! p :unread))
-              "an open drain's coordinator starts though the prompt log is unread and nobody typed")
-          (is (str/includes? (second (first @launched)) "You coordinate drain")
-              "briefed with the coordinator brief")
-          (is (str/includes? (second (first @launched)) "Charter: established by")
-              "composed from the drain's records"))))))
+(defn- deliver-wakes!
+  "Post every wake owed and let the coordinator's turn hear them."
+  [d]
+  (lane/wakes! p *core*)
+  (swap! (:states *core*) assoc-in [d :inbox] {}))
 
 (deftest only-the-coordinator-pulls-a-lever
   (with-tmp
@@ -132,266 +116,80 @@
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
             a-plan {:sites ["a"] :rests-on [] :census census}]
-        (is (= :not-the-coordinator (refused #(in-session nil (fn [] (lane/plan! p d a-plan))))))
-        (is (= :not-the-coordinator (refused #(in-session "someone-else" (fn [] (lane/plan! p d a-plan))))))
-        (is (int? (in-session c #(lane/plan! p d a-plan))))))))
+        (is (= :not-the-coordinator (refused #(in-turn nil (fn [] (lane/plan! p d a-plan))))))
+        (is (= :not-the-coordinator (refused #(in-turn "ws-else" (fn [] (lane/plan! p d a-plan))))))
+        (is (int? (in-turn c #(lane/plan! p d a-plan))))))))
 
-(deftest a-slice-starts-once-the-coordinator-has-its-newest-wake
+(deftest a-slice-starts-once-the-coordinator-heard-its-newest-wake
   (with-tmp
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["src/a.clj"] :rests-on [] :census census}))]
-        (is (lane/wake-pending? p d) "the census's wake is not yet posted")
-        (lane/wakes! p)
-        (is (= 1 (count (filter #(= :wake (:kind %)) (seats/traffic p d 1)))))
-        (lane/wakes! p)
-        (is (= 1 (count (filter #(= :wake (:kind %)) (seats/traffic p d 1)))) "posted once per event")
-        (is (= :wake-pending (refused #(lane/start-slice! p d plan))) "posted is not delivered")
+            plan   (in-turn c #(lane/plan! p d {:sites ["src/a.clj"] :rests-on [] :census census}))]
+        (is (lane/wake-pending? p d *core*) "the census's wake is not yet posted")
+        (lane/wakes! p *core*)
+        (is (= 1 (count (wakes d))))
+        (is (str/includes? (:text (first (wakes d))) "You coordinate drain") "a wake carries the coordinator brief")
+        (lane/wakes! p *core*)
+        (is (= 1 (count (wakes d))) "posted once per event")
+        (is (= :wake-pending (refused #(start-slice! d plan))) "posted is not heard")
         (deliver-wakes! d)
-        (launching [launched]
-          (let [{:keys [slice session]} (lane/start-slice! p d plan)
-                brief (second (first @launched))]
-            (is (= session (first (first @launched))))
-            (is (str/includes? brief "move each call site behind the owning door") "the recipe's steps, verbatim")
-            (is (str/includes? brief "bb test green") "its ready gates")
-            (is (str/includes? brief "src/a.clj") "the plan it started from")
-            (is (drain/slice? (ws/read-ws p slice)))))))))
+        (let [{:keys [slice session]} (start-slice! d plan)
+              [[s unit brief]] @(:opened *core*)]
+          (is (= [slice session] [s unit]))
+          (is (= (str slice "--slice-g1") unit))
+          (is (str/includes? brief "move each call site behind the owning door") "the recipe's steps, verbatim")
+          (is (str/includes? brief "bb test green") "its ready gates")
+          (is (str/includes? brief "src/a.clj") "the plan it started from")
+          (is (drain/slice? (ws/read-ws p slice))))))))
 
-(deftest only-a-slice-records-a-misfit-and-its-coordinator-answers-first
+(deftest only-a-slice-records-a-misfit
   (with-tmp
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            plan   (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
             _      (deliver-wakes! d)
-            {:keys [slice session]} (launching [_] (lane/start-slice! p d plan))]
-        (is (= :not-a-slice (refused #(in-session c (fn [] (lane/misfit! p d {:site "x" :note "y"})))))
-            "the coordinator records no misfit")
-        (let [{m :misfit} (in-session session #(lane/misfit! p {:site "src/a.clj:9" :note "job shape"}))
-              hb (:id (first (conductor/hand-backs! {:turn-ends [{:project p :ws-id slice :session session
-                                                                  :event {:last-message "misfit at a:9"}
-                                                                  :instruction {:token "t1"} :run nil}]})))
-              go {:hand-back hb :decision [:instruct [{:slice slice :seat 1 :text "carry on"}]]}]
-          (testing "a slice's hand-back is posted to its drain's coordinator, naming the slice"
-            (let [msg (first (filter #(= hb (:id %)) (seats/traffic p d 1)))]
-              (is (= slice (:slice msg)))
-              (is (= :conductor (:to msg)))))
-          (is (= [:refused :open-misfit] (in-session c #(conductor/decide! p d go))))
-          (in-session c #(lane/answer-misfit! p d m {:as :carved :site "src/a.clj:9" :disposition {:to :closing}}))
-          (is (= :accepted (first (in-session c #(conductor/decide! p d go)))))
-          (is (= ["carry on"] (mapv :text (filter #(= :instruction (:kind %)) (seats/traffic p slice 1))))
-              "the instruction reaches the slice's own seat"))))))
+            {:keys [slice]} (start-slice! d plan)]
+        (is (= :not-a-slice (refused #(in-turn c (fn [] (lane/misfit! p {:site "a" :note "n"}))))))
+        (is (= d (:drain (in-turn slice #(lane/misfit! p {:site "a" :note "odd"})))))))))
 
-(deftest no-blocker-opens-on-a-slice-between-its-check-and-the-decision
-  ;; A slice's blocker opened by another writer while the drain's decision is being recorded:
-  ;; the slice's own append lock is held from its check through the drain's appends, so that
-  ;; writer waits until the decision is taken, and the decision was made on an unblocked slice.
+(deftest a-slice-whose-unit-failed-to-open-keeps-its-plan-consumed
   (with-tmp
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            plan   (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
             _      (deliver-wakes! d)
-            {:keys [slice session]} (launching [_] (lane/start-slice! p d plan))
-            hb     (:id (first (conductor/hand-backs! {:turn-ends [{:project p :ws-id slice :session session :event {}
-                                                                    :instruction {:token "t1"} :run nil}]})))
-            payload report/entry-payload
-            raced  (atom nil)
-            writer (atom nil)]
-        (with-redefs [report/entry-payload
-                      (fn [kind content]
-                        (when (and (= :conduct-decision kind) (nil? @writer))
-                          (reset! writer (future (ws/append-entry! p slice {:kind :blocker}
-                                                                   (pr-str {:format :blocker :summary "s" :needs "n?" :after "a"}))))
-                          (reset! raced (deref @writer 1500 ::waited)))
-                        (payload kind content))]
-          (let [r (in-session c #(conductor/decide! p d {:hand-back hb :decision [:instruct [{:slice slice :seat 1 :text "go"}]]}))]
-            @@writer
-            (is (some? @writer) "the other writer ran")
-            (is (or (= [:refused :blocked] r) (= ::waited @raced))
-                "the slice's blocker landed only once the decision was taken")))))))
+            e      (binding [*core* (assoc *core* :open-slice! (fn [& _] (throw (ex-info "the core refused" {}))))]
+                     (try (start-slice! d plan) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))]
+        (is (= :seat-failed (:reason e)) "the slice was made; its unit, not its plan, failed")
+        (is (empty? (drain/refused-plans (ws/read-ws p d))) "a consumed plan is not recorded refused")))))
 
-(deftest an-instruction-to-a-slice-behind-the-recipe-carries-its-brief
+(deftest a-slice-lands-by-the-persons-grant-after-what-it-rests-on
   (with-tmp
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            b      (in-turn c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
             _      (deliver-wakes! d)
-            {:keys [slice session]} (launching [_] (lane/start-slice! p d plan))
-            v2     (drain/approve-recipe! p d (in-session c #(lane/propose! p d {:reason "amend"
-                                                                                 :recipe (assoc a-recipe :steps ["the amended step"])})))
-            hb     (:id (first (conductor/hand-backs! {:turn-ends [{:project p :ws-id slice :session session :event {}
-                                                                    :instruction {:token "t1"} :run nil}]})))]
-        (in-session c #(conductor/decide! p d {:hand-back hb :decision [:instruct [{:slice slice :seat 1 :text "go"}]]}))
-        (is (= v2 (drain/slice-version (ws/read-ws p slice))) "the slice moved to the current version")
-        (is (str/includes? (:text (first (filter #(= :instruction (:kind %)) (seats/traffic p slice 1))))
-                           "the amended step"))))))
-
-(deftest a-slice-lands-by-its-own-run-after-what-it-rests-on
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            b      (in-session c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
-            _      (deliver-wakes! d)
-            sa     (:slice (launching [_] (lane/start-slice! p d a)))
-            sb     (:slice (launching [_] (with-redefs [lane/jj-repo? (constantly true)
-                                                        lane/sh (fn [_ _] {:exit 0 :out "" :err ""})]
-                                            (lane/start-slice! p d b))))
-            submitted (atom [])]
-        (with-redefs [executor/submit! (fn [& args] (swap! submitted conj args))]
-          (is (= :rests-unlanded (refused #(lane/land! p sb))) "b rests on a, which has not landed")
-          (is (= :not-ready (refused #(lane/land! p sa)))
-              "nor before its review under its recipe version passed: an override waives no ready gate")
-          (passed-review! sa)
-          (let [run (lane/land! p sa)]
-            (is (:override (:event-payload run)) "a landing of an uncleared slice is the person's override")
-            (is (= sa (:workstream-id run)))
-            (is (not= :merge (:trigger run)) "never the serial merge lane")
-            (is (= [] @submitted) "not this process's executor, which nobody ticks after a CLI exits")
-            (is (= [{:type :submit-run :run-id (:id run)}]
-                   (mapv #(select-keys (read-string (slurp (str %))) [:type :run-id])
-                         (fs/glob (cstate/queue-dir) "*.edn")))
-                "handed to the daemon on its durable queue")
-            (is (= :landing-in-flight (refused #(lane/land! p sa)))))
-          (in-session c #(lane/clear! p d sb []))
-          (landed! sa)
-          (passed-review! sb)
-          (is (not (:override (:event-payload (lane/land! p sb)))) "a cleared slice is no override"))
-        (is (= 2 (count (filter #(str/includes? % "-drain-land-") (runs/list-run-ids)))))))))
-
-(deftest a-newer-unresolved-review-withdraws-an-older-pass
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            sa     (:slice (launching [_] (lane/start-slice! p d a)))
-            done   (pr-str {:format :closed :outcome :done :by :person})]
+            sa     (:slice (start-slice! d a))
+            sb     (:slice (with-redefs [lane/jj-repo? (constantly true)
+                                         lane/sh (fn [_ _] {:exit 0 :out "" :err ""})]
+                             (start-slice! d b)))]
+        (is (= :rests-unlanded (refused #(lane/land! *core* p sb))) "b rests on a, which has not landed")
+        (is (= :not-ready (refused #(lane/land! *core* p sa)))
+            "nor before its review under its recipe version passed: an override waives no ready gate")
         (passed-review! sa)
-        (unresolved-review! sa)
-        (is (= :not-ready (refused #(lane/land! p sa))) "its newest review under the version left findings")
-        (is (= :not-ready (refused #(ws/append-entry! p sa {:kind :closed} done))) "nor is its landing recorded")
-        (passed-review! sa)
-        (is (some? (ws/append-entry! p sa {:kind :closed} done)) "passed again, it lands")))))
-
-(deftest a-slice-landing-run-settles-from-the-slices-own-records
-  ;; Its /drive-home turn ends with no :complete status written: the merge lane's settle reads a
-  ;; ticket ledger a slice has none of, and would park a landing that reached main as failed.
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            b      (in-session c #(lane/plan! p d {:sites ["b"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            sa     (:slice (launching [_] (lane/start-slice! p d a)))
-            sb     (:slice (launching [_] (lane/start-slice! p d b)))
-            _      (passed-review! sa)
-            _      (passed-review! sb)
-            ra     (:id (lane/land! p sa))
-            rb     (:id (lane/land! p sb))
-            end!   (fn [rid] (runs/transition! rid :running)
-                     (#'boot/settle-turn-ends! {:turn-ends [{:project p :ws-id (:workstream-id (runs/read-run rid))
-                                                             :session (:session-name (runs/read-run rid))
-                                                             :event {} :instruction {:for rid}}]}))]
-        (ws/append-entry! p sa {:kind :closed} (pr-str {:format :closed :outcome :done :note "landed"}))
-        (end! ra)
-        (is (= :done (:state (runs/read-run ra))) "landed: the landing is done")
-        (end! rb)
-        (is (= :awaiting-review (:state (runs/read-run rb))) "not landed: a failed landing")
-        (lane/wakes! p)
-        (is (= [(str "The landing of slice " sb " (Run " rb ") did not finish: awaiting-review.")]
-               (filterv #(str/starts-with? % "The landing") (map :text (seats/traffic p d 1))))
-            "only the failed landing wakes the coordinator as failed")))))
-
-(deftest a-slice-landing-run-a-restart-finds-is-read-from-the-slice
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            sa     (:slice (launching [_] (lane/start-slice! p d a)))
-            _      (passed-review! sa)
-            ra     (:id (lane/land! p sa))]
-        (runs/write-run! (assoc (runs/read-run ra) :session-name "no-such-session"))
-        (runs/transition! ra :running)
-        (ws/append-entry! p sa {:kind :closed} (pr-str {:format :closed :outcome :done :note "landed"}))
-        (#'reconcile/reconcile-one! ra)
-        (is (= :done (:state (runs/read-run ra))) "a landing that reached main before the restart is done")))))
-
-(deftest a-slice-has-no-conductor-and-its-acts-are-the-persons
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            {:keys [slice]} (launching [_] (lane/start-slice! p d plan))]
-        (launching [launched]
-          (conductor/conductors! p :unread)
-          (is (not-any? #(= (str slice "--conductor") (first %)) @launched) "no conductor starts on a slice"))
-        (doseq [task ["nido:drain:approve" "nido:drain:land" "nido:drain:close" "nido:drain:start"]]
-          (is (contains? @#'conductor/person-tasks task) (str task " is a person's act")))))))
-
-(deftest a-start-given-turn-in-a-slices-session-is-answered-for-by-the-conductor
-  ;; `nido:session:spawn` on an existing slice, from a person's turn, marks its instruction
-  ;; :given-by :start; the slice's class, not that marker, says who answers for the turn.
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            {:keys [slice]} (launching [_] (lane/start-slice! p d plan))
-            given  {:pending {:token "tok-1" :given-by :start} :session-id "conv-1"}
-            answered? (fn [s] (with-redefs [conductor/turn-prompt (fn [_] {:prompt "[nido-send tok-1] go"})]
-                                (#'conductor/answering-for-conductor? s nil)))]
-        (is (true? (answered? {:project p :workstream-id slice :claude given}))
-            "a slice's turn nido gave for no Run is the conductor's, whatever marker it carries")
-        (is (false? (answered? {:project p :workstream-id (:id (ws/create! p {})) :claude given}))
-            "a start's instruction on any other workstream stays the person's")))))
-
-(deftest a-slice-whose-seat-failed-at-its-start-is-reseated
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            e      (launching [_]
-                     (with-redefs-fn {#'lane/occupy-slice-on! (fn [& _] (throw (ex-info "bookmark create failed"
-                                                                                       {:reason :base-failed})))}
-                       #(try (lane/start-slice! p d plan) nil (catch clojure.lang.ExceptionInfo e (ex-data e)))))
-            slice  (:ws-id e)]
-        (is (= :seat-failed (:reason e)) "the slice was made; its seat, not its plan, failed")
-        (is (empty? (drain/refused-plans (ws/read-ws p d))) "a consumed plan is not recorded refused")
-        (launching [launched]
-          (conductor/reseat! p slice :unread)
-          (is (= [(str slice "--slice-g1")] (mapv first @launched))
-              "a slice never carried is seated by the next pass, whoever typed"))))))
-
-(deftest a-slice-seated-after-its-recipe-moved-is-rebased-before-it-is-briefed
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            slice  (:ws-id (launching [_]
-                             (with-redefs-fn {#'lane/occupy-slice-on! (fn [& _] (throw (ex-info "bookmark create failed" {})))}
-                               #(try (lane/start-slice! p d plan) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))))
-            v2     (drain/approve-recipe! p d (drain/propose-recipe! p d {:reason "r2" :recipe (assoc a-recipe :steps ["the new step"])}))]
-        (launching [launched]
-          (conductor/reseat! p slice :unread)
-          (is (= v2 (drain/slice-version (ws/read-ws p slice)))
-              "the slice records the version its recovered session is briefed under")
-          (is (str/includes? (second (first @launched)) "the new step")))))))
+        (let [r (lane/land! *core* p sa)]
+          (is (= {:slice sa :override? true :granted :granted} r)
+              "a landing of an uncleared slice is the person's override, granted in the core"))
+        (in-turn c #(lane/clear! p d sb []))
+        (landed! sa)
+        (passed-review! sb)
+        (is (false? (:override? (lane/land! *core* p sb))) "a cleared slice is no override")
+        (is (= [sa sb] @(:landed *core*)))))))
 
 (defn- repo-stub
   "A `sh` stub answering the repository calls a start on rested-on work makes, recording each argv."
@@ -407,21 +205,37 @@
           (some #{"commit-tree"} argv) {:exit 0 :out "merged-sha\n" :err ""}
           :else                        {:exit 0 :out "" :err ""})))
 
+(deftest a-newer-unresolved-review-withdraws-an-older-pass
+  (with-tmp
+    (fn []
+      (let [[d c] (coordinated-drain)
+            census (:seq (drain/newest-census (ws/read-ws p d)))
+            a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            _      (deliver-wakes! d)
+            sa     (:slice (start-slice! d a))
+            done   (pr-str {:format :closed :outcome :done :by :person})]
+        (passed-review! sa)
+        (unresolved-review! sa)
+        (is (= :not-ready (refused #(lane/land! *core* p sa))) "its newest review under the version left findings")
+        (is (= :not-ready (refused #(ws/append-entry! p sa {:kind :closed} done))) "nor is its landing recorded")
+        (passed-review! sa)
+        (is (some? (ws/append-entry! p sa {:kind :closed} done)) "passed again, it lands")))))
+
 (deftest a-slice-on-top-of-work-that-cannot-be-snapshotted-is-not-started
   (with-tmp
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            b      (in-session c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
+            a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            b      (in-turn c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
             _      (deliver-wakes! d)
-            _      (launching [_] (lane/start-slice! p d a))
+            _      (start-slice! d a)
             stub   (repo-stub (atom []))]
         (with-redefs [lane/jj-repo? (constantly true)
                       lane/sh (fn [dir argv] (if (= ["jj" "status"] argv)
                                                {:exit 1 :out "" :err "The working copy is stale"}
                                                (stub dir argv)))]
-          (is (= :base-failed (refused #(launching [_] (lane/start-slice! p d b))))
+          (is (= :base-failed (refused #(start-slice! d b)))
               "a stale snapshot is no reading of the work it rests on")
           (is (= 1 (count (drain/slices (ws/read-ws p d)))) "and no slice is made"))))))
 
@@ -430,16 +244,16 @@
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            b      (in-session c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
+            a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            b      (in-turn c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
             _      (deliver-wakes! d)
-            _      (launching [_] (lane/start-slice! p d a))
+            _      (start-slice! d a)
             stub   (repo-stub (atom []))]
         (with-redefs [lane/jj-repo? (constantly false)
                       lane/sh (fn [dir argv] (if (some #{"--porcelain"} argv)
                                                {:exit 0 :out " M src/a.clj\n" :err ""}
                                                (stub dir argv)))]
-          (is (= :base-uncommitted (refused #(launching [_] (lane/start-slice! p d b))))
+          (is (= :base-uncommitted (refused #(start-slice! d b)))
               "uncommitted edits are never left out of the work a slice starts on")
           (is (= 1 (count (drain/slices (ws/read-ws p d)))) "and no slice is made")
           (is (empty? (drain/refused-plans (ws/read-ws p d)))
@@ -452,16 +266,16 @@
         (fn []
           (let [[d c] (coordinated-drain)
                 census (:seq (drain/newest-census (ws/read-ws p d)))
-                a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-                a2     (in-session c #(lane/plan! p d {:sites ["a2"] :rests-on [] :census census}))
-                b      (in-session c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
-                m      (in-session c #(lane/plan! p d {:sites ["m"] :rests-on [a a2] :start :on-top :census census}))
+                a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+                a2     (in-turn c #(lane/plan! p d {:sites ["a2"] :rests-on [] :census census}))
+                b      (in-turn c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :on-top :census census}))
+                m      (in-turn c #(lane/plan! p d {:sites ["m"] :rests-on [a a2] :start :on-top :census census}))
                 _      (deliver-wakes! d)
-                {sa :slice na :session} (launching [_] (lane/start-slice! p d a))
-                {na2 :session}          (launching [_] (lane/start-slice! p d a2))
+                {sa :slice na :session} (start-slice! d a)
+                {na2 :session}          (start-slice! d a2)
                 calls  (atom [])]
             (with-redefs [lane/jj-repo? (constantly jj?) lane/sh (repo-stub calls)]
-              (let [{nb :session} (launching [_] (lane/start-slice! p d b))]
+              (let [{nb :session} (start-slice! d b)]
                 (is (some #(= (if jj?
                                 ["jj" "--ignore-working-copy" "bookmark" "create" nb "-r" (str "commit-of-" na "@")]
                                 ["git" "branch" nb (str "sha-refs/heads/" na)])
@@ -469,7 +283,7 @@
                           @calls)
                     "one rested-on slice: the session starts on its work"))
               (reset! calls [])
-              (let [{nm :session} (launching [_] (lane/start-slice! p d m))]
+              (let [{nm :session} (start-slice! d m)]
                 (is (some #(= (if jj?
                                 ["jj" "--ignore-working-copy" "bookmark" "create" nm "-r" "commit-of-kzmerge"]
                                 ["git" "branch" nm "merged-sha"])
@@ -477,27 +291,27 @@
                           @calls)
                     "several: a merge of their work")))
             (testing "a merge that conflicts is refused before the slice is made, and wakes the coordinator once"
-              (let [x  (in-session c #(lane/plan! p d {:sites ["x"] :rests-on [a a2] :start :on-top :census census}))
+              (let [x  (in-turn c #(lane/plan! p d {:sites ["x"] :rests-on [a a2] :start :on-top :census census}))
                     n  (count (drain/slices (ws/read-ws p d)))
                     st (repo-stub (atom []))]
                 (deliver-wakes! d)
                 (with-redefs [lane/jj-repo? (constantly false)
                               lane/sh (fn [dir argv] (if (some #{"merge-tree"} argv) {:exit 1 :out "CONFLICT" :err ""} (st dir argv)))]
-                  (is (= :base-failed (refused #(launching [_] (lane/start-slice! p d x)))))
-                  (dotimes [_ 2] (lane/handle-fire! {:what :start-slice :project "brian" :drain d :plan x
+                  (is (= :base-failed (refused #(start-slice! d x))))
+                  (dotimes [_ 2] (lane/handle-fire! *core* {:what :start-slice :project "brian" :drain d :plan x
                                                      :id (str d "/start/" x)})))
                 (is (= n (count (drain/slices (ws/read-ws p d)))))
                 (is (= #{x} (drain/refused-plans (ws/read-ws p d)))
                     "recorded refused once, so source-drain fires it no more")
                 (is (= 1 (count (ws/entries-of p d :start-refused))))
-                (is (= 1 (count (filter #(str/includes? (str (:text %)) "cannot be started") (seats/traffic p d 1)))))))
+                (is (= 1 (count (filter #(str/includes? (str (:text %)) "cannot be started") (wakes d)))))))
             (testing "a landed slice is on main: nothing to start on"
               (landed! sa)
-              (let [b2 (in-session c #(lane/plan! p d {:sites ["b2"] :rests-on [a] :start :on-top :census census}))
+              (let [b2 (in-turn c #(lane/plan! p d {:sites ["b2"] :rests-on [a] :start :on-top :census census}))
                     calls (atom [])]
                 (deliver-wakes! d)
                 (with-redefs [lane/sh (fn [_ argv] (swap! calls conj argv) {:exit 0 :out "" :err ""})]
-                  (launching [_] (lane/start-slice! p d b2)))
+                  (start-slice! d b2))
                 (is (= [] @calls))))))))))
 
 (deftest a-newer-census-wakes-even-after-a-landing-was-delivered
@@ -505,14 +319,14 @@
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
             _      (deliver-wakes! d)
-            sa     (:slice (launching [_] (lane/start-slice! p d a)))]
+            sa     (:slice (start-slice! d a))]
         (landed! sa)
         (deliver-wakes! d)
-        (is (not (lane/wake-pending? p d)))
+        (is (not (lane/wake-pending? p d *core*)))
         (drain/record-census! p d {:recipe (drain/version (ws/read-ws p d)) :remaining 3 :groups []})
-        (is (lane/wake-pending? p d) "the new census's wake is not yet delivered")))))
+        (is (lane/wake-pending? p d *core*) "the new census's wake is not yet delivered")))))
 
 (deftest every-census-recorded-between-passes-gets-its-wake
   (with-tmp
@@ -522,11 +336,10 @@
         (deliver-wakes! d)
         (drain/record-census! p d {:recipe v :remaining 3 :groups []})
         (drain/record-census! p d {:recipe v :remaining 2 :groups []})
-        (lane/wakes! p)
+        (lane/wakes! p *core*)
         (is (= #{"3 remaining." "2 remaining."}
-               (set (for [m (seats/traffic p d 1)
-                          :when (= :wake (:kind m))
-                          :let [t (re-find #"[32] remaining\.$" (:text m))]
+               (set (for [m (wakes d)
+                          :let [t (re-find #"[32] remaining\." (:text m))]
                           :when t]
                       t)))
             "neither census of the two is lost to the newer")))))
@@ -565,36 +378,14 @@
           (is (= :closed (refused #(lane/close! p d))) "a closed drain is not closed again")
           (is (= n (count (:entries (ws/read-ws p d))))))))))
 
-(deftest approving-a-recipe-leaves-nothing-open-from-an-escalation-at-it
-  (with-tmp
-    (fn []
-      (let [[d c] (coordinated-drain)
-            census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            _      (deliver-wakes! d)
-            {:keys [slice session]} (launching [_] (lane/start-slice! p d plan))
-            proposal (in-session c #(lane/propose! p d {:reason "amend" :recipe (assoc a-recipe :steps ["s2"])}))
-            hb     (:id (first (conductor/hand-backs! {:turn-ends [{:project p :ws-id slice :session session :event {}
-                                                                    :instruction {:token "t1"} :run nil}]})))
-            [v _]  (in-session c #(conductor/decide! p d {:hand-back hb
-                                                          :decision [:escalate {:needs "approve the amended recipe?"
-                                                                                :summary "the recipe needs a second step"
-                                                                                :after "slices move to it"}]}))]
-        (is (= :accepted v))
-        (is (empty? (ws/entries-of p d :blocker)) "an escalation at the person's own step parks no blocker")
-        (drain/approve-recipe! p d proposal)
-        (conductor/answers! p)
-        (is (not (#{:recipe-proposed :blocked} (:at (pipeline/of p d))))
-            "approved, the drain moves on: nothing left open holds it")))))
-
 (deftest a-slice-is-reviewed-against-its-recipe-version-and-plan
   (with-tmp
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            plan   (in-session c #(lane/plan! p d {:sites ["src/a.clj"] :rests-on [] :census census}))
+            plan   (in-turn c #(lane/plan! p d {:sites ["src/a.clj"] :rests-on [] :census census}))
             _      (deliver-wakes! d)
-            {:keys [slice]} (launching [_] (lane/start-slice! p d plan))
+            {:keys [slice]} (start-slice! d plan)
             v      (drain/slice-version (ws/read-ws p slice))]
         (with-redefs [stages/project+ws-from-cwd (fn [_] [p slice])]
           (let [y (stages/discover-design-record "/wt")]
@@ -616,12 +407,12 @@
     (fn []
       (let [[d c] (coordinated-drain)
             census (:seq (drain/newest-census (ws/read-ws p d)))
-            a      (in-session c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
-            b      (in-session c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :after-landing :census census}))
+            a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            b      (in-turn c #(lane/plan! p d {:sites ["b"] :rests-on [a] :start :after-landing :census census}))
             _      (deliver-wakes! d)
-            sa     (:slice (launching [_] (lane/start-slice! p d a)))
-            sb     (:slice (launching [_] (lane/start-slice! p d b)))
-            sc     (:slice (launching [_] (lane/start-slice! p d (in-session c #(lane/plan! p d {:sites ["c"] :rests-on [] :census census})))))
+            sa     (:slice (start-slice! d a))
+            sb     (:slice (start-slice! d b))
+            sc     (:slice (start-slice! d (in-turn c #(lane/plan! p d {:sites ["c"] :rests-on [] :census census}))))
             done   (pr-str {:format :closed :outcome :done :by :person})]
         (is (= :not-ready (refused #(ws/append-entry! p sa {:kind :closed} done))) "no review under its version")
         (passed-review! sb)
@@ -629,3 +420,4 @@
         (landed! sa)
         (is (some? (ws/close! p sb :done nil :person)))
         (is (some? (ws/close! p sc :dropped nil :person)) "a slice given up on closes without either")))))
+

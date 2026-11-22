@@ -2,20 +2,16 @@
   "A person starting work: a session brought up on its workstream, and a ticket started at the
    click.
 
-   A person's start of a ticket is an ACT, carried out when they click, not a request the daemon
-   fulfils later. It is not a Run: a Run is work nido starts and finishes on its own, and nothing
-   a person started waits behind the Run cap, a trigger's breaker or a budget. The workstream is
-   activated by the start itself — that is what hands it to nido's recipe — and the conductor the
-   activation grants takes it from there.
+   A person's start of a ticket is an ACT, carried out when they click, not a request nido
+   fulfils later. This is its work-record half: what the ticket says and where it stands. The
+   coordination half — the workstream's unit opened in the core, which provisions its session —
+   is the work plane's, which calls this first.
 
    HIDES what a start consists of: the order its ledger writes land in (the ticket's own words
    first, so nothing the start appends can make the transcription look already done), which
-   source the brief is read from, the project's Notion properties a start writes, and how the
-   impl session is named, brought up and carried."
+   source the brief is read from, and the project's Notion properties a start writes."
   (:require
-   [clojure.string :as str]
    [nido.coordinator.lane.brief :as brief]
-   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.tickets :as tickets]
@@ -33,54 +29,27 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :WorkstreamId]}
   start-session!
   "Bring the session `session-name` up on the workstream holding it — or, given `:ws-id`, on that
-   one; else on a minted one-off — and on that workstream's runtime, then carry it when this
-   start first recorded it — or, given `:carry? true`, whether or not it did. Heavy and slow:
-   surfaces wrap it in their own progress UI. Returns the ws-id.
+   one; else on a minted one-off — and on that workstream's runtime. Heavy and slow: surfaces wrap
+   it in their own progress UI. Returns the ws-id.
 
-   `opts` are lifecycle/up!'s, plus `:ws-id`, `:carry?`, and `:brief`, `:model` and `:given-by`
-   for the carry (`conductor/carry!`; :given-by defaults to :start, a person's). The carry takes
-   the whole seat only when it is free and no ids are fixed, so a session already recorded is
-   carried only where nobody else works. The workstream is
-   settled BEFORE up! so the session comes up on its runtime at once, and its weight read back
-   AFTER, from what up! really provisioned. A failure to carry leaves the session up and
-   undriven, and says so on stderr; it never fails the start. Callers check
-   `scratch/joinable` first when a named workstream may refuse the session."
+   `opts` are lifecycle/up!'s, plus `:ws-id`. The workstream is settled BEFORE up! so the session
+   comes up on its runtime at once, and its weight read back AFTER, from what up! really
+   provisioned. Callers check `scratch/joinable` first when a named workstream may refuse the
+   session."
   [project session-name opts]
-  (let [p        (keyword (name project))
-        {:keys [ws-id carry? brief model given-by] :or {given-by :start}} opts
-        up-opts  (-> (dissoc opts :ws-id :carry? :brief :model :given-by)
-                     (assoc :project (name project)))
-        first?   (nil? (csession/workstream-id-for p session-name))
-        held-by  (scratch/birth! p session-name nil ws-id)]
+  (let [p       (keyword (name project))
+        ws-id   (:ws-id opts)
+        up-opts (-> (dissoc opts :ws-id) (assoc :project (name project)))
+        held-by (scratch/birth! p session-name nil ws-id)]
     (lifecycle/up! session-name (assoc up-opts :runtime-key held-by))
-    (let [held-by (scratch/birth! p session-name (lifecycle/session-weight session-name up-opts) held-by)]
-      (when (or first? carry?)
-        (try (conductor/carry! p held-by session-name brief model given-by)
-             (catch Throwable t
-               (warn (str session-name " is up but was not carried — " (ex-message t))))))
-      held-by)))
+    (scratch/birth! p session-name (lifecycle/session-weight session-name up-opts) held-by)))
 
 ;; ── the ticket a workstream carries ─────────────────────────────────────────
 
 (defn- notion-ref [w] (some #(when (= :notion (:adapter %)) %) (:external-refs w)))
 (defn- github-ref [w] (some #(when (= :github-issue (:adapter %)) %) (:external-refs w)))
 
-(defn- slugify
-  "Lower-case `s` into a `-`-delimited alphanumeric slug, capped near 40 characters on a word
-   boundary."
-  [s]
-  (let [base (-> (str s) str/lower-case (str/replace #"[^a-z0-9]+" "-") (str/replace #"^-+|-+$" ""))]
-    (if (<= (count base) 40)
-      base
-      (let [cut (subs base 0 40) at (str/replace cut #"-[^-]*$" "")]
-        (if (seq at) at cut)))))
 
-(defn- impl-session-name
-  "`impl-<ref-slug>[-<title-slug>]` — e.g. \"impl-br-4659-firefox-loading\". The name a ticket's
-   impl session has always had, so a ticket started again finds the session it already has."
-  [ref-id title]
-  (let [t (some-> title slugify)]
-    (str "impl-" (slugify ref-id) (when (seq t) (str "-" t)))))
 
 (defn- issue-parts
   "\"owner/repo#42\" → [\"owner/repo\" 42]."
@@ -151,21 +120,19 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName
                              [:or [:map [:ws-id :WorkstreamId]]
                                   [:map [:ref [:map [:adapter [:enum :notion :github-issue]] [:id :string]]]]]]
-                       [:or [:map [:decision [:enum :started]] [:ws-id :WorkstreamId] [:session :SessionName]]
-                            [:map [:decision [:enum :no-such-workstream :closed :name-held :ticket-unreadable]]]]]}
+                       [:or [:map [:decision [:enum :started]] [:ws-id :WorkstreamId]]
+                            [:map [:decision [:enum :no-such-workstream :closed :ticket-unreadable]]]]]}
   start-ticket!
   "A person starts a ticket's workstream, `start` being {:ws-id} or {:ref {:adapter :notion :id
    <BR-####>}} — already resolved by the surface lane that took their input, which is where the
    input is trusted. In order: transcribe the ticket onto the ledger when nothing tells it there
    yet; record the person's :in-progress choice unless the ticket is already planning or being
-   worked (`tickets/status-of`); activate the recipe by
-   :person; write the project's start properties to a Notion ticket; bring the impl session up
-   and carry it into the whole seat when that seat is free.
+   worked (`tickets/status-of`); write the project's start properties to a Notion ticket. The
+   caller then opens the workstream's unit in the core.
 
-   Answers {:decision :started :ws-id :session}, or, before writing anything on the workstream,
-   one refusal: :no-such-workstream, :closed, :name-held (the impl session's name belongs to
-   another workstream), or :ticket-unreadable (its words are owed to the ledger and could not be
-   read). A failed Notion property write never stops a start."
+   Answers {:decision :started :ws-id}, or, before writing anything on the workstream, one
+   refusal: :no-such-workstream, :closed, or :ticket-unreadable (its words are owed to the ledger
+   and could not be read). A failed Notion property write never stops a start."
   [project start]
   (let [p (keyword (name project))
         w (if-let [id (:ws-id start)]
@@ -182,12 +149,9 @@
             ;; carries no page id, which the ticket record behind the caller does.
             ref     (merge (:ref start) (or (notion-ref w) (github-ref w)))
             page-id (or (:page-id (notion-ref w)) (get-in start [:ref :page-id]))
-            title   (or (:title ticket) (:title ref) (:title w))
-            session (impl-session-name (:id ref) title)
-            held    (scratch/joinable p session ws-id)]
+            title   (or (:title ticket) (:title ref) (:title w))]
         (cond
           (nil? ticket)                         {:decision :ticket-unreadable}
-          (= :name-held (:reason held))         {:decision :name-held}
           ;; Owed and with no way to read it: no page to read, or no credential to read it with.
           ;; A page that reads empty is transcribed as empty, best-effort, and does not stop the
           ;; start — a person's start is not held hostage to a flaky API.
@@ -205,8 +169,6 @@
               ;; pull one with recorded work back to :planning.
               (when-not (#{:planning :implementing} (tickets/status-of p (ws/read-ws p ws-id)))
                 (ws/advance-stage! p ws-id :in-progress :person))
-              (ws/activate! p ws-id session)
               (when (notion-ref w) (write-start-properties! p page-id))
-              (start-session! p session {:ws-id ws-id :carry? true :session-profile :full :wait false})
-              {:decision :started :ws-id ws-id :session session}))))))
+              {:decision :started :ws-id ws-id}))))))
 

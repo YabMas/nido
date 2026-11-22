@@ -43,7 +43,7 @@
                           [ws (:command c) (or (:refused o) (:error o))]))})
       (finally (store/close s)))))
 
-(defn -main
+(defn ^{:malli/schema [:=> [:cat :string] :any]} -main
   "`<plan.edn>`: apply the plan to the nido home's core store, and print the outcome as EDN."
   [plan-path]
   (let [ps (release/paths)]

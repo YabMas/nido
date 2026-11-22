@@ -3,7 +3,6 @@
   (:require
    [clojure.pprint :as pprint]
    [nido.coordinator.lane.facets :as facets]
-   [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.view.tickets :as tickets-view]
@@ -177,13 +176,15 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   promote-cmd
   "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)
-   Gate a triaged ticket and start it: its workstream activated, its impl session brought up.
-   Exits non-zero (and starts nothing) when the ticket isn't promotable."
+   Start a triaged ticket: its workstream's unit opened in the core, which provisions its session.
+   Exits non-zero (and starts nothing) when the ticket has no workstream or the core refuses."
   [& args]
   (let [[pos o] (task-args/split-args args)
+        p       (project-kw o)
         br      (str (or (:br o) (first pos)))
-        res     (promote/promote! (project-kw o) br)]
-    (case (:decision res)
-      :promote (println "started" br "→ session" (:session res) "on" (:ws-id res))
-      (do (println "refused" br "—" (name (:decision res)))
+        w       (workstream/find-by-ref-id p br)
+        res     (if w (work/set-stage! p (:id w) :in-progress) {:decision :no-workstream})]
+    (if (= :promoted (:decision res))
+      (println "started" br "on" (:id w))
+      (do (println "refused" br "—" (pr-str (or (:because res) (:decision res))))
           (System/exit 3)))))

@@ -7,9 +7,7 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.lane.conductor :as conductor]
             [canvas.coordinator.lane.landing :as landing]
-            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.coordinator.work :as work]
             [fukan.common.typing.malli]))
@@ -76,7 +74,7 @@
      revision, retiring every seat occupant of the generation it closes — refused, as the ledger
      refuses it, while a review run of the workstream is live."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [workstream/open-generation! seats/reseat!]})
+     :delegates [workstream/open-generation!]})
   (Operation generation-open-cmd
     "bb nido:workstream:generation:open — the entry point for `generation-open*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
@@ -86,8 +84,7 @@
   (Operation tell*
     "Pass word on to the conductor of the workstream whose chat this runs in, and print the id of
      the hand-back it became."
-    {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [conductor/tell!]})
+    {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation pr-land*
     "Land the change of the workstream of the session this runs in by its project's procedure,
      through lane-landing — where that landing names a PR (landing/names-pr?), the workstream's own

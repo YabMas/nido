@@ -21,34 +21,19 @@
   (:require
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.daemon.halt :as halt]
-   [nido.coordinator.daemon.pid :as pid]
-   [nido.coordinator.daemon.restart :as restart]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.source.queue :as queue]
    [nido.platform.io :as io]))
 
-;; ── the latest landing: whether the daemon is on it yet ─────────────────────────
+;; ── the latest landing ─────────────────────────────────────────────────────────
 
-(defn ^{:malli/schema [:=> [:cat]
-                       [:or
-                        [:map {:closed true}
-                         [:landing [:map [:state [:enum :owed]] [:commit :string] [:owed-at :string] [:by-pid :int]]]
-                         [:waits [:vector :string]]]
-                        [:map {:closed true}
-                         [:landing [:map [:state [:enum :running]] [:commit :string] [:owed-at :string]
-                                    [:since :string] [:pid :int]]]]
-                        [:map [:none :boolean]]
-                        [:map [:unreadable :string]]]]}
+(defn ^{:malli/schema [:=> [:cat] [:map [:none :boolean]]]}
   latest-landing
-  "The latest landing as the record's boundary answers it: an owed landing with what it waits for,
-   read now; a running landing, which waits for nothing; {:none true}; or {:unreadable <why>},
-   kept apart from none so a surface can say the record cannot be read."
+  "No landing waits on a restart: `nido:land` upgrades the core onto what it lands before it
+   returns, so a surface has nothing to show here."
   []
-  (let [{:keys [landing] :as answer} (restart/landing)]
-    (if (= :owed (:state landing))
-      {:landing landing :waits (restart/waits landing)}
-      answer)))
+  {:none true})
 
 ;; ── health: the rail dot, and the different question underneath it ───────────
 
@@ -91,12 +76,19 @@
 (defn- read-edn-safe [path]
   (try (io/read-edn path) (catch Throwable _ nil)))
 
+(defn- intake-pid
+  "The intake host's pid as its last heartbeat names it, while that process lives; nil else."
+  []
+  (let [pid (:pid (read-edn-safe (cstate/status-path)))
+        h   (when (int? pid) (java.lang.ProcessHandle/of pid))]
+    (when (and h (.isPresent h) (.isAlive ^java.lang.ProcessHandle (.get h))) pid)))
+
 (defn ^{:malli/schema [:=> [:cat] :DaemonHealth]}
   read-daemon-health
   "Impure: read the coordinator status/halt/breaker files and derive health."
   []
   (daemon-health
-   {:alive?        (pid/alive?)
+   {:alive?        (boolean (intake-pid))
     :halted?       (halt/halted?)
     ;; Only AUTO-tripped breakers (real failures) light the dot — a deliberate
     ;; user-pause is a normal operational state, not a fault.
@@ -109,7 +101,7 @@
    queued envelope for `project`/`trigger`. nil means it will run."
   [project trigger]
   (queue-blocker
-   {:alive?           (pid/alive?)
+   {:alive?           (boolean (intake-pid))
     :halted?          (halt/halted?)
     :status           (read-edn-safe (cstate/status-path))
     ;; Unlike the dot, a user-disabled trigger DOES block the envelope, so this
@@ -120,11 +112,10 @@
 
 (defn ^{:malli/schema [:=> [:cat] [:maybe :int]]}
   coordinator-pid
-  "The live coordinator's pid, or nil when none runs — a pid file left by a coordinator that died
-   answers nil, not the dead pid. What a host reading needs to find the coordinator's process
-   among the others; the file itself stays here."
+  "The live intake host's pid, or nil when none runs — a heartbeat left by one that died answers
+   nil, not the dead pid. What a host reading needs to find nido's own process among the others."
   []
-  (when (pid/alive?) (pid/read)))
+  (intake-pid))
 
 (defn ^{:malli/schema [:=> [:cat] :boolean]}
   halted?

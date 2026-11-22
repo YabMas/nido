@@ -5,8 +5,6 @@
             [babashka.process :as p]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [nido.coordinator.daemon.supervisor :as sup]
-            [nido.coordinator.daemon.restart :as restart]
             [nido.review.layers :as layers]
             [nido.platform.jj :as jj]
             [tasks.nido-land :as land]))
@@ -185,13 +183,12 @@
 (deftest no-step-of-a-landing-restores-the-repository
   (is (not (re-find #"\"op\"\s+\"restore\"" (slurp "src/tasks/nido_land.clj")))))
 
-;; ── the coordinator's checkout ───────────────────────────────────────────────
+;; ── the core's checkout ─────────────────────────────────────────────────────
 
-(defn- restart [{:keys [checkout rebase-exit conflicts? holds? owe-fails?]
-                 :or {checkout "/root" rebase-exit 0 holds? true}}]
-  (let [calls  (atom [])
-        owed   (atom nil)
-        kicked (atom nil)]
+(defn- restart [{:keys [checkout rebase-exit conflicts? holds? upgrade-exit]
+                 :or {checkout "/root" rebase-exit 0 holds? true upgrade-exit 0}}]
+  (let [calls    (atom [])
+        upgraded (atom nil)]
     (with-redefs [land/daemon-checkout (fn [] checkout)
                   jj/jj! (fn [_ & args]
                            (swap! calls conj (vec args))
@@ -212,54 +209,45 @@
                              {:exit 0 :out (if conflicts? "abc" "") :err ""}
                              :else {:exit 0 :out "op1" :err ""}))
                   layers/resolve-rev (fn [_ _] (when holds? "tip"))
-                  restart/owe!  (fn [commit pid]
-                                  (reset! owed [commit pid])
-                                  (if owe-fails?
-                                    {:failed "disk full"}
-                                    {:landing {:state :owed :commit commit :owed-at "t" :by-pid pid}}))
-                  restart/waits (fn [_] ["the landing that owed it to finish"])
-                  sup/restart! (fn [] (reset! kicked :restart) {:ok? true})
-                  sup/start!   (fn [] (reset! kicked :start) {:ok? true})
-                  sup/stop!    (fn [] (reset! kicked :stop) {:ok? true})]
-      {:result (#'land/restart-daemon! "tip") :calls @calls :owed @owed :kicked @kicked})))
+                  p/sh (fn [opts & argv]
+                         (reset! upgraded [(:dir opts) (last argv)])
+                         {:exit upgrade-exit :out "" :err "refused"})]
+      {:result (#'land/restart-daemon! "tip") :calls @calls :upgraded @upgraded})))
 
-(deftest a-landing-rebases-the-checkout-and-owes-the-restart
-  (let [{:keys [result calls owed kicked]} (restart {})]
+(deftest a-landing-rebases-the-checkout-and-upgrades-the-core
+  (let [{:keys [result calls upgraded]} (restart {})]
     (is (some #(= ["rebase" "-b" "@" "-d" "main@origin"] (take 5 %)) calls)
-        "the daemon loads the root checkout, so it moves onto the landing at once")
-    (is (= "tip" (first owed)))
-    (is (= (.pid (java.lang.ProcessHandle/current)) (second owed)) "the debt names the landing's own process")
-    (is (= {:owed "tip" :waits ["the landing that owed it to finish"]} result))
-    (is (nil? kicked) "no landing restarts, starts or signals the daemon")))
+        "the services load the root checkout, so it moves onto the landing at once")
+    (is (= ["/root" "nido:core:upgrade"] upgraded) "the upgrade runs from that checkout")
+    (is (= {:upgraded "tip"} result))))
 
-(deftest no-launchd-daemon-owes-nothing
-  (let [{:keys [result owed calls]} (restart {:checkout nil})]
+(deftest no-supervised-intake-upgrades-nothing
+  (let [{:keys [result upgraded calls]} (restart {:checkout nil})]
     (is (:skipped result))
-    (is (nil? owed))
+    (is (nil? upgraded))
     (is (empty? calls))))
 
-(deftest a-conflicting-checkout-rebase-is-undone-and-owes-nothing
+(deftest a-conflicting-checkout-rebase-is-undone-and-upgrades-nothing
   (doseq [opts [{:conflicts? true} {:rebase-exit 1} {:holds? false}]]
-    (let [{:keys [result calls owed kicked]} (restart opts)]
+    (let [{:keys [result calls upgraded]} (restart opts)]
       (is (:failed result) (pr-str opts))
       (if (zero? (:rebase-exit opts 0))
         (is (some #(= ["op" "revert" "op2"] %) calls) (str "only the rebase's own operation is reverted " (pr-str opts)))
         (is (not-any? #(= "revert" (second %)) calls) (str "a rebase that made no operation reverts nothing " (pr-str opts))))
       (is (not-any? #(= ["op" "restore"] (take 2 %)) calls) (pr-str opts))
-      (is (nil? owed) (pr-str opts))
-      (is (nil? kicked) (pr-str opts)))))
+      (is (nil? upgraded) (pr-str opts)))))
 
-(deftest a-debt-that-cannot-be-written-fails-and-keeps-the-rebase
-  (let [{:keys [result calls]} (restart {:owe-fails? true})]
-    (is (str/includes? (:failed result) "disk full"))
+(deftest a-refused-upgrade-fails-and-keeps-the-rebase
+  (let [{:keys [result calls]} (restart {:upgrade-exit 3})]
+    (is (str/includes? (:failed result) "refused"))
     (is (:way-out result))
     (is (not-any? #(#{"restore" "revert"} (second %)) calls))))
 
-(deftest the-landing-prints-one-coordinator-line
-  (doseq [[outcome code] [[{:owed "abcdef" :waits ["x" "y"]} 0]
+(deftest the-landing-prints-one-core-line
+  (doseq [[outcome code] [[{:upgraded "abcdef"} 0]
                           [{:skipped "not installed" :way-out "w"} 0]
                           [{:failed "boom" :way-out "w"} 1]]]
     (let [ret (atom nil)
           out (with-out-str (reset! ret (#'land/report-restart! outcome)))]
       (is (= code @ret) (pr-str outcome))
-      (is (= 1 (count (re-seq #"(?m)^land · coordinator " out))) out))))
+      (is (= 1 (count (re-seq #"(?m)^land · core " out))) out))))

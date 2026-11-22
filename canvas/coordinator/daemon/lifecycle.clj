@@ -126,70 +126,8 @@
   (Operation checkout
     "The checkout the installed service loads its code from — the working directory its unit file
      names — or nil when no service is installed."
-    {:signature [:=> [:catn] [:maybe :string]]}))
+    {:signature [:=> [:catn] [:maybe :string]]})
+  (Operation with-service
+    "Call `f` with every verb here acting on service `k` (a key of `services`) rather than the coordinator."
+    {:signature [:=> [:catn [:k :keyword] [:f fn?]] :any]}))
 
-(Module daemon-restart
-  "The latest landing, as a restart owed onto its commit or as the commit the daemon runs, and
-   what an owed restart still waits for.
-
-   A file rather than a decision made in the landing, because the landing is often the one process
-   that cannot make it — it runs inside the daemon, or runs are live — and a decision nobody holds
-   afterwards is never carried out. The landing owes; the daemon pays, on its tick, by exiting for
-   its supervisor to start it again onto the checkout that holds the landing, and the daemon that comes up
-   records that it runs it. `landing` is the one place the file's shape becomes trusted, and
-   `waits` the one reading of whether a debt is due — read from the system each time it is asked,
-   never kept — so the landing's account, the daemon's act and what the surfaces show cannot
-   disagree."
-  {:child [Landing]}
-  (Operation landing
-    "The one parsing boundary of the file: {:landing <Landing>}, {:none true} when no file exists,
-     or {:unreadable <why>} when one exists and does not parse to a Landing. Unreadable is never
-     read as none."
-    {:signature [:=> [:catn] [:or [:map [:landing Landing]] [:map [:none :boolean]] [:map [:unreadable :string]]]]
-     :delegates [state/restart-owed-path]})
-  (Operation owe!
-    "Record the latest landing as owed onto `commit` by the landing process `by-pid`, replacing
-     whatever was recorded, under the record's lock. {:landing <Landing>} as written, or
-     {:failed <why>} when the file cannot be written."
-    {:signature [:=> [:catn [:commit :string] [:by-pid :int]] [:or [:map [:landing Landing]] [:map [:failed :string]]]]
-     :delegates [state/restart-owed-path clock/now-iso]})
-  (Operation running!
-    "Record an owed landing as running in this daemon, `pid`, since now — only while the record is
-     still that owed landing, same commit and owed-at, compared and written under the lock `owe!`
-     writes under, so a landing owed meanwhile is never overwritten. {:landing <Landing>} as
-     written; {:moved true}, nothing written, when the record is no longer that owed landing; or
-     {:failed <why>} when the write fails."
-    {:signature [:=> [:catn [:owed Landing] [:pid :int]]
-                 [:or [:map [:landing Landing]] [:map [:moved :boolean]] [:map [:failed :string]]]]
-     :delegates [landing state/restart-owed-path clock/now-iso]})
-  (Operation waits
-    "What an owed landing still waits for, read when asked from what any process can read, so
-     every asker gets the same answer: runs whose agent is alive under the daemon — live? reports
-     them live, or their record says running and the daemon executes them rather than a background
-     session, which outlives a restart — the owing landing still running, the checkout not holding
-     the commit, the daemon not running under its supervisor, the running daemon having started after the
-     debt. Each wait in words; empty when the restart is due."
-    {:signature [:=> [:catn [:owed Landing]] [:vector :string]]
-     :delegates [runs/list-run-ids runs/read-run runs/live? session/read-session session/claude-facet
-                 process/process-alive? status checkout state/pid-path]}))
-
-(Module daemon-reconcile
-  "Startup repair: force every non-terminal Run to a terminal state, and leave each Run's own
-   session as the executor would have left it for that state.
-
-   Runs on startup because a Run left mid-flight by a crash is indistinguishable from one still
-   going, and the daemon that could have told them apart is the one that died. The session half
-   is part of the same repair: the executor ends a session when it ends the Run, so a Run ended
-   here with its session left :live is a record claiming work nothing is doing."
-  (Operation reconcile!
-    "Settle every Run the last daemon left in flight, and every session a settled Run still holds."
-    {:signature [:=> [:catn] :any]
-     :delegates [runs/read-run runs/write-run! state/runs-dir session/read-session
-                 runs/owns-session? runs/teardown-session-for-run!
-                 runs/stop-session-for-parked-run!]})
-  (Operation release-improvement-hold!
-    "Close, as :orphaned, the open improvement claim a resolved Run leaves behind, unless an
-     unanswered blocker holds it for a person — the close is the only thing that releases the
-     sweep, and a dead Run writes none."
-    {:signature [:=> [:catn [:run :map]] :any]
-     :delegates [ws/read-ws ws/entries-of ws/close!]}))

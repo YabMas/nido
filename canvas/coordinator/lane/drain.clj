@@ -19,13 +19,13 @@
    residue it leaves and each item's disposition (a carved misfit answer carries its site's the
    same way), dispose of a residue item again (a follow-up slice now, or the closing residue
    slice), answer a misfit, and propose a recipe or a change to it — which becomes the drain's
-   recipe only by the person's approval. Each slice lands by a landing Run in its own session, in
-   parallel with its siblings' landing Runs. Its turns are as [coordinator-woken-by-events] says.
+   recipe only by the person's approval. Each slice lands in its own session, in parallel with its
+   siblings, once the core grants it the landing.
 
-   ONE COORDINATOR. The drain workstream's conductor coordinates it; a slice has none. Starting and
-   retiring the coordinator is lane-conductor's, briefed with this lane's coordinator brief. Where a
-   slice's hand-backs are posted is lane-conductor's, as every hand-back is. Landing is a person's act, or this lane's while the
-   person's grant stands — never a coordinator's or a slice's turn."
+   ONE COORDINATOR. The drain workstream's conductor in the core coordinates it; a slice's unit is
+   opened in the slice's own workstream. The lane reaches the core only through the map of
+   functions its caller injects, so it names no core namespace. Landing is a person's act, or this
+   lane's while the person's grant stands — never a coordinator's or a slice's turn."
   (Operation answer-misfit!
     "The coordinator answering an open misfit."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:misfit-seq :any] [:answer :any]] :any]})
@@ -46,19 +46,13 @@
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:residue-seq :any] [:disposition :any]] :any]})
   (Operation handle-fire!
     "Carry out one fire source-drain emitted: start the slice it names, or wake the coordinator with the census failure it reports. A start refused because what it decided from has moved is logged, not thrown: the next poll decides again."
-    {:signature [:=> [:catn [:fire :any]] :any]})
+    {:signature [:=> [:catn [:core :map] [:fire :any]] :any]})
   (Operation land!
-    "The person asking for slice `slice-id` to land: refused while a slice it rests on has not landed (:rests-unlanded), while a landing of it is in flight (:landing-in-flight), or when it has no session (:no-session). A slice the coordinator has not cleared is landed as the person's override, recorded on its Run. The landing Run gives /drive-home to the slice's own session and runs beside its siblings' — never on the serial merge lane. Answers the Run."
-    {:signature [:=> [:catn [:project ProjectName] [:slice-id WorkstreamId]] :any]})
-  (Operation settle-landing!
-    "Settle a slice landing Run from how its /drive-home turn ended by record-drain's landing-outcome: a failed landing parks the Run for review, with the cause on the slice session's record. Answers the state."
-    {:signature [:=> [:catn [:run-id :any] [:result :map]] :keyword]})
+    "The person asking for slice `slice-id` to land: refused while a slice it rests on has not landed (:rests-unlanded) or its newest review under its recipe version has not passed (:not-ready). Then the landing is granted on the slice in the core, whose conductor lands it in the slice's own session, beside its siblings. A slice the coordinator has not cleared is landed as the person's override. Answers {:slice :override? :granted}."
+    {:signature [:=> [:catn [:core :map] [:project ProjectName] [:slice-id WorkstreamId]] :map]})
   (Operation misfit!
     "A slice's session recording a site its recipe version does not cover, on its drain. Refused from any session but one of a slice of the drain it names — or, given none, of the drain its session's slice belongs to. Answers {:drain :misfit}."
     {:signature [:function [:=> [:catn [:project ProjectName] [:arg1 :any]] :any] [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:arg2 :any]] :any]]})
-  (Operation occupy-slice!
-    "Occupy slice `slice-id`'s whole seat with a driven session briefed from its drain's recipe — at a slice's start, and whenever a reseat finds the seat empty. Answers {:seat :session}."
-    {:signature [:=> [:catn [:project ProjectName] [:slice-id WorkstreamId]] :any]})
   (Operation plan!
     "The coordinator planning a slice. Answers the plan's seq."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:plan :any]] :any]})
@@ -71,15 +65,12 @@
   (Operation start-drain!
     "The person starting a drain from a pattern established elsewhere. Answers its ws-id."
     {:signature [:=> [:catn [:project ProjectName] [:charter :any]] :any]})
-  (Operation start-slice!
-    "Start a slice from drain `drain-id`'s plan `plan-seq`: refused while the coordinator has not been given its newest wake (:wake-pending), and as record-drain refuses a start (no recipe, no census under it, the plan not open) — then the slice workstream is made and its whole seat occupied by a driven session briefed from the recipe. Answers {:slice :session}."
-    {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:plan-seq :any]] :any]})
   (Operation wake-pending?
-    "Whether drain `drain-id`'s coordinator has not yet been given the wake for its newest event: a wake not posted, or posted and not delivered. While it is, no slice of the drain starts."
-    {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId]] :any]})
+    "Whether drain `drain-id`'s coordinator has not yet heard one of its wakes: a wake not posted, or posted and still in its conductor's inbox. While one is pending, no slice of the drain starts."
+    {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:core :map]] :any]})
   (Operation wakes!
-    "Post to each open drain's coordinator the wake for each event it has not been woken for — through lane-seats' post!, keyed by the event, so each is posted once. A drain whose coordinator has never started is woken by its start's brief instead. Answers the wakes posted."
-    {:signature [:=> [:catn [:project ProjectName]] :any]})
+    "Post to each drain the core holds open the wake for each event its coordinator has not been woken for — to the conductor's chat, keyed by the event, so each is posted once. Answers what each post answered."
+    {:signature [:=> [:catn [:project ProjectName] [:core :map]] :any]})
   (Operation withdraw!
     "The coordinator withdrawing an open plan."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:plan-seq :any] [:why :any]] :any]}))

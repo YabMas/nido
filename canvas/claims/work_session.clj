@@ -9,7 +9,6 @@
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.record.session :refer [work-session?]]
             [canvas.coordinator.work :refer [coordinator-work environment open-target resolve-gate!]]
-            [canvas.tasks.nido-ship :refer [nido-ship]]
             [canvas.tasks.nido-attach :refer [nido-attach]]))
 
 (Claim work-session-predicate
@@ -28,6 +27,3 @@
   "open-target, the improvement sweep's reading of an attempt's sessions, and attach's suggested session to enter choose or count only records work-session? admits."
   {:about [open-target coordinator-work nido-attach] :evidence "round"})
 
-(Claim ship-refuses-non-work-session
-  "`nido ship` enqueues nothing for a session whose record work-session? rejects: it exits non-zero naming the workstream's environment session (or that it has none) as what to ship. A work session ships as before."
-  {:about [nido-ship work-session?] :evidence "round"})

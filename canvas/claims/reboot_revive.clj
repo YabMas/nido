@@ -5,7 +5,6 @@
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.boot.attention :refer [boot-attention]]
-            [canvas.boot.core :refer [boot-core]]
             [canvas.coordinator.record.session-events :refer [record-session-events]]
             [canvas.coordinator.work :refer [coordinator-work]]
             [canvas.session.casualties :refer [session-casualties]]
@@ -15,10 +14,6 @@
             [canvas.session.revive :refer [session-revive]]
             [canvas.session.state :refer [session-state]]
             [canvas.tasks.nido-session :refer [nido-session]]))
-
-(Claim casualty-recorded-before-prune
-  "At every daemon start, before its first tick and whether or not a halt is persisted, and again at every registry prune, the current boot's casualty record is asked to hold every registry entry registered before the host boot, whether or not the prune's guards would remove it. The prune removes no such entry the record does not hold; when the host boot cannot be read, it removes nothing registered earlier than the daemon's own start."
-  {:about [session-casualties coordinator-work boot-core] :evidence "round"})
 
 (Claim casualty-outlives-housekeeping
   "A casualty record lives outside the per-instance state root, so no reclaim deletes it."
@@ -43,10 +38,6 @@
 (Claim conversation-reopened-where-it-ran
   "For every :revive and :conversation-only row, revive takes the conversation whose last recorded event is newest among those whose recorded cwd is the session's home or lies within its worktree, and runs `claude --resume <id> --dangerously-skip-permissions` from that recorded cwd as a typed command in a Warp tab; outside Warp it opens nothing and prints the command with its directory. A row with no such conversation opens no tab and says so."
   {:about [nido-session record-session-events session-lifecycle] :evidence "round"})
-
-(Claim daemon-announces-only
-  "The daemon starts no casualty's services and opens no tab for one. While any casualty of a boot is owed a revive it is an attention item keyed by that boot, and the gate inbox shows a card listing them with the revive command. The first look's one summary still counts every waiting item, casualties among them, and when any are casualties it names how many workstreams there are to revive — \"N things need your attention — M workstreams to revive\"; it posts no second banner for them."
-  {:about [boot-core boot-attention] :evidence "round"})
 
 (Claim revive-owed-per-workstream
   "A casualty is owed a revive while the workstream its runtime key names is open and holds a session a person works in — neither its conductor's nor a Run's — and is owed at most once per workstream; one whose workstream cannot be read, or that names none, is owed nothing. An owed casualty brings back the newest such session, in its own worktree, whatever session the runtime was last registered under. The revive plan, the daemon's attention item and the inbox card each read only owed casualties, and count workstreams."

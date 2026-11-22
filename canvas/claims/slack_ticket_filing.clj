@@ -4,7 +4,6 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.lane.work :refer [claim-and-drive! pickup!]]
             [canvas.coordinator.report :refer [coordinator-report]]
             [canvas.coordinator.work :refer [apply! conclude!]]
             [canvas.integration.notion :refer [notion-client]]))
@@ -20,14 +19,6 @@
 (Claim filed-at-most-once
   "No slack-keyed workstream gets a second Notion page, whichever era its proposal is from. Every Slack filing — conclude!'s, apply!'s, and apply!'s for a pre-change proposal — creates only when the workstream has no :notion ref, records a filing-started mark on the slack-keyed ticket record before it calls create, and clears it only when Notion answers with a definite error; a mark with no ref makes every filing refuse with an error naming the interrupted filing, leaving the gate parked for a person to check Notion."
   {:about [conclude! apply!] :evidence "round"})
-
-(Claim no-drive-before-accept
-  "While the BR's ticket record is held by an unaccepted Slack proposal, nothing but apply! starts its drive: conclude! never starts the ticket or sets a ticket record :planning, and pickup! — the other verb that starts a BR — refuses such a BR, saying the analysis waits in the gate."
-  {:about [conclude! apply! pickup!] :evidence "round"})
-
-(Claim accept-writes-then-drives
-  "Accepting a product proposal appends the technical sections to the filed page as a collapsed toggle titled \"Engineering notes & history\" — appended into an existing one of that title rather than doubled — and only then starts the ticket through claim-and-drive! with its page id, URL and title; a failed Notion write starts nothing and leaves the gate as it was."
-  {:about [apply! claim-and-drive!] :evidence "round"})
 
 (Claim doubt-replies-and-files-nothing
   "conclude! on a :doubt proposal posts one threaded reply that opens with the Slack mention of report/owner->slack-id :jaap followed by the doubt, and creates no page; apply! refuses a :doubt proposal, so a doubt is overridden only by a reply that yields a product proposal. Jaap's reply reaches the parked workstream as the gate's Reply, which resolve-gate! passes to resume! as revise feedback for the triage-slack session."

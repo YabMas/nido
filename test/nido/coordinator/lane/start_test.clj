@@ -3,9 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.lane.brief :as brief]
-   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.scratch :as scratch]
-   [nido.coordinator.record.session :as csession]
    [nido.session.lifecycle :as lifecycle]
    [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.standing :as standing]
@@ -41,23 +39,19 @@
 
 ;; ── start-session! ──────────────────────────────────────────────────────────
 
-(deftest a-session-already-recorded-is-carried-only-when-asked
-  ;; A re-start finds its impl session already recorded; a ticket start still asks for the carry,
-  ;; which takes the whole seat only if nobody works there.
-  (let [carried (atom [])]
-    (with-redefs [csession/workstream-id-for (constantly "ws-1")
-                  scratch/birth!             (fn [& _] "ws-1")
-                  lifecycle/up!              (fn [& _] nil)
-                  lifecycle/session-weight   (constantly :heavy)
-                  conductor/carry!           (fn [_ ws s & _] (swap! carried conj [ws s]) {:carried nil})]
-      (start/start-session! :brian "impl-br-1" {:ws-id "ws-1"})
-      (is (= [] @carried) "a plain session start leaves a recorded session uncarried")
-      (start/start-session! :brian "impl-br-1" {:ws-id "ws-1" :carry? true})
-      (is (= [["ws-1" "impl-br-1"]] @carried)))))
+(deftest a-session-start-settles-its-workstream-then-brings-it-up
+  (let [calls (atom [])]
+    (with-redefs [scratch/birth!           (fn [_ s w h] (swap! calls conj [:birth s w h]) "ws-1")
+                  lifecycle/up!            (fn [s o] (swap! calls conj [:up s (:runtime-key o)]) nil)
+                  lifecycle/session-weight (constantly :heavy)]
+      (is (= "ws-1" (start/start-session! :brian "impl-br-1" {:ws-id "ws-1"})))
+      (is (= [[:birth "impl-br-1" nil "ws-1"] [:up "impl-br-1" "ws-1"] [:birth "impl-br-1" :heavy "ws-1"]]
+             @calls)
+          "settled before up!, so it comes up on its workstream's runtime; weighed after"))))
 
 ;; ── start-ticket! ───────────────────────────────────────────────────────────
 
-(deftest a-start-activates-and-brings-the-session-up-at-once
+(deftest a-start-writes-the-tickets-records-and-brings-nothing-up
   (with-tmp
     (fn []
       (with-start (fn [{:keys [ups briefs]}]
@@ -65,13 +59,10 @@
                                                        :title "Firefox loading"}]})
               res (start/start-ticket! :brian {:ws-id (:id w)})
               w'  (ws/read-ws :brian (:id w))]
-          (is (= {:decision :started :ws-id (:id w) :session "impl-br-7-firefox-loading"} res))
-          (is (standing/activated? w') "the start itself activates the recipe")
+          (is (= {:decision :started :ws-id (:id w)} res))
           (is (= :in-progress (standing/chosen-stage :brian (:id w) w')))
           (is (some? (standing/person-started-at w')) "the start is a person's")
-          (is (= [[:brian "impl-br-7-firefox-loading" {:ws-id (:id w) :carry? true :session-profile :full :wait false}]]
-                 @ups)
-              "the session comes up at the click — no envelope, no Run")
+          (is (empty? @ups) "the core provisions the session once the caller opens the unit")
           (is (empty? (fs/list-dir (cstate/runs-dir))) "no Run is minted")
           (is (= 1 (count @briefs)))
           (is (= :ticket (first (kinds (:id w))))
@@ -118,13 +109,12 @@
 (deftest a-github-issue-start-records-the-issue-as-the-brief
   (with-tmp
     (fn []
-      (with-start (fn [{:keys [ups]}]
+      (with-start (fn [_]
         (with-redefs [gh/view-issue (constantly {:issue {:title "Crash" :url "https://gh/4" :body "it crashes"}})]
           (let [w   (ws/create! :nido {:external-refs [{:adapter :github-issue :id "o/r#4"}]})
                 res (start/start-ticket! :nido {:ws-id (:id w)})]
-            (is (= "impl-o-r-4-crash" (:session res)))
-            (is (= :ticket (first (mapv :kind (:entries (ws/read-ws :nido (:id w)))))))
-            (is (= 1 (count @ups))))))))))
+            (is (= :started (:decision res)))
+            (is (= :ticket (first (mapv :kind (:entries (ws/read-ws :nido (:id w))))))))))))))
 
 ;; ── the Notion properties a start writes ───────────────────────────────────
 

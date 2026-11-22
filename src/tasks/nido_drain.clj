@@ -7,6 +7,7 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.lane.drain :as drain-lane]
+   [nido.coordinator.work :as work]
    [nido.coordinator.source.drain :as source-drain]
    [nido.platform.task-args :as task-args]
    [nido.review.stages :as stages]
@@ -87,7 +88,7 @@
   [& args]
   (let [[_ opts] (task-args/split-args args)
         [p _]    (drain-target opts)]
-    (refusing #(select-keys (drain-lane/land! p (str (:slice opts))) [:id :event-payload]))))
+    (refusing #(work/drain-land! p (str (:slice opts))))))
 
 (defn close-cmd
   "The person closing the drain on its observed exit."

@@ -19,7 +19,6 @@
    [tasks.nido-design :as nido-design]
    [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.daemon.supervisor :as sup]
-   [nido.coordinator.daemon.restart :as restart]
    [nido.review.layers :as layers]
    [nido.review.stages :as stages]
    [nido.session.change :as change]
@@ -737,29 +736,26 @@
           :way-out "check `jj workspace list` in the worktree, then run it again"}))))
 
 (defn- daemon-checkout
-  "The checkout the supervised daemon loads its code from, or nil when its service is not
-   installed."
+  "The checkout the supervised intake host loads its code from — the one the core's releases are
+   installed from — or nil when its service is not installed."
   []
-  (sup/checkout))
+  (sup/with-service :intake sup/checkout))
 
 (def ^:private restart-by-hand
-  "jj rebase -b @ -d main@origin in ~/Code/nido, then bb nido:coordinator:restart once no run is live")
+  "jj rebase -b @ -d main@origin in ~/Code/nido, then bb nido:core:upgrade there")
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   restart-daemon!
-  "Put the coordinator on the code that landed at `landed`: rebase the checkout the supervised daemon
-   loads onto origin's main now, then record the landing as owed for the daemon to pay on its own
-   tick. Returns {:owed <commit> :waits [<why>]}, {:skipped <why>} or {:failed <why>}, each with the
-   way out when there is one.
+  "Put the core, the intake host and the dashboard on the code that landed at `landed`: rebase the
+   checkout they load onto origin's main, then upgrade the core from it (`nido:core:upgrade`),
+   which restarts the other two once the new release serves. Returns {:upgraded <commit>},
+   {:skipped <why>} or {:failed <why>}, each with the way out when there is one.
 
-   Never restarts, starts or signals the daemon: a landing is often the one process that cannot —
-   it runs inside the daemon, or runs are live — and the daemon is the one that can see when a
-   restart cuts nothing. The rebase cannot wait for that: it kills nothing, and the daemon loads
-   whatever the checkout holds when it next starts. A rebase that fails, conflicts or leaves the
-   checkout without the landing is undone and owes nothing — a daemon started on a conflicted tree
-   loads conflict markers. Undone by reverting the rebase's own operation, never by restoring the
-   repository to before it: a restore would also revert whatever another workspace of the shared
-   store recorded meanwhile. A debt that cannot be written leaves the rebase in place."
+   A rebase that fails, conflicts or leaves the checkout without the landing is undone and upgrades
+   nothing — a release copied from a conflicted tree carries conflict markers. Undone by reverting
+   the rebase's own operation, never by restoring the repository to before it: a restore would
+   also revert whatever another workspace of the shared store recorded meanwhile. A turn the core
+   runs survives the upgrade: the new release takes it back at start."
   [landed]
   (if-let [checkout (daemon-checkout)]
     (let [;; The rebase's own operation is found by a mark it carries in its args, never as the op
@@ -777,43 +773,42 @@
                           (cond (not (zero? exit)) (str "failed: " (str/trim (str err)))
                                 (not (str/blank? conflicted)) "conflicts"
                                 :else "left it without the landing")
-                          " — undone, so no restart is owed")
+                          " — undone, so nothing is upgraded")
              :way-out (str "resolve it by hand: " restart-by-hand)})
-        (let [{:keys [landing failed]} (restart/owe! landed (.pid (java.lang.ProcessHandle/current)))]
-          (if failed
-            {:failed (str failed " — the checkout holds the landing, but nothing will restart onto it")
-             :way-out "bb nido:coordinator:restart once no run is live"}
-            {:owed landed :waits (restart/waits landing)}))))
-    {:skipped "the coordinator is not installed under a supervisor, so no restart is owed"
-     :way-out "restart it yourself if it is running: bb nido:coordinator:down, then bb nido:coordinator:up"}))
+        (let [{:keys [exit out err]} (p/sh {:dir checkout} "bb" "--config" (str checkout "/bb.edn")
+                                           "nido:core:upgrade")]
+          (if (zero? exit)
+            {:upgraded landed}
+            {:failed (str "the core upgrade refused: " (str/trim (str out err)))
+             :way-out "the previous release still serves; fix the cause, then bb nido:core:upgrade in the checkout"}))))
+    {:skipped "the intake host is not installed under a supervisor, so nothing was upgraded"
+     :way-out "bb nido:core:install in the checkout"}))
 
 (defn- report-restart!
   "Print the landing's one `land · coordinator …` line and return the exit code it adds: only a
    failure is one. The landing itself stands either way."
-  [{:keys [owed waits skipped failed way-out]}]
+  [{:keys [upgraded skipped failed way-out]}]
   (cond
-    owed    (do (println (str "land · coordinator restart owed onto " (short-id owed)
-                              " · waits for " (str/join "; " waits)))
-                0)
-    skipped (do (println (str "land · coordinator no restart owed · " skipped "\n  " way-out)) 0)
-    :else   (do (println (str "land · coordinator no restart owed · FAILED · " failed "\n  " way-out)) 1)))
+    upgraded (do (println (str "land · core upgraded onto " (short-id upgraded))) 0)
+    skipped  (do (println (str "land · core not upgraded · " skipped "\n  " way-out)) 0)
+    :else    (do (println (str "land · core not upgraded · FAILED · " failed "\n  " way-out)) 1)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
   land
   "bb nido:land — land a revision on nido's main through the gate (`gate!`): `:rev` when given,
    else the worktree's tip read once. Record the commit the gate landed on the worktree's
-   workstream (`record`), then owe the coordinator a restart onto it
-   (`restart-daemon!`). No option skips that step: a landing the daemon is not put onto changes
-   nothing it does. A worktree no workstream owns lands unrecorded, and says so. Returns an exit
-   code: non-zero, naming the way out, whenever nothing was pushed, a pushed landing could not be
-   recorded, or the restart could not be owed. The step follows any push, recorded or not."
+   workstream (`record`), then upgrade the core onto it (`restart-daemon!`). No option skips that
+   step: a landing nido's services are not put onto changes nothing they do. A worktree no
+   workstream owns lands unrecorded, and says so. Returns an exit code: non-zero, naming the way
+   out, whenever nothing was pushed, a pushed landing could not be recorded, or the upgrade was
+   refused. The step follows any push, recorded or not."
   [& args]
   (let [[_ opts] (task-args/split-args args)
         given (or (some-> (:cwd opts) str) (System/getProperty "user.dir"))
         cwd   (or (lifecycle/worktree-from-cwd given) given)
         {:keys [landed refused way-out]} (if-let [r (some-> (:rev opts) str)] (gate! cwd r) (gate! cwd))
         restart (fn [code]
-                  ;; Even when the record failed: main holds the landing, so the daemon owes it too.
+                  ;; Even when the record failed: main holds the landing, so the core is put onto it too.
                   (max code (report-restart! (restart-daemon! landed))))]
     (cond
       refused

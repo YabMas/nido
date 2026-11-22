@@ -7,9 +7,6 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.lane.conduct :as conduct]
-            [canvas.coordinator.lane.conductor :as conductor]
-            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.work :as work]
             [fukan.common.typing.malli]))
 
@@ -29,10 +26,9 @@
     {:signature [:=> [:catn] :any]})
   (Operation up
     "Bring the named session up, on the workstream `:ws-id` names when given — refused before
-     anything is provisioned when it cannot join it. A session this start first recorded is
-     carried once it is up — a step of this verb's own, which spawn takes too."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]
-     :delegates [conductor/carry!]})
+     anything is provisioned when it cannot join it. Given a brief, the workstream is activated
+     with the session as its unit's and the brief as its first turn, which the core runs."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation revive
     "Bring back the workstreams that died with the host: plan from those owed a revive, bring the
      admitted ones up in order on the session a person works in, and reopen its latest
@@ -53,28 +49,16 @@
   (Operation kickoff-prompt
     "A spawned child agent's first turn: whom it answers to, when to write, then the brief."
     {:signature [:=> [:catn [:opts :map]] :string]})
-  (Operation attach
-    "Attach this terminal to a background session through the substrate adapter."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation adopt
-    "Make nido the driver of a background session started in a session's home or worktree."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation release
-    "Stop nido driving a session's background session; the session keeps running."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation start
     "Start work on a goal from outside any session: bring a new session up as `up` does on a
-     workstream minted for it, activate that workstream, and drive the session on the brief as
-     its first instruction. Names no parent and links nothing."
+     workstream minted for it, and activate that workstream with the brief as its unit's first
+     turn. Names no parent and links nothing."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation spawn
-    "Bring a child session up as `up` does and drive it on the brief addressed back to the parent's
-     agent: carried as `up` carries a session, occupying its workstream's whole seat when that seat
-     is free, and otherwise driven occupying no seat. Record it and the session spawning it as each
-     other's :session link, and open a tab that attaches to the child rather than starting a
-     conversation of its own. `:ws-id` is passed to `up` and nothing else."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]
-     :delegates [conductor/carry! seats/drive!]})
+    "Bring a child session up as `up` does, its first turn the brief addressed back to the parent's
+     agent, run by the core. Record it and the session spawning it as each other's :session link,
+     and open a tab at the child's home. `:ws-id` is passed to `up` and nothing else."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation status
     "Print status for the named session."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

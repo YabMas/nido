@@ -7,7 +7,7 @@
    the ledger already says, and appends only the difference — so it is safe to run again, and a
    second run appends nothing."
   (:require
-   [nido.coordinator.lane.pickup :as pickup]
+   [nido.notion.client :as notion-client]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
@@ -39,7 +39,7 @@
   (some (fn [r]
           (when (= :notion (:adapter r))
             (or (:page-id r)
-                (pickup/extract-page-id (:url r))
+                (notion-client/extract-page-id (:url r))
                 (when-let [br (:id r)]
                   (some (fn [[page-id f]] (when (= br (:br f)) page-id)) facts)))))
         (:external-refs w)))

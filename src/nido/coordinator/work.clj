@@ -22,21 +22,14 @@
    [nido.coordinator.lane.phase :as lphase]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.source.start-failures :as start-failures]
-   [nido.coordinator.lane.pickup :as pickup]
-   [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
    [nido.coordinator.report.ask :as ask]
-   [nido.coordinator.lane.conduct :as conduct]
-   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.drain :as drain-lane]
-   [nido.coordinator.lane.seats :as seats]
-   [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.session-events :as session-events]
-   [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.proposal :as proposal]
@@ -665,7 +658,7 @@
                          ;; running at once — and at status's liveness, so it cannot say halted
                          ;; and running at once either.
                          :doing      (observed-doing (wsv/doing-at project ws-id closed band
-                                                                   (conduct/mid-turn-ids {}))
+                                                                   #{})
                                                      st))
             (not (contains? unrendered-bands band))
             (assoc :phase (wsv/phase-progress project ws-id)))))))))
@@ -868,7 +861,7 @@
 
 (defn- session-facet
   "One session on the autonomy axis. `waiting` is the session waiting on a person's reply
-   (`resume/waiting-session`), the one a :reply resolves against."
+   (nil now: an ask is the core's, and no session waits on a reply)."
   [s waiting run-states]
   (let [auto (:autonomy s)]
     {:name           (:name s)
@@ -1518,7 +1511,7 @@
         ;; Shown on the workstream whether or not it is a gate: a denial needs no answer, so the
         ;; inbox never carries it on its own, and this is where a reader of the work finds it.
         :denials      (driven-denials project ws-id)
-        :sessions     (let [waiting    (resume/waiting-session project ws-id)
+        :sessions     (let [waiting    nil
                             run-states (into {} (map (juxt :session-name :state))
                                              (runs/runs-of project ws-id))]
                         (mapv #(session-facet % waiting run-states) sessions))})
@@ -1543,19 +1536,13 @@
          fct (bare-pane project ws-id fct)
          :else nil)))))
 
-(defn- parked-session
-  "The session waiting on a person's reply under a workstream, or nil — the session a :reply
-   resolves against (`resume/waiting-session`)."
-  [project ws-id]
-  (resume/waiting-session project ws-id))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   replyable?
-  "Whether a :reply has someone to reach on the workstream: a session waiting on a person's reply
-   (`parked-session`), or a conductor's escalation owed the person's answer, whoever's session the
-   work runs in. What every surface offering Reply reads."
+  "Whether a :reply has someone to reach on the workstream: an ask the core holds open for the
+   person. What every surface offering Reply reads."
   [project ws-id]
-  (boolean (or (parked-session project ws-id) (conductor/awaiting-answer? project ws-id))))
+  (boolean (seq (wcore/open-asks (core-of project ws-id)))))
 
 (defn- resuming?
   "True iff a one-shot agent nido launched is running against the workstream right now, observed
@@ -1701,65 +1688,6 @@
        :resume-error nil
        :working?     false})))
 
-(defn- ->gate
-  "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
-   STRING (the web routes on it, e.g. /gate/<project>/…; all-machine-rows tags
-   rows with the same string key) so a gate reads the same whether it came from
-   `gates` (string or keyword arg) or `all-gates`."
-  [project row]
-  (let [psess   (parked-session project (:ws-id row))
-        ;; A session to reply to, not merely a move a person owes: :reply resumes an agent, and
-        ;; a gate a round handed back to a person has no agent asleep in it. A conductor's open
-        ;; escalation is one too: :reply records the answer it is owed, whoever's session it is.
-        parked? (replyable? project (:ws-id row))
-        ;; Read once: the action set is derived from what the ledger holds last,
-        ;; so the buttons and the report a reader is looking at cannot disagree.
-        report  (answered-report project (:ws-id row) (latest-report project (:ws-id row))
-                                 (:position row))
-        ;; From the row, not re-derived: the spine used this same reading to decide the
-        ;; workstream is a gate at all, and a second read is a second moment.
-        awaiting (awaiting-human (:position row))
-        actions  (gate-actions (:stage row) parked? (:origin row)
-                               {:report-format  (:format report)
-                                :options        (:options report)
-                                :questions      (report/triage-questions report)
-                                :several?       (asks-several? report)
-                                :awaiting       awaiting
-                                ;; Land grants the landing to the seats, so it is offered only
-                                ;; where there are seats to act on it.
-                                :landable?      (and (= :published (:at (:position row)))
-                                                     (boolean (some-> (cws/read-ws project (:ws-id row))
-                                                                      standing/activated?)))
-                                :gate-criterion (get-in row [:phase :exit :criterion])
-                                ;; Whom a Reply reaches, in resolve-gate!'s order: a conductor's
-                                ;; open escalation before a parked agent.
-                                :reply-to       (when (conductor/awaiting-answer? project (:ws-id row))
-                                                  :conductor)
-                                :seq            (:seq report)})
-        inputs   (ask-inputs project (:ws-id row) report (:position row) actions)]
-    {:ws-id        (:ws-id row)
-     :project      (name project)
-     :origin       (:origin row)
-     :stage        (:stage row)
-     :label        (:label row)
-     :tag          (:tag row)
-     :links        (:links row)
-     ;; A gate is a workstream too, and the one whose activity is easiest to
-     ;; miss: a claim outranks session state, so a workstream parked on a human
-     ;; can ALSO have a round running against it. Taken from the row rather than
-     ;; re-derived, for the reason `workstream` takes it from the row — the
-     ;; inbox and the board sit on one screen, and a second read is a second
-     ;; moment.
-     :doing        (:doing row)
-     :report       report
-     :actions      actions
-     ;; The question the card leads with, for the move the position owes. Built here, once, so
-     ;; the inbox row, the pane and the TUI all ask the same thing.
-     :ask          (ask/ask (or awaiting :generic) inputs)
-     :session      (:name psess)
-     :denials      (driven-denials project (:ws-id row))
-     :resume-error (get-in psess [:autonomy :error])
-     :working?     (resuming? project (:ws-id row))}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :Gate]]}
   gates
@@ -1928,10 +1856,6 @@
 
 (declare owed-revivals)
 
-(defn- agent-states
-  "The agent listing as status reads it, at most `listing-lifetime-ms` old."
-  []
-  (vals (conduct/live-states {})))
 
 (defn- file-mtime [path] (.lastModified (java.io.File. (str path))))
 
@@ -1948,23 +1872,11 @@
 
 (defn- liveness-probe
   "A row's liveness as status observes it, read without reading the workstream's records: a
-   claim held under it, a run whose agent holds its lock, and which of its background sessions
-   the agent listing shows working or mid-turn (`conduct/mid-turn?`) — read, as status reads it,
-   only for a row that has one — and, apart, which of them are mid-turn by
-   `conduct/mid-turn-ids`, the set the row's `:doing` is read from, so a turn starting or
-   ending under an unchanged liveness still moves the probe. The registry's half is in the
-   row's stamp."
-  [project ws-id {:keys [listed]}]
-  (let [with-pid (when (seq listed)
-                   (into #{} (comp (filter #(or (and (:pid %) (= "working" (:state %)))
-                                                (conduct/mid-turn? %)))
-                                   (mapcat (juxt :sessionId :id)))
-                         (agent-states)))
-        mid-turn (when (seq listed) (conduct/mid-turn-ids {}))]
-    [(boolean (activity/held? project ws-id))
-     (resuming? project ws-id)
-     (into #{} (filter #(contains? with-pid %)) listed)
-     (into #{} (filter #(contains? mid-turn %)) listed)]))
+   claim held under it, and a run whose agent holds its lock. The registry's half is in the
+   row's stamp; what turns run is the core's, which the row's overlay reads."
+  [project ws-id _entry]
+  [(boolean (activity/held? project ws-id))
+   (resuming? project ws-id)])
 
 (defn- compute-entry
   "One held row for `ws-id`, read whole from its records, or nil when it no longer exists.
@@ -2384,7 +2296,7 @@
       configured
       (canonical-default-target action))))
 
-(declare core-resolve!)
+(declare core-resolve! start-ticket! resolve-ref open-fire!)
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :any]}
   set-stage!
@@ -2645,8 +2557,8 @@
           (if (:error res)
             {:decision :error :error (:error res)}
             (do (tickets/complete! project (:slack-id (slack-thread w')))
-                (pickup/claim-and-drive! project {:id (:id page) :page-id (:page-id page)
-                                                  :url (:url page) :title (:title proposal)})
+                (start-ticket! project {:id (:id page) :page-id (:page-id page)
+                                        :url (:url page) :title (:title proposal)})
                 {:decision :created :br (:id page)})))))))
 
 (declare conclude!)
@@ -3017,260 +2929,31 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   start-triage-page!
-  "Force-start a triage for a bare watched-view row, whose ws-id IS the Notion
-   page-id. The triage that should have run never did (the page predates the
-   watcher, or its trigger was skipping), so there is no workstream and no ledger
-   — this is the one action that creates them.
-
-   Resolves the page FRESH from Notion (pickup/resolve-ref) rather than
-   synthesising the payload from the cache: the cache carries no :url, and the
-   trigger's own template needs {{event/title}} and {{event/page-id}}, so the
-   payload has to look exactly like a poller emit.
-
-   FORCE, deliberately: this calls spawn-and-submit! directly, bypassing the
-   whole routing pipeline coordinator.core/process-envelope! normally applies
-   before a spawn — trigger :filter, breaker, :dry-run?, :intake queue mode,
-   and tickets/gate-decision — and reproducing only its
-   ref-has-pending-run? dedup. One ticket, one deliberate click. A
-   :triage-bug trigger configured with any of those other checks would still
-   fire here, unfiltered.
-
-   ref-has-pending-run? only suppresses a REPEAT click once a first spawn
-   has already persisted its run — it is not a race guard: a bare row has
-   no workstream on click #1 (nothing for find-by-ref to resolve), so two
-   clicks landing inside spawn-records!'s own ensure-workstream! →
-   create-session-for-run! window can both spawn.
-
-   Does network I/O — callers run it off the render thread (ui.server/gate-resolve!
-   already resolves gate actions on a future). Returns {:decision :triaging} |
-   {:decision :no-trigger} | {:decision :already-in-flight} |
-   {:decision :unresolved :error <kw>}."
+  "Start a triage for a bare watched-view row, whose ws-id IS the Notion page-id: the triage
+   that should have run never did, so there is no workstream yet. The page is resolved fresh from
+   Notion, so the payload is what a poll would have emitted, and the fire is opened in the core as
+   intake opens one (`open-fire!`) — past the trigger's filter, breaker, dry run, queue mode and
+   ticket gate, which one deliberate click is. Does network I/O; callers run it off the render
+   thread. Returns {:decision :triaging} | {:decision :no-trigger} | {:decision
+   :already-in-flight} | {:decision :unresolved :error <kw>}."
   [project ws-id]
   (if-let [t (triage-trigger project)]
-    (let [ref (pickup/resolve-ref project ws-id (notion/keychain-token))]
+    (let [ref (resolve-ref project ws-id (notion/keychain-token))]
       (if (:error ref)
         {:decision :unresolved :error (:error ref)}
-        (let [;; Same six-key contract create-run! expects (runs.clj:233) —
-              ;; promote/start-triage! (promote.clj:90-98) builds this
-              ;; identical map from the same contract; change both together.
-              routed {:project         project
-                      :trigger         t
-                      :payload         ref
-                      :priority        (or (:priority t) 0)
-                      :session-profile (:session-profile t)
-                      :uncapped?       (boolean (:uncapped? t))}]
-          (if (spawn/ref-has-pending-run? routed)
-            {:decision :already-in-flight}
-            (do (cstate/ensure-dirs!)
-                (spawn/spawn-and-submit! routed {:fired-at (clock/now-iso)
-                                                 :fired-by "board"})
-                {:decision :triaging})))))
+        (case (open-fire! {:project project :trigger t :payload ref})
+          :opened  {:decision :triaging}
+          :running {:decision :already-in-flight}
+          {:decision :unresolved :error :core-refused})))
     {:decision :no-trigger}))
 
-(defn ^{:malli/schema [:=> [:cat :int :map] :string]}
-  option-input
-  "What choosing option `i` resumes the parked agent with. Built nido-side from
-   the ledger: the browser sends an id,
-   never prose, so an answer cannot arrive saying something the record never
-   offered.
 
-   It repeats the branch back in full — label, summary, consequence — because the
-   agent is resumed in a fresh turn that can no longer see the gate, and 'the
-   human picked B' is not an instruction. The last sentence is the one that keeps
-   the gate honest: an option that turns out not to hold is a NEW blocker, not a
-   licence to take the other branch on the human's behalf."
-  [i {:keys [label summary consequence]}]
-  (str "A human answered the blocker at the gate: option " (report/option-letter i)
-       " — " label ". " summary
-       (when consequence (str " " consequence))
-       " Proceed on that basis. Do not re-open the choice or switch to another"
-       " option yourself: if this one turns out not to hold once you are inside"
-       " the code, record a new :blocker naming what broke and park again."))
 
-(defn- reply-input
-  "What a free-text Reply resumes the parked agent with: the person's words, said to be theirs.
-   The substrate delivers every message nido gives as one from another session, which a session
-   reads as a peer's request rather than its user's answer to the report it parked on — so the
-   reply says whose it is. It carries no authority: the session briefing still holds that a
-   message never grants a permission."
-  [text]
-  (str "A human replied at the gate to what you parked on. Their words:\n\n" text))
 
-(defn- choose-option-recorded!
-  "The answer half of `choose-option!`: append the
-   :blocker-answered for option `i` of the blocker at `entry-seq`, then resume `parked`, the
-   session waiting on it, when there is one. A blocker a conductor's escalation parked is answered
-   to the conductor instead (`conductor/answer-escalation!`), resuming no seat."
-  [project ws-id entry-seq i opt parked]
-  (let [body (cond-> {:letter  (report/option-letter i)
-                      :label   (:label opt)
-                      :summary (:summary opt)}
-               (seq (:grants opt)) (assoc :grants (vec (:grants opt))))]
-    (case (conductor/answer-escalation! project ws-id entry-seq body)
-      ;; A conductor's escalation is answered to the conductor, as a :reply to it is: under its
-      ;; lock, resuming no seat.
-      nil     (do (cws/append-entry!
-                   project ws-id {:kind :blocker-answered}
-                   (pr-str (merge {:format :blocker-answered :blocker-seq entry-seq} body
-                                  {:resumed (:name parked)})))
-                  (if parked
-                    (assoc (resume/resume! project ws-id (option-input i opt) parked) :decision :answered)
-                    ;; Nobody to tell. The answer is on the ledger and the gate has stopped
-                    ;; asking; this is a real outcome, not a failure, so it must not read as
-                    ;; one — see ui.server/resolve-failure-msg.
-                    {:decision :answered-unresumed}))
-      :closed {:decision :option-stale}
-      {:decision :answered})))
 
-(defn- choose-option!
-  "ANSWER the blocker, then tell whoever is listening. The answer is written to
-   the ledger first (a :blocker-answered entry) and only then does this try to
-   resume a parked agent, because the two have different lifetimes: the question
-   is a durable ledger entry, the session that asked it is not.
 
-   That order is the whole point. Four of five blockers on this box outlived
-   their session — runs fail, budgets kill, sessions get torn down — and an
-   answer that exists only as a resume argument is available exactly when it is
-   least needed. Recorded, the decision stands with nobody listening: the next
-   session picking the workstream up reads it (/continue-ticket), and the gate
-   stops asking, because the latest entry is now the answer rather than the
-   question. It also means a resume that dies mid-turn cannot silently swallow a
-   human decision.
 
-   The branch is resolved against the CURRENT latest report, never against what
-   the browser was showing. A click carries a letter and `entry-seq`, the ledger
-   position the letter was rendered from: the ledger decides what the letter
-   meant, and the position decides whether that question is still the one being
-   asked. A letter alone would silently resolve against WHATEVER is latest — if
-   another tab answered and the agent parked on a new blocker with as many
-   branches, :option-a would pick branch A of a question the human never read.
-   A click whose position is not the latest entry, or which carries none, is
-   refused. After answering, the answer IS the latest entry, so a double-click
-   refuses on the same check.
 
-   The one other question a click may answer is the blocker the pipeline is halted on
-   (`pipeline/owed-blocker`) when later records have buried it. That is the blocker the gate
-   offers (`answered-report`), and it is owed until an answer names it. Answering it makes it
-   no longer owed, so a second click on it is refused just as above."
-  [project ws-id action-id entry-seq]
-  (let [latest (latest-report project ws-id)
-        report (cond
-                 (nil? entry-seq)                   nil
-                 (= entry-seq (:seq latest))        latest
-                 (= entry-seq (pipeline/owed-blocker project ws-id))
-                 (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
-                   (report-at base-dir entries entry-seq)))
-        i      (option-index action-id)]
-    (if-let [opt (get (vec (:options report)) i)]
-      (choose-option-recorded! project ws-id entry-seq i opt (parked-session project ws-id))
-      {:decision :option-stale})))
-
-(defn- answers-input
-  "What answering a blocker's several questions resumes the parked agent with: every question
-   `qs` (report/blocker-questions) in order, under it the answer `answers` (BlockerAnswer) records
-   for it — the branch picked, in full; the person's words; or that it was left open. Built
-   nido-side for option-input's reason: the agent resumes in a fresh turn that cannot see the
-   card."
-  [qs answers]
-  (str "A human answered the blocker at the gate, question by question.\n"
-       (str/join
-        (for [[{:keys [id question options]} {:keys [letter summary]}] (map vector qs answers)]
-          (str "\n" (str/upper-case id) " — " question "\n"
-               (cond
-                 letter  (let [{:keys [label consequence] :as o}
-                               (get (vec options) (.indexOf ^java.util.List report/option-letters letter))]
-                           (str "Answer: option " letter " — " label ". " (:summary o)
-                                (when consequence (str " " consequence))))
-                 summary (str "Answer, in their words: " summary)
-                 :else   "Left open."))))
-       "\n\nProceed on that basis. Do not re-open a choice or switch to another option yourself:"
-       " if one turns out not to hold once you are inside the code, record a new :blocker naming"
-       " what broke and park again."))
-
-(defn- answer-questions!
-  "ANSWER a blocker that asks several questions, one answer per question, then tell whoever is
-   listening — choose-option!'s order and its position check, for a card's submit. `picks` holds,
-   per question index, {:letter <the branch chosen>}, {:words <the person's answer>} or nothing
-   for a question left open. Each letter is resolved against the owed blocker's question at its
-   index; one that names no branch there, more picks than questions, or a position that no longer
-   names the blocker refuses the whole answer as stale, recording nothing. The answer's :grants is
-   the union of the picked branches'. A blocker a conductor's escalation parked is answered to the
-   conductor (`conductor/answer-escalation!`), resuming no seat, as a :reply to it is."
-  [project ws-id {entry-seq :seq picks :answers}]
-  (let [latest  (latest-report project ws-id)
-        report  (cond
-                  (nil? entry-seq)            nil
-                  (= entry-seq (:seq latest)) latest
-                  (= entry-seq (pipeline/owed-blocker project ws-id))
-                  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
-                    (report-at base-dir entries entry-seq)))
-        qs      (when (asks-several? report) (report/blocker-questions report))
-        picks   (vec picks)
-        answer  (fn [{:keys [id options]} {:keys [letter words]}]
-                  (cond
-                    letter (when-let [o (get (vec options) (.indexOf ^java.util.List report/option-letters letter))]
-                             (cond-> {:question-id id :letter letter :label (:label o) :summary (:summary o)}
-                               (seq (:grants o)) (assoc ::grants (:grants o))))
-                    (not (str/blank? (str words))) {:question-id id :summary (str/trim (str words))}
-                    :else {:question-id id}))
-        answers (when (and qs (<= (count picks) (count qs)))
-                  (mapv #(answer %1 (get picks %2)) qs (range)))]
-    (if (or (nil? answers) (some nil? answers))
-      {:decision :option-stale}
-      (let [grants (vec (distinct (mapcat ::grants answers)))
-            stored (mapv #(dissoc % ::grants) answers)
-            body   (cond-> {:answers stored} (seq grants) (assoc :grants grants))]
-        (case (conductor/answer-escalation! project ws-id entry-seq body)
-          ;; A conductor's escalation is answered to the conductor, as a :reply to it is: under its
-          ;; lock, resuming no seat.
-          nil     (let [parked (parked-session project ws-id)]
-                    (cws/append-entry!
-                     project ws-id {:kind :blocker-answered}
-                     (pr-str (merge {:format :blocker-answered :blocker-seq entry-seq} body
-                                    {:resumed (:name parked)})))
-                    (if parked
-                      (assoc (resume/resume! project ws-id (answers-input qs stored) parked) :decision :answered)
-                      {:decision :answered-unresumed}))
-          :closed {:decision :option-stale}
-          {:decision :answered})))))
-
-(defn- answer-owed!
-  "Record `text`, the person's own words, as the answer to the blocker the pipeline is halted on
-   (`pipeline/owed-blocker`). Returns {:decision :answered-unresumed}, or nil when no blocker is
-   owed or the text is blank, so the caller falls through to its own refusal.
-
-   This is the free-text half of choose-option! for a gate nobody is parked on. It writes the same
-   entry `bb nido:workstream:blocker:answer` writes: the answer goes on the ledger, and whoever
-   picks the workstream up next reads it there."
-  [project ws-id text]
-  (when-let [n (and (not (str/blank? (str text))) (pipeline/owed-blocker project ws-id))]
-    (cws/append-entry! project ws-id {:kind :blocker-answered}
-                       (pr-str {:format :blocker-answered :blocker-seq n :summary (str text)
-                                :resumed nil}))
-    {:decision :answered-unresumed}))
-
-(defn- land!
-  "Grant the landing the gate offers: the person's :merge grant, recorded by
-   `conductor/grant-landing!`, which `conductor/instruct-landing!` then hands the seat to land by
-   its project's declared procedure. Nothing is landed here and no merge run is queued.
-
-   Refused when the position no longer owes a landing (:nothing-to-land — granted or merged since,
-   or sent back), when the click names another record than the one owed (:land-stale), and when
-   the workstream has nobody to land it — not activated, or not at :published (:not-landable).
-   Nothing is written on a refusal."
-  [project ws-id entry-seq]
-  (let [p (keyword (name project))]
-    (cond
-      (not= :land (awaiting-human (pipeline/of p ws-id))) {:decision :nothing-to-land}
-
-      (or (nil? entry-seq) (not= entry-seq (:seq (gate-report p ws-id))))
-      {:decision :land-stale}
-
-      :else
-      (let [{:keys [granted refused]} (conductor/grant-landing! p ws-id)]
-        (if granted
-          {:decision :landing-granted :seq granted}
-          {:decision :not-landable :because refused})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   advance-phase!
@@ -3315,6 +2998,134 @@
    :first-turn {:spec {:executor     (or (:agent trigger) :claude)
                        :instructions (str "/" (name (:skill trigger)) " "
                                           (triggers/render-payload (:payload trigger) payload))}}})
+
+;; ── arrivals: a fire, a pen, a pickup ─────────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  external-ref
+  "The external ref an event payload names, or nil when it carries no usable id: its :adapter
+   (default :notion) and :id, with :title, :url and :page-id where present."
+  [payload]
+  (let [id (:id payload)]
+    (when (and id (not (str/blank? id)))
+      (cond-> {:adapter (or (:adapter payload) :notion) :id id}
+        (:title payload)   (assoc :title (:title payload))
+        (:url payload)     (assoc :url (:url payload))
+        (:page-id payload) (assoc :page-id (:page-id payload))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :Workstream]}
+  ensure-workstream!
+  "The workstream an arrival's `payload` is for: the one its ref already names, or a new one
+   stamped with the payload's facets. Not atomic: arrivals are dispatched one at a time."
+  [project payload]
+  (let [facets (facets/select-facets (views/facet-properties project) payload)]
+    (if-let [ref (external-ref payload)]
+      (or (cws/find-by-ref project (:adapter ref) (:id ref))
+          (cws/create! project {:external-refs [ref] :facets facets}))
+      (cws/create! project {:external-refs [] :facets facets}))))
+
+(declare core-open?)
+
+(defn ^{:malli/schema [:=> [:cat :map] :keyword]}
+  open-fire!
+  "Open the unit a spawning fire `routed` ({:project :trigger :payload}) asks for: its workstream
+   found by the event's ref or made, then the trigger's unit opened in the core, keyed by the fire
+   so a re-emit is answered rather than repeated. Answers :opened, :running (a unit of this
+   trigger is still open there), :settled (the source works a ref once, and it has a workstream)
+   or :refused."
+  [routed]
+  (let [project (:project routed)
+        ref     (external-ref (:payload routed))
+        pre     (when ref (cws/find-by-ref project (:adapter ref) (:id ref)))
+        tname   (name (-> routed :trigger :name))
+        units   #(vals (:units (wcore/state project %)))]
+    (cond
+      (and pre (true? (:once-per-ref? (:payload routed)))) :settled
+      (and pre (some #(and (= :open (:status %)) (= tname (:trigger %))) (units (:id pre)))) :running
+      :else
+      (let [w    (or pre (ensure-workstream! project (:payload routed)))
+            unit (str tname "-" (subs (str (random-uuid)) 0 8))
+            goal (str/trim (str (name (-> routed :trigger :skill)) " "
+                                (or (-> routed :payload :title) (-> routed :payload :id) "")))
+            k    (str "fire/" (wcore/ws-key project (:id w)) "/" tname "/"
+                      (or (:id ref) (random-uuid)) "/" (count (units (:id w))))]
+        (if (wcore/admitted? (wcore/act! project (:id w) (fire-unit routed unit goal) {:key k}))
+          :opened
+          :refused)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :Workstream]}
+  enqueue-inbox!
+  "Pen a queue-mode fire for the person: its workstream, deduped on the payload's ref, made with
+   the trigger and payload under :intake so a promote opens what the fire would have, and placed
+   at :incoming. The core is told nothing until the person promotes it."
+  [{:keys [project payload trigger]}]
+  (let [ref (external-ref payload)
+        pen! #(cws/append-entry! project % {:kind :stage-set}
+                                 (pr-str {:format :stage-set :stage :incoming :by :nido}))]
+    (if-let [existing (when ref (cws/find-by-ref project (:adapter ref) (:id ref)))]
+      (if (empty? (:entries existing))
+        (do (pen! (:id existing)) (cws/read-ws project (:id existing)))
+        existing)
+      (let [w (cws/create! project {:external-refs (if ref [ref] [])
+                                    :facets (facets/select-facets (views/facet-properties project) payload)
+                                    :intake {:trigger (:name trigger) :payload payload}})]
+        (pen! (:id w))
+        (cws/read-ws project (:id w))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :int :int] [:vector :string]]}
+  expire-stale!
+  "Drop every penned workstream of `project` still at :incoming and older than `max-age-ms` at
+   `now-ms`, in its work records and, where the core holds it, there. Answers their ids."
+  [project max-age-ms now-ms]
+  (->> (cws/list-ids project)
+       (keep #(cws/read-ws project %))
+       (filter (fn [w] (and (nil? (cws/closure w))
+                            (= :incoming (standing/chosen-stage project (:id w) w))
+                            (>= (- now-ms (if-let [c (:created-at w)] (.toEpochMilli (java.time.Instant/parse c)) now-ms))
+                                max-age-ms))))
+       (mapv (fn [w]
+               (cws/close! project (:id w) :dropped)
+               (try (when (core-open? project (:id w)) (core-resolve! project (:id w) :drop nil))
+                    (catch Exception _ nil))
+               (:id w)))))
+
+(defn- resolve-ref
+  "Resolve `input` — a Notion URL, page id or BR-#### — to {:id :page-id :url :title}, or
+   {:error <kw>}."
+  [project input token]
+  (let [norm #(select-keys (notion/normalise-page %) [:id :page-id :url :title])]
+    (cond
+      (str/blank? token) {:error :no-token}
+      (notion/extract-page-id input)
+      (let [page (notion/retrieve-page (notion/extract-page-id input) token)]
+        (cond (:error page) {:error (:error page)}
+              (str/blank? (:id (norm page))) {:error :not-a-ticket}
+              :else (norm page)))
+      :else
+      (if-let [[_ n] (re-matches #"(?i)(?:BR-)?(\d+)" (str/trim (str input)))]
+        (try
+          (let [ds   (notion/resolve-data-source-id (:database (views/load-registry project)) token)
+                resp (notion/data-source-query ds token {:filter {:property "ID" :unique_id {:equals (parse-long n)}}})]
+            (cond (:error resp) {:error (:error resp)}
+                  (first (:results resp)) (norm (first (:results resp)))
+                  :else {:error :not-found}))
+          (catch Exception _ {:error :notion-error}))
+        {:error :unrecognized-input}))))
+
+(defn- start-ticket!
+  "Start ticket `r` ({:id :page-id :url :title}) as the person's: its ticket record opened, its
+   work records written (`start/start-ticket!`), and its unit opened in the core, which provisions
+   its session. Answers {:decision :driving :ref :continuing? :ws-id} or {:decision :unresolved
+   :error <why> :ref}."
+  [project {:keys [id page-id url title] :as r}]
+  (let [existing (cws/find-by-ref-id project id)]
+    (tickets/open! project id {:notion-page-id page-id :url url :title title :opened-by :pickup})
+    (let [w (or existing (ensure-workstream! project {:id id :page-id page-id :url url :title title}))
+          s (start/start-ticket! project {:ws-id (:id w)})
+          d (when (= :started (:decision s)) (core-resolve! project (:id w) :promote nil))]
+      (if (= :promoted (:decision d))
+        {:decision :driving :ref r :continuing? (some? existing) :ws-id (:id w)}
+        {:decision :unresolved :error (or (when-not d (:decision s)) (:because d) :core-refused) :ref r}))))
 
 (defn- penned-fire
   "The fire a workstream penned by queue-mode intake was held back from, rebuilt from what the pen
@@ -3385,12 +3196,14 @@
       (core-decision (act! {:command :give-grant :grant :merge :by "person"}) :granted)
 
       ;; A workstream the pen held back starts as its fire would have.
+      ;; The workstream's first unit is named for it; a later arc's, after its own count.
       (= :promote action-id)
-      (core-decision (act! (if-let [fire (penned-fire project ws-id)]
-                             (fire-unit fire ws-id (intent-goal project ws-id))
-                             {:command :open-unit :unit ws-id :project (name project)
-                              :goal (intent-goal project ws-id)}))
-                     :promoted)
+      (let [unit (if (contains? (:units w) ws-id) (str ws-id "-" (count (:units w))) ws-id)]
+        (core-decision (act! (if-let [fire (penned-fire project ws-id)]
+                               (fire-unit fire unit (intent-goal project ws-id))
+                               {:command :open-unit :unit unit :project (name project)
+                                :goal (intent-goal project ws-id)}))
+                       :promoted))
 
       (#{:done :drop} action-id)
       (do (doseq [u (vals (:units w)) :when (= :open (:status u))]
@@ -3468,63 +3281,49 @@
      (contains? #{:reply :withdraw :land :promote :done :drop} action-id)
      (or (core-resolve! project ws-id action-id payload) {:decision :core-refused :because "nothing to do"})
 
+     ;; Not a `case` branch: the id set is derived from report/option-letters, and case needs
+     ;; literals — spelling six of them here is a second copy of that vector.
      (option-action? action-id)
      (core-resolve! project ws-id action-id payload)
 
-     ;; Not a `case` branch: the id set is derived from report/option-letters, and
-     ;; case needs literals — spelling six of them here is a second copy of that
-     ;; vector, free to drift from the one the buttons are built from.
-     (option-action? action-id) (choose-option! project ws-id action-id payload)
-
      :else
      (case action-id
-       :promote (set-stage! project ws-id :in-progress)
-       :done    (set-stage! project ws-id :done)
-       :drop    (do (cws/close! project ws-id :dropped nil :person) {:decision :dropped})
        ;; An Accept answers every question it was shown, open ones as nil: one that carried no
        ;; answers answers none, so a report that asks is refused it — only Defer leaves all open.
        :apply   (apply! project ws-id (if (map? payload)
                                         {:at-seq (:seq payload) :answers (vec (:answers payload))}
                                         {:at-seq payload :answers []}))
        :defer   (apply! project ws-id {:at-seq payload})
-       ;; A reply to a conductor's escalation is that blocker's answer, in the person's own words,
-       ;; and reaches the conductor as a hand-back on the next pass; any other resumes the parked
-       ;; agent.
-       :reply   (cond
-                  (conductor/answer! project ws-id payload) {:decision :answered}
-                  (parked-session project ws-id) (resume/resume! project ws-id (reply-input payload))
-                  :else (or (answer-owed! project ws-id payload)
-                            (resume/resume! project ws-id (reply-input payload))))
-       :answer-questions (answer-questions! project ws-id payload)
        :assert-gate  (advance-phase! project ws-id payload)
-       :land         (land! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
 (def ^:private activation-preamble
   (str "nido's recipe is now active on this workstream. Write the records it owes — intent, "
        "baseline, design — from your understanding of this session so far, as /design says; the "
-       "review loops exist to check that understanding, so do not re-derive it from scratch. Then:\n\n"))
+       "review loops exist to check that understanding, so do not re-derive it from scratch."))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:? [:map [:cwd {:optional true} [:maybe :string]]]]] :map]}
   activate!
   "Hand `ws-id` to the core for a person: their command opening its unit, in `session`'s working
    copy `:cwd` when they gave it from one — that session is then the unit's, recorded ready, and
-   its turns run there — else in a session the core provisions. Activating twice changes nothing.
-   Answers {:ws-id :already? :instruction :refused}, the instruction being what the session's
-   agent is to do now — the surface delivers it."
-  [project ws-id _session & [{:keys [cwd]}]]
+   its turns run there — else in a session the core provisions; given `:brief`, that is the unit's
+   first turn, run once its session is ready. Activating twice changes nothing. Answers {:ws-id
+   :already? :instruction}, the instruction being what the session's agent is to do now — the
+   surface delivers it; throws when the core refuses."
+  [project ws-id _session & [{:keys [cwd brief]}]]
   (let [p        (keyword (name project))
         already? (contains? (:units (wcore/state p ws-id)) ws-id)
         o        (when-not already?
                    (wcore/act! p ws-id (cond-> {:command :open-unit :unit ws-id :project (name p)
                                                 :goal (intent-goal p ws-id)}
-                                         cwd (assoc :session-cwd cwd))))]
+                                         cwd   (assoc :session-cwd cwd)
+                                         brief (assoc :first-turn {:spec {:executor :claude :instructions brief}}))))]
     (when (and o (not (wcore/admitted? o)))
       (throw (ex-info (str "the core refused — " (or (some-> (get-in o [:refused :reason]) name) (:error o)))
                       {:ws-id ws-id :outcome o})))
     {:ws-id       ws-id
      :already?    already?
-     :instruction (str activation-preamble (:practice (seats/default-embodiment)))}))
+     :instruction activation-preamble}))
 
 (defn- pause-of
   "The standing pause on workstream `w` as {:at :note}, or nil when none stands."
@@ -3562,27 +3361,7 @@
     (doseq [u open] (wcore/act! project ws-id {:command :hold-unit :unit (:id u)}))
     {:ws-id ws-id :was? (boolean (seq open))}))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
-  chat-place
-  "Where the chat of workstream `ws-id` runs, as {:session <name>}, or nil when it has none to
-   offer: no workstream of the project has that id, or it is closed and no chat was ever held on
-   it — a closed one keeps the chat whose session record still stands. Reads only; on an open
-   workstream the session need not exist yet (`open-chat!`)."
-  [project ws-id]
-  (let [p (keyword (name project))
-        w (cws/read-ws p ws-id)
-        n (seats/chat-session ws-id)]
-    (when (and w (or (not (cws/closure w)) (:chat (csession/read-session p ws-id n))))
-      {:session n})))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
-  open-chat!
-  "Make the session workstream `ws-id`'s chat runs in ready for a conversation: on that
-   workstream, occupying no seat, up with no services. Slow the first time, when it makes the
-   working copy. Throws, naming why in :reason, for no such workstream, or a closed one no chat
-   was held on. Answers {:session}."
-  [project ws-id]
-  (seats/chat-session! (keyword (name project)) ws-id))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :any]}
   start!
@@ -3603,28 +3382,6 @@
   [project session-name]
   (start! project session-name {:wait false}))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
-  workstream-listing
-  "The substrate's rows for one workstream: every background session its session records name,
-   and every session started in one of its session homes or the worktrees they link to — what
-   the session list shows beside nido's own — each with :baseline-shown?. Read from a listing at
-   most two seconds old."
-  [project ws-id]
-  (let [sessions (csession/list-sessions project ws-id)
-        named    (set (keep #(get-in % [:claude :session-id]) sessions))
-        real     #(try (str (fs/canonicalize %)) (catch Exception _ nil))
-        dirs     (set (keep real (mapcat (fn [s]
-                                           (let [home (sstate/session-home-dir (name project) (:name s))]
-                                             [home (str (fs/path home "worktree"))]))
-                                         sessions)))]
-    (->> (vals (conduct/live-states {}))
-         (filter #(or (named (:sessionId %)) (dirs (real (:cwd %)))))
-         ;; Whether the session's own events show the launch baseline, by the one check
-         ;; conduct makes before adopting, sending or waking: its latest start recorded by
-         ;; nido's hook from the directory it runs in — one of this workstream's, by the
-         ;; filter above — and auto mode on its latest event.
-         (map #(assoc % :baseline-shown?
-                      (nil? (conduct/baseline-refusal (conduct/baseline-shown (:sessionId %)) %)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   open-target
@@ -3637,7 +3394,7 @@
   (let [work       (filter csession/work-session? (csession/list-sessions project ws-id))
         work-names (set (map :name work))
         rows       (filter #(and (:recorded? %) (work-names (:name %)))
-                           (wsv/session-rows project ws-id (workstream-listing project ws-id)))
+                           (wsv/session-rows project ws-id []))
         live-names (->> work
                         (filter csession/live?)
                         (map :name)
@@ -3646,23 +3403,7 @@
                        (first rows))]
     (when pick {:project project :session (:name pick)})))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :string]]}
-  driven-conversation
-  "The background conversation a person entering `session` is to be put in front of: the one its
-   record names, unless nido retired it. nil for a session with none — a person's own shell."
-  [project session]
-  (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-    (let [c (:claude (csession/read-session (keyword project) ws-id session))]
-      (when (not= :retired (:driver c)) (:session-id c)))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :string]]}
-  attach-command
-  "The command that attaches a terminal to `session`'s driven conversation, as a spawned child's
-   tab runs it; nil when it has none (`driven-conversation`)."
-  [project session]
-  (when-let [sid (driven-conversation project session)]
-    (str "bb --config " (str (fs/path (core/nido-source-dir) "bb.edn"))
-         " nido:session:attach :session-id " sid)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :boolean]}
   reclaimed?
@@ -3957,7 +3698,6 @@
                    (when (and (= 1 (count sess))
                               (some #(not= (:id w) (:id %))
                                     (owners-of (:name (first sess)))))
-                     (seats/retire-conductor! project (:id w))
                      (cws/delete! project (:id w))
                      (:id w)))))
          vec)))
@@ -4246,7 +3986,12 @@
   "Resolve a pasted Notion URL / page-id / BR-#### and start its ticket: its workstream
    activated, its impl session brought up."
   [project input token]
-  (pickup/pickup! project input token))
+  (let [r (resolve-ref project input token)]
+    (cond
+      (:error r) {:decision :unresolved :error (:error r)}
+      ;; An unaccepted Slack proposal holds the ticket: only accepting it at its gate starts it.
+      (tickets/held-by-gate? project (:id r)) {:decision :unresolved :error :awaiting-gate :ref r}
+      :else (start-ticket! project r))))
 
 (def start-intent-trigger
   "The leg a described intent is enqueued at. Named here because a surface asking whether a
@@ -4288,9 +4033,14 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   file-findings!
   "File a staging findings round on a shipped workstream. `opts` = {:items […] :staging-ref?
-   :note? :session?}. Appends the event, seeds the tracker, reopens to :in-progress."
+   :note? :session?}. Appends the event, seeds the tracker, reopens to :in-progress, and — for a
+   ticket it started again — reopens it in the core and opens its unit there."
   [project ws-id opts]
-  (findings/file! project ws-id opts))
+  (let [r (findings/file! project ws-id opts)]
+    (when (= :started (get-in r [:start :decision]))
+      (wcore/act! project ws-id {:command :reopen-workstream})
+      (core-resolve! project ws-id :promote nil))
+    r))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
   session-started!
@@ -4515,6 +4265,43 @@
         (catch clojure.lang.ExceptionInfo e
           {:refused (ex-message e)})))))
 
+(def ^:private drain-core
+  "How lane-drain reaches the core: a drain's state, a keyed post to its conductor, a slice's unit
+   opened on its brief, and a slice's landing granted."
+  {:state       (fn [project ws-id] (wcore/state project ws-id))
+   :post!       (fn [project ws-id k text]
+                  (wcore/act! project ws-id {:command :post-chat :message k :text text}
+                              {:key (str "drain/" (name project) "/" ws-id "/" k)}))
+   :open-slice! (fn [project slice-id unit brief]
+                  (let [r (wcore/act! project slice-id
+                                      {:command :open-unit :unit unit :project (name project)
+                                       :goal (str "slice " slice-id)
+                                       :first-turn {:spec {:executor :claude :instructions brief}}}
+                                      {:key (str "slice/" (name project) "/" slice-id "/" unit)})]
+                    (when-not (wcore/admitted? r)
+                      (throw (ex-info (str "the core refused the slice's unit: " (pr-str (or (:refused r) (:error r))))
+                                      {:reason :core-refused})))
+                    r))
+   :land!       (fn [project slice-id] (:decision (core-resolve! project slice-id :land nil)))})
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  drain-fire!
+  "Carry out one fire a drain source emitted (`lane-drain/handle-fire!`), reaching the core."
+  [fire]
+  (drain-lane/handle-fire! drain-core fire))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  drain-wakes!
+  "Wake each open drain's coordinator for each event it has not been woken for."
+  [project]
+  (drain-lane/wakes! project drain-core))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  drain-land!
+  "The person landing slice `slice-id` (`lane-drain/land!`)."
+  [project slice-id]
+  (drain-lane/land! drain-core project slice-id))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword [:maybe :string]] :map]}
   drain-act!
   "Carry out one of the person's acts on drain `ws-id` from the drains page: :approve the recipe
@@ -4525,7 +4312,7 @@
     (try
       {:ok (case act
              :approve (drain-lane/approve! project ws-id (parse-long (str arg)))
-             :land    (:id (drain-lane/land! project (str arg)))
+             :land    (:slice (drain-land! project (str arg)))
              :close   (drain-lane/close! project ws-id))}
       (catch clojure.lang.ExceptionInfo e
         {:refused (ex-message e)}))))

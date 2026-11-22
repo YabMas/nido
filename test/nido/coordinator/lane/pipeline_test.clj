@@ -14,7 +14,6 @@
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.reentry :as reentry]
-   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.pipeline :as p]))
 
 (defn- with-tmp [f]
@@ -1496,19 +1495,9 @@
           (sess/create! :brian id {:name "human-1" :weight :light :autonomy nil})
           (is (false? (:live (p/status :brian id))))
           (is (true? (:live (p/status :brian id #{"human-1"})))))
-        (testing "a background session is live while listed working with a process, named by Claude Code yet or not"
-          (sess/create! :brian id {:name "bg-1" :weight :light :autonomy {:skill :x :first-message "x" :agent :claude
-                                                                         :claude-session-id nil :trigger :t
-                                                                         :limits {} :priority 0 :uncapped? false
-                                                                         :on-promote nil :phase :running
-                                                                         :phase-history [] :error nil}})
-          (sess/update-substrate! :brian id "bg-1"
-                                  (constantly {:claude nil :dispatching {:token "T" :at "t" :bg-id "b1"}}))
-          (with-redefs [conduct/live-states (constantly {"s-b1" {:sessionId "s-b1" :id "b1" :pid 9 :state "working"}})]
-            (is (true? (:live (p/status :brian id))) "a start in flight, by the :bg-id its note keeps"))
-          (with-redefs [conduct/live-states (constantly {"s-b1" {:sessionId "s-b1" :id "b1" :pid 9 :state "blocked"
-                                                                 :status "waiting" :waitingFor "input needed"}})]
-            (is (false? (:live (p/status :brian id))) "a process waiting on a dialog is not working")))))))
+        (testing "a background session's listing is no longer read: the core's turns are what run"
+          (sess/create! :brian id {:name "bg-1" :weight :light :autonomy nil})
+          (is (false? (:live (p/status :brian id)))))))))
 
 (defn- faceted!
   "A session on `id` driven through a facet, as a spawn leaves it: no :autonomy, a :claude facet."
@@ -1520,30 +1509,11 @@
                                                        :announced-blocked? false :recovered-boot nil}
                                                       facet))))
 
-(deftest a-driven-session-is-live-only-mid-turn
-  (with-tmp
-    (fn [_]
-      (let [[id _] (ledger)]
-        (faceted! id "spawned" {})
-        (testing "its services being up does not make a session nido drives live"
-          (with-redefs [conduct/live-states (constantly {})]
-            (is (false? (:live (p/status :brian id #{"spawned"}))))))
-        (doseq [[row live?] [[{:pid 1 :state "working" :status "busy"} true]
-                             [{:pid 1 :state "working" :status "idle"} true]
-                             [{:pid 1 :state "blocked" :status "idle"} false]
-                             ;; Woken by its own subagents after a turn that ended asking a person:
-                             ;; the task still reads blocked, the process is working.
-                             [{:pid 1 :state "blocked" :status "busy"} true]
-                             [{:pid 1 :state "blocked" :status "waiting" :waitingFor "input needed"} false]
-                             [{:state "done"} false]]]
-          (with-redefs [conduct/live-states (constantly {"s-spawned" (assoc row :sessionId "s-spawned")})]
-            (is (= live? (:live (p/status :brian id))) (pr-str row))))))))
-
 (deftest a-stall-says-why
   (with-tmp
     (fn [_]
       (let [[id _] (ledger)]
-        (with-redefs [conduct/live-states (constantly {})]
+        (do
           (testing "with no turn end recorded, it says so"
             (faceted! id "worker" {})
             (let [s (p/status :brian id)]

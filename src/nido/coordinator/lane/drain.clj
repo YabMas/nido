@@ -10,40 +10,37 @@
    turns by the commit gate, which reads their tasks as a person's; this namespace does not try to
    tell a person from a turn on its own.
 
-   ONE COORDINATOR. The drain workstream's conductor is its coordinator; a slice has none, and a
-   slice's hand-backs are posted to its drain's coordinator — lane-conductor's to carry out, with
-   this namespace's coordinator brief and slice brief.
+   ONE COORDINATOR. The drain workstream's conductor — a core turn on the drain with no unit — is
+   its coordinator; a slice is a unit of its own workstream, and its turns' ends reach its drain's
+   coordinator through the core.
 
-   WAKES. The coordinator is given a turn on each new census, landing and failed landing of its
-   drain: a :wake posted to the drain's conductor, keyed by the event so it is posted once. A wake
-   owes no decision. While the wake for the drain's newest such event has not been delivered to the
-   coordinator's session, no slice of the drain starts — the coordinator plans from what it has
-   seen, and a start must not race what it has not.
+   THE CORE IS REACHED THROUGH `core`, a map the work plane supplies, since this lane may not reach
+   the work plane that calls it: {:state (fn [project ws-id]) the core's state of a workstream or
+   nil, :post! (fn [project ws-id key text]) a chat post to its conductor keyed `key`,
+   :open-slice! (fn [project slice-id unit brief]) the slice's unit opened with `brief` as its first
+   turn, :land! (fn [project slice-id]) the person's landing granted on the slice}.
 
-   LANDING. A slice lands by a landing Run in its own session — /drive-home given to it — and never
-   through the serial merge lane: landing Runs of sibling slices run side by side, and none starts
-   while a slice it rests on has not landed. In this phase a landing is always the person's act;
-   one of a slice the coordinator has not cleared is recorded on its Run as the person's override."
+   WAKES. The coordinator is given a turn on each new census and landing of its drain: a chat post
+   to the drain's conductor whose message id is the event's key, so each is posted once. A wake owes
+   no decision. While one has not been heard — not posted, or still in the conductor's inbox — no
+   slice of the drain starts: the coordinator plans from what it has seen, and a start must not
+   race what it has not.
+
+   LANDING. A slice lands by the person's merge grant on its workstream: sibling slices land side
+   by side, and none while a slice it rests on has not landed."
   (:require
    [babashka.fs :as fs]
    [babashka.process :as process]
    [clojure.string :as str]
    [nido.coordinator.lane.pipeline :as pipeline]
-   [nido.coordinator.lane.seats :as seats]
-   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.generation :as generation]
-   [nido.coordinator.record.runs :as runs]
-   [nido.coordinator.record.seats :as rseats]
    [nido.coordinator.record.session :as session]
-   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
    [nido.coordinator.source.drain :as source-drain]
-   [nido.coordinator.source.queue :as queue]
    [nido.platform.project :as project]
-   [nido.session.lifecycle :as lifecycle])
-  (:import [java.util UUID]))
+   [nido.session.lifecycle :as lifecycle]))
 
 (defn- refuse! [message reason data]
   (throw (ex-info message (assoc data :reason reason :refused :drain-lane))))
@@ -72,34 +69,33 @@
 
 ;; ── who is asking ───────────────────────────────────────────────────────────
 
-(defn- here [] (System/getProperty "user.dir"))
 
-(defn- caller
-  "The session record `cwd` is in — its worktree or its home — as {:ws-id :record}, or nil."
-  [project cwd]
-  (let [n (or (some-> (lifecycle/session-from-cwd cwd) :session)
-              (second (lifecycle/session-home-coords-from-cwd cwd)))]
-    (when-let [ws-id (and n (session/workstream-id-for project n))]
-      {:ws-id ws-id :record (session/read-session project ws-id n)})))
+
+(defn- turn-ws
+  "The workstream the core turn this process runs in works on, as [project ws-id], or nil outside
+   one. The core names it \"<project>/<ws-id>\" in NIDO_CORE_WS."
+  []
+  (when-let [k (System/getenv "NIDO_CORE_WS")]
+    (let [i (.indexOf ^String k "/")]
+      (when (pos? i) [(subs k 0 i) (subs k (inc i))]))))
 
 (defn- coordinating?
-  "Whether the process runs in drain `drain-id`'s conductor's session — its coordinator."
-  ([project drain-id] (coordinating? project drain-id (here)))
-  ([project drain-id cwd]
-   (let [{:keys [ws-id record]} (caller project cwd)]
-     (boolean (and (= drain-id ws-id) (:conductor record))))))
+  "Whether the process runs in drain `drain-id`'s conductor turn — its coordinator: a core turn on
+   the drain with no unit."
+  [project drain-id]
+  (and (= [(name project) drain-id] (turn-ws)) (nil? (System/getenv "NIDO_CORE_UNIT"))))
 
 (defn- slice-calling
-  "The slice workstream of drain `drain-id` whose session the process runs in, or nil."
-  [project drain-id cwd]
-  (let [{:keys [ws-id]} (caller project cwd)
-        w (some->> ws-id (ws/read-ws project))]
+  "The slice workstream of drain `drain-id` whose core turn the process runs in, or nil."
+  [project drain-id]
+  (let [[p ws-id] (turn-ws)
+        w (when (= p (name project)) (some->> ws-id (ws/read-ws project)))]
     (when (and w (drain/slice? w) (= drain-id (drain/drain-of w)))
       ws-id)))
 
 (defn- must-coordinate! [project drain-id]
   (when-not (coordinating? project drain-id)
-    (refuse! (str "Only " drain-id "'s coordinator — its conductor's session — pulls this lever")
+    (refuse! (str "Only " drain-id "'s coordinator — its conductor turn — pulls this lever")
              :not-the-coordinator {:ws-id drain-id})))
 
 ;; ── briefs ──────────────────────────────────────────────────────────────────
@@ -157,9 +153,8 @@
               (remove #(answered (:seq %)) (ws/entries-of project drain-id :blocker)))]
     (str "You coordinate drain " drain-id " of " (name project) ". You occupy no seat and write no code. "
          "You plan the roll-out slice by slice as the census moves, never once up front; you answer "
-         "each slice's hand-back with exactly one decision (`bb nido:seats:decide :hand-back <id> …`, "
-         "instructing a slice with `:instruct '[{:slice <ws-id> :text \"…\"}]'` or "
-         "escalating); you clear ready slices with the residue they leave; you answer misfits. "
+         "each slice's turn end with exactly one decision — instructing the slice, or asking the "
+         "person; you clear ready slices with the residue they leave; you answer misfits. "
          "A wake (a new census, a landing, a failed landing) owes no decision.\n\n"
          "Charter: established by " (pr-str (:established-by ch)) "; exit criterion: " (:exit ch) "\n"
          "Recipe: " (if-let [v (drain/version w)]
@@ -247,13 +242,12 @@
    session's slice belongs to. Answers {:drain :misfit}."
   ([project {:keys [site note]}] (misfit! project nil {:site site :note note}))
   ([project drain-id {:keys [site note]}]
-   (let [cwd   (here)
-         {:keys [ws-id]} (caller project cwd)
-         own   (some->> ws-id (ws/read-ws project) drain/drain-of)
+   (let [[p ws-id] (turn-ws)
+         own   (when (= p (name project)) (some->> ws-id (ws/read-ws project) drain/drain-of))
          d     (or drain-id own)
-         slice (when d (slice-calling project d cwd))]
+         slice (when d (slice-calling project d))]
      (when-not slice
-       (refuse! "A misfit is recorded from the session of a slice of the drain" :not-a-slice {:drain d}))
+       (refuse! "A misfit is recorded from a turn of a slice of the drain" :not-a-slice {:drain d}))
      {:drain d :misfit (drain/record-misfit! project d {:slice slice :site site :note note})})))
 
 ;; ── the person's acts ───────────────────────────────────────────────────────
@@ -294,79 +288,61 @@
 
 ;; ── wakes ───────────────────────────────────────────────────────────────────
 
-(defn- landing-runs
-  "Every landing Run of the drain's slices, oldest first."
-  [project drain-id]
-  (->> (runs/list-run-ids)
-       (filter #(str/includes? % (str "-" (name project) "-drain-land-")))
-       (keep runs/read-run)
-       (filter #(= drain-id (get-in % [:event-payload :drain])))
-       (sort-by #(-> % :state-history first :at))))
 
 (defn- wake-events
   "The events drain `w` wakes its coordinator for, each {:key :text} keyed by its event: every census
-   reading, each landed slice, and each landing Run that failed and left its slice unlanded (read
-   off the slice's records, as `drain/landing-outcome` settles it) — every one, never a newest per
-   kind, so a reading appended before the last pass is woken too; the keys post each once. Grouped
-   by kind, not ordered by when each happened."
+   reading and each landed slice — every one, never a newest per kind, so a reading appended before
+   the last pass is woken too; the keys post each once. Grouped by kind, not ordered by when each
+   happened."
   [project w]
-  (let [d (:id w)]
-    (concat
-     (for [c (drain/censuses w)]
-       {:key (str "wake:census:" (:seq c))
-        :text (str "Census #" (:seq c) " under recipe version " (:recipe c) ": " (:remaining c) " remaining.")})
-     (for [{:keys [ws-id]} (drain/slices w) :when (source-drain/landed? project ws-id)]
-       {:key (str "wake:landed:" ws-id) :text (str "Slice " ws-id " landed.")})
-     (for [r (landing-runs project d)
-           :when (and (#{:failed :awaiting-review} (:state r))
-                      (not (source-drain/landed? project (:workstream-id r))))]
-       {:key (str "wake:landing-failed:" (:id r))
-        :text (str "The landing of slice " (:workstream-id r) " (Run " (:id r) ") did not finish: " (name (:state r)) ".")}))))
+  (concat
+   (for [c (drain/censuses w)]
+     {:key (str "wake:census:" (:seq c))
+      :text (str "Census #" (:seq c) " under recipe version " (:recipe c) ": " (:remaining c) " remaining.")})
+   (for [{:keys [ws-id]} (drain/slices w) :when (source-drain/landed? project ws-id)]
+     {:key (str "wake:landed:" ws-id) :text (str "Slice " ws-id " landed.")})))
 
-(defn- has-coordinator? [project drain-id]
-  (boolean (some :conductor (session/list-sessions project drain-id))))
+(defn- has-coordinator?
+  "Whether the core holds drain `drain-id` open, so a conductor turn of it can hear a wake."
+  [core project drain-id]
+  (let [st ((:state core) project drain-id)] (boolean (and st (not (:closed? st))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+(defn- wake!
+  "Post wake `e` to drain `drain-id`'s coordinator, keyed by its event, with its brief read now."
+  [core project drain-id {:keys [key text]}]
+  ((:post! core) project drain-id key (str text "\n\n" (coordinator-brief project drain-id))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   wakes!
-  "Post to each open drain's coordinator the wake for each event it has not been woken for —
-   through lane-seats' post!, keyed by the event, so each is posted once. A drain whose
-   coordinator has never started is woken by its start's brief instead. Answers the wakes posted."
-  [project]
+  "Post to each open drain's coordinator the wake for each event it has not been woken for, keyed by
+   the event, so each is posted once. Answers what each post answered."
+  [project core]
   (vec
    (for [d (source-drain/open-drains project)
-         :when (has-coordinator? project d)
-         e (wake-events project (ws/read-ws project d))]
-     (seats/post! project d (assoc e :kind :wake :to :conductor)))))
+         :when (has-coordinator? core project d)
+         e (wake-events project (ws/read-ws project d))
+         :when (not (some #(= (:key e) (:id %)) (:chat ((:state core) project d))))]
+     (wake! core project d e))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   wake-pending?
-  "Whether drain `drain-id`'s coordinator has not yet been given the wake for one of its events —
-   a census reading, a landing, a failed landing: a wake not posted, or posted and not delivered.
-   Every event is checked, not the last of `wake-events`, whose order is by kind and not by when
-   each happened. While one is pending, no slice of the drain starts."
-  [project drain-id]
-  (let [w   (ws/read-ws project drain-id)
-        evs (wake-events project w)]
-    (boolean
-     (when (seq evs)
-       (let [msgs (into {} (map (juxt :key identity))
-                        (mapcat #(seats/traffic project drain-id %)
-                                (range 1 (inc (generation/current (:entries w))))))]
-         (some #(not (:delivered? (msgs (:key %)))) evs))))))
+  "Whether drain `drain-id`'s coordinator has not yet heard one of its wakes — a census reading or a
+   landing: a wake not posted, or posted and still in its conductor's inbox. Every event is checked,
+   not the last of `wake-events`, whose order is by kind and not by when each happened. While one is
+   pending, no slice of the drain starts."
+  [project drain-id core]
+  (let [evs     (wake-events project (ws/read-ws project drain-id))
+        st      ((:state core) project drain-id)
+        posted  (set (map :id (:chat st)))
+        unheard (set (keep #(when (= :chat (:kind %)) (:message %)) (vals (:inbox st))))]
+    (boolean (some #(or (not (posted (:key %))) (unheard (:key %))) evs))))
 
 ;; ── starting a slice ────────────────────────────────────────────────────────
 
-(defn- slice-embodiment
-  "How a slice's whole seat is carried: its session named for the slice, briefed with `brief`."
-  [brief]
-  {:seat-name (fn [_] "slice")
-   :practice  brief
-   :refuse    (:refuse (seats/default-embodiment))})
-
 (defn- slice-session
-  "The session of slice `slice-id` that occupies its whole seat, or nil."
+  "The name of slice `slice-id`'s session, or nil before its unit's session is recorded."
   [project slice-id]
-  (:session (first (seats/occupants project slice-id))))
+  (some :name (remove :conductor (session/list-sessions project slice-id))))
 
 (defn- rested-on-sessions
   "For an :on-top plan of drain `dw`, the session of each slice it rests on that has not landed —
@@ -442,78 +418,67 @@
         (in-repo! project session-name [rev] ["git" "branch" session-name rev])))))
 
 (defn- slice-session-name
-  "The name seats/occupy! gives the slice embodiment's session: `<ws>--slice-g<generation>`."
+  "The slice's unit, and so the session the core provisions for it: `<ws>--slice-g<generation>`."
   [sw]
   (str (:id sw) "--slice-g" (generation/current (:entries sw))))
 
-(defn- occupy-slice-on!
-  "occupy-slice!, on revision `base` when the slice's start already read the work it rests on
-   (nil: read it here, when the slice rests :on-top of slices not yet landed)."
-  [project slice-id base]
-  (let [whole (first (filter :whole (rseats/seats project slice-id)))
-        sw    (ws/read-ws project slice-id)
-        dw    (ws/read-ws project (drain/drain-of sw))
-        plan  (first (filter #(= (:plan (drain/slice-birth sw)) (:seq %)) (drain/plans dw)))]
-    (when (nil? (slice-session project slice-id))
-      (when-let [rev (or base
-                         (let [bases (rested-on-sessions project dw plan)]
-                           (when (seq bases) (rested-base project slice-id bases))))]
-        (place-branch! project (slice-session-name sw) rev)))
-    (seats/occupy! project slice-id (slice-embodiment (slice-brief! project slice-id)) (:id whole))))
+(defn- open-slice!
+  "Open slice `slice-id`'s unit in the core, briefed from its drain's recipe, on revision `base`
+   when the slice's start already read the work it rests on (nil: read it here, when the slice rests
+   :on-top of slices not yet landed). Answers {:session}."
+  [core project slice-id base]
+  (let [sw   (ws/read-ws project slice-id)
+        dw   (ws/read-ws project (drain/drain-of sw))
+        plan (first (filter #(= (:plan (drain/slice-birth sw)) (:seq %)) (drain/plans dw)))
+        unit (slice-session-name sw)]
+    (when-let [rev (or base
+                       (let [bases (rested-on-sessions project dw plan)]
+                         (when (seq bases) (rested-base project slice-id bases))))]
+      (place-branch! project unit rev))
+    ((:open-slice! core) project slice-id unit (slice-brief! project slice-id))
+    {:session unit}))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
-  occupy-slice!
-  "Occupy slice `slice-id`'s whole seat with a driven session briefed from its drain's recipe —
-   at a slice's start, and whenever a reseat finds the seat empty. A slice whose plan rests :on-top
-   of slices not yet landed starts on their work (`rested-base`). Answers {:seat :session}."
-  [project slice-id]
-  (occupy-slice-on! project slice-id nil))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :any]}
-  start-slice!
+(defn- start-slice!
   "Start a slice from drain `drain-id`'s plan `plan-seq`: refused while the coordinator has not
-   been given its newest wake (:wake-pending), when an :on-top plan rests on an unlanded slice with
-   no session (:rests-unseated) or its work cannot be read or merged (:base-failed), and as
-   record-drain refuses a start (no recipe, no census under
-   it, the plan not open) — then the slice workstream is made and its whole seat
-   occupied by a driven session briefed from the recipe. Every refusal of the plan comes before the
-   slice is made; a seat that fails after it is refused :seat-failed, the slice standing for the
-   conduct pass's reseat. Answers {:slice :session}."
-  [project drain-id plan-seq]
-  (when (wake-pending? project drain-id)
-    (refuse! (str drain-id "'s coordinator has not yet been given its newest wake") :wake-pending {:ws-id drain-id}))
+   heard its newest wake (:wake-pending), when an :on-top plan rests on an unlanded slice with no
+   session (:rests-unseated) or its work cannot be read or merged (:base-failed), and as
+   record-drain refuses a start (no recipe, no census under it, the plan not open) — then the slice
+   workstream is made and its unit opened, briefed from the recipe. Every refusal of the plan comes
+   before the slice is made; a unit that fails to open after it is refused :seat-failed. Answers
+   {:slice :session}."
+  [core project drain-id plan-seq]
+  (when (wake-pending? project drain-id core)
+    (refuse! (str drain-id "'s coordinator has not yet heard its newest wake") :wake-pending {:ws-id drain-id}))
   ;; Read before the slice is made, so a plan that cannot be started on what it rests on is
   ;; refused while it is still open — for the coordinator to withdraw or replace.
   (let [dw    (ws/read-ws project drain-id)
         bases (rested-on-sessions project dw (first (filter #(= plan-seq (:seq %)) (drain/plans dw))))
         base  (when (seq bases) (rested-base project (str "plan " plan-seq) bases))
         slice (drain/start-slice! project drain-id plan-seq :nido)]
-    ;; The plan is consumed from here: a seat that fails is the slice's, not the plan's, and
-    ;; reseat seats it on a later conduct pass.
     {:slice slice
-     :session (:session (try (occupy-slice-on! project slice base)
+     :session (:session (try (open-slice! core project slice base)
                              (catch Exception e
-                               (refuse! (str "Started " slice " from plan " plan-seq ", but its seat failed: "
-                                             (ex-message e) " — the conduct pass reseats it")
+                               (refuse! (str "Started " slice " from plan " plan-seq ", but its unit failed to open: "
+                                             (ex-message e))
                                         :seat-failed {:ws-id slice}))))}))
 
-(defn ^{:malli/schema [:=> [:cat :any] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   handle-fire!
   "Carry out one fire source-drain emitted: start the slice it names, or wake the coordinator with
    the census failure it reports. A start refused because what it decided from has moved is
    logged, not thrown: the next poll decides again. One refused because its plan's rested-on work
    cannot be merged is recorded refused (:start-refused), which source-drain then fires no more,
    and wakes the coordinator, once per plan, to withdraw or replace it."
-  [{:keys [what drain plan cause detail] :as fire}]
+  [core {:keys [what drain plan cause detail] :as fire}]
   (let [project (keyword (:project fire))]
     (try
       (case what
-        :start-slice   (start-slice! project drain plan)
-        :census-failed (when (has-coordinator? project drain)
-                         (seats/post! project drain
-                                      {:key (str "wake:" (:id fire)) :kind :wake :to :conductor
-                                       :text (str "The census could not be read (" (name cause) "): " detail
-                                                  ". Propose a recipe change to its counter, or escalate.")})))
+        :start-slice   (start-slice! core project drain plan)
+        :census-failed (when (has-coordinator? core project drain)
+                         (wake! core project drain
+                                {:key (str "wake:" (:id fire))
+                                 :text (str "The census could not be read (" (name cause) "): " detail
+                                            ". Propose a recipe change to its counter, or escalate.")})))
       (catch clojure.lang.ExceptionInfo e
         (binding [*out* *err*]
           (println (str "nido drain: " (name what) " on " drain " refused — " (ex-message e))))
@@ -524,79 +489,29 @@
                (catch Exception r
                  (binding [*out* *err*]
                    (println (str "nido drain: recording plan " plan "'s refused start failed — " (ex-message r)))))))
-        (when (and (= :base-failed (:reason (ex-data e))) (has-coordinator? project drain))
-          (seats/post! project drain
-                       {:key (str "wake:" (:id fire)) :kind :wake :to :conductor
-                        :text (str "Plan " plan " cannot be started on the work it rests on: " (ex-message e)
-                                   ". Withdraw or replace it.")}))
+        (when (and (= :base-failed (:reason (ex-data e))) (has-coordinator? core project drain))
+          (wake! core project drain
+                 {:key (str "wake:" (:id fire))
+                  :text (str "Plan " plan " cannot be started on the work it rests on: " (ex-message e)
+                             ". Withdraw or replace it.")}))
         nil))))
 
 ;; ── landing ─────────────────────────────────────────────────────────────────
 
-(defn- landing-in-flight? [project drain-id slice-id]
-  (some #(and (= slice-id (:workstream-id %)) (#{:queued :preprocessing :running} (:state %)))
-        (landing-runs project drain-id)))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :ProjectName :WorkstreamId] :map]}
   land!
   "The person asking for slice `slice-id` to land: refused while a slice it rests on has not landed
-   (:rests-unlanded), until its newest review under the recipe version it runs under passed — the
-   recipe's ready gates judged (:not-ready), both read by `ws/slice-unlandable` — while a landing of it is in flight (:landing-in-flight), or when it has no
-   session (:no-session). A slice the coordinator has not cleared is landed as the person's
-   override, recorded on its Run. The landing Run gives /drive-home to the slice's own session and
-   runs beside its siblings' — never on the serial merge lane. The Run is handed to the daemon as a
-   :submit-run envelope on its durable queue, so an ask from any process reaches it. Answers the
-   Run."
-  [project slice-id]
-  (let [sw      (ws/read-ws project slice-id)
-        d       (drain/drain-of sw)
-        dw      (ws/read-ws project d)
-        why     (ws/slice-unlandable project sw)
-        sname   (slice-session project slice-id)]
-    (cond
-      ;; Its rests landed and its newest review under its recipe version passed — the recipe's
-      ;; ready gates judged; a person's override waives the coordinator's clearance, never these.
-      why
-      (refuse! (:message why) (:reason why) {:ws-id slice-id})
-      (landing-in-flight? project d slice-id)
-      (refuse! (str "A landing of " slice-id " is in flight") :landing-in-flight {:ws-id slice-id})
-      (nil? sname)
-      (refuse! (str slice-id " has no session to land from") :no-session {:ws-id slice-id})
-      :else
-      (let [run-id (str (subs (clock/now-iso) 0 10) "-" (name project) "-drain-land-" (subs (str (UUID/randomUUID)) 0 8))
-            run    {:id run-id :project project :trigger :drain-land :source {:type :drain}
-                    :event-payload (cond-> {:drain d :slice slice-id :by :person}
-                                     (not (drain/cleared? dw slice-id)) (assoc :override true))
-                    :skill :drive-home :first-message "/drive-home" :agent :claude
-                    :session-name sname :workstream-id slice-id :claude-session-id nil
-                    :limits {:budget "8h" :max-failures 3} :priority 0 :session-profile :full
-                    :mode :merge :uncapped? true :state :queued
-                    :state-history [{:at (clock/now-iso) :state :queued}] :artifacts [] :error nil}]
-        (fs/create-dirs (cstate/run-dir run-id))
-        (fs/create-dirs (cstate/run-artifacts-dir run-id))
-        (runs/write-run! run)
-        ;; Submitted through the daemon's durable queue, not this process's executor: the person's
-        ;; ask comes from a CLI process whose in-memory queue nobody ticks before it exits.
-        (queue/enqueue! {:type :submit-run :run-id run-id})
-        run))))
-
-(defn ^{:malli/schema [:=> [:cat :any :map] :keyword]}
-  settle-landing!
-  "Settle slice landing Run `run-id` from how its /drive-home turn ended (`result`, as the merge
-   lane's settle takes it) by `drain/landing-outcome`: a failed landing parks the Run for review, with
-   the cause on the slice session's record. Answers the state."
-  [run-id result]
-  (let [run     (runs/read-run run-id)
-        outcome (drain/landing-outcome run result)]
-    (runs/transition! run-id outcome)
-    (when (= :awaiting-review outcome)
-      (try
-        (session/set-error! (:project run) (:workstream-id run) (:session-name run)
-                            {:at (clock/now-iso) :reason :ship-blocked
-                             :message (cond
-                                        (:spawn-error result) (str "the landing could not start: " (:detail result))
-                                        (:timed-out? result)  (str "the landing exceeded its " (-> run :limits :budget) " budget")
-                                        :else (str "the landing halted without landing the slice — fix what stopped it, "
-                                                   "then `bb nido:drain:land :slice " (:workstream-id run) "` again"))})
-        (catch Throwable _ nil)))
-    outcome))
+   (:rests-unlanded), or until its newest review under the recipe version it runs under passed — the
+   recipe's ready gates judged (:not-ready), both read by `ws/slice-unlandable`. Then the landing is
+   granted on the slice in the core, whose conductor lands it in the slice's own session, beside its
+   siblings. A slice the coordinator has not cleared is landed as the person's override. Answers
+   {:slice :override? :granted}, :granted being what the core answered."
+  [core project slice-id]
+  (let [sw  (ws/read-ws project slice-id)
+        dw  (ws/read-ws project (drain/drain-of sw))
+        why (ws/slice-unlandable project sw)]
+    ;; A person's override waives the coordinator's clearance, never the rests or the ready gates.
+    (when why (refuse! (:message why) (:reason why) {:ws-id slice-id}))
+    {:slice     slice-id
+     :override? (not (drain/cleared? dw slice-id))
+     :granted   ((:land! core) project slice-id)}))

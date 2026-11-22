@@ -47,4 +47,7 @@
      an image's bytes by digest — or nil for any other, which is its caller's."
     {:signature [:=> [:catn [:host :map] [:req :map]] [:maybe :map]]
      :delegates [changed-events parse-image chat-log chat/transcript chat/image chat/send! chat/cancel! chat/reset! chat/answer-permission!
-                 chat/subscribe!]}))
+                 chat/subscribe!]})
+  (Operation via
+    "The function `k` of a conversation: its backend's, else `f`."
+    {:signature [:=> [:catn [:chat :map] [:k :keyword] [:f fn?]] fn?]}))

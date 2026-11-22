@@ -17,7 +17,7 @@
             [babashka.process :as p]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [nido.coordinator.agent.substrate :as substrate]
+            [cheshire.core :as json]
             [nido.coordinator.daemon.supervisor :as supervisor]
             [nido.coordinator.record.session :as session]
             [nido.coordinator.record.workstream :as ws]
@@ -79,13 +79,20 @@
     (say "old coordinator " (if (:ok? r) "stopped and disabled" (str "uninstall said: " (:err r)))))
   (await! "the old coordinator's pid is still live" (complement old-pid-live?) 60000))
 
+(defn- claude! [& argv]
+  (let [r (apply p/sh "claude" argv)]
+    (when-not (or (zero? (:exit r)) (str/includes? (str (:out r) (:err r)) "No session matching"))
+      (throw (ex-info (str "claude " (str/join " " argv) " failed: " (str/trim (str (:err r) (:out r))))
+                      {:exit (:exit r)})))
+    (:out r)))
+
 (defn- running-background
-  "The background sessions the agent listing shows a live process for, but the one running this
-   verb. Throws when the listing cannot be read."
+  "The background sessions Claude Code's agent listing (`claude agents --json --all`) shows a live
+   process for, but the one running this verb. Throws when the listing cannot be read."
   []
   (let [me (System/getenv "CLAUDE_CODE_SESSION_ID")]
     (filter #(and (= "background" (:kind %)) (:pid %) (not= me (:sessionId %)))
-            (substrate/listing {}))))
+            (json/parse-string (claude! "agents" "--json" "--all") true))))
 
 (defn- stop-sessions!
   "Stop every running legacy background session, and answer the directories of those stopped
@@ -95,7 +102,7 @@
         mid (set (for [r rows :when (or (= "busy" (:status r)) (= "working" (:state r)))]
                    (str (fs/canonicalize (:cwd r)))))]
     (doseq [r rows]
-      (try (substrate/stop! (:sessionId r) {})
+      (try (claude! "stop" (:sessionId r))
            (catch Exception e (refuse! "stopping " (:sessionId r) ": " (ex-message e)))))
     (await! "a legacy session is still running"
             #(empty? (try (running-background) (catch Exception _ [:unreadable])))

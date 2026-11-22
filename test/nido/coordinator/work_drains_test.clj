@@ -4,7 +4,6 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.source.drain :as source-drain]

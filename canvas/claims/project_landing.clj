@@ -11,7 +11,6 @@
             [canvas.core.api :refer [core-api]]
             [canvas.core.domain :refer [core-domain]]
             [canvas.platform.project :refer [landing]]
-            [canvas.tasks.nido-commit-gate :refer [refusal]]
             [canvas.tasks.nido-workstream :refer [pr-land*]]))
 
 (Claim landing-declared-per-project
@@ -21,10 +20,6 @@
 (Claim one-place-chooses-the-procedure
   "A registry entry's :landing is read only by platform-project's landing, and lane-landing is the only module that calls landing or chooses a procedure by it. land! chooses the procedure by landing alone — :pr-auto puts the PR on auto-merge or its merge queue, :pr-squash squash-merges it after marking a draft ready, :push-main runs bb nido:land in the workstream's worktree; names-pr? tells a caller only whether that landing names a PR. pr-land* lands only through land!, after the own-PR check where names-pr? answers true."
   {:about [land! names-pr? pr-land*] :evidence "test"})
-
-(Claim seat-lands-only-through-pr-land
-  "In a turn the conductor answers for, refusal refuses nido:land and nido:ship as the person's acts whatever the workstream's grants, so nido:workstream:pr:land is the only landing verb a seat may run."
-  {:about [refusal] :evidence "test"})
 
 (Claim land-gate-grants-never-ships
   "The gate's own Land control — the one a workstream's position offers, apart from any ask — is offered at position :published only on a workstream whose core state holds an open unit, and never at :slice-cleared, whose slice lands by its drain. It does one thing: it sends the person's grant of :merge as one keyed core command through core-api [person-acts-by-command]. It appends no ledger entry, lands nothing itself and enqueues no :ship envelope, so a click on it writes no :ship-submitted and creates no merge run. An open ask's Land is that ask's option, not this control [land-answers-the-escalation]."

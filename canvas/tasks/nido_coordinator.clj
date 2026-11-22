@@ -11,9 +11,6 @@
 
 (Module nido-coordinator
   "Bb task entry points for the coordinator daemon."
-  (Operation run
-    "The `run` entry point."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation status
     "The `status` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
@@ -25,22 +22,4 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation resume
     "bb nido:coordinator:resume — clears halted.edn so the daemon picks back up."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation up
-    "bb nido:coordinator:up [:poll-ms <int>] — start the daemon."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation down
-    "bb nido:coordinator:down [:force true] — stop the background daemon."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation install
-    "bb nido:coordinator:install — write the LaunchAgent plist and start"
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation uninstall
-    "bb nido:coordinator:uninstall — bootout and remove the plist. Idempotent."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation restart
-    "bb nido:coordinator:restart — restart the daemon via launchctl."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation logs
-    "bb nido:coordinator:logs [:follow true] [:lines <n>]"
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

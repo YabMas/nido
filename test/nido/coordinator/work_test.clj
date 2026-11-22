@@ -8,22 +8,15 @@
    [nido.platform.config]
    [nido.coordinator.lane.start :as start]
    [nido.coordinator.lane.facets]
-   [nido.coordinator.lane.drive :as drive]
-   [nido.coordinator.lane.intake :as intake]
-   [nido.coordinator.lane.pickup]
-   [nido.coordinator.lane.promote]
    [nido.coordinator.lane.pipeline :as pipeline]
-   [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.report :as report]
    [nido.coordinator.report.ask :as ask]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
-   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.source.state]
-   [nido.coordinator.lane.spawn]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers]
@@ -400,16 +393,6 @@
           (is (nil? (:brakes (by "me"))) "interactive sessions carry no brakes")
           (is (= :up (:status (by "me"))) "a live human session reads :up"))))))
 
-(deftest workstream-detail-flags-the-hitl-gate
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w) {:name "gate" :weight :heavy
-                                         :autonomy (assoc autonomy-running :phase :parked)})
-        (write-run! "r-gate" (:id w) "gate" "sid")
-        (is (true? (:parked? (first (:sessions (work/workstream :brian (:id w))))))
-            "a session whose run is parked for review, with no agent running, is at the HITL gate")))))
-
 (deftest workstream-detail-flags-the-current-ledger-entry
   (with-tmp
     (fn [_]
@@ -499,58 +482,6 @@
         (session/create! :brian (:id w) {:name "live" :weight :light :autonomy nil})
         (is (= {:project :brian :session "live"} (work/open-target :brian (:id w)))
             "open lands in the live session, not the archived one")))))
-
-(deftest open-target-never-picks-a-listed-session-no-record-names
-  ;; A person's own background session in the workstream is a row of the list, newest of all,
-  ;; but it is not a nido session: open lands in the recorded one.
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w) {:name "old" :weight :light :autonomy nil})
-        (session/archive! :brian (:id w) "old")
-        (with-redefs [work/workstream-listing (constantly [{:sessionId "s-own" :kind "background"
-                                                            :state "done" :name "mine"
-                                                            :startedAt 4102444800000
-                                                            :baseline-shown? true}])]
-          (is (= {:project :brian :session "old"} (work/open-target :brian (:id w)))))))))
-
-(deftest a-listed-session-shows-the-baseline-only-by-conducts-check
-  ;; The session list lists a person's own session only on the evidence conduct demands: the
-  ;; latest start recorded from where it runs, and auto mode on the latest event that reports a
-  ;; mode — a restart's :session-start reports none, so it neither shows nor hides the baseline.
-  (with-tmp
-    (fn [_]
-      (let [w    (workstream/create! :brian {:external-refs []})
-            _    (session/create! :brian (:id w) {:name "s" :weight :light :autonomy nil})
-            home (str (fs/canonicalize (doto (fs/path (nido.session.state/session-home-dir "brian" "s"))
-                                         fs/create-dirs)))]
-        (doseq [[sid evs] {"s-ok"   [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}]
-                           "s-late" [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}
-                                     {:event :prompt :permission-mode "default"}]
-                           "s-none" [{:event :session-start :cwd home}]
-                           "s-resumed" [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}
-                                        {:event :stop} {:event :session-start :cwd home :source "resume"}]}
-                ev evs]
-          (session-events/append! sid ev))
-        (with-redefs [conduct/live-states
-                      (constantly (into {} (for [sid ["s-ok" "s-late" "s-none" "s-resumed"]]
-                                             [sid {:sessionId sid :kind "background" :cwd home}])))]
-          (is (= {"s-ok" true "s-late" false "s-none" false "s-resumed" true}
-                 (into {} (map (juxt :sessionId :baseline-shown?))
-                       (work/workstream-listing :brian (:id w))))))))))
-
-(deftest the-liveness-probe-moves-when-a-turn-starts-under-an-unchanged-state
-  ;; A row's :doing is read from `conduct/mid-turn-ids`. A session whose listing keeps
-  ;; :state "working" while its :status goes idle → busy changes that, and no file a stamp
-  ;; sees; the probe must move too, or the held row keeps its stale :doing.
-  (with-tmp
-    (fn [_]
-      (let [w      (workstream/create! :brian {:external-refs []})
-            e      {:listed #{"s-1"}}
-            probe  #(with-redefs [nido.coordinator.agent.substrate/listing-cached
-                                  (constantly [{:sessionId "s-1" :pid 1 :state "working" :status %}])]
-                      (#'work/liveness-probe :brian (:id w) e))]
-        (is (not= (probe "idle") (probe "busy")))))))
 
 (deftest a-denial-is-an-operational-notice-not-a-gate
   ;; Nothing waits on a person here: a denial needs no answer, so it is listed for Operations
@@ -1073,8 +1004,7 @@
       (let [w (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-A9" :title "t"}]})
             resumed (atom false)]
         (tickets/open! :brian "BR-A9" {:title "t"})
-        (with-redefs [nido.coordinator.lane.resume/resume! (fn [& _] (reset! resumed true) {:resumed "x"})
-                      nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
+        (with-redefs [nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
           (is (= {:decision :applied} (work/resolve-gate! :brian (:id w) :apply)))
           (is (false? @resumed) "Apply does NOT resume a conversation")
           (is (= :triaged (tickets/status :brian "BR-A9"))
@@ -1723,7 +1653,8 @@
 (defn- with-slack-stubs
   "Run `f` with Notion and Slack stubbed. `opts`: :create (fn [fields] result), :post (fn
    [opts] result), :toggle (fn [page-id title sections] result). Returns what was called:
-   {:created [fields …] :posted [opts …] :toggled [[page title sections] …] :started [session …]}."
+   {:created [fields …] :posted [opts …] :toggled [[page title sections] …] :started [ws-id …]}, a
+   start being the workstream's unit opened in the core."
   [{:keys [create post toggle]} f]
   (let [calls (atom {:created [] :posted [] :toggled [] :started []})]
     (with-redefs [views/load-registry                  (fn [_] {:database "db-1"})
@@ -1743,7 +1674,9 @@
                   (fn [_ch _tok opts]
                     (swap! calls update :posted conj opts)
                     ((or post (constantly {:ok true})) opts))
-                  start/start-session!                 (fn [_ sname o] (swap! calls update :started conj sname) (:ws-id o))]
+                  work/core-resolve!                   (fn [_ ws-id action _]
+                                                         (when (= :promote action) (swap! calls update :started conj ws-id))
+                                                         {:decision :promoted})]
       (f)
       @calls)))
 
@@ -2730,55 +2663,15 @@
       (with-redefs [nido.coordinator.record.triggers/load-for-project (fn [_] [])]
         (is (= {:decision :no-trigger} (work/start-triage-page! :brian "pg-bare")))))))
 
-(deftest start-triage-page-force-spawns-the-triage-trigger
-  (with-tmp
-    (fn [_]
-      (let [spawned (atom nil)]
-        (with-redefs [nido.coordinator.record.triggers/load-for-project
-                      (fn [_] [{:name :smoke :skill :investigate-bug}
-                               {:name :triage-new :skill :triage-bug :priority 10
-                                :session-profile :lite :uncapped? true}])
-                      nido.notion.client/keychain-token (constantly "tok")
-                      nido.coordinator.lane.pickup/resolve-ref
-                      (fn [_ input _] {:id "BR-9" :page-id input
-                                       :url "https://notion.so/pg-bare" :title "Move Licences"})
-                      nido.coordinator.lane.spawn/ref-has-pending-run? (constantly false)
-                      nido.coordinator.lane.spawn/spawn-and-submit!
-                      (fn [routed _] (reset! spawned routed))]
-          (is (= {:decision :triaging} (work/start-triage-page! :brian "pg-bare")))
-          (is (= :triage-new (-> @spawned :trigger :name))
-              "picks the :triage-bug trigger, not the :investigate-bug one")
-          (is (= "BR-9" (-> @spawned :payload :id)))
-          (is (= "pg-bare" (-> @spawned :payload :page-id))
-              "page-id rides the payload — the trigger template needs it")
-          (is (= 10 (:priority @spawned)))
-          (is (= :lite (:session-profile @spawned)))
-          (is (true? (:uncapped? @spawned))))))))
-
 (deftest start-triage-page-reports-an-unresolvable-page
   (with-tmp
     (fn [_]
       (with-redefs [nido.coordinator.record.triggers/load-for-project
                     (fn [_] [{:name :triage-new :skill :triage-bug}])
                     nido.notion.client/keychain-token (constantly "")
-                    nido.coordinator.lane.pickup/resolve-ref (fn [_ _ _] {:error :no-token})]
+                    nido.coordinator.work/resolve-ref (fn [_ _ _] {:error :no-token})]
         (is (= {:decision :unresolved :error :no-token}
                (work/start-triage-page! :brian "pg-bare")))))))
-
-(deftest start-triage-page-does-not-double-spawn
-  (with-tmp
-    (fn [_]
-      (with-redefs [nido.coordinator.record.triggers/load-for-project
-                    (fn [_] [{:name :triage-new :skill :triage-bug}])
-                    nido.notion.client/keychain-token (constantly "tok")
-                    nido.coordinator.lane.pickup/resolve-ref
-                    (fn [_ _ _] {:id "BR-9" :page-id "pg-bare" :url "u" :title "t"})
-                    nido.coordinator.lane.spawn/ref-has-pending-run? (constantly true)
-                    nido.coordinator.lane.spawn/spawn-and-submit!
-                    (fn [_ _] (throw (ex-info "must not spawn" {})))]
-        (is (= {:decision :already-in-flight}
-               (work/start-triage-page! :brian "pg-bare"))
-            "a second click while one is in flight is a no-op, not a duplicate")))))
 
 (deftest resolve-gate-lets-start-triage-past-the-workstream-less-guard
   (with-tmp
@@ -3400,7 +3293,7 @@
   (with-tmp
     (fn [_]
       (let [w   (with-redefs [nido.notion.views/facet-properties (constantly nil)]
-                  (intake/enqueue-inbox! {:project :brian
+                  (work/enqueue-inbox! {:project :brian
                                           :trigger {:name :t :skill :triage-bug}
                                           :payload {:adapter :slack-message :id "slack-C-1.0"
                                                     :title "hi" :text "hi" :url "u"}}))
@@ -3594,7 +3487,6 @@
             ta (workstream/find-by-ref :brian :slack-message "slack-C1-100.0~a")
             c  (with-slack-stubs {} #(work/apply! :brian (:id ta)))]
         (is (= 1 (count (:started c))))
-        (is (re-find #"^impl-br-4901" (first (:started c))) "the accepted ticket's impl session comes up")
         (is (= :planning (tickets/status :brian "BR-4901")))
         (is (tickets/held-by-gate? :brian "BR-4902") "the sibling still waits for a person")))))
 
@@ -3672,56 +3564,6 @@
   (is (work/position-carrying-action? :answer-questions))
   (is (work/asks-several? two-question-blocker))
   (is (not (work/asks-several? {:format :blocker :needs "One?" :summary "s" :after "a"}))))
-
-(deftest answering-several-questions-records-one-answer-each-and-resumes-with-all
-  (with-tmp
-    (fn [_]
-      (let [w   (workstream/create! :brian {:external-refs []})
-            got (atom nil)]
-        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
-        (workstream/append-entry! :brian (:id w) {:kind :blocker} (pr-str two-question-blocker))
-        (with-redefs [resume/resume! (fn [_ _ input & _] (reset! got input) {:decision :resumed})]
-          (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :answer-questions
-                                                         {:seq 1 :answers [{:letter "A"} {:words " Yes, for now. "}]}))))
-          (let [answer (:report (work/workstream :brian (:id w) 2))]
-            (is (= [{:question-id "q1" :letter "A" :label "General" :summary "Ask the general question."}
-                    {:question-id "q2" :summary "Yes, for now."}]
-                   (:answers answer)))
-            (is (nil? (:summary answer)) "no stored copy of the answers beside them")
-            (is (= [:intent] (:grants answer)) "the union of the picked branches' grants")
-            (is (= "run-x" (:resumed answer))))
-          (is (str/includes? @got "Q1 — Should the card ask the general question?\nAnswer: option A — General."))
-          (is (str/includes? @got "Q2 — May alternatives show as their own questions?\nAnswer, in their words: Yes, for now.")))))))
-
-(deftest a-question-left-open-is-recorded-open
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :blocker} (pr-str two-question-blocker))
-        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian (:id w) :answer-questions
-                                                                 {:seq 1 :answers [{} {:words "Yes"}]}))))
-        (is (= [{:question-id "q1"} {:question-id "q2" :summary "Yes"}]
-               (:answers (:report (work/workstream :brian (:id w) 2)))))
-        (is (str/includes? (#'work/answers-input (report/blocker-questions two-question-blocker)
-                                               [{:question-id "q1"} {:question-id "q2"}])
-                           "Q1 — Should the card ask the general question?\nLeft open."))))))
-
-(deftest a-stale-pick-records-nothing
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :blocker} (pr-str two-question-blocker))
-        (is (= :option-stale (:decision (work/resolve-gate! :brian (:id w) :answer-questions
-                                                           {:seq 1 :answers [{:letter "C"} {}]})))
-            "a letter the question does not offer refuses the whole answer")
-        (is (= :option-stale (:decision (work/resolve-gate! :brian (:id w) :answer-questions
-                                                           {:seq 1 :answers [{} {} {}]})))
-            "more picks than questions")
-        (is (= :option-stale (:decision (work/resolve-gate! :brian (:id w) :answer-questions
-                                                           {:seq 9 :answers [{} {}]})))
-            "a position that no longer names the blocker")
-        (is (= 1 (count (workstream/entries-of :brian (:id w) :blocker))))
-        (is (empty? (workstream/entries-of :brian (:id w) :blocker-answered)))))))
 
 (deftest land-is-offered-only-where-a-seat-can-act-on-it
   (is (= [] (work/gate-actions :shipping false nil {:report-format :pr-opened :seq 7 :awaiting :land}))

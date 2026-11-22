@@ -27,7 +27,6 @@
    ask them, so there is one answer to that question in the system and not two."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.drain :as drain]
@@ -1089,8 +1088,7 @@
    ;; holding the workstream RIGHT NOW, which no amount of retrying inside one
    ;; stage can change — a review runs for many minutes and the whole retry
    ;; budget is fifteen seconds, so spending it on contention parks a blocker
-   ;; against a perfectly healthy round. `drive/run-stage!` answers that one
-   ;; before dispositions are consulted, by deferring to the next tick.
+   ;; against a perfectly healthy round.
    :detached             :retry
    :max-iters            :escalate  ; a cap somebody asked for was reached
    :owed-second-reading  :escalate  ; a cap fell between a reading and the second it owes
@@ -1392,9 +1390,9 @@
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
-   whose agent holds its lock, a session nido drives that the substrate lists with a live process
-   working (state working) or mid-turn (`conduct/mid-turn?`) — a process waiting on a dialog or
-   idle after its Stop is not working — or a person's own session, one without a :claude facet, that is up (`sstate/session-live?`)
+   whose agent holds its lock, or a person's own session, one without a :claude facet, that is up
+   (`sstate/session-live?`); what turns the core runs is the core's to say, and the surfaces read
+   it from there
    — `live-names` when the caller observed them, else observed here. :paused is a person's
    standing pause — their choice not to push the workstream forward.
 
@@ -1421,21 +1419,8 @@
          ;; row.
          humans   (filter #(and (nil? (:autonomy %)) (nil? (:claude %))) sessions)
          up       (when (seq humans) (or live-names (observed-live-names project)))
-         ;; A background session is live while the substrate lists it with a process mid-turn: a
-         ;; facet's by its full id, and a start still in flight by the :bg-id its note keeps.
-         facets   (keep :claude sessions)
-         notes    (keep :dispatching sessions)
-         states   (when (or (seq facets) (seq notes)) (vals (conduct/live-states {})))
-         ;; Working as the listing judges the task, or mid-turn as its process shows it: a seat
-         ;; its own subagents woke lists busy whatever its last message said.
-         working? (fn [matches?] (some #(and (or (and (:pid %) (= "working" (:state %)))
-                                                 (conduct/mid-turn? %))
-                                             (matches? %))
-                                       states))
          live     (boolean (or (activity/held? project ws-id)
                                (seq (runs/live-runs project ws-id))
-                               (some (fn [f] (working? #(= (:session-id f) (:sessionId %)))) facets)
-                               (some (fn [n] (and (:bg-id n) (working? #(= (:bg-id n) (:id %))))) notes)
                                (some #(contains? up (:name %)) humans)))
          w        (ws/read-ws project ws-id)
          paused   (boolean (some-> w standing/paused?))

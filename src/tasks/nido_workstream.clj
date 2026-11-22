@@ -6,7 +6,6 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.lane.pipeline :as pipeline]
-   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
@@ -353,9 +352,7 @@
    :words, building from :base-rev. The generation-defining ids are :ids (comma-separated), else
    the ones the re-cut proposes. The claims the closing generation saw falsified, and the tensions
    the re-cut names, the ledger carries itself from the closing span — nobody supplies them. Every
-   seat occupant of the closing generation is retired as it opens; the conductor's continues, and
-   a retirement that fails here is completed before any seat of the new generation is occupied.
-   Answers {:generation <entry> :retired [session …]}."
+   Answers {:generation <entry>}."
   [{:keys [recut words base-rev ids] :as opts}]
   (let [[p id] (here opts)
         n      (some-> recut str parse-long)
@@ -372,7 +369,7 @@
       (throw (ex-info "Pass :base-rev — the revision the new generation builds from" {:ws-id id})))
     (let [opened (ws/open-generation! p id {:format :generation :recut {:seq n} :words (str words)
                                             :ids ids :base-rev (str base-rev)})]
-      {:generation opened :retired (:retired (seats/reseat! p id))})))
+      {:generation opened})))
 
 (defn- unanswered-blockers
   "The seqs of this workstream's blockers no :blocker-answered names, oldest first — off the

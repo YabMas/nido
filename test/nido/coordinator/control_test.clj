@@ -4,7 +4,7 @@
             [clojure.test :refer [deftest is]]
             [nido.coordinator.control :as control]
             [nido.coordinator.daemon.breakers :as breakers]
-            [nido.coordinator.daemon.pid :as pid]
+            [nido.coordinator.record.state :as cstate]
             [nido.platform.core :as core]))
 
 (deftest daemon-health-state-priority
@@ -80,10 +80,13 @@
         (is (not (breakers/tripped? :brian :triage-new)) "only resuming lifts it"))
       (finally (fs/delete-tree tmp)))))
 
-(deftest coordinator-pid-answers-only-a-live-coordinator
-  (with-redefs [pid/alive? (constantly true)
-                pid/read (constantly 4242)]
-    (is (= 4242 (control/coordinator-pid))))
-  (with-redefs [pid/alive? (constantly false)
-                pid/read (constantly 4242)]
-    (is (nil? (control/coordinator-pid)) "a stale pid file is no coordinator")))
+(deftest coordinator-pid-answers-only-a-live-intake-host
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (spit (cstate/status-path) (pr-str {:pid (.pid (java.lang.ProcessHandle/current)) :status :running}))
+        (is (= (.pid (java.lang.ProcessHandle/current)) (control/coordinator-pid)))
+        (spit (cstate/status-path) (pr-str {:pid 999999999 :status :running}))
+        (is (nil? (control/coordinator-pid)) "a heartbeat left by a dead host is no coordinator"))
+      (finally (fs/delete-tree tmp)))))

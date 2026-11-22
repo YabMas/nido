@@ -155,7 +155,7 @@
 
   nido:session:spawn
   {:requires ([tasks.nido-session :as nido-session])
-   :doc "Spawn a child session from inside a parent one: :project <p> <child> :parent-agent <your agent name> :brief-file <path> [:ws-id <id>] [:permission-mode <yours; default bypassPermissions>] [:model <id>] [up opts] — up, link both ways, stage a kickoff, open a Warp tab where the child's agent starts on the brief. See the spawn-session skill."
+   :doc "Spawn a child session from inside a parent one: :project <p> <child> :parent-agent <your agent name> :brief-file <path> [:ws-id <id>] [up opts] — up, link both ways, hand its workstream to the core with the brief as its unit's first turn, and open a Warp tab on it. See the spawn-session skill."
    :task (apply nido-session/spawn *command-line-args*)}
 
   nido:session:sync
@@ -304,10 +304,6 @@
            ;; its keys are babashka's internals and change between releases.
            (deref (promise)))}
 
-  nido:ship
-  {:requires ([tasks.nido-ship :as nido-ship])
-   :doc "Hand the current session's branch to nido's merge lane (drives /drive-home autonomously, serialized). Run from the session home/worktree."
-   :task (apply nido-ship/ship *command-line-args*)}
 
   nido:run
   {:requires ([tasks.nido-run :as nido-run])
@@ -384,10 +380,6 @@
    :doc "Run unit tests. Optional :only <ns-prefix> to filter."
    :task (apply nido-test/run *command-line-args*)}
 
-  nido:coordinator:run
-  {:requires ([tasks.nido-coordinator :as nido-coordinator])
-   :doc "Run coordinator in foreground (stage 1a). Optional :poll-ms <int>."
-   :task (apply nido-coordinator/run *command-line-args*)}
 
   nido:coordinator:status
   {:requires ([tasks.nido-coordinator :as nido-coordinator])
@@ -404,35 +396,11 @@
    :doc "Resume after halt: remove halted.edn so the daemon ticks again."
    :task (apply nido-coordinator/resume *command-line-args*)}
 
-  nido:coordinator:up
-  {:requires ([tasks.nido-coordinator :as nido-coordinator])
-   :doc "Spawn coordinator daemon in background. Optional :poll-ms <int>. Logs to coordinator.log."
-   :task (apply nido-coordinator/up *command-line-args*)}
 
-  nido:coordinator:down
-  {:requires ([tasks.nido-coordinator :as nido-coordinator])
-   :doc "Stop the background daemon. SIGTERM by default. :force true → SIGKILL."
-   :task (apply nido-coordinator/down *command-line-args*)}
 
-  nido:coordinator:logs
-  {:requires ([tasks.nido-coordinator :as nido-coordinator])
-   :doc "Tail the coordinator log. Default last 50 lines. :follow true to follow."
-   :task (apply nido-coordinator/logs *command-line-args*)}
 
-  nido:coordinator:install
-  {:requires ([tasks.nido-coordinator :as nido-coordinator])
-   :doc "Write the LaunchAgent plist and start the daemon. Auto-starts at login."
-   :task (apply nido-coordinator/install *command-line-args*)}
 
-  nido:coordinator:uninstall
-  {:requires ([tasks.nido-coordinator :as nido-coordinator])
-   :doc "Bootout and remove the LaunchAgent plist. Idempotent."
-   :task (apply nido-coordinator/uninstall *command-line-args*)}
 
-  nido:coordinator:restart
-  {:requires ([tasks.nido-coordinator :as nido-coordinator])
-   :doc "Restart the daemon via launchctl kickstart -k (requires install)."
-   :task (apply nido-coordinator/restart *command-line-args*)}
 
   nido:notion:auth:set
   {:requires ([tasks.nido-notion :as nido-notion])
@@ -549,20 +517,8 @@
    :doc "Drive a Notion ticket by URL or id: :project <p> <notion-url-or-BR-####>"
    :task (apply nido-pickup/pickup *command-line-args*)}
 
-  nido:drive:list
-  {:requires ([tasks.nido-drive :as nido-drive])
-   :doc "List the workstreams the coordinator's driver may advance (empty by default)."
-   :task (apply nido-drive/list-cmd *command-line-args*)}
 
-  nido:drive:add
-  {:requires ([tasks.nido-drive :as nido-drive])
-   :doc "Let the driver advance one workstream: :project <p> :ws-id <id>"
-   :task (apply nido-drive/add-cmd *command-line-args*)}
 
-  nido:drive:remove
-  {:requires ([tasks.nido-drive :as nido-drive])
-   :doc "Stop driving one workstream: :project <p> :ws-id <id>"
-   :task (apply nido-drive/remove-cmd *command-line-args*)}
 
   nido:phase:advance
   {:requires ([tasks.nido-phase :as nido-phase])
@@ -704,40 +660,12 @@
    :doc "Open the next generation of a workstream's design from a re-cut — a person's verb: :recut <seq> :words \"…\" :base-rev <rev> [:ids a,b — default: the re-cut's]. The falsified claims and the re-cut's tensions are carried from the ledger. Retires every seat occupant of the closing generation; the conductor continues. Resolves the workstream from cwd, or :project with :ws-id/:ref."
    :task (apply nido-workstream/generation-open-cmd *command-line-args*)}
 
-  nido:seats:carry
-  {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Carry the workstream by its strata: occupy every seat of the current generation no session holds. Refused, naming each, unless the generation-defining ids are exactly the governing design's strata. Resolves the workstream from cwd, or :project with :ws-id."
-   :task (apply nido-seats/carry-cmd *command-line-args*)}
 
-  nido:seats:occupy
-  {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Occupy one seat with a driven session of its own: :seat <id>."
-   :task (apply nido-seats/occupy-cmd *command-line-args*)}
 
-  nido:seats:replace
-  {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Replace a seat's occupant with a fresh Claude session on the same record, briefed from the records: :seat <id>."
-   :task (apply nido-seats/replace-cmd *command-line-args*)}
 
-  nido:seats:decide
-  {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Record the conductor's one decision on a hand-back, from the conductor's session: :hand-back <id> and :escalate \"what the person is needed for\" | :seat <id> :text \"…\" | :instruct '[{:seat … :text …} …]'."
-   :task (apply nido-seats/decide-cmd *command-line-args*)}
 
-  nido:seats:record
-  {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Record a seat's or the conductor's move, its writer stamped from the session this runs in: :kind tension :to <seat|conductor> :about a,b :statement \"…\" | :kind accord :tension <seq> :terms \"…\" | :kind withdrawal :tension <seq> [:note \"…\"] | :kind recut :ids a,b :why \"…\" [:tensions 12,14] (a re-cut from anyone)."
-   :task (apply nido-seats/record-cmd *command-line-args*)}
 
-  nido:seats:send
-  {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Message a seat or the conductor from the seat or conductor this runs in: :to <seat|conductor> :text \"…\". Logged per generation, delivered through conduct in the order sent."
-   :task (apply nido-seats/send-cmd *command-line-args*)}
 
-  nido:seats:show
-  {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Who occupies each seat now, and the seat messages of a generation: [:generation <n> — default: the current one]."
-   :task (apply nido-seats/show-cmd *command-line-args*)}
 
   nido:workstream:blocker:answer
   {:requires ([tasks.nido-workstream :as nido-workstream])
@@ -761,7 +689,7 @@
 
   nido:workstream:start
   {:requires ([tasks.nido-session :as nido-session])
-   :doc "Start work on a goal from anywhere: a new session on a new, activated workstream, driven on the brief as its first instruction. :project <p> <session> (:brief-file <path> | :brief \"…\") [:model <id>] [up opts]. Prints the workstream's id."
+   :doc "Start work on a goal from anywhere: a new session on a new, activated workstream, the brief its unit's first turn in the core. :project <p> <session> (:brief-file <path> | :brief \"…\") [up opts]. Prints the workstream's id."
    :task (apply nido-session/start *command-line-args*)}
 
   nido:workstream:tell
@@ -860,21 +788,6 @@
    :doc "nido's commit gate — a Claude Code PreToolUse hook on Bash. Reads the hook JSON on stdin; exits 2 (reason on stderr) when a `jj git push` would publish, or a `gh pr create/edit --title` would set, a message the project's own commit-msg hook rejects. 0 otherwise, including on anything it cannot read."
    :task (apply nido-commit-gate/gate-cmd *command-line-args*)}
 
-  nido:session:adopt
-  {:requires ([tasks.nido-session :as nido-session])
-   :doc "Make nido the driver of a background session started in a session's home or worktree: :project <p> <session> :session-id <uuid> [:auto-respawn true]. Refused unless its own events show nido's hooks and auto mode."
-   :task (apply nido-session/adopt *command-line-args*)}
-
-  nido:session:release
-  {:requires ([tasks.nido-session :as nido-session])
-   :doc "Stop nido driving a session's background session: :project <p> <session>. The session keeps running."
-   :task (apply nido-session/release *command-line-args*)}
-
-  nido:session:attach
-  {:requires ([tasks.nido-session :as nido-session])
-   :doc "Attach this terminal to a background session: :session-id <uuid>. The resume shim runs it for a run whose conversation is a background session; the session keeps running on detach."
-   :task (apply nido-session/attach *command-line-args*)}
-
   nido:session:hook
   {:requires ([tasks.nido-session-hook :as nido-session-hook])
    :doc "nido's session hook — installed for SessionStart, UserPromptSubmit, Stop, PermissionDenied and Notification in every nido session home and worktree. Records the event in the session's event log, gives the supervisor briefing as SessionStart context, and always exits 0. <Event>"
@@ -967,7 +880,7 @@
 
   nido:attach
   {:requires ([tasks.nido-attach :as nido-attach])
-   :doc "Attach to this worktree's workstream and let its ledger pick the stage: follow whatever is running, else run what is due, else say what is owed. Takes no stage. [:cwd <dir>]"
+   :doc "Attach to this worktree's workstream: follow whatever is running, else say what is owed and who runs it. Takes no stage. [:cwd <dir>]"
    :task (apply nido-attach/attach-cmd *command-line-args*)}
 
   nido:work

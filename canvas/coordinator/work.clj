@@ -3,9 +3,7 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.lane.conductor :as conductor]
             [canvas.coordinator.lane.drive :as pipeline]
-            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.lane.start :as start]
             [canvas.coordinator.lane.work :as lanes]
             [canvas.coordinator.record.session :as session :refer [Session]]
@@ -172,38 +170,20 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]})
   (Operation start-triage-page! "Force a triage for a watched row that has no workstream yet."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})
-  (Operation option-input "What choosing one of a blocker's options resumes the agent with."
-    {:signature [:=> [:catn [:i :int] [:option :map]] :string]})
   (Operation resolve-gate!
     "Apply a gate follow-action. Position-carrying actions check the ledger has not moved, which
-     is what makes two people clicking the same button safe. A reply to a workstream a
-     conductor's escalation parked is recorded as that blocker's answer, for the conductor. A
-     picked option or answers per question given to a blocker a conductor's escalation parked are
-     recorded for the conductor (conductor/answer-escalation!), resuming no seat."
+     is what makes two people clicking the same button safe. An action the core answers — an
+     option, a reply or a withdrawal of an ask, Land, Promote, Done, Drop — is sent to it as the
+     person's keyed command (`core-resolve!`)."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
-     :delegates [option-input set-stage! conductor/answer! conductor/answer-escalation!]})
+     :delegates [set-stage!]})
   (Operation new! "Birth a scratch workstream and bring its session up."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [lanes/birth! lifecycle/up!]})
-  (Operation workstream-listing
-    "The substrate's rows for one workstream: the background sessions its records name and every
-     session started in its homes or the worktrees they link to."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]
-     :delegates [session/list-sessions]})
   (Operation open-target "Where opening a workstream lands — on a work session, never its conductor's or its chat's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [session/list-sessions workstream-listing view/session-rows]})
-  (Operation driven-conversation
-    "The background conversation a person entering a session is put in front of — the one its
-     record names, unless nido retired it."
-    {:signature [:=> [:catn [:project ProjectName] [:session SessionName]] [:maybe :string]]
-     :delegates [session/read-session]})
-  (Operation attach-command
-    "The command that attaches a terminal to a session's driven conversation, as a spawned
-     child's tab runs it."
-    {:signature [:=> [:catn [:project ProjectName] [:session SessionName]] [:maybe :string]]
-     :delegates [driven-conversation]})
+     :delegates [session/list-sessions view/session-rows]})
   (Operation reclaimed? "Whether a session's substrate was reclaimed under it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session :any]] :boolean]})
   (Operation ensure-open! "Make a session landable, re-provisioning it if it was reclaimed."
@@ -232,12 +212,13 @@
   (Operation orphan-live-sessions "The live sessions no workstream owns. Pure."
     {:signature [:=> [:catn [:live :any] [:owned :any]] :any]})
   (Operation activate!
-    "Activate nido's recipe on a workstream for a person — its :activated entry, once — and answer
-     the instruction its session's agent is to follow now: write the owed records from what the
-     session already understands, then work the recipe as the whole seat's occupant would — and
-     carry the session it was given from into the free whole seat, starting no conversation on it."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]] [:opts [:? [:map [:carry? {:optional true} :boolean]]]]] :map]
-     :delegates [workstream/activate! standing/activated? seats/default-embodiment conductor/carry!]})
+    "Hand `ws-id` to the core for a person: their command opening its unit, in the working copy
+     `:cwd` names when given — that session is then the unit's — else in a session the core
+     provisions; given `:brief`, that is the unit's first turn. Activating twice changes nothing.
+     Answers {:ws-id :already? :instruction}, the instruction being what the session's agent is to
+     do now; throws when the core refuses."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]
+                       [:opts [:? [:map [:cwd {:optional true} [:maybe :string]]]]]] :map]})
   (Operation pause!
     "Pause a workstream for a person, with their note: no conductor drives it while the pause
      stands, and every surface reads it paused rather than stalled."
@@ -252,17 +233,6 @@
      the recipe was running."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] :map]
      :delegates [workstream/deactivate! standing/activated?]})
-  (Operation chat-place
-    "Where a workstream's chat runs, as its session's name, or nil when it has none to offer: no
-     workstream of the project has that id, or it is closed and no chat's session record stands
-     on it. Reads only."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [workstream/read-ws session/read-session seats/chat-session]})
-  (Operation open-chat!
-    "Make the session a workstream's chat runs in ready for a conversation: on that workstream,
-     occupying no seat, up with no services."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
-     :delegates [seats/chat-session!]})
   (Operation start!
     "Bring a session up on the workstream holding it — a fresh one-off when none does — and on that
      workstream's runtime. The workstream is settled first so the session comes up on its runtime
@@ -276,7 +246,7 @@
      hold that it cannot settle by yielding a bare one-off, naming the holders. A yielded one-off
      is counted past its conductor's record, and its conductor retired before it is deleted."
     {:signature [:=> [:catn [:project ProjectName]] :any]
-     :delegates [orphan-live-sessions live-session-names lanes/birth! seats/retire-conductor!
+     :delegates [orphan-live-sessions live-session-names lanes/birth!
                  workstream/delete!]})
   (Operation machine-rows "Machine facts for every worktree of one project."
     {:signature [:=> [:catn [:project-name ProjectName] [:project-dir Path]] [:vector :map]]})
@@ -339,8 +309,7 @@
      the dashboard render the same board without either being its definition."
     {:signature [:=> [:catn [:view-state :map]] Screen]})
   (Operation pickup! "Resolve a pasted reference into a workstream."
-    {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
-     :delegates [lanes/pickup!]})
+    {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]})
   (Operation start-intent!
     "Start work from a description: enqueue it for the daemon, which mints the ref-less
      workstream and hands the text to an agent as its first message.
@@ -361,6 +330,63 @@
      :delegates [triggers/load-for-project triggers/find-by-name queue/enqueue!]})
   (Operation file-findings! "File a findings round on a shipped workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]})
+  (Operation core-open?
+    "Whether the core holds workstream `ws-id` open: it has heard of it, and has not closed it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]})
+  (Operation core-ask-card
+    "The question card for an operator ask, in the Ask shape every card renders: its options
+     lettered, each given by an :option-<letter> action, beside a free answer and a withdrawal."
+    {:signature [:=> [:catn [:ask :map]] :map]})
+  (Operation core-resolve!
+    "Do what a gate action asks of the core, as the person's keyed command; nil when the action is
+     not one the core answers. An option or a reply answers the oldest open ask, a withdrawal takes
+     it back, Land grants the landing, Promote opens the workstream's unit, Done and Drop retract
+     its open units and close it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any] [:payload [:? :any]]]
+                 [:maybe :map]]})
+  (Operation core-merged!
+    "Tell the core that what a workstream's open units built has landed, keyed by the landing so a
+     retry is answered rather than repeated, and close it. Whether it is closed."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:landing :string]] :boolean]})
+  (Operation person-says!
+    "What a person said to a workstream outside a gate, as their commands to the core: words answer
+     the oldest ask awaiting them, or are posted to the conductor's chat when none does; each grant
+     is given. Answers {:answered :posted :granted :refused}."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:words [:maybe :string]]
+                       [:grants [:maybe [:sequential :keyword]]]] :map]})
+  (Operation external-ref
+    "The external ref an event payload names, or nil when it carries no usable id."
+    {:signature [:=> [:catn [:payload :map]] [:maybe :map]]})
+  (Operation ensure-workstream!
+    "The workstream an arrival's payload is for: the one its ref already names, or a new one
+     stamped with the payload's facets."
+    {:signature [:=> [:catn [:project ProjectName] [:payload :map]] Workstream]})
+  (Operation fire-unit
+    "The :open-unit command a trigger's fire opens as `unit` toward `goal`: its first turn is the
+     trigger's skill on the rendered payload, run once the unit's session is up."
+    {:signature [:=> [:catn [:routed :map] [:unit :string] [:goal :string]] :map]})
+  (Operation open-fire!
+    "Open the unit a spawning fire asks for, on the workstream its ref names or a new one, keyed by
+     the fire so a re-emit is answered rather than repeated. Answers :opened, :running, :settled or
+     :refused."
+    {:signature [:=> [:catn [:routed :map]] :keyword]})
+  (Operation enqueue-inbox!
+    "Pen a queue-mode fire for the person, deduped on its ref and placed at :incoming. The core is
+     told nothing until the person promotes it."
+    {:signature [:=> [:catn [:routed :map]] Workstream]})
+  (Operation expire-stale!
+    "Drop every penned workstream still at :incoming and older than `max-age-ms`, in its work
+     records and in the core. Answers their ids."
+    {:signature [:=> [:catn [:project ProjectName] [:max-age-ms :int] [:now-ms :int]] [:vector :string]]})
+  (Operation drain-fire!
+    "Carry out one fire a drain source emitted, with lane-drain reaching the core."
+    {:signature [:=> [:catn [:fire :any]] :any]})
+  (Operation drain-wakes!
+    "Wake each open drain's coordinator for each event it has not been woken for."
+    {:signature [:=> [:catn [:project ProjectName]] :any]})
+  (Operation drain-land!
+    "The person landing a slice, granted in the core."
+    {:signature [:=> [:catn [:project ProjectName] [:slice-id WorkstreamId]] :map]})
   (Operation advance-phase!
     "Assert a phased workstream's gate with its evidence and open its next phase. A gate that
      will not open is an answer — {:decision :phase-refused :because …} — not a thrown failure."

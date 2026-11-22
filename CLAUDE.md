@@ -27,10 +27,11 @@ owed — `nido owed` says "not activated". When the work has reached the point w
 (intent → baseline → design → review loops → implementation) should take over, run
 `/nido-pipeline` in the session's chat, `nido activate` from inside the session, or press
 <kbd>A</kbd> on the TUI board. It appends an
-`:activated` entry to the ledger, once, and prints the instruction for the session's agent: write
-the owed records from what the session already understands, which the review loops then check.
-From then on the conduct pass starts the workstream's conductor as before. Runs (triggers,
-recoveries) are unaffected — they are driven by their Run.
+`:activated` entry to the ledger, once, opens the workstream's unit in the core with that session
+as its own, and prints the instruction for the session's agent: write the owed records from what
+the session already understands, which the review loops then check. From then on the
+workstream's conductor in the core directs it. A trigger's fire opens its unit in the core
+directly.
 
 Every review judge launch runs under a wall clock (30m by default, cut to the loop's deadline),
 and the review loops stop at a total wall clock (`:wall-clock`, 2h by default) with status
@@ -208,10 +209,10 @@ Two limits worth knowing:
 - **It reaches sessions started after you add it** — the agent inherits the
   environment of the shell that launched it, so live sessions keep the old one.
   Same for rotating the token: new shells only.
-- **It does not reach coordinator-spawned Runs.** The daemon runs under launchd,
-  which does not source `~/.zshrc`. That is fine today because the autonomous
-  skills (`/triage-bug`, `/triage-slack`) use the `notion` CLI, which carries
-  its own credential — but a Run that shells `bb notion:*` would fail.
+- **It does not reach turns the core runs.** The core runs as a supervised
+  service, which does not source `~/.zshrc`. That is fine today because the
+  autonomous skills (`/triage-bug`, `/triage-slack`) use the `notion` CLI, which
+  carries its own credential — but a turn that shells `bb notion:*` would fail.
 
 The `notion` CLI is unaffected by all of this and stays the path agents should
 reach for first; see `docs/reference/notion-access.md`.
@@ -274,8 +275,8 @@ bb nido:land:check                            # the design stands, and the code 
 jj bookmark set main -r <top-change-id>       # fast-forward
 jj git push -b main
 bb nido:land:record                           # close the workstream and record the landing
-(cd ~/Code/nido && jj rebase -b @ -d main@origin)  # the daemon loads the ROOT checkout
-bb nido:coordinator:restart                   # …and reads src/ only at startup — once no run is live
+(cd ~/Code/nido && jj rebase -b @ -d main@origin)  # the services load the ROOT checkout
+(cd ~/Code/nido && bb nido:core:upgrade)      # …and read src/ only at startup
 ```
 
 `bb nido:land` runs those steps as one verb and refuses, naming the way out,
@@ -283,23 +284,16 @@ before pushing anything it could not show green — a rebase that conflicts is
 undone, not left for you. It is what the catalog's Publish runs, and
 `bb nido:recovery:land` lands through the same gate.
 
-**Restart the coordinator onto the landing.** The daemon loads `src/` once, from
-the root checkout, so a landing it is not restarted onto changes nothing it does.
-`bb nido:land` rebases that checkout onto the landing at once — whether or not runs
-are live, or the landing runs inside the daemon (the dashboard's Publish); a rebase
-that conflicts is undone — and then **owes** the daemon a restart onto it, in
-`~/.nido/coordinator/restart-owed.edn`. It never restarts the daemon itself. The
-daemon pays the debt on its own tick, by exiting for launchd to relaunch it, as
-soon as no run is live and the landing has finished; the daemon that comes up
-records that it runs the landing. Nothing has to be run by hand, and no option
-skips the step. The landing prints one `land · coordinator …` line saying what the
-restart waits for, and the catalog's Publish bar shows the same, then which commit
-the dashboard runs once it is back. A daemon someone stopped stays stopped, and
-picks the landing up when it is brought up. `bb nido:recovery:land` owes nothing:
-it always runs inside a Run.
-
-This holds once a daemon carrying it runs. The daemon running when this change
-landed was put onto it by one `bb nido:coordinator:restart`, while no run was live.
+**Upgrade the core onto the landing.** The core daemon, the intake host and the
+dashboard load `src/` once, from the root checkout, so a landing they are not
+restarted onto changes nothing they do. `bb nido:land` rebases that checkout onto
+the landing — a rebase that conflicts is undone — and then runs
+`bb nido:core:upgrade` there before it returns: a gated restart that installs the
+landing as a core release, keeps it only once it serves, and otherwise restores
+the release that ran; the intake host and the dashboard are restarted once the
+new release serves. A turn the core was running survives the upgrade — the new
+release takes it back at start. The landing prints one `land · core …` line saying
+what was upgraded, or why the previous release still serves.
 
 **Record the landing after the push.** `bb nido:land:record` closes the
 workstream and appends a `:merged` naming the pushed commit and the design that
@@ -400,10 +394,8 @@ brief in the commit message. The brief is worth *more* in this mode, not less:
 it is the only artifact a later reader gets, since there is no PR conversation
 to reconstruct the reasoning from.
 
-**What does not apply:** `/prepare-draft-pr`, `/drive-home`, every `gh stack`
-recipe in `/stack` §4 and §6, and `nido ship`. `nido ship` hands a branch to the
-coordinator's merge lane, which ends at `gh pr merge --auto` on GitHub's native
-merge queue — that is the path for target projects with CI, not for nido.
+**What does not apply:** `/prepare-draft-pr`, `/drive-home`, and every `gh stack`
+recipe in `/stack` §4 and §6.
 
 **The PRs in this repo's history are not counter-examples.** Most of them are
 throwaway probes (`probe stack alpha/beta/gamma/delta/epsilon`, `chore(probe):
@@ -420,19 +412,6 @@ This is load-bearing because the **session launcher injects nido's native harnes
 Symptom & fix: a shipped harness skill or reviewer "missing" from sessions → check `ls ~/Code/nido/.claude/skills/<name>` or `ls ~/Code/nido/.claude/agents/<name>.md` (on disk, not `jj file list`). Present in main's tree but absent on disk ⇒ stale checkout ⇒ rebase as above, then re-`session:up` the live sessions (or restart the in-session agent) so the launcher recomposes them.
 
 **A nido-owned agent reaches every project nido drives, and a project's own `.claude/agents` is therefore not the whole roster its sessions can dispatch.** Same rule as skills: a native entry wins a name clash with the project's. Put an agent here only when it is genuinely harness-wide — a project's reviewer belongs in that project's tree.
-
-## Local merge queue (nido ship)
-
-`nido ship` (run from a session home/worktree) hands the branch to a strictly
-serial **merge lane** in the coordinator: it writes a `:ship` envelope, the daemon
-flips the workstream to the `:shipping` stage and runs `/drive-home` headless
-(one branch at a time, on its own budget — never stealing a triage slot). Close
-the tab; nido drives it home. On a clean finish the PR goes onto GitHub's native
-merge queue (`gh pr merge --auto`) and the existing `github-merge` poller closes
-the workstream to `:done`. On a halt it parks the branch as **blocked** in the
-gate inbox with the blocker — fix it in the worktree and `nido ship` again
-(idempotent). `bb nido:coordinator:status` shows a `Merge lane:` line. The lane is
-cap-1 by design (one brian CI run already saturates ~8 test containers).
 
 ## Session lifecycle
 
@@ -454,27 +433,15 @@ There is no `restart` task — use `down` then `up` (or just `up`, since it's id
 
 Sessions stay up until explicitly stopped. There is no automatic idle-suspension — bring a session `down` yourself when you're done with it.
 
-The exception is a session the coordinator spawned for a Run. It is torn down when the Run finishes, and when the Run **parks for review** its services are stopped — the worktree, the parked gate and the conversation stay, and a reply or an open (TUI ↵, dashboard) brings the session back up. A parked session is kept up only when someone is working in it, or the presence probe can't tell. Promote (`impl-*`) sessions are yours from the start and are never stopped.
+The exception is a session the core provisioned for a unit. The core brings it up before the unit's first turn, stops it when the unit is held, and destroys it when the workstream closes.
 
 Debug escape hatch: `bb nido:session:status` / `bb nido:session:list` stay scan-based and model-independent — they work even when the workstream model is wedged.
 
-### A session whose agent exits mid-turn
+### A turn whose agent exits
 
-A turn ends only when the session's own Stop says so. When the agent process of a session on an
-activated, un-paused workstream is gone inside a turn, the coordinator's next pass puts a blocker
-on that workstream's Needs you row: the conversation, when the turn began, any end Claude Code
-recorded with its reason, and the command that resumes it in the directory it ran in — a bare `claude --resume <id>`, since
-a resume given any flag starts a copy under a new id. nido starts
-nothing — why the process exited is not known to it — and answers the blocker itself once the
-conversation runs again or its turn has ended.
-
-It asks only on certainty: the listing read for the check holds no process for the conversation,
-and the pid its start recorded is not that process any more. A listing that cannot be read, or a
-pid whose start the OS will not give, decides nothing. Deliberately not alarmed: a turn already
-open when the daemon first read the session, one followed by a person's own exit (a `SessionEnd`
-whose reason is not `other`), a conductor's, chat's or Run's turn, and any turn on a paused
-workstream. A halted daemon checks nothing; a pass that comes more than two minutes after the
-previous one says so in `coordinator.log`.
+The core starts every turn and watches its process, so a turn whose agent exits is an outcome the
+core records and hands to the workstream's conductor, which decides what follows. A turn that was
+running when the core stopped is taken back when it starts again.
 
 ### Failed starts recover themselves
 
@@ -584,51 +551,55 @@ The coordinator daemon also reclaims orphans automatically: once per hour (and o
 - `brian.server/server` reads `(:datastar/port (mount/args))` to bind the HTTP server
 - The nido start form tries `(development/start {:datastar-port PORT})` first, with an ArityException fallback for older brian codebases
 
-## Coordination layer (stages 1–3)
+## Coordination: the core
 
-The coordinator daemon spawns Run-owned sessions that auto-launch claude with a configured skill. Triggers live at `~/.nido/projects/<project>/triggers.edn`; envelopes hit `~/.nido/coordinator/queue/`.
+One daemon, the **core**, is the single writer of coordination state. Each
+workstream it holds has a conductor, and each piece of work on it is a **unit**
+with its own session, which the core provisions before the unit's first turn. A
+turn is an agent run the core starts and watches; an agent asks the person
+through the core, and the ask halts its turn until it is answered. Nothing runs
+while idle: a conductor turn is woken only by something in its inbox. Work
+records — the ledger — stay in the workstream files; the core keeps its own
+state in `~/.nido/core/core.db`.
 
-**Running the daemon (Stage 3):**
+Three supervised services (launchd on macOS, systemd `--user` on Linux):
 
-```
-bb nido:coordinator:up          # background daemon; logs to coordinator.log
-bb nido:coordinator:status      # process alive? + heartbeat + halt/breaker info + what holds the improvement sweep
-bb nido:coordinator:logs        # last 50 lines (or :follow true to tail -f)
-bb nido:coordinator:down        # graceful stop (SIGTERM); :force true → SIGKILL
-```
-
-**Web dashboard (bundled with the daemon):** the coordinator runs the dashboard
-in-process. With the daemon up it's always at `http://localhost:8800` — the home
-page (`/`) is now the cross-project **Gate Inbox**: every parked workstream that
-needs you, each with its report and one-click follow-actions (skip / promote /
-drop / done / reply). The stage-grouped **Workstreams** overview is at `/workstreams`;
-workstream detail is at `/workstreams/<project>/<ws-id>` — a ledger reader plus, below it,
-a stage-appropriate action bar (the same gate actions as the inbox, e.g. parked triage →
-Apply/Dismiss/Reply) shown only for the current ledger entry. The old flat live-sessions board
-is gone: every live session belongs to a workstream (the daemon adopts orphans into scratch
-workstreams every 5 minutes), machine facts (ports, RSS, lifecycle) live on each workstream's
-session rows, closed-but-still-running workstreams surface in the Active tab's winding-down
-band, and global ops levers (halt, breakers, fire-trigger) sit behind the rail's health dot.
-`/system` redirects to `/workstreams`. The Workstreams overview (`/workstreams`) filters by **scope** (project) only — the cockpit's overview surface. Drains and their slices are not on it; they are the Structure slice's second view (`/structure/drains`), beside the declared design. The TUI stays a lean session launcher. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
-disable with `:no-dashboard true`. `bb nido:coordinator:status` shows a `Dashboard:`
-line (port + reachability).
-
-The standalone `bb nido:ui [:port 8800]` task still exists for UI iteration or when
-the daemon is down — but it and the daemon both bind 8800, so don't run both.
-
-`up` refuses if a live daemon already holds the PID file. `down` cleans the PID file even when the daemon was already gone (stale PID).
-
-**The daemon is a single long-lived process that reads `src/` once at startup — editing coordinator code does NOT affect the running daemon.** After changing any coordinator namespace, restart it (`bb nido:coordinator:restart` under launchd, otherwise `down` then `up`) or the fix never loads. This bites silently: a fix can sit committed on disk for hours while the live daemon keeps running the old logic — when debugging behaviour that contradicts the on-disk code, check the daemon's start time (`ps -o lstart -p $(cat ~/.nido/coordinator/coordinator.pid)`) against the relevant commit before assuming the code is wrong. (Restarting also loads any uncommitted working-tree changes.)
-
-**Auto-start at login (Stage 4):**
+- **core** (`nido-core`): the daemon, on the socket `~/.nido/core/core.sock`.
+  It runs a *release*, a copy of the checkout under `~/.nido/core/releases/`.
+- **intake** (`nido-intake`): the triggers and sources. Each arrival becomes
+  core commands — a spawning fire opens a unit whose first turn is the trigger's
+  skill; a queue-mode fire waits at `:incoming` until a person promotes it.
+- **dashboard** (`nido-dashboard`): `bb nido:ui` on `http://localhost:8800`. It
+  renders the core's feed, and its answer, withdraw and hold actions are core
+  commands.
 
 ```
-bb nido:coordinator:install     # write LaunchAgent plist + bootstrap; daemon runs now + at every login
-bb nido:coordinator:uninstall   # bootout + remove plist
-bb nido:coordinator:restart     # launchctl kickstart -k (requires install)
+bb nido:core:install        # install this checkout as a release and the services, and start them
+bb nido:core:status         # which release runs, and whether it answers on its socket
+bb nido:core:upgrade        # gated restart onto this checkout; restores the previous release if it does not serve
+bb nido:core:start / stop   # the core's service
+bb nido:coordinator:status  # the intake host's heartbeat, halt and breaker state
+bb nido:halt / bb nido:coordinator:resume   # stop / restart intake
 ```
 
-Once installed, `bb nido:coordinator:up` / `down` wrap `launchctl bootstrap` / `bootout` automatically; status surfaces a `Launchd:` line so you can see which lifecycle is in charge. `install` refuses if a bare daemon is already running — `down` it first.
+`bb nido:intake:run` and `bb nido:ui` run the intake host and the dashboard in
+the foreground for development; the dashboard binds 8800, so do not run both it
+and the service.
+
+**A service reads `src/` once at start**, so editing code changes nothing it
+does until it is restarted. `bb nido:core:upgrade` restarts all three onto the
+checkout it is run in, which is what `bb nido:land` does after a landing.
+
+**The cut-over.** A nido home that ran the old coordinator moves to the core
+once, with `bb nido:core:cutover`: it snapshots the home, stops and disables
+the old coordinator and every legacy `claude --bg` session, imports every
+legacy ledger read-only, hands each unclosed workstream to the core and starts
+it. No imported running turn is started, and no legacy blocker becomes an ask.
+Until the core has started over the imported store, `bb nido:core:restore` puts
+the snapshot back and starts the old coordinator.
+
+Triggers live at `~/.nido/projects/<project>/triggers.edn`; envelopes hit
+`~/.nido/coordinator/queue/`.
 
 **Autonomous sources (Stage 5):**
 
@@ -663,13 +634,7 @@ The source is **push**, not a poll: it holds a Slack **Socket Mode** connection 
  :limits          {:budget "8h" :max-failures 3}}
 ```
 
-Slack app setup: turn on **Socket Mode** and make an app-level token with `connections:write` (store it with `bb nido:slack:app-auth:set`, check with `bb nido:slack:app-auth:check`); subscribe the bot to the **`reaction_added`** event; bot scopes `reactions:read`, `channels:history`, `groups:history`, `users:read`, `chat:write` (plus `reactions:write` for the 👀 pickup ack). Then `bb nido:coordinator:restart`.
-
-**Foreground (still supported for development):**
-
-```
-bb nido:coordinator:run :poll-ms 500
-```
+Slack app setup: turn on **Socket Mode** and make an app-level token with `connections:write` (store it with `bb nido:slack:app-auth:set`, check with `bb nido:slack:app-auth:check`); subscribe the bot to the **`reaction_added`** event; bot scopes `reactions:read`, `channels:history`, `groups:history`, `users:read`, `chat:write` (plus `reactions:write` for the 👀 pickup ack). Then `bb nido:core:upgrade` to restart the intake host onto it.
 
 **Working with triggers/runs:**
 
@@ -708,9 +673,9 @@ Keep the view narrow. Widening it to "Code Review" would put every merged-and-
 closed workstream back on the Active band, because a Notion-driven row ignores
 nido's own `:closed`.
 
-**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). On the TUI, `s` opens the ops overlay: `h` halts, `c` clears a breaker, `f` fires a trigger.
+**Safety brakes:** per-trigger circuit breaker (`:limits.max-failures`, default 3) and the kill switch (`bb nido:halt` + `bb nido:coordinator:resume`), which stops intake. On the TUI, `s` opens the ops overlay: `h` halts, `c` clears a breaker, `f` fires a trigger.
 
-**Startup reconciliation (Stage 3):** when the daemon starts, any non-terminal Run on disk is forced to a terminal state from observable evidence (artifacts, `_run-status.edn`, agent.log). Crashed/orphaned Runs get marked `:failed :reason :orphaned-from-restart` so the dashboard stays honest.
+**Restart recovery:** the core keeps every turn and attempt in its store, so a core that starts again takes back the turns that were running and makes again any session bring-up a kill interrupted.
 
 Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions: `docs/skill-conventions-for-triggers.md`.
 

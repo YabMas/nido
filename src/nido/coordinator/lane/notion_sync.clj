@@ -115,7 +115,7 @@
   [ws]
   (some #(when (= :notion (:adapter %)) (:page-id %)) (:external-refs ws)))
 
-(defn ^{:malli/schema [:function [:=> [:cat :ProjectName] [:sequential :Workstream]] [:=> [:cat :ProjectName [:maybe :map]] [:sequential :Workstream]]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? [:maybe :map]]] [:sequential :Workstream]]}
   open-notion-workstreams
   "Open workstreams carrying a :notion page-id: open as `core`'s :open? says when given, else as
    the ledger's closure does."

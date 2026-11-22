@@ -3,6 +3,7 @@
   (:require
    [clojure.pprint :as pprint]
    [nido.coordinator.lane.findings :as findings]
+   [nido.coordinator.work :as work]
    [nido.platform.io :as io]
    [nido.platform.task-args :as task-args]))
 
@@ -15,7 +16,7 @@
   [& args]
   (let [[_ o] (task-args/split-args args)
         data  (io/read-edn (str (:file o)))
-        res   (findings/file! (project-kw o) (str (:ws o))
+        res   (work/file-findings! (project-kw o) (str (:ws o))
                               (assoc data :session (:session o)))]
     (println "filed findings round" (:round res) "→ reopened" (:ws o))
     (pprint/pprint res)))
