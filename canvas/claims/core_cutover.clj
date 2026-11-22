@@ -1,0 +1,81 @@
+(ns canvas.claims.core-cutover
+  "The claims the core cut-over design (workstream ws-20261122-3274ad) commits nido to, declared
+   where they live on. Each Claim's name is the claim's id, its docstring the statement, and its
+   :about the elements it is about. The design's restated landing-grant claims live in
+   canvas.claims.merge-grant and canvas.claims.project-landing."
+  (:require [canvas.vocab.claim :refer [Claim]]
+            [canvas.boot.intake :refer [boot-intake]]
+            [canvas.coordinator.record.workstream :refer [record-workstream]]
+            [canvas.coordinator.work :refer [coordinator-work]]
+            [canvas.core.api :refer [core-api]]
+            [canvas.core.buffer :refer [core-buffer]]
+            [canvas.core.cutover :refer [core-cutover]]
+            [canvas.core.domain :refer [core-domain]]
+            [canvas.core.feed :refer [core-feed]]
+            [canvas.core.provision :refer [core-provision]]
+            [canvas.core.release :refer [core-release]]
+            [canvas.core.store :refer [core-store]]
+            [canvas.core.turn :refer [core-turn]]
+            [canvas.core.writer :refer [core-writer]]
+            [canvas.review.core :refer [review-loop]]
+            [canvas.ui.surface :refer [ui-server ui-tui]]))
+
+(Claim start-is-recovery
+  "Starting the core daemon is its only recovery path, and it assumes nothing a crash left in flight done or not done. An ordinary start opens the store, takes back each turn the store records running by its recorded handle — reattached while its run still runs, recorded with the outcome its run left, or failed with its actions unknown when the run left none — and then hands the conductor rules and core-provision the committed state of every workstream not closed, read through the store's existing reads, as a commit hands them a change. So whatever they owed at a kill is issued again, and nothing already done is done twice: their commands are keyed and admitted against that state, and the session verb a provisioning attempt calls is idempotent. It starts no turn over, replays no event history or legacy ledger — a rebuild under a changed fold is the upgrade verb's, before the release starts [upgrade-is-a-gated-restart] — and needs no shutdown step, so a kill at any instant loses no acknowledged command."
+  {:about [core-release core-store core-turn] :evidence "round"})
+
+(Claim upgrade-is-a-gated-restart
+  "A release goes live by a restart onto it that binds the command socket only after passing its health gate — the store opens at its schema, the fold of a sample of workstreams equals their stored state, and the executors and the session verb answer — else the previous release is restored and started. A release that changes the fold goes live through the upgrade verb, which, while neither release serves, rebuilds the stored state from the event history under the new fold before the new release starts, so its gate compares its fold with state that fold wrote; when the gate fails, the verb rebuilds the stored state under the previous release's fold before restoring it, so the restored release reads only state its own fold wrote. A release commits nothing before its gate passes. Schema changes are expand-then-contract, so the previous release reads the store the new one wrote. Turns in flight are not stopped by the restart; whichever release binds the socket takes them back as [start-is-recovery] says."
+  {:about [core-release] :evidence "round"})
+
+(Claim cutover-imports-and-hands-over
+  "nido moves to the core in one cut-over. It stops and disables the old daemon, stops every legacy agent session, and imports only once the legacy agent listing, read under a deadline, shows none running and the old daemon's pid is gone, refusing while either cannot be read. It imports every legacy ledger from files it only reads, starts no turn it imported, carries no legacy blocker over as an ask, and provisions no session. Each unclosed legacy workstream gets a hand-over item in its conductor's inbox, which its conductor hears or, stopped on failures, raises to the person as [handover-wakes-are-capped] says. One that had a session is opened with one unit in its project, that session recorded ready as the unit's; one that had none, such as a queue-mode arrival held :incoming, is opened with no unit, and gets one as any arrival does [arrivals-open-units]. Where a legacy session was stopped mid-turn, an unknown is recorded on its unit and settled before anything on it runs. Before it imports, the cut-over snapshots the nido home whole; until the core daemon has started over the imported store, one named restore puts that snapshot back in place of the nido home and re-enables and starts the old daemon, and the restored home is what the old daemon ran over before the cut-over began. The old coordinator and the core daemon never run at once over the same nido home."
+  {:about [core-cutover core-store core-buffer] :evidence "round"})
+
+(Claim handover-wakes-are-capped
+  "A workstream's conductor wake is owed exactly when, in its committed state, its inbox holds items, it is not closed, no conductor turn of it runs or waits to resume, and it is not stopped. It is stopped once its last :max-failures conductor turns failed, until the person answers the operator ask a rule raises on it saying its conductor has stopped; that answer clears the stop. An owed wake whose inbox holds a person's input — a chat message or an answer to an operator ask — is issued at once. Every other owed wake is admitted under a daemon-wide cap on the conductor turns running for inboxes holding no person's input: while fewer such turns run than the cap, the wakes are issued in the order they became owed, at each start too [start-is-recovery]. So a person's input passes the cap but never the stop — a chat message to a stopped conductor waits in its inbox behind the stop ask — hundreds of handed-over workstreams start their conductors a few at a time with none passed over, and a conductor that cannot run reaches the person instead of going silent."
+  {:about [core-buffer] :evidence "round"})
+
+(Claim session-before-first-turn
+  "A unit's session is part of its state: opening a unit makes it owe one, a rule records a provisioning attempt for it before core-provision makes the attempt, and the attempt's outcome is recorded as ready (with the working directory turns run in) or failed. The domain refuses a unit turn while the unit's session is not ready, and a unit turn's working directory is its unit's session, never an argument a conductor supplies."
+  {:about [core-domain core-provision core-buffer] :evidence "round"})
+
+(Claim surfaces-render-the-feed
+  "The dashboard and the TUI render coordination from core-feed: a workstream's position, its asks and its chat are what the feed delivered at its latest commit, and what they show as awaiting the person is exactly the open operator asks. No surface derives coordination from ledger files, or probes a port, process or CLI to decide what to show. Work records are still read from the ledger to render them."
+  {:about [core-feed coordinator-work ui-server ui-tui] :evidence "round"})
+
+(Claim person-acts-by-command
+  "Everything a person does to coordination — answering or withdrawing an ask, holding or releasing a unit, granting, closing, chatting — is a keyed core command sent through core-api, from the dashboard, the TUI and the bb verbs alike, marked as input so it is taken ahead of background commands. None of them appends a coordination entry or writes a coordination file."
+  {:about [core-api coordinator-work] :evidence "round"})
+
+(Claim arrivals-open-units
+  "Work that arrives from a source, a trigger fire or a person's start becomes core commands: a workstream identity written to the ledger where it is new, then a command opening a unit in its project with its goal and, for a trigger, its first turn's instructions, which a rule starts once the unit's session is ready. The intake host applies a trigger's limits by reading committed state; it starts no agent and writes no Run or session record, a unit's session being core-provision's to bring up [session-before-first-turn]. A queue-mode trigger's fire is the exception: it writes the identity and opens the workstream in the core with an arrival item in its conductor's inbox and no unit, so nothing is provisioned for it; its conductor raises promote or dismiss to the person as an operator ask, a promotion is the person's start that opens the unit as above, and its expiry is a command the intake host sends from the core's state."
+  {:about [boot-intake core-domain] :evidence "round"})
+
+(Claim chat-is-conductor-turns
+  "Chat with a workstream is held on that workstream: each message a person sends is a command that puts it in the conductor's inbox, a conductor turn hears it, and that turn's reply is a command whose event the chat receives through core-feed; both are the workstream's events. A chat turn holds no unit, and what is settled in chat takes effect only as the same command a surface's control sends."
+  {:about [core-buffer core-domain core-feed] :evidence "round"})
+
+(Claim one-coordination-writer
+  "Once cut over, coordination state is written only by core-writer. What is coordination is decided by what reads it, not by an entry's kind name: state is coordination when something decides what runs from it. The legacy ledger takes work records and workstream identity only — including a landing's or merge's :closed with its phase outcome, a work record that work-record readers read — the phase checks, the design append, the pipeline's placement of a workstream on its arc, the landing record's own check that it has not already recorded the landing, the review's analysis — and from which nothing decides what runs: the passes the intake host carries read closure and merged state from the core. The core's closed flag is the only closure that decides what runs. A landing reaches the core by command whichever route it took: GitHub merge polling sends :record-merge, and nido:land:record, after appending its work records, sends :record-merge for the workstream's unit through core-api. A review verb that stops for a person ends its run with the question for its turn to ask, and the :blocker it records is a work record nothing decides what runs from. Every ledger kind that a reader the change keeps reads, and that a person's act or the old loops wrote, has one named source once cut over: a :grant is read from the core through core-api; a landing's :merged and :closed are appended by nido:land:record or by GitHub merge polling before it sends :record-merge; and a person's answer to an ask a stopped review raised is appended as their :blocker-answered — naming the :blocker it answers, with the person's words as its summary, neither :by :nido nor carrying an :act — by the process that answers it, the dashboard or the bb verb, in the person's own process and outside any turn the core runs, before it sends the answer command through core-api. That process is not a turn the core runs, so the commit gate does not judge the append, and the review's next round hears it as the person's reply as it does today."
+  {:about [core-writer record-workstream review-loop] :evidence "round"})
+
+(Claim old-loops-gone
+  "The old coordinator's pickup, drive, conduct, conductor, seat and tick loops, its claude --bg substrate and its restart and reconcile passes are deleted from the tree, and nothing launches an agent for coordination except core-turn's executors."
+  {:about [core-release] :evidence "round"})
+
+(Claim old-claims-leave-with-their-modules
+  "A reference to an element this design removes, or to an operation declared in one — a claim under canvas/claims whose :about names it, or the declaration of an element that stays requiring or delegating to it — leaves canvas/ in the landing that takes that element out of canvas/, unless this design restates the claim over elements that stay; so none is carried past the landing that deletes the old loops."
+  {:about [core-release] :evidence "round"})
+
+(Claim never-alongside
+  "At no point do the old coordinator and the core daemon both run over the same nido home: the core daemon refuses to start on a home while an old daemon runs over that home or that home's supervised old unit is enabled, and the old daemon is not started again over a home once a core daemon has started over that home's imported store; before then, the cut-over's named restore may start it again only after putting back the snapshot, with no core daemon running."
+  {:about [core-release core-cutover] :evidence "round"})
+
+(Claim every-old-pass-is-placed
+  "Every pass the old daemon runs at startup or on its tick is either carried by the intake host, reaching coordination only by command, or retired because the core does its job. Carried: the source plugins, their reconciliation and their polls (notion-view, board views, slack-channel, slack-events, session-failure, improvement and sweep, review-queue nightly, drain); routing a fired envelope to its trigger, with the trigger's breaker, dry run, in-flight limit, triage gate, ref dedup and queue-mode holding; a :ship envelope, which becomes a command starting the landing turn on the workstream's unit; a drain fire and a drain slice's :submit-run, which become commands opening units on the drain's workstream; a restore's :execute-run and :resume-turn continuations, which become start and resume commands the recovery verb sends; GitHub merge polling, which sends :record-merge; GitHub issue intake; Notion status sync; the tab-title refresh; desktop notifications, read from the feed; the halt switch, which stops arrivals; the anomaly auto-halt, which trips that switch on runaway spawns or failures; orphaned-state reclaim; host-reboot casualty records; settling abandoned review runs; expiring stale queue-mode arrivals. Every carried pass that decides whether to send a command from a workstream's closure or merged state — GitHub merge polling, the drain source picking open drains and counting slices in flight, a restore continuation withdrawing — reads that state from the core through core-api, never from the ledger. Retired: paying and settling an owed restart (replaced by the gated upgrade); the heartbeat file (replaced by the health gate and the socket answering); startup Run reconciliation, reap-stranded and queued-Run resubmission (replaced by take-back); reboot respawn of background sessions (replaced by take-back); the live census and the conduct pass: conduct, turn-end settling, budgets, refusals and left-running surfacing, blocked and turn-end notices (replaced by core turns, deadlines and the feed); the conductor pass: answers in place, hand-backs, landing instruction, landed-merge reaping, closing unanswered turns, stops, prompted, answers, conductors, re-seating, undelivered instructions, drain wakes (replaced by core-buffer and the landing order); the driver's tick; the executor's slot queue and its usage hold; sweeping resolved triage Runs; adopting orphan sessions into scratch workstreams; the in-process dashboard (replaced by the dashboard process)."
+  {:about [boot-intake core-release] :evidence "round"})
+
+(Claim settled-unit-session-is-stopped
+  "When a unit merges or its goal is retracted, a rule records a stop of its session and core-provision stops the session's services while keeping its working copy on disk; the working copy is destroyed only when its workstream closes. A stop is reversible and costs disk, a destroy is neither, and a merged unit's working copy is what a person or the conductor reads to check what landed — the same reason a parked Run's session keeps its worktree today."
+  {:about [core-provision core-domain] :evidence "round"})

@@ -173,7 +173,7 @@
    That is NOT yet declared — 110 of the 117 edges into the work plane currently go around this
    namespace — so the seal is a decision still to be made, not a claim this file makes."
   {:prefix ["nido.coordinator.work"]
-   :may-depend [Platform Integration Session Record Source View Lane Report]})
+   :may-depend [Platform Integration Session Record Source View Lane Report Core]})
 
 ;; ── the bands above the work plane ───────────────────────────────────────────
 
@@ -194,7 +194,7 @@
    task supplies both. The declaration is what forced that."
   {:prefix ["nido.boot."]
    :may-depend [Platform Integration Session Review
-                Record Source Daemon Lane WorkPlane Report Control Agent Executor]})
+                Record Source Daemon Lane WorkPlane Report Control Agent Executor Core]})
 
 (Band Surface
   "The long-lived surfaces a human looks at: the TUI, the web dashboard, the views behind them.
@@ -241,4 +241,4 @@
    `:correspondence/module-ambiguous` fails the check."
   {:prefix ["tasks."]
    :may-depend [Platform Integration Session Review Boot Design Surface
-                Record Source Daemon View Lane WorkPlane Report Control Agent Executor]})
+                Record Source Daemon View Lane WorkPlane Report Control Agent Executor Core]})

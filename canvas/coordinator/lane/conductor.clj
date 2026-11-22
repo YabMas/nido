@@ -232,16 +232,6 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session SessionName]
                      [:instruction [:maybe :map]]] [:sequential :map]]
      :delegates [seats/traffic drive/park-held! workstream/appending!]})
-  (Operation refusal
-    "Why a command must not run, or nil: a person's act — an intent, a design grant, a triage
-     acceptance, a phase gate, a blocker's answer, a landing, a PR merge or a close — run from the
-     conductor's session, or from any other session's conversation in a turn whose latest prompt
-     since its previous Stop carries the token of an instruction the conductor answers for and
-     that no start gave, judged over what the commit gate reads the command to do. A turn whose
-     latest prompt carries no such token is the person's, and its acts are allowed. Pushing, whatever the branch, and opening or readying a PR are not a person's
-     act, and neither is a design round, whose carried grant grants nothing the person did not."
-    {:signature [:=> [:catn [:input :map]] [:maybe :string]]
-     :delegates [commit-gate/acts]})
   (Operation starter
     "Who gives the first instruction of a session a start made from a directory carries or drives:
      the start, unless the directory is in a nido session whose driven conversation's turn runs

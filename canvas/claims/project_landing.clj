@@ -6,13 +6,12 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.lane.conductor :refer [lane-conductor refusal grant-landing! instruct-landing!]]
-            [canvas.coordinator.lane.drive :refer [lane-pipeline reap-landed! reap-stranded!]]
             [canvas.coordinator.lane.landing :refer [land! names-pr?]]
-            [canvas.coordinator.record.workstream :refer [unspent-grants]]
-            [canvas.coordinator.work :refer [gate-actions resolve-gate!]]
+            [canvas.coordinator.work :refer [coordinator-work]]
+            [canvas.core.api :refer [core-api]]
+            [canvas.core.domain :refer [core-domain]]
             [canvas.platform.project :refer [landing]]
-            [canvas.strata :refer [workstream-position]]
+            [canvas.tasks.nido-commit-gate :refer [refusal]]
             [canvas.tasks.nido-workstream :refer [pr-land*]]))
 
 (Claim landing-declared-per-project
@@ -28,25 +27,9 @@
   {:about [refusal] :evidence "test"})
 
 (Claim land-gate-grants-never-ships
-  "Land is offered at position :published only on an activated workstream, and never at :slice-cleared, whose slice lands by its drain; there resolve-gate! does one thing: grant-landing!, which appends the person's :grant [:merge] only while the workstream is activated and at :published and otherwise writes nothing. It lands nothing itself and enqueues no :ship envelope, so a Land click writes no :ship-submitted and creates no merge run."
-  {:about [gate-actions resolve-gate! grant-landing!] :evidence "test"})
+  "The gate's own Land control — the one a workstream's position offers, apart from any ask — is offered at position :published only on a workstream whose core state holds an open unit, and never at :slice-cleared, whose slice lands by its drain. It does one thing: it sends the person's grant of :merge as one keyed core command through core-api [person-acts-by-command]. It appends no ledger entry, lands nothing itself and enqueues no :ship envelope, so a click on it writes no :ship-submitted and creates no merge run. An open ask's Land is that ask's option, not this control [land-answers-the-escalation]."
+  {:about [coordinator-work core-api] :evidence "round"})
 
 (Claim land-answers-the-escalation
-  "On an activated workstream, an open blocker that asks one question (its :options) offers its option carrying :grants [:merge] as the Land action, labelled Land as it is at :published, whatever the project, and resolve-gate! records that blocker's :blocker-answered by that option, so the one click grants the landing and answers the blocker. A blocker that asks several questions (:questions) offers no Land: it is answered whole through :answer-questions, whose :blocker-answered carries the grants of the options picked, and instruct-landing! dispatches that grant as it does any other."
-  {:about [gate-actions resolve-gate!] :evidence "test"})
-
-(Claim landing-instructed-under-grant
-  "instruct-landing! posts each seat held by an activated workstream whose unspent-grants hold :merge one instruction per grant, keyed on the :seq unspent-grants answers for it, to run bb nido:workstream:pr:land — where names-pr? answers true, only once the workstream records a PR own-pr answers for, and naming it — and never /drive-home or nido ship; the daemon runs it every pass, so a grant is instructed however it was recorded. It is the one dispatcher of that landing: neither the conductor's brief nor refusal's answer to a conductor tells it to instruct a seat to land under a grant, and refusal's answer to a seat names nido:workstream:pr:land without requiring a PR."
-  {:about [instruct-landing! refusal unspent-grants lane-conductor] :evidence "test"})
-
-(Claim granted-landing-owes-no-gate
-  "A workstream at :published whose unspent-grants hold :merge reads :land-granted — stage :land, mode :working-copy — so its next move is not a person's and no gate offers Land on it."
-  {:about [lane-pipeline unspent-grants workstream-position] :evidence "test"})
-
-(Claim landed-merge-runs-settle
-  "reap-landed! settles to :done every merge run not yet terminal whose workstream holds a :merged or :closed entry written after the run was created, and touches no other run; the daemon runs it every pass."
-  {:about [reap-landed!] :evidence "test"})
-
-(Claim stranded-merge-runs-reaped
-  "reap-stranded! settles to :done each merge run it is given that is not yet terminal, and touches no other; the daemon gives it, at each start, the 2026-11-19-fukan-merge-* runs, so none of those is left non-terminal whether or not reap-landed! reaches it."
-  {:about [reap-stranded!] :evidence "round"})
+  "On a workstream whose core state holds an open unit, an open operator ask that asks one question offers its option carrying :grants [:merge] as a Land action of the ask's own, labelled Land whatever the project and apart from the gate's own Land control [land-gate-grants-never-ships], and choosing it answers that ask by that option in one core command, so the one click grants the landing and answers the ask. An ask that asks several questions offers no Land: it is answered whole by one core command carrying the grants of the options picked."
+  {:about [coordinator-work core-domain] :evidence "round"})
