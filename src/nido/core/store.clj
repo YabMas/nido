@@ -78,6 +78,7 @@
       id       TEXT NOT NULL,
       status   TEXT NOT NULL CHECK (status IN ('open','answered','withdrawn')),
       concerns TEXT,
+      kind     TEXT,
       PRIMARY KEY (ws, id))"
    "CREATE TABLE IF NOT EXISTS ask_binds(
       ws   TEXT NOT NULL,
@@ -96,12 +97,13 @@
    "CREATE VIEW IF NOT EXISTS violations AS
       SELECT a.ws, a.id AS ask, 'open operator ask binds no call' AS violation
       FROM operator_asks a
-      WHERE a.status = 'open'
+      WHERE a.status = 'open' AND a.kind IS NOT 'conductor-stopped'
         AND NOT EXISTS (SELECT 1 FROM ask_binds b WHERE b.ws = a.ws AND b.ask = a.id)
       UNION ALL
       SELECT a.ws, a.id AS ask, 'open operator ask concerns a unit with a running turn' AS violation
       FROM operator_asks a JOIN turns t ON t.ws = a.ws
       WHERE a.status = 'open' AND t.status = 'running' AND t.unit IS NOT NULL
+        AND a.kind IS NOT 'conductor-stopped'
         AND (a.concerns IS NULL OR a.concerns = t.unit
              OR EXISTS (SELECT 1 FROM ask_binds b JOIN turns bt ON bt.ws = b.ws AND bt.id = b.turn
                         WHERE b.ws = a.ws AND b.ask = a.id AND bt.unit = t.unit))"
@@ -152,14 +154,14 @@
    :turns (for [t (vals (:turns state))]
             [ws (:id t) (:unit t) (name (:status t)) (get-in t [:call :id])])
    :asks  (for [a (vals (:operator-asks state))]
-            [ws (:id a) (name (:status a)) (:concerns a)])
+            [ws (:id a) (name (:status a)) (:concerns a) (some-> (:kind a) name)])
    :binds (for [a (vals (:operator-asks state)), t (:binds a)]
             [ws (:id a) t])})
 
 (def ^:private row-sql
   {:units "INSERT INTO units(ws,id,status,held) VALUES (?,?,?,?)"
    :turns "INSERT INTO turns(ws,id,unit,status,call_id) VALUES (?,?,?,?,?)"
-   :asks  "INSERT INTO operator_asks(ws,id,status,concerns) VALUES (?,?,?,?)"
+   :asks  "INSERT INTO operator_asks(ws,id,status,concerns,kind) VALUES (?,?,?,?,?)"
    :binds "INSERT INTO ask_binds(ws,ask,turn) VALUES (?,?,?)"})
 
 (defn- replace-rows!
@@ -258,7 +260,7 @@
 (def ^:private row-columns
   {:units ["units"         [:ws :id :status :held]]
    :turns ["turns"         [:ws :id :unit :status :call_id]]
-   :asks  ["operator_asks" [:ws :id :status :concerns]]
+   :asks  ["operator_asks" [:ws :id :status :concerns :kind]]
    :binds ["ask_binds"     [:ws :ask :turn]]})
 
 (defn- stored-rows

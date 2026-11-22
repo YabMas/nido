@@ -69,7 +69,7 @@
                               (tool-line sock ws t "answer_call" {:turn (:turn i) :answer "use Postgres"}))
                             ["echo '{:outcome :completed}'"])))
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "pick a database"})
+     (cmd! {:command :open-unit :unit "u" :project "p" :goal "pick a database" :session-cwd "/tmp"})
      (cmd! {:command :start-turn :turn "t" :unit "u"
             :spec {:executor :fake :instructions "echo '{:outcome :asked :call {:id \"c\" :question \"which db?\"}}'"
                    :on-resume "echo \"{:outcome :completed :detail {:summary \\\"done\\\"}}\""}})
@@ -88,7 +88,7 @@
    (fn [_sock _ws _t _state _items]
      "echo '{:outcome :asked :call {:id \"c\" :question \"open unit b?\" :explored \"x\" :options [\"yes\" \"no\"] :recommendation \"yes\"}}'")
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g"})
+     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
      (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
      (is (await-until #(seq (d-awaiting s)) 30000) "the rules raised the conductor's ask to the person")
      (let [[a] (d-awaiting s)]
@@ -101,7 +101,7 @@
   (run-core
    (fn [& _] "echo 'not an outcome'")
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g"})
+     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
      (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
      (is (await-until #(= 3 (:conductor-failures (store/state s "ws"))) 30000))
      (Thread/sleep 1000)

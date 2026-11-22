@@ -62,7 +62,7 @@
 
 (deftest a-turn-runs-after-its-commit-and-its-outcome-is-recorded
   (with-core [{:keys [s cmd!]} {}]
-    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "echo '{:outcome :completed :detail {:summary \"done\"}}'")})
     (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))
     (is (= {:summary "done"} (:detail (turn-of s "ws" "t"))))
@@ -72,7 +72,7 @@
 
 (deftest an-asked-turn-ends-and-resumes-with-its-resolution
   (with-core [{:keys [s cmd! root]} {}]
-    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (cmd! "ws" {:command :start-turn :turn "t" :unit "u"
                 :spec (spec "echo '{:outcome :asked :call {:id \"c1\" :question \"which?\"}}'"
                             :on-resume "echo \"{:outcome :completed :detail {:resumed-with $RESOLUTION}}\"")})
@@ -88,7 +88,7 @@
 
 (deftest output-that-is-no-outcome-fails-the-turn-and-leaves-its-actions-unknown
   (with-core [{:keys [s cmd!]} {}]
-    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "echo 'I did some things'")})
     (is (await-until #(= :failed (:status (turn-of s "ws" "t"))) 10000))
     (is (= #{(d/run-unknown-key "t" 1)} (get-in (store/state s "ws") [:units "u" :unknowns])))
@@ -99,14 +99,14 @@
 
 (deftest a-run-past-its-deadline-is-cancelled
   (with-core [{:keys [s cmd!]} {}]
-    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "sleep 30" :deadline-ms 300)})
     (is (await-until #(= :cancelled (:status (turn-of s "ws" "t"))) 10000))
     (is (= {:reason :deadline} (:detail (turn-of s "ws" "t"))))))
 
 (deftest a-hold-cancels-the-run-only-after-its-commit
   (with-core [{:keys [s cmd! root]} {}]
-    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "sleep 30")})
     (let [pid-f (io/file (turn/run-dir (turn/turn-dir root "ws" "t") 1) "pid")]
       (is (await-until #(.exists pid-f) 10000))
@@ -128,7 +128,7 @@
         ;; The daemon that dies: its runner launches, and nothing it reports reaches the store.
         dead (turn/start {:root root :executors {:fake fake} :submit (fn [_] nil)})]
     (try
-      (doseq [u ["a" "b" "c" "d"]] (cmd! {:command :open-unit :unit u :project "p" :goal "g"}))
+      (doseq [u ["a" "b" "c" "d"]] (cmd! {:command :open-unit :unit u :project "p" :goal "g" :session-cwd "/tmp"}))
       (cmd! {:command :start-turn :turn "still-running" :unit "a" :spec (spec "sleep 1; echo '{:outcome :completed}'")})
       (cmd! {:command :start-turn :turn "ended-meanwhile" :unit "b" :spec (spec "echo '{:outcome :completed}'")})
       (cmd! {:command :start-turn :turn "ended-mute" :unit "c" :spec (spec "true")})

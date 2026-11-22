@@ -14,7 +14,7 @@
                      (doseq [i (range (parse-long per-thread))]
                        (let [k (str "t" t "-" i)
                              o (deref (writer/submit! w {:key k :ws (str "ws" (mod i 4))
-                                                         :command {:command :open-unit :unit k :project "p" :goal "g"}})
+                                                         :command {:command :open-unit :unit k :project "p" :goal "g" :session-cwd "/tmp"}})
                                       10000 nil)]
                          (when (:events o)
                            (locking out-lock (println "ack" k) (flush))))))))]

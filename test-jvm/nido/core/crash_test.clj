@@ -45,7 +45,7 @@
             (try
               (doseq [k (take 50 acked)]
                 (is (= (store/command-outcome s k)
-                       (deref (writer/submit! w {:key k :ws "ws0" :command {:command :open-unit :unit k :project "p" :goal "g"}}) 5000 nil))
+                       (deref (writer/submit! w {:key k :ws "ws0" :command {:command :open-unit :unit k :project "p" :goal "g" :session-cwd "/tmp"}}) 5000 nil))
                     "a resent key is answered with its original outcome"))
               (is (= events-before (reduce + (map #(count (store/events s %)) (store/workstreams s))))
                   "and decided nothing again")

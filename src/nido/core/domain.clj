@@ -25,6 +25,12 @@
    command `decide` accepts yields a state with violations; the tests check this over generated
    command sequences, and core-store's constraints restate the same rules at the table level.
 
+   A unit's session is part of its state. What the session should be is derived, never an event:
+   up while the unit is open, stopped once it merged or its goal was retracted (its working copy
+   kept on disk), destroyed once the workstream closed. What it is changes only by a recorded
+   provisioning attempt and that attempt's recorded outcome, so a provisioner killed between the
+   two leaves an attempt pending that a start finds and makes again.
+
    Pure: no clock, no ids minted, no I/O. Ids and times arrive in commands."
   (:require [clojure.set :as set]))
 
@@ -33,7 +39,9 @@
 (def empty-state
   "A workstream before its first event."
   {:units         {}    ; unit-id -> {:id :project :goal :status #{:open :merged :retracted}
-                        ;             :held? bool :unknowns #{key} :landing? bool}
+                        ;             :held? bool :unknowns #{key} :landing? bool :session session}
+                        ; session: {:status #{:none :ready :failed :stopped :destroyed}
+                        ;           :cwd str|nil :attempt {:id :want}|nil :detail}
    :turns         {}    ; turn-id -> {:id :unit (nil = conductor) :status :spec :run
                         ;             :call :resolution :resolved-call :ended-by :detail}
                         ; :spec {:executor kw :instructions str ...} is what the executor runs;
@@ -47,7 +55,14 @@
                         ; cancelled puts them back, because it did not dispose of them.
    :inbox-seq     0     ; how many items the inbox has ever held, which numbers the next one
    :conductor-failures 0 ; conductor turns failed or cancelled since one last completed or asked
+   :conductor-stopped? false ; a stop ask is open on the conductor; nothing wakes it until answered
+   :grants        {}    ; grant kind -> {:by str}: what the person granted and has not yet spent
+   :chat          []    ; [{:id :from #{:person :conductor} :text :turn}] in the order posted
    :closed?       false})
+
+(def person-input-kinds
+  "The inbox items that carry a person's input. A wake for an inbox holding one is never capped."
+  #{:chat :ask-answered})
 
 (def active-statuses
   "A turn in one of these statuses is active, so it counts against its unit. Only :running counts
@@ -55,6 +70,47 @@
   #{:running :asked :resolved})
 
 (defn- conductor-turn? [turn] (nil? (:unit turn)))
+
+(defn ^{:malli/schema [:=> [:cat :map :map] [:maybe :keyword]]} session-want
+  "What unit `unit`'s session should be in `state`: :up, :stopped or :destroyed."
+  [state unit]
+  (cond
+    (:closed? state)            :destroyed
+    (= :open (:status unit))    :up
+    :else                       :stopped))
+
+(def ^:private reached
+  "The session status each want is reached at."
+  {:up :ready :stopped :stopped :destroyed :destroyed})
+
+(declare active-turns)
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} sessions-owed
+  "Every unit of `state` whose session is not what it should be and has no attempt pending, with
+   the want: [{:unit :want}]. A failed bring-up is not owed again until it is retried: the
+   conductor hears the failure and decides."
+  [state]
+  (for [u (sort-by :id (vals (:units state)))
+        :let [want (session-want state u)
+              {:keys [status attempt]} (:session u)]
+        :when (and (nil? attempt)
+                   (not= (reached want) status)
+                   ;; a session is never taken down under a turn still active in it
+                   (or (= :up want) (empty? (active-turns state (:id u))))
+                   (not (and (= :up want) (= :failed status)))
+                   ;; nothing to stop or destroy where nothing was ever brought up
+                   (not (and (not= :up want) (= :none status)))
+                   (not (and (= :stopped want) (= :destroyed status))))]
+    {:unit (:id u) :want want}))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} attempts-pending
+  "Every provisioning attempt recorded and not yet resolved: [{:unit :attempt :want :project}]."
+  [state]
+  (for [u (sort-by :id (vals (:units state)))
+        :let [a (get-in u [:session :attempt])]
+        :when a]
+    {:unit (:id u) :attempt (:id a) :want (:want a) :project (:project u)
+     :cwd (get-in u [:session :cwd])}))
 
 (defn- active-turns
   "The active turns of `unit-id`, or of the conductor when `unit-id` is nil."
@@ -77,8 +133,10 @@
   "The units operator ask `ask` holds still: the unit it names, or every unit of the workstream
    when it names none, and the units whose calls it binds."
   [state ask]
-  (into (if-let [u (:concerns ask)] #{u} (set (keys (:units state))))
-        (keep #(get-in state [:turns % :unit]) (:binds ask))))
+  (if (= :conductor-stopped (:kind ask))
+    #{}
+    (into (if-let [u (:concerns ask)] #{u} (set (keys (:units state))))
+          (keep #(get-in state [:turns % :unit]) (:binds ask)))))
 
 (defn- concerns-open-ask?
   "Whether an open operator ask holds unit `unit-id` still."
@@ -123,9 +181,27 @@
    would have refused is never in a ledger, so evolve does not re-check it."
   (fn [_state event] (:event event)))
 
-(defmethod evolve :unit-opened [state {:keys [unit project goal]}]
+(defmethod evolve :unit-opened [state {:keys [unit project goal session-cwd]}]
   (assoc-in state [:units unit] {:id unit :project project :goal goal :status :open
-                                 :held? false :unknowns #{} :landing? false}))
+                                 :held? false :unknowns #{} :landing? false
+                                 :session (if session-cwd
+                                            {:status :ready :cwd session-cwd}
+                                            {:status :none})}))
+
+(defmethod evolve :provision-attempted [state {:keys [unit attempt want]}]
+  (assoc-in state [:units unit :session :attempt] {:id attempt :want want}))
+
+(defmethod evolve :provision-recorded [state {:keys [unit outcome cwd detail]}]
+  (let [want (get-in state [:units unit :session :attempt :want])
+        status (if (= :failed outcome) :failed (reached want))]
+    (cond-> (update-in state [:units unit :session]
+                       #(cond-> (-> % (dissoc :attempt :detail) (assoc :status status))
+                          cwd    (assoc :cwd cwd)
+                          detail (assoc :detail detail)))
+      (= :failed outcome) (hear-later {:kind :session-failed :unit unit :want want :detail detail}))))
+
+(defmethod evolve :provision-retried [state {:keys [unit]}]
+  (update-in state [:units unit :session] #(-> % (assoc :status :none) (dissoc :detail))))
 
 (defmethod evolve :unit-goal-retracted [state {:keys [unit]}]
   (assoc-in state [:units unit :status] :retracted))
@@ -183,11 +259,47 @@
                           (hear-later (turn-ended-item t :cancelled false))))
             state running)))
 
-(defmethod evolve :operator-ask-answered [state {:keys [ask answer]}]
-  (close-ask state ask :answered {:answered answer}))
+(defn- person-closed-ask
+  "After the person closed operator ask `ask-id`: a stop ask lifts the conductor's stop; any other
+   is heard by the conductor as the person's input."
+  [state ask-id how]
+  (if (= :conductor-stopped (get-in state [:operator-asks ask-id :kind]))
+    (assoc state :conductor-stopped? false :conductor-failures 0)
+    (hear-later state {:kind :ask-answered :ask ask-id :how how})))
 
-(defmethod evolve :operator-ask-withdrawn [state {:keys [ask reason]}]
-  (close-ask state ask :withdrawn {:refused reason}))
+(defmethod evolve :operator-ask-answered [state {:keys [ask answer by]}]
+  (cond-> (close-ask state ask :answered {:answered answer})
+    (= :person by) (person-closed-ask ask :answered)))
+
+(defmethod evolve :operator-ask-withdrawn [state {:keys [ask reason by]}]
+  (cond-> (close-ask state ask :withdrawn {:refused reason})
+    (= :person by) (person-closed-ask ask :withdrawn)))
+
+(defmethod evolve :conductor-stop-raised [state {:keys [ask content]}]
+  (-> state
+      (assoc :conductor-stopped? true)
+      (assoc-in [:operator-asks ask] {:id ask :kind :conductor-stopped :binds #{} :concerns nil
+                                      :status :open :content content})))
+
+(defmethod evolve :grant-given [state {:keys [grant by]}]
+  (assoc-in state [:grants grant] {:by by}))
+
+(defmethod evolve :grant-spent [state {:keys [grant]}]
+  (update state :grants dissoc grant))
+
+(defmethod evolve :chat-posted [state {:keys [message text]}]
+  (-> state
+      (update :chat (fnil conj []) {:id message :from :person :text text})
+      (hear-later {:kind :chat :message message :text text})))
+
+(defmethod evolve :chat-replied [state {:keys [message text turn]}]
+  (update state :chat (fnil conj []) {:id message :from :conductor :text text :turn turn}))
+
+(defmethod evolve :handed-over [state {:keys [summary]}]
+  (hear-later state {:kind :hand-over :summary summary}))
+
+(defmethod evolve :arrival-recorded [state {:keys [arrival summary]}]
+  (hear-later state {:kind :arrival :arrival arrival :summary summary}))
 
 (defmethod evolve :unit-held [state {:keys [unit]}]
   ;; The hold's one commit: the unit is held, its active turn is cancelled by takeover, a pending
@@ -225,10 +337,14 @@
 (defmethod evolve :unit-merged [state {:keys [unit]}]
   (-> state
       (update-in [:units unit] assoc :status :merged :landing? false)
+      (update :grants dissoc :merge)
       (hear-later {:kind :unit-merged :unit unit})))
 
 (defmethod evolve :workstream-closed [state _]
   (assoc state :closed? true))
+
+(defmethod evolve :workstream-reopened [state _]
+  (assoc state :closed? false))
 
 (defn ^{:malli/schema [:=> [:cat [:sequential :map]] :map]} fold
   "The state `events` fold to, from the empty workstream."
@@ -271,12 +387,36 @@
 (defmethod decide :default [_ command]
   (refuse :unknown-command :command (:command command)))
 
-(defmethod decide :open-unit [state {:keys [unit project goal]}]
+(defmethod decide :open-unit [state {:keys [unit project goal session-cwd]}]
   (cond
     (:closed? state)                       (refuse :workstream-closed)
     (contains? (:units state) unit)        (refuse :unit-exists :unit unit)
     (or (nil? project) (nil? goal))        (refuse :unit-needs-project-and-goal)
-    :else (accept {:event :unit-opened :unit unit :project project :goal goal})))
+    :else (accept (cond-> {:event :unit-opened :unit unit :project project :goal goal}
+                    session-cwd (assoc :session-cwd session-cwd)))))
+
+(defmethod decide :record-provision-attempt [state {:keys [unit attempt want]}]
+  (cond
+    (nil? (get-in state [:units unit]))  (refuse :no-such-unit :unit unit)
+    (not (some #(and (= unit (:unit %)) (= want (:want %))) (sessions-owed state)))
+    (refuse :session-not-owed :unit unit :want want)
+    :else (accept {:event :provision-attempted :unit unit :attempt attempt :want want})))
+
+(defmethod decide :record-provision-outcome [state {:keys [unit attempt outcome cwd detail]}]
+  (let [a (get-in state [:units unit :session :attempt])]
+    (cond
+      (not= attempt (:id a))                    (refuse :no-such-attempt :unit unit :attempt attempt)
+      (not (#{:done :failed} outcome))          (refuse :unknown-outcome :outcome outcome)
+      (and (= :done outcome) (= :up (:want a)) (not (string? cwd)))
+      (refuse :ready-needs-a-cwd)
+      :else (accept (cond-> {:event :provision-recorded :unit unit :attempt attempt :outcome outcome}
+                      cwd    (assoc :cwd cwd)
+                      detail (assoc :detail detail))))))
+
+(defmethod decide :retry-provision [state {:keys [unit]}]
+  (if (= :failed (get-in state [:units unit :session :status]))
+    (accept {:event :provision-retried :unit unit})
+    (refuse :session-not-failed :unit unit)))
 
 (defmethod decide :retract-unit-goal [state {:keys [unit]}]
   (cond
@@ -297,9 +437,12 @@
       :else (accept {:event :turn-started :turn turn :unit nil :spec spec :hears (vec (distinct hears))}))
     (seq hears)                            (refuse :only-the-conductor-hears)
     :else
-    (if-let [why (unit-blocker state unit)]
+    (if-let [why (or (unit-blocker state unit)
+                     (when-not (= :ready (get-in state [:units unit :session :status])) :session-not-ready))]
       (refuse why :unit unit)
-      (accept {:event :turn-started :turn turn :unit unit :spec spec}))))
+      ;; A unit turn works in its unit's session, whatever the command said.
+      (accept {:event :turn-started :turn turn :unit unit
+               :spec (assoc spec :cwd (get-in state [:units unit :session :cwd]))}))))
 
 (defmethod decide :record-outcome [state {:keys [turn run outcome call detail actions-unknown?]}]
   (let [t (get-in state [:turns turn])]
@@ -365,16 +508,62 @@
       :else (accept {:event :operator-ask-raised :ask ask :binds (vec binds)
                      :concerns concerns :content content}))))
 
-(defmethod decide :answer-operator-ask [state {:keys [ask answer]}]
+(defmethod decide :answer-operator-ask [state {:keys [ask answer by]}]
   (if (= :open (get-in state [:operator-asks ask :status]))
-    (accept {:event :operator-ask-answered :ask ask :answer answer})
+    (accept (cond-> {:event :operator-ask-answered :ask ask :answer answer}
+              (= :person by) (assoc :by :person)))
     (refuse :ask-not-open :ask ask)))
 
-(defmethod decide :withdraw-operator-ask [state {:keys [ask reason]}]
+(defmethod decide :withdraw-operator-ask [state {:keys [ask reason by]}]
   (cond
     (not= :open (get-in state [:operator-asks ask :status])) (refuse :ask-not-open :ask ask)
     (nil? reason)                                            (refuse :withdrawal-needs-a-reason)
-    :else (accept {:event :operator-ask-withdrawn :ask ask :reason reason})))
+    :else (accept (cond-> {:event :operator-ask-withdrawn :ask ask :reason reason}
+                    (= :person by) (assoc :by :person)))))
+
+(defmethod decide :raise-conductor-stop [state {:keys [ask content]}]
+  (cond
+    (:conductor-stopped? state)               (refuse :conductor-already-stopped)
+    (contains? (:operator-asks state) ask)    (refuse :ask-exists :ask ask)
+    (not (decision-ready? content))           (refuse :ask-not-decision-ready)
+    :else (accept {:event :conductor-stop-raised :ask ask :content content})))
+
+(defmethod decide :give-grant [state {:keys [grant by]}]
+  (cond
+    (not (keyword? grant))                 (refuse :grant-needs-a-kind)
+    (contains? (:grants state) grant)      (refuse :already-granted :grant grant)
+    :else (accept {:event :grant-given :grant grant :by by})))
+
+(defmethod decide :spend-grant [state {:keys [grant]}]
+  (if (contains? (:grants state) grant)
+    (accept {:event :grant-spent :grant grant})
+    (refuse :not-granted :grant grant)))
+
+(defmethod decide :post-chat [state {:keys [message text]}]
+  (cond
+    (some #(= message (:id %)) (:chat state)) (refuse :message-exists :message message)
+    (not (string? text))                      (refuse :chat-needs-text)
+    :else (accept {:event :chat-posted :message message :text text})))
+
+(defmethod decide :reply-chat [state {:keys [message text turn]}]
+  (cond
+    (some #(= message (:id %)) (:chat state)) (refuse :message-exists :message message)
+    (not (string? text))                      (refuse :chat-needs-text)
+    (not= :running (get-in state [:turns turn :status])) (refuse :turn-not-running :turn turn)
+    (some? (get-in state [:turns turn :unit]))           (refuse :only-the-conductor-replies)
+    :else (accept {:event :chat-replied :message message :text text :turn turn})))
+
+(defmethod decide :hand-over [state {:keys [summary]}]
+  (cond
+    (:closed? state)        (refuse :workstream-closed)
+    (not (string? summary)) (refuse :hand-over-needs-a-summary)
+    :else (accept {:event :handed-over :summary summary})))
+
+(defmethod decide :record-arrival [state {:keys [arrival summary]}]
+  (cond
+    (:closed? state)        (refuse :workstream-closed)
+    (nil? arrival)          (refuse :arrival-needs-an-id)
+    :else (accept {:event :arrival-recorded :arrival arrival :summary summary})))
 
 (defmethod decide :hold-unit [state {:keys [unit]}]
   (let [u (get-in state [:units unit])]
@@ -449,6 +638,11 @@
       (seq open)       (refuse :units-not-landed :units (vec (sort open)))
       :else (accept {:event :workstream-closed}))))
 
+(defmethod decide :reopen-workstream [state _]
+  (if (:closed? state)
+    (accept {:event :workstream-reopened})
+    (refuse :workstream-not-closed)))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]} step
   "Decide `command` against `state`: [new-state events] when admitted, [state nil refusal] when not."
   [state command]
@@ -477,8 +671,13 @@
        [{:violation :conductor-runs-two-turns}])
      (for [a open, t (:binds a) :when (not= :asked (get-in state [:turns t :status]))]
        {:violation :open-ask-binds-resolved-call :ask (:id a) :turn t})
-     (for [a open :when (empty? (:binds a))]
+     (for [a open :when (and (empty? (:binds a)) (not= :conductor-stopped (:kind a)))]
        {:violation :open-ask-binds-nothing :ask (:id a)})
+     (for [t turns
+           :when (and (:unit t) (= :running (:status t)))
+           :let [s (get-in state [:units (:unit t) :session])]
+           :when (or (not= :ready (:status s)) (not= (:cwd s) (get-in t [:spec :cwd])))]
+       {:violation :unit-turn-outside-its-session :turn (:id t)})
      (for [[t as] (group-by identity (mapcat :binds open)) :when (> (count as) 1)]
        {:violation :call-bound-twice :turn t})
      (for [u (vals (:units state)), t (active-turns state (:id u)) :when (:held? u)]

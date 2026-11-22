@@ -30,7 +30,7 @@
 
 (deftest a-commit-is-read-back-and-a-repeated-key-answered
   (with-store [s]
-    (commit-command! s "ws1" "k1" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (commit-command! s "ws1" "k1" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (is (= :open (get-in (store/state s "ws1") [:units "u" :status])))
     (is (= {:events 1} (store/command-outcome s "k1")))
     (is (nil? (store/command-outcome s "never-sent")))
@@ -87,7 +87,7 @@
 
 (deftest a-batch-that-breaks-a-constraint-writes-nothing
   (with-store [s]
-    (commit-command! s "ws1" "k1" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (commit-command! s "ws1" "k1" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (let [bad (-> (store/state s "ws1")
                   (assoc-in [:turns "t1"] {:id "t1" :unit "u" :status :running})
                   (assoc-in [:turns "t2"] {:id "t2" :unit "u" :status :running}))]
@@ -114,7 +114,7 @@
 
 (deftest verify-reports-a-cache-that-drifted
   (with-store [s]
-    (commit-command! s "ws1" "k1" {:command :open-unit :unit "u" :project "p" :goal "g"})
+    (commit-command! s "ws1" "k1" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
     (jdbc/execute! (:conn s) ["UPDATE workstreams SET state = ? WHERE ws = 'ws1'" (pr-str d/empty-state)])
     (is (= #{:state-differs-from-fold :rows-differ-from-state} (set (map :problem (store/verify s)))))
     (store/rebuild! s)

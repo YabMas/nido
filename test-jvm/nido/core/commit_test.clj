@@ -15,7 +15,7 @@
 (defn- temp-dir [] (str (Files/createTempDirectory "nido-commit-" (make-array FileAttribute 0))))
 
 (defn- open-unit [ws key unit & {:as more}]
-  (merge {:key key :ws ws :command {:command :open-unit :unit unit :project "p" :goal "g"}} more))
+  (merge {:key key :ws ws :command {:command :open-unit :unit unit :project "p" :goal "g" :session-cwd "/tmp"}} more))
 
 (defmacro with-writer [[w s db opts] & body]
   `(let [dir# (temp-dir)
@@ -30,7 +30,7 @@
 (deftest a-command-is-answered-with-what-committed-and-a-repeat-with-the-same
   (with-writer [w s db {}]
     (let [first-answer (answer (writer/submit! w (open-unit "ws" "k1" "u")))]
-      (is (= [{:event :unit-opened :unit "u" :project "p" :goal "g"}] (:events first-answer)))
+      (is (= [{:event :unit-opened :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}] (:events first-answer)))
       (testing "a resent key is answered from the store, not decided again"
         (is (= first-answer (answer (writer/submit! w (open-unit "ws" "k1" "u")))))
         (is (= 1 (count (store/events s "ws")))))
@@ -151,7 +151,7 @@
     (with-writer [w s db {:publish #(feed/publish! f %)}]
       (let [r (store/open-reader db)
             sub (feed/subscribe! f r 0 {})]
-        (doseq [[k c] [["1" {:command :open-unit :unit "u" :project "p" :goal "g"}]
+        (doseq [[k c] [["1" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}]
                        ["2" {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}]
                        ["3" {:command :record-outcome :turn "t" :outcome :asked :call {:id "c" :question "q"}}]]]
           (answer (writer/submit! w {:key k :ws "ws" :command c})))
@@ -170,8 +170,8 @@
           (let [c (api/connect sock) sub (api/connect sock)]
             (api/subscribe sub 0)
             (testing "commands, through the writer"
-              (is (:events (api/request c {:op :command :key "k1" :ws "ws" :command {:command :open-unit :unit "u" :project "p" :goal "g"}})))
-              (is (:events (api/request c {:op :command :key "k2" :ws "ws" :command {:command :open-unit :unit "v" :project "p" :goal "g"} :input? true}))))
+              (is (:events (api/request c {:op :command :key "k1" :ws "ws" :command {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}})))
+              (is (:events (api/request c {:op :command :key "k2" :ws "ws" :command {:command :open-unit :unit "v" :project "p" :goal "g" :session-cwd "/tmp"} :input? true}))))
             (testing "reads, from committed state"
               (is (= :open (get-in (api/request c {:op :state :ws "ws"}) [:state :units "u" :status])))
               (is (= {:workstreams ["ws"]} (api/request c {:op :workstreams}))))

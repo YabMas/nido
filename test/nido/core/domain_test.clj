@@ -28,8 +28,8 @@
 (defn- refusal [state command] (:reason (nth (d/step state command) 2)))
 
 (def two-units
-  [{:command :open-unit :unit "brian" :project "brian" :goal "g1"}
-   {:command :open-unit :unit "babel" :project "babel" :goal "g2"}])
+  [{:command :open-unit :unit "brian" :project "brian" :goal "g1" :session-cwd "/w"}
+   {:command :open-unit :unit "babel" :project "babel" :goal "g2" :session-cwd "/w"}])
 
 (deftest an-ask-halts-the-unit
   (let [[s] (run (conj two-units
@@ -165,7 +165,7 @@
         mturn (gen/elements turn-ids)
         ask   (gen/elements ask-ids)]
     (gen/one-of
-     [(gen/fmap (fn [u] {:command :open-unit :unit u :project u :goal "g"}) unit)
+     [(gen/fmap (fn [u] {:command :open-unit :unit u :project u :goal "g" :session-cwd "/w"}) unit)
       (gen/fmap (fn [[t u]] (cond-> {:command :start-turn :turn t :unit u :spec spec}
                                (nil? u) (assoc :hears :whole-inbox)))
                 (gen/tuple mturn (gen/one-of [unit (gen/return nil)])))
@@ -189,7 +189,21 @@
       (gen/fmap (fn [p] {:command :set-landing-order :pairs [p]}) (gen/elements [["u1" "u2"] ["u2" "u1"]]))
       (gen/fmap (fn [u] {:command :begin-landing :unit u}) unit)
       (gen/fmap (fn [u] {:command :record-merge :unit u}) unit)
-      (gen/return {:command :close-workstream})])))
+      (gen/return {:command :close-workstream})
+      (gen/return {:command :reopen-workstream})
+      (gen/fmap (fn [u] {:command :open-unit :unit u :project u :goal "g"}) unit)
+      (gen/fmap (fn [[u w]] {:command :record-provision-attempt :unit u :attempt (str "p-" u) :want w})
+                (gen/tuple unit (gen/elements [:up :stopped :destroyed])))
+      (gen/fmap (fn [[u o]] {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome o :cwd "/w"})
+                (gen/tuple unit (gen/elements [:done :failed])))
+      (gen/fmap (fn [u] {:command :retry-provision :unit u}) unit)
+      (gen/fmap (fn [g] {:command :give-grant :grant g :by "p"}) (gen/elements [:merge :intent]))
+      (gen/fmap (fn [g] {:command :spend-grant :grant g}) (gen/elements [:merge :intent]))
+      (gen/fmap (fn [m] {:command :post-chat :message m :text "hi"}) (gen/elements ["m1" "m2"]))
+      (gen/fmap (fn [[m t]] {:command :reply-chat :message m :text "yo" :turn t}) (gen/tuple (gen/elements ["r1" "r2"]) mturn))
+      (gen/return {:command :hand-over :summary "s"})
+      (gen/fmap (fn [a] {:command :answer-operator-ask :ask a :answer "x" :by :person}) ask)
+      (gen/fmap (fn [a] {:command :raise-conductor-stop :ask a :content ready}) ask)])))
 
 (def no-admitted-command-breaks-an-invariant
   (prop/for-all [commands (gen/vector gen-command 0 60)]
@@ -208,7 +222,7 @@
     (is (:pass? result) (pr-str (select-keys result [:shrunk :fail])))))
 
 (deftest an-outcome-names-its-run-and-an-unknown-run-stops-the-unit
-  (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g"}
+  (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                   {:command :start-turn :turn "t" :unit "u" :spec spec}
                   {:command :record-outcome :turn "t" :run 1 :outcome :asked :call {:id "c"}}
                   {:command :answer-call :turn "t" :answer "yes"}
@@ -223,7 +237,7 @@
           "nothing proceeds on the unit until what the run did is settled"))))
 
 (deftest the-conductor-hears-each-outcome-once
-  (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g"}
+  (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                   {:command :start-turn :turn "t" :unit "u" :spec spec}
                   {:command :record-outcome :turn "t" :outcome :completed}])
         [item] (keys (:inbox s))]
@@ -243,7 +257,7 @@
           (is (empty? (:inbox s3)))
           (is (zero? (:conductor-failures s3))))))
     (testing "a hold's cancellation, a release and a merge reach it too"
-      (let [[s2] (run [{:command :open-unit :unit "u" :project "p" :goal "g"}
+      (let [[s2] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                        {:command :start-turn :turn "t" :unit "u" :spec spec}
                        {:command :hold-unit :unit "u"}
                        {:command :release-unit :unit "u"}
@@ -252,8 +266,8 @@
                (map (juxt :kind :outcome) (sort-by :id (vals (:inbox s2))))))))))
 
 (deftest an-ask-halts-every-unit-it-concerns-in-its-own-commit
-  (let [[s] (run [{:command :open-unit :unit "x" :project "p" :goal "g"}
-                  {:command :open-unit :unit "y" :project "p" :goal "g"}
+  (let [[s] (run [{:command :open-unit :unit "x" :project "p" :goal "g" :session-cwd "/w"}
+                  {:command :open-unit :unit "y" :project "p" :goal "g" :session-cwd "/w"}
                   {:command :start-turn :turn "tx" :unit "x" :spec spec}
                   {:command :start-turn :turn "ty" :unit "y" :spec spec}
                   {:command :record-outcome :turn "ty" :outcome :asked :call {:id "c"}}])]
@@ -265,6 +279,6 @@
     (testing "an ask naming no unit concerns every unit"
       (let [[s2] (d/step s {:command :raise-operator-ask :ask "a" :binds ["ty"] :concerns nil :content ready})]
         (is (= :cancelled (get-in s2 [:turns "tx" :status])))
-        (let [[s3] (d/step s2 {:command :open-unit :unit "z" :project "p" :goal "g"})]
+        (let [[s3] (d/step s2 {:command :open-unit :unit "z" :project "p" :goal "g" :session-cwd "/w"})]
           (is (= :unit-has-open-operator-ask (refusal s3 {:command :start-turn :turn "tz" :unit "z" :spec spec}))
               "a unit opened while it is open is held still too"))))))
