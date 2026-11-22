@@ -56,7 +56,49 @@
    HIDES the schema, the transaction boundary and the durability settings. A batch's events and the
    rows they produce commit as one transaction, so stored state is always the fold
    of the ledger and can be rebuilt from it; the rows are a declared
-   cache over the ledger, not a second truth.")
+   cache over the ledger, not a second truth."
+  (Operation open
+    "Open the store for writing, creating it and its schema if absent; one writer holds it."
+    {:signature [:=> [:catn [:path :string]] :map]})
+  (Operation open-reader
+    "Open the store for reading only; under WAL it never waits on the writer."
+    {:signature [:=> [:catn [:path :string]] :map]})
+  (Operation close
+    "Close a store."
+    {:signature [:=> [:catn [:store :map]] :nil]})
+  (Operation commit!
+    "Make a batch of decided commands durable as one transaction, events and derived state together, and answer each entry's last event position; a batch a constraint refuses writes nothing."
+    {:signature [:=> [:catn [:store :map] [:batch [:sequential :map]]] [:vector [:maybe :int]]]})
+  (Operation changed-since
+    "Every workstream whose last commit is after a position, at that commit, in commit order."
+    {:signature [:=> [:catn [:store :map] [:pos :int]] [:sequential :map]]})
+  (Operation command-outcome
+    "The outcome a command key was answered with, or nil if none committed."
+    {:signature [:=> [:catn [:store :map] [:key :string]] [:maybe :any]]})
+  (Operation state
+    "A workstream's committed state."
+    {:signature [:=> [:catn [:store :map] [:ws :string]] :map]})
+  (Operation workstreams
+    "The ids of every workstream with committed events."
+    {:signature [:=> [:catn [:store :map]] [:sequential :string]]})
+  (Operation events
+    "A workstream's events in commit order."
+    {:signature [:=> [:catn [:store :map] [:ws :string]] [:sequential :map]]})
+  (Operation position
+    "The position of the last committed event."
+    {:signature [:=> [:catn [:store :map]] :int]})
+  (Operation verify
+    "Every way the stored state disagrees with the fold of the ledger; reads all of history, so only on request."
+    {:signature [:=> [:catn [:store :map]] [:sequential :map]]})
+  (Operation rebuild!
+    "Recompute every stored state and its rows from the ledger, as a release that changes the fold does."
+    {:signature [:=> [:catn [:store :map]] :int]})
+  (Operation import-legacy!
+    "Import every legacy ledger entry under a nido home as written, only reading the files."
+    {:signature [:=> [:catn [:store :map] [:home :string]] :map]})
+  (Operation legacy-entries
+    "A workstream's imported legacy entries."
+    {:signature [:=> [:catn [:store :map] [:project :string] [:ws :string]] [:sequential :map]]}))
 
 (Module core-writer
   "The single writer: one thread takes commands from its queue — a surface's input
@@ -77,8 +119,7 @@
 (Module core-feed
   "The change feed: what each commit changed, in commit order, keyed by commit position,
    delivered to surfaces as pushed messages (SSE to the dashboard, a socket stream to
-   the TUI). A unit turn's ask is carried only inside an operator ask bound
-   to it.
+   the TUI). The asks it delivers as awaiting the person are the open operator asks.
 
    HIDES subscription, fan-out and resume-from-position, so a surface that reconnects continues from the last position
    it rendered.")
@@ -131,12 +172,15 @@
    asleep — woken per outcome or event — or resident, while a person chats
    with it.
 
-   HIDES the policy that decides between them, so no unit's ask reaches a surface except
-   in an operator ask it raised.")
+   HIDES the policy that decides between them, so a unit's ask awaits the person only in an
+   operator ask it raised.")
 
 (Module core-reconcile
   "Reconcilers for what nido does not own — runtimes (one per workstream and project),
    databases, each unit's worktree, executor processes: desired state against observed state, converged.
+   The external effects other than turns that a commit records — a push, a PR, a message — are
+   desired state too: it attempts each from the committed change, under its command key, and
+   records what it learns as a command.
 
    HIDES how each kind of thing is observed. Every observation carries when it was made
    and how long it holds; past that, or when observing failed, the fact is

@@ -99,6 +99,18 @@
     (let [{:keys [fail error]} (apply t/run-tests nses)]
       (System/exit (if (zero? (+ (or fail 0) (or error 0))) 0 1)))))
 
+(defn- run-jvm-tests!
+  "Run the JVM suite (test-jvm/, through deps.edn's :core-test alias) in the same fresh home, and
+   answer its exit code. These are the coordination core's tests, which need a classpath bb cannot
+   give them; a checkout with no test-jvm/ has none and answers 0. `only` narrows them by namespace
+   prefix, as it narrows the bb suite."
+  [root env tmp only]
+  (if-not (fs/exists? (fs/path root "test-jvm"))
+    0
+    (:exit (apply p/shell {:continue true :dir root :extra-env env}
+                  "clojure" (str "-J-Djava.io.tmpdir=" tmp) "-M:core-test"
+                  (when only ["-r" (str "^" (java.util.regex.Pattern/quote only) ".*")])))))
+
 (defn- run-in-fresh-home!
   "The parent: make a fresh home, run the suite in a child bb pointed at it,
    remove the home, and exit with the child's code.
@@ -115,18 +127,19 @@
   (let [home (str (fs/create-temp-dir {:dir "/tmp" :prefix "nt-"}))
         tmp  (str (fs/path home "tmp"))
         root (core/nido-source-dir)
+        env  {"NIDO_HOME"   home
+              test-home-env home
+              "CODEX_HOME"  (str (fs/path home "codex"))
+              "TMPDIR"      tmp}
+        only (some-> (:only (second (task-args/split-args args))) str)
         exit (try
                (seed-home! home)
                (fs/create-dirs tmp)
-               (:exit (apply p/shell {:continue true
-                                      :dir root
-                                      :extra-env {"NIDO_HOME"   home
-                                                  test-home-env home
-                                                  "CODEX_HOME"  (str (fs/path home "codex"))
-                                                  "TMPDIR"      tmp}}
-                             "bb" (str "-Djava.io.tmpdir=" tmp)
-                             "--config" (str (fs/path root "bb.edn")) "nido:test"
-                             (map str args)))
+               (let [bb-exit (:exit (apply p/shell {:continue true :dir root :extra-env env}
+                                           "bb" (str "-Djava.io.tmpdir=" tmp)
+                                           "--config" (str (fs/path root "bb.edn")) "nido:test"
+                                           (map str args)))]
+                 (max bb-exit (run-jvm-tests! root env tmp only)))
                (finally (fs/delete-tree home)))]
     (System/exit exit)))
 

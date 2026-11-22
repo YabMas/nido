@@ -1,0 +1,16 @@
+;; The JVM side of nido: the coordination core (nido.core.*), which needs what Babashka lacks,
+;; JDBC SQLite first. Everything else still runs under bb.edn; nothing bb loads requires a
+;; namespace that only this classpath can satisfy.
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure                 {:mvn/version "1.12.3"}
+        org.xerial/sqlite-jdbc              {:mvn/version "3.54.1.0"}
+        com.github.seancorfield/next.jdbc   {:mvn/version "1.4.72"}}
+ :aliases
+ {;; JVM tests live in test-jvm/, apart from test/, so `bb nido:test`'s own discovery never
+  ;; tries to load them under bb; it runs this alias for them instead.
+  :core-test {:extra-paths ["test-jvm" "test"]
+              :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
+                            io.github.cognitect-labs/test-runner
+                            {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+              :jvm-opts    ["--enable-native-access=ALL-UNNAMED"]
+              :main-opts   ["-m" "cognitect.test-runner" "-d" "test-jvm"]}}}

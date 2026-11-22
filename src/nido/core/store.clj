@@ -1,0 +1,350 @@
+(ns nido.core.store
+  "Where committed state lives: one SQLite database, in WAL mode with synchronous=FULL.
+
+   A commit makes a batch durable as one transaction: the events of every command in the batch,
+   each command's key with its outcome, and the state those events fold to. That state is stored
+   twice. Each workstream's whole state is kept as EDN, for reads. Its turns, units and operator
+   asks are also kept as rows, so the store itself can state the invariants as table constraints.
+   Both are a cache over the events, and `verify` checks that they equal the fold.
+
+   The constraints refuse an illegal state even when a write bypasses core-domain, such as raw SQL
+   or a bug above. They are:
+     - a turn is asked exactly when it carries a call
+     - a unit has at most one turn running, asked or resolved
+     - a workstream's conductor has at most one turn running
+     - a held unit has no active turn
+     - an open operator ask binds only asked turns, and no call is bound by two open asks
+     - an open operator ask binds at least one call, and no unit it concerns (the one it names,
+       every unit when it names none, and those whose calls it binds) has a running turn: both
+       are checked by the `violations` view at commit, because they span rows written in either
+       order
+
+   Legacy ledger entries are imported as they were written, marked as imported, and are never
+   folded. The import only reads the legacy files.
+
+   One writer only. core-writer holds the connection `open` returns; readers use `open-reader`,
+   which never writes and, under WAL, never waits on the writer."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
+            [nido.core.domain :as d])
+  (:import [java.sql Connection]))
+
+;; ── schema ───────────────────────────────────────────────────────────────────
+
+(def ^:private schema
+  ["CREATE TABLE IF NOT EXISTS events(
+      pos     INTEGER PRIMARY KEY AUTOINCREMENT,
+      ws      TEXT NOT NULL,
+      cmd_key TEXT NOT NULL,
+      data    TEXT NOT NULL)"
+   "CREATE INDEX IF NOT EXISTS events_by_ws ON events(ws, pos)"
+   "CREATE TABLE IF NOT EXISTS commands(
+      key     TEXT PRIMARY KEY,
+      ws      TEXT NOT NULL,
+      outcome TEXT NOT NULL)"
+   "CREATE TABLE IF NOT EXISTS workstreams(
+      ws    TEXT PRIMARY KEY,
+      state TEXT NOT NULL,
+      pos   INTEGER NOT NULL)"
+   "CREATE INDEX IF NOT EXISTS workstreams_by_pos ON workstreams(pos)"
+   "CREATE TABLE IF NOT EXISTS units(
+      ws     TEXT NOT NULL,
+      id     TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('open','merged','retracted')),
+      held   INTEGER NOT NULL CHECK (held IN (0,1)),
+      PRIMARY KEY (ws, id))"
+   "CREATE TABLE IF NOT EXISTS turns(
+      ws      TEXT NOT NULL,
+      id      TEXT NOT NULL,
+      unit    TEXT,
+      status  TEXT NOT NULL
+              CHECK (status IN ('running','asked','resolved','completed','failed','cancelled')),
+      call_id TEXT,
+      PRIMARY KEY (ws, id),
+      CHECK ((status = 'asked') = (call_id IS NOT NULL)))"
+   "CREATE UNIQUE INDEX IF NOT EXISTS one_active_turn_per_unit ON turns(ws, unit)
+      WHERE unit IS NOT NULL AND status IN ('running','asked','resolved')"
+   "CREATE UNIQUE INDEX IF NOT EXISTS one_running_conductor_turn ON turns(ws)
+      WHERE unit IS NULL AND status = 'running'"
+   "CREATE TRIGGER IF NOT EXISTS held_unit_runs_nothing BEFORE INSERT ON turns
+      WHEN NEW.unit IS NOT NULL AND NEW.status IN ('running','asked','resolved')
+       AND EXISTS (SELECT 1 FROM units WHERE ws = NEW.ws AND id = NEW.unit AND held = 1)
+    BEGIN SELECT RAISE(ABORT, 'held unit has an active turn'); END"
+   "CREATE TABLE IF NOT EXISTS operator_asks(
+      ws       TEXT NOT NULL,
+      id       TEXT NOT NULL,
+      status   TEXT NOT NULL CHECK (status IN ('open','answered','withdrawn')),
+      concerns TEXT,
+      PRIMARY KEY (ws, id))"
+   "CREATE TABLE IF NOT EXISTS ask_binds(
+      ws   TEXT NOT NULL,
+      ask  TEXT NOT NULL,
+      turn TEXT NOT NULL,
+      PRIMARY KEY (ws, ask, turn))"
+   "CREATE TRIGGER IF NOT EXISTS open_ask_binds_asked_turns BEFORE INSERT ON ask_binds
+      WHEN EXISTS (SELECT 1 FROM operator_asks a WHERE a.ws = NEW.ws AND a.id = NEW.ask AND a.status = 'open')
+       AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.ws = NEW.ws AND t.id = NEW.turn AND t.status = 'asked')
+    BEGIN SELECT RAISE(ABORT, 'open operator ask binds a turn that is not asked'); END"
+   "CREATE TRIGGER IF NOT EXISTS call_bound_once BEFORE INSERT ON ask_binds
+      WHEN EXISTS (SELECT 1 FROM operator_asks a WHERE a.ws = NEW.ws AND a.id = NEW.ask AND a.status = 'open')
+       AND EXISTS (SELECT 1 FROM ask_binds b JOIN operator_asks a ON a.ws = b.ws AND a.id = b.ask
+                   WHERE b.ws = NEW.ws AND b.turn = NEW.turn AND a.status = 'open')
+    BEGIN SELECT RAISE(ABORT, 'call bound by two open operator asks'); END"
+   "CREATE VIEW IF NOT EXISTS violations AS
+      SELECT a.ws, a.id AS ask, 'open operator ask binds no call' AS violation
+      FROM operator_asks a
+      WHERE a.status = 'open'
+        AND NOT EXISTS (SELECT 1 FROM ask_binds b WHERE b.ws = a.ws AND b.ask = a.id)
+      UNION ALL
+      SELECT a.ws, a.id AS ask, 'open operator ask concerns a unit with a running turn' AS violation
+      FROM operator_asks a JOIN turns t ON t.ws = a.ws
+      WHERE a.status = 'open' AND t.status = 'running' AND t.unit IS NOT NULL
+        AND (a.concerns IS NULL OR a.concerns = t.unit
+             OR EXISTS (SELECT 1 FROM ask_binds b JOIN turns bt ON bt.ws = b.ws AND bt.id = b.turn
+                        WHERE b.ws = a.ws AND b.ask = a.id AND bt.unit = t.unit))"
+   "CREATE TABLE IF NOT EXISTS legacy_entries(
+      project TEXT NOT NULL,
+      ws      TEXT NOT NULL,
+      file    TEXT NOT NULL,
+      content TEXT NOT NULL,
+      PRIMARY KEY (project, ws, file))"])
+
+(defn- exec! [^Connection c sql] (with-open [st (.createStatement c)] (.execute st sql)))
+
+(defn- connect ^Connection [path]
+  (io/make-parents (io/file path))
+  (jdbc/get-connection {:dbtype "sqlite" :dbname (str path)}))
+
+(defn ^{:malli/schema [:=> [:cat :string] :map]} open
+  "Open the store at `path` for writing, creating it and its schema if they are absent. Exactly one
+   writer may hold it; core-writer is that writer."
+  [path]
+  (let [c (connect path)]
+    (exec! c "PRAGMA journal_mode=WAL")
+    (exec! c "PRAGMA synchronous=FULL")
+    (doseq [s schema] (exec! c s))
+    {:conn c :path (str path)}))
+
+(defn ^{:malli/schema [:=> [:cat :string] :map]} open-reader
+  "Open the store at `path` for reading only. Under WAL a reader sees the last committed state and
+   never waits on the writer."
+  [path]
+  (let [c (connect path)]
+    (exec! c "PRAGMA query_only=1")
+    {:conn c :path (str path)}))
+
+(defn ^{:malli/schema [:=> [:cat :map] :nil]} close
+  "Close a store opened by `open` or `open-reader`."
+  [store]
+  (.close ^Connection (:conn store)))
+
+;; ── rows: the state, restated as tables the constraints read ──────────────────
+
+(defn- rows-of
+  "The rows `state` of workstream `ws` is stored as, in the order they must be inserted so each
+   trigger sees what it checks against: units, turns, asks, then the calls asks bind."
+  [ws state]
+  {:units (for [u (vals (:units state))]
+            [ws (:id u) (name (:status u)) (if (:held? u) 1 0)])
+   :turns (for [t (vals (:turns state))]
+            [ws (:id t) (:unit t) (name (:status t)) (get-in t [:call :id])])
+   :asks  (for [a (vals (:operator-asks state))]
+            [ws (:id a) (name (:status a)) (:concerns a)])
+   :binds (for [a (vals (:operator-asks state)), t (:binds a)]
+            [ws (:id a) t])})
+
+(def ^:private row-sql
+  {:units "INSERT INTO units(ws,id,status,held) VALUES (?,?,?,?)"
+   :turns "INSERT INTO turns(ws,id,unit,status,call_id) VALUES (?,?,?,?,?)"
+   :asks  "INSERT INTO operator_asks(ws,id,status,concerns) VALUES (?,?,?,?)"
+   :binds "INSERT INTO ask_binds(ws,ask,turn) VALUES (?,?,?)"})
+
+(defn- replace-rows!
+  "Replace workstream `ws`'s rows with those of `state`. The cost is the workstream's own size,
+   never the ledger's."
+  [c ws state]
+  (doseq [t ["ask_binds" "operator_asks" "turns" "units"]]
+    (jdbc/execute! c [(str "DELETE FROM " t " WHERE ws = ?") ws]))
+  (let [rows (rows-of ws state)]
+    (doseq [k [:units :turns :asks :binds], r (get rows k)]
+      (jdbc/execute! c (into [(row-sql k)] r)))))
+
+(defn- violation-rows [c]
+  (jdbc/execute! c ["SELECT ws, ask, violation FROM violations"]
+                 {:builder-fn rs/as-unqualified-lower-maps}))
+
+;; ── commit ───────────────────────────────────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat :map [:sequential :map]] [:vector [:maybe :int]]]} commit!
+  "Make `batch` durable as one transaction and answer, entry by entry, the position of the
+   entry's last event (nil for an entry that yielded none, such as a refusal).
+
+   Each entry of `batch` is {:key :ws :events :outcome :state}: a command's key, the workstream it
+   was decided against, the events it yielded, the outcome to answer a repeat of its key with, and
+   the state the workstream folds to after it. If any constraint refuses, nothing in the batch is
+   written and the exception is rethrown, so a caller is never answered for a batch that did not
+   commit."
+  [store batch]
+  (let [^Connection c (:conn store)]
+    (jdbc/with-transaction [tx c]
+      (let [last-pos (volatile! 0)
+            positions (volatile! [])]
+        (doseq [{:keys [key ws events outcome state]} batch]
+          (doseq [e events]
+            (jdbc/execute! tx ["INSERT INTO events(ws,cmd_key,data) VALUES (?,?,?)" ws key (pr-str e)])
+            (vreset! last-pos (:pos (jdbc/execute-one! tx ["SELECT last_insert_rowid() AS pos"]
+                                                       {:builder-fn rs/as-unqualified-lower-maps}))))
+          (jdbc/execute! tx ["INSERT INTO commands(key,ws,outcome) VALUES (?,?,?)" key ws (pr-str outcome)])
+          (when (seq events)
+            (jdbc/execute! tx ["INSERT INTO workstreams(ws,state,pos) VALUES (?,?,?)
+                                ON CONFLICT(ws) DO UPDATE SET state = excluded.state, pos = excluded.pos"
+                               ws (pr-str state) @last-pos])
+            (replace-rows! tx ws state))
+          (vswap! positions conj (when (seq events) @last-pos)))
+        (when-let [v (seq (violation-rows tx))]
+          (throw (ex-info "commit breaks a store constraint" {:violations (vec v)})))
+        @positions))))
+
+;; ── reads ────────────────────────────────────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat :map :string] [:maybe :any]]} command-outcome
+  "The outcome a command with `key` was answered with, or nil if no such command committed."
+  [store key]
+  (some-> (jdbc/execute-one! (:conn store) ["SELECT outcome FROM commands WHERE key = ?" key]
+                             {:builder-fn rs/as-unqualified-lower-maps})
+          :outcome edn/read-string))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] :map]} state
+  "Workstream `ws`'s committed state; the empty state for a workstream with no events."
+  [store ws]
+  (or (some-> (jdbc/execute-one! (:conn store) ["SELECT state FROM workstreams WHERE ws = ?" ws]
+                                 {:builder-fn rs/as-unqualified-lower-maps})
+              :state edn/read-string)
+      d/empty-state))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :string]]} workstreams
+  "The ids of every workstream with committed events."
+  [store]
+  (mapv :ws (jdbc/execute! (:conn store) ["SELECT ws FROM workstreams ORDER BY ws"]
+                           {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] [:sequential :map]]} events
+  "Workstream `ws`'s events, in commit order."
+  [store ws]
+  (mapv (comp edn/read-string :data)
+        (jdbc/execute! (:conn store) ["SELECT data FROM events WHERE ws = ? ORDER BY pos" ws]
+                       {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map :int] [:sequential :map]]} changed-since
+  "Every workstream whose last commit is after position `pos`, each {:ws :pos :state} at its
+   last commit, in commit order. Costs the workstreams that changed, never the ledger."
+  [store pos]
+  (mapv #(update % :state edn/read-string)
+        (jdbc/execute! (:conn store) ["SELECT ws, pos, state FROM workstreams WHERE pos > ? ORDER BY pos" pos]
+                       {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map] :int]} position
+  "The position of the last committed event; 0 for an empty store."
+  [store]
+  (or (:pos (jdbc/execute-one! (:conn store) ["SELECT max(pos) AS pos FROM events"]
+                               {:builder-fn rs/as-unqualified-lower-maps}))
+      0))
+
+;; ── verify and rebuild: reading all of history, only when asked ───────────────
+
+(def ^:private row-columns
+  {:units ["units"         [:ws :id :status :held]]
+   :turns ["turns"         [:ws :id :unit :status :call_id]]
+   :asks  ["operator_asks" [:ws :id :status :concerns]]
+   :binds ["ask_binds"     [:ws :ask :turn]]})
+
+(defn- stored-rows
+  "Workstream `ws`'s rows as the tables hold them, each kind a set of vectors in `rows-of` order."
+  [c ws]
+  (into {}
+        (for [[k [table cols]] row-columns]
+          [k (set (map (apply juxt cols)
+                       (jdbc/execute! c [(str "SELECT * FROM " table " WHERE ws = ?") ws]
+                                      {:builder-fn rs/as-unqualified-lower-maps})))])))
+
+(defn- expected-rows [ws state]
+  (update-vals (rows-of ws state) #(set (map vec %))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} verify
+  "Every way the stored state disagrees with the fold of the ledger, as data; empty when the cache
+   is faithful. Reads all of history, so it runs only when explicitly requested (a verify command,
+   a test, a migration), never at start."
+  [store]
+  (let [c (:conn store)]
+    (vec
+     (for [ws (workstreams store)
+           :let [folded (d/fold (events store ws))
+                 stored (state store ws)]
+           problem (concat
+                    (when (not= folded stored) [{:ws ws :problem :state-differs-from-fold}])
+                    (when (not= (stored-rows c ws) (expected-rows ws stored))
+                      [{:ws ws :problem :rows-differ-from-state}])
+                    (for [v (d/violations folded)] {:ws ws :problem :violation :violation v}))]
+       problem))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :int]} rebuild!
+  "Recompute every workstream's stored state and rows from its events, in one transaction, and
+   answer how many workstreams were rebuilt. This is what a release that changes the fold runs
+   before it serves."
+  [store]
+  (let [c (:conn store) wss (workstreams store)]
+    (jdbc/with-transaction [tx c]
+      (doseq [ws wss]
+        (let [s (d/fold (events store ws))]
+          (jdbc/execute! tx ["UPDATE workstreams SET state = ? WHERE ws = ?" (pr-str s) ws])
+          (replace-rows! tx ws s))))
+    (count wss)))
+
+;; ── legacy import ────────────────────────────────────────────────────────────
+
+(defn- legacy-entry-files
+  "Every legacy ledger entry under `home`, as [project ws-id file-name path]. Reads directories
+   only."
+  [home]
+  (for [proj (some-> (io/file home "projects") .listFiles seq)
+        :when (.isDirectory proj)
+        ws   (some-> (io/file proj "workstreams") .listFiles seq)
+        :when (.isDirectory ws)
+        f    (some-> (io/file ws "entries") .listFiles seq)
+        :when (and (.isFile f) (str/ends-with? (.getName f) ".edn"))]
+    [(.getName proj) (.getName ws) (.getName f) f]))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] :map]} import-legacy!
+  "Import every legacy ledger entry under nido home `home`, each held with its content exactly as
+   written. The legacy files are only read. Re-running imports what is new, and reports any entry
+   whose stored content no longer matches its file without overwriting it. Answers
+   {:imported n :unchanged n :changed [[project ws file] ...]}."
+  [store home]
+  (let [c (:conn store)]
+    (jdbc/with-transaction [tx c]
+      (reduce
+       (fn [acc [project ws file f]]
+         (let [content (slurp f)
+               stored  (:content (jdbc/execute-one!
+                                  tx ["SELECT content FROM legacy_entries WHERE project=? AND ws=? AND file=?"
+                                      project ws file]
+                                  {:builder-fn rs/as-unqualified-lower-maps}))]
+           (cond
+             (nil? stored)
+             (do (jdbc/execute! tx ["INSERT INTO legacy_entries(project,ws,file,content) VALUES (?,?,?,?)"
+                                    project ws file content])
+                 (update acc :imported inc))
+             (= stored content) (update acc :unchanged inc)
+             :else              (update acc :changed conj [project ws file]))))
+       {:imported 0 :unchanged 0 :changed []}
+       (legacy-entry-files home)))))
+
+(defn ^{:malli/schema [:=> [:cat :map :string :string] [:sequential :map]]} legacy-entries
+  "Workstream `ws`'s imported legacy entries in `project`, each {:file :content}, by file name."
+  [store project ws]
+  (jdbc/execute! (:conn store)
+                 ["SELECT file, content FROM legacy_entries WHERE project=? AND ws=? ORDER BY file" project ws]
+                 {:builder-fn rs/as-unqualified-lower-maps}))
