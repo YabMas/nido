@@ -469,29 +469,12 @@
     (is (= :in-progress (work/default-target :brian :promote))
         "a configured value that isn't a spine stage is ignored")))
 
-(deftest set-stage-done-closes-the-workstream
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (is (= {:decision :done} (work/set-stage! :brian (:id w) :done)))
-        (is (some? (workstream/closure (workstream/read-ws :brian (:id w)))))))))
-
 (deftest set-stage-advance-moves-stage-without-a-leg
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:external-refs []})]
         (is (= {:decision :advanced} (work/set-stage! :brian (:id w) :ready)))
         (is (= :ready (:stage (workstream/newest-choice (workstream/read-ws :brian (:id w))))))))))
-
-(deftest set-stage-in-progress-runs-the-promote-gesture
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})
-            calls (atom [])]
-        (with-redefs [nido.coordinator.lane.promote/promote-workstream!
-                      (fn [p id] (swap! calls conj [p id]) {:decision :promote})]
-          (is (= {:decision :promote} (work/set-stage! :brian (:id w) :in-progress)))
-          (is (= [[:brian (:id w)]] @calls) "delegates to the shared promote gesture"))))))
 
 (deftest new!-births-a-scratch-workstream-with-its-session
   (with-tmp
@@ -773,143 +756,6 @@
   (is (= [] (work/gate-actions :in-progress false))
       "and a gate with no branches to offer is unchanged: still nothing"))
 
-(deftest choosing-an-option-resumes-with-that-branch-read-from-the-ledger
-  (with-tmp
-    (fn [_]
-      (let [w   (workstream/create! :brian {:external-refs []})
-            got (atom nil)]
-        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "The modal offers a branch nothing implements."
-                   :needs "A product decision on Keep Old?" :options sample-options :after "The work resumes once you answer."}))
-        (with-redefs [resume/resume! (fn [_ _ input & _] (reset! got input) {:decision :resumed})]
-          (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-b 1)))
-              "the click names the report it was rendered from — entry 1, still the latest")
-          (let [answer (:report (work/workstream :brian (:id w) 2))]
-            (is (= :blocker-answered (:format answer))
-                "the answer is written to the ledger BEFORE the resume, so a turn
-                 that dies mid-flight cannot swallow a human decision")
-            (is (= ["B" "Implement archive-and-clone" 1 "run-x"]
-                   [(:letter answer) (:label answer) (:blocker-seq answer) (:resumed answer)])))
-          (is (str/includes? @got "option B — Implement archive-and-clone"))
-          (is (str/includes? @got "Build the archive path.")
-              "the branch is repeated in full — the resumed turn cannot see the gate")
-          (is (str/includes? @got "Needs a prior product call"))
-          (is (str/includes? @got "record a new :blocker")
-              "an option that does not hold is a new blocker, not a licence to
-               take the other branch on the human's behalf"))))))
-
-(deftest the-answer-carries-what-the-picked-option-grants
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "Narrow the goal?" :after "The seat amends it."
-                   :options [(assoc (first sample-options) :grants [:intent]) (second sample-options)]}))
-        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
-        (is (= [:intent] (:grants (:report (work/workstream :brian (:id w) 2))))
-            "what the person handed the seat by picking it is on the ledger")))))
-
-(deftest an-answer-outlives-the-session-that-asked-the-question
-  ;; The case that made this the shape it is: a run writes a blocker and then
-  ;; dies (failed, budget-killed, torn down). The question is still the ledger's
-  ;; latest entry and still needs a human, but there is nobody to resume — so the
-  ;; answer is recorded and waits for whoever picks the workstream up next.
-  (with-tmp
-    (fn [_]
-      (let [w       (workstream/create! :brian {:external-refs []})
-            resumed (atom false)]
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
-        (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
-          (is (= {:decision :answered-unresumed}
-                 (work/resolve-gate! :brian (:id w) :option-a 1))
-              "an answer nobody was live to hear is an outcome, not a failure")
-          (is (false? @resumed) "there was no parked session to resume"))
-        (let [answer (:report (work/workstream :brian (:id w) 2))]
-          (is (= :blocker-answered (:format answer)))
-          (is (= "A" (:letter answer)))
-          (is (nil? (:resumed answer))
-              "the record says plainly that nobody was told"))
-        (is (= [] (work/gate-actions :in-progress false nil
-                                     {:report-format (:format (:action-report (work/workstream :brian (:id w))))
-                                      :options (:options (:action-report (work/workstream :brian (:id w))))}))
-            "and the gate stops asking: the latest entry is the answer, not the
-             question, so the buttons are gone")))))
-
-(deftest an-answer-reaches-a-session-held-only-by-its-blocker
-  ;; resume! un-mocked. A driver's blocker parks no run: the run settles :done, and only the
-  ;; workstream owing the person its next move says the session waits. The answer ends that
-  ;; owing — so a resume that looked the session up AFTER recording the answer found nobody,
-  ;; threw :not-parked, and the reply never reached the session (BR-5072, 2026-10-27).
-  (with-tmp
-    (fn [_]
-      (let [w     (workstream/create! :brian {:external-refs []})
-            given (atom nil)]
-        (session/create! :brian (:id w) {:name "run-x" :weight :heavy :autonomy parked-autonomy})
-        (session/update-claude! :brian (:id w) "run-x"
-                                (constantly {:session-id "sid" :bg-id "sid" :origin :nido
-                                             :driver :nido :hold nil :pending nil :queued nil
-                                             :own-work? false :policy {:auto-respawn? true}
-                                             :cursor 0 :driving-since "t"
-                                             :announced-blocked? false :recovered-boot nil}))
-        (write-run! "r1" (:id w) "run-x" "sid" :done)
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
-        (with-redefs [executor/driven?  (constantly false)
-                      conduct/instruct! (fn [_ _ sname text & _] (reset! given [sname text]))]
-          (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
-          (is (= "run-x" (first @given)) "the session that asked is given the answer")
-          (is (str/includes? (second @given) "option A")))))))
-
-(deftest answering-twice-is-refused-by-the-same-position-check
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
-        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
-        (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-b 1))
-            "entry 1 is no longer the latest — the answer is — so a second click
-             on the same rendered page cannot answer the question twice")))))
-
-(deftest a-letter-that-no-longer-resolves-refuses-rather-than-resuming
-  (with-tmp
-    (fn [_]
-      (let [w       (workstream/create! :brian {:external-refs []})
-            resumed (atom false)]
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
-        (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
-          (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-c 1))
-              "the click carries a letter; the CURRENT ledger decides what it meant")
-          (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a))
-              "and a click carrying no position at all cannot be bound to a
-               question, so it is refused rather than resolved blind")
-          (is (false? @resumed)))))))
-
-(deftest a-click-on-a-report-the-ledger-has-moved-past-is-refused
-  (with-tmp
-    (fn [_]
-      (let [w       (workstream/create! :brian {:external-refs []})
-            resumed (atom false)]
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "Keep Old" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
-        ;; Another tab answered; the agent parked again on a DIFFERENT question
-        ;; that happens to have as many branches — so the letter still resolves.
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "Retention" :needs "n?"
-                   :options [{:label "Delete after 30 days" :summary "x"}
-                             {:label "Keep forever" :summary "y"}] :after "The work resumes once you answer."}))
-        (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
-          (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a 1))
-              "answering entry 1 after entry 2 replaced it would resume the agent
-               with branch A of a question the human never read")
-          (is (false? @resumed))
-          (is (= {:decision :answered-unresumed}
-                 (work/resolve-gate! :brian (:id w) :option-a 2))
-              "the same letter on the CURRENT report still answers"))))))
-
 ;; ── A blocker buried under later records ───────────────────────────────────
 ;; A blocker holds the workstream until an answer names it. When a review round, a verdict
 ;; or a close-then-reopen lands on top of it, the latest report is not the blocker any more.
@@ -925,42 +771,6 @@
       (pr-str {:format :design-verdict :verdict :sound :round 1 :reason "Nothing moved."}))
     w))
 
-(deftest a-buried-blocker-is-still-the-question-the-gate-asks
-  (with-tmp
-    (fn [_]
-      (let [w (bury-a-blocker!)
-            g (work/gate :brian (:id w))]
-        (is (= [:blocker 1] [(:format (:report g)) (:seq (:report g))])
-            "the gate shows the blocker the workstream is halted on, not the verdict above it")
-        (is (= [:option-a :option-b :reply] (map :id (:actions g)))
-            "its branches, plus a free-text answer, though nobody is parked")
-        (is (= [1 1] (keep :seq (:actions g)))
-            "each branch carries the blocker's position, not the latest entry's")
-        (is (= "Answer" (:label (last (:actions g))))
-            "no agent hears it now, so the button says Answer rather than Reply")
-        (is (= 1 (:seq (:action-report (work/workstream :brian (:id w)))))
-            "the pane's action bar answers the same blocker the inbox does")
-        (is (= ["n?" [:option-a :option-b]]
-               [(:question (:ask g)) (mapv :action (:options (first (:questions (:ask g)))))])
-            "and its card asks the buried blocker's question, its branches tied to the buttons")))))
-
-(deftest every-gate-asks-with-the-live-intent-beside-it
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :intent}
-          (pr-str {:format :intent :goal "Old goal." :done-when ["old"]}))
-        (workstream/append-entry! :brian (:id w) {:kind :intent}
-          (pr-str {:format :intent :goal "Live goal." :done-when ["one" "two"] :supersedes {:seq 1 :why "Amended."}}))
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "The totals are summed twice." :needs "Which way?"
-                   :after "The work resumes once you answer."}))
-        (let [a (:ask (work/gate :brian (:id w)))]
-          (is (= "Which way?" (:question a)))
-          (is (= ["The totals are summed twice."] (:context (first (:questions a)))))
-          (is (= {:goal "Live goal." :done-when ["one" "two"]} (:goal a))
-              "the newest intent is the one the question is judged against"))))))
-
 (deftest a-workstream-carries-its-gate-and-the-gate-carries-no-pane-facts
   (with-tmp
     (fn [_]
@@ -975,38 +785,6 @@
         (is (= [[(get-in ws [:position :stage]) :awaiting]]
                (keep #(when (:now %) [(:stage %) (:now %)]) (get-in ws [:arc :stages])))
             "the stage the blocker holds is marked as waiting on the person")))))
-
-(deftest a-workstream-that-is-no-gate-carries-none
-  (with-tmp
-    (fn [_]
-      (let [w (bury-a-blocker!)]
-        (work/resolve-gate! :brian (:id w) :option-b 1)
-        (is (nil? (:gate (work/workstream :brian (:id w))))
-            "once answered nothing is owed, and the pane renders no question")))))
-
-(deftest a-buried-blocker-is-answered-by-its-letter-once
-  (with-tmp
-    (fn [_]
-      (let [w (bury-a-blocker!)]
-        (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a 2))
-            "a letter against the verdict answers nothing: the verdict asked no question")
-        (is (= {:decision :answered-unresumed} (work/resolve-gate! :brian (:id w) :option-b 1)))
-        (let [answer (workstream/latest-entry :brian (:id w) :blocker-answered)]
-          (is (= [1 "B"] [(:blocker-seq answer) (:letter answer)])))
-        (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a 1))
-            "once answered it is owed no longer, so a second click is refused")
-        (is (nil? (work/gate :brian (:id w)))
-            "and nothing is owed a person any more")))))
-
-(deftest a-buried-blocker-takes-a-free-text-answer-with-nobody-parked
-  (with-tmp
-    (fn [_]
-      (let [w (bury-a-blocker!)]
-        (is (= {:decision :answered-unresumed}
-               (work/resolve-gate! :brian (:id w) :reply "Superseded by the redesign.")))
-        (let [answer (workstream/latest-entry :brian (:id w) :blocker-answered)]
-          (is (= [1 "Superseded by the redesign."] [(:blocker-seq answer) (:summary answer)])
-              "the person's words, recorded against the blocker they answer"))))))
 
 (deftest a-blocker-owed-an-answer-offers-no-done
   (is (= [:reply] (mapv :id (work/gate-actions :in-progress true nil {:awaiting :answer-blocker})))
@@ -1149,106 +927,6 @@
                                           :approves-design d}
                                          {:label "Hold" :summary "Leave it."}]}))))))))
 
-(deftest picking-an-option-on-a-design-question-records-the-answer-and-nothing-else
-  (with-tmp
-    (fn [_]
-      (let [[id _ _ _] (decided-design)
-            _    (workstream/append-entry!
-                  :brian id {:kind :blocker}
-                  (pr-str {:format :blocker :summary "s" :needs "Should we build this design?"
-                           :after "The next decision round reads your answer."
-                           :options [{:label "Build it" :summary "As designed."}
-                                     {:label "Hold" :summary "Leave it."}]}))
-            card (count (:entries (workstream/read-ws :brian id)))]
-        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian id :option-a card))))
-        (is (= card (:blocker-seq (workstream/latest-entry :brian id :blocker-answered)))
-            "the answer is recorded against the card")
-        (is (nil? (workstream/latest-entry :brian id :design-approved))
-            "and no grant is written: the next round reads the answer")))))
-
-(deftest gates-hydrates-a-parked-triage-workstream
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-7" :title "t"}]})]
-        (tickets/open! :brian "BR-7" {:title "t"})
-        (triaged! (:id w) "BR-7" false)
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked)})
-        (let [g (first (work/gates :brian))]
-          (is (= (:id w) (:ws-id g)))
-          (is (= :notion (:origin g)))
-          (is (= :triage (:stage g)))
-          (is (= "auto" (:session g)) "the parked session a :reply would resume")
-          (is (= [:apply :dismiss :reply] (map :id (:actions g)))
-              "Notion origin: Dismiss offered same as any other origin")
-          (is (= :triage-report (-> g :report :format)))
-          (is (= "Verdict" (-> g :report :title))))))))
-
-(deftest a-paused-workstream-is-no-gate-until-resumed
-  ;; A pause is the person's choice not to be asked: the workstream leaves the inbox and its
-  ;; row stops reading :needs-you, and lifting the pause puts both back.
-  (with-tmp
-    (fn [_]
-      (let [w        (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-8" :title "t"}]})
-            id       (:id w)
-            gate-ids #(set (map :ws-id (work/gates :brian)))
-            row      #(first (filter (fn [r] (= id (:ws-id r))) (work/list-workstreams :brian)))]
-        (tickets/open! :brian "BR-8" {:title "t"})
-        (triaged! id "BR-8" false)
-        (session/create! :brian id {:name "auto" :weight :heavy
-                                    :autonomy (assoc autonomy-running :phase :parked)})
-        (is (contains? (gate-ids) id) "owing a person a move, it is a gate")
-        (work/pause! :brian id "later")
-        (is (not (contains? (gate-ids) id)) "paused, it is not")
-        (is (false? (:needs-you (row))))
-        (is (nil? (:gate (work/workstream :brian id))) "nor does its pane carry a gate")
-        (work/resume! :brian id)
-        (is (contains? (gate-ids) id) "resumed, it is a gate again")
-        (is (true? (:needs-you (row))))))))
-
-(deftest gate-not-working-when-session-failed-not-in-flight
-  ;; Regression: a live autonomous session stuck at :failed (e.g. a plan-bug spawn
-  ;; failure, whose teardown is a no-op so the session stays :live at :failed) must
-  ;; NOT strand a permanent 'working…' on the gate — that hides its actions and the
-  ;; ticket looks stuck. resuming? counts only actively-executing phases. Vehicle: a
-  ;; parked triage gate (a :failed session alongside is still not in flight).
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
-        (tickets/open! :brian "BR-9" {:title "t"})
-        (triaged! (:id w) "BR-9" false)   ; a verdict nobody accepted ⇒ a real gate
-        (session/create! :brian (:id w)
-                         {:name "triage" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked)})
-        (session/create! :brian (:id w)
-                         {:name "impl" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :failed)})
-        (let [g (work/gate :brian (:id w))]
-          (is (= :triage (:stage g)))
-          (is (false? (:working? g))
-              "no agent holds a run lock ⇒ no stranded 'working…', whatever a session's phase says")
-          (is (= [:apply :dismiss :reply] (map :id (:actions g)))
-              "gate actions stay actionable (Notion origin: Dismiss offered)"))))))
-
-(deftest gate-working-when-session-actively-running
-  ;; The honest positive case: a parked triage gate whose agent you resumed is now
-  ;; mid-turn (:running) ⇒ working… (gate visible, actions gated until it re-parks).
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-10" :title "t"}]})]
-        (tickets/open! :brian "BR-10" {:title "t"})
-        (triaged! (:id w) "BR-10" false)
-        (session/create! :brian (:id w)
-                         {:name "triage" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked)})
-        (session/create! :brian (:id w)
-                         {:name "impl" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :running)})
-        (with-redefs [nido.coordinator.record.runs/live-runs (constantly ["r-1"])]
-          (is (true? (:working? (work/gate :brian (:id w))))
-              "an agent holding its run lock ⇒ working… (gate visible, actions gated)"))))))
-
 (deftest triaged-failed-spawn-is-not-a-gate-but-stays-on-board
   ;; The scenario the two tests above used to cover on a :ready gate: a triaged
   ;; ticket whose impl spawn failed. :ready is no longer a gate, so it drops off the
@@ -1274,49 +952,6 @@
            :routing nil
            :questions [] :notion-writes nil :trail []}))
 
-(deftest gates-hydrates-a-slack-triage-report-from-the-workstream-ledger
-  ;; A Slack triage report is appended to the workstream ledger, ROUTED by the
-  ;; slack-message ref (workstream/append-to-ref!) — the single ledger store
-  ;; post ledger-unification. The gate must surface it via work/active-ledger.
-  (with-tmp
-    (fn [_]
-      (let [slack-id "slack-C1-1.0"
-            w (workstream/create! :brian {:external-refs [{:adapter :slack-message
-                                                           :id slack-id :title "msg"}]})]
-        (tickets/open! :brian slack-id {:title "msg"})
-        (workstream/append-to-ref! :brian slack-id {:kind :triage}
-                                   slack-edn-report)
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked)})
-        (let [g (first (work/gates :brian))]
-          (is (= (:id w) (:ws-id g)))
-          (is (= :slack (:origin g)))
-          (is (= :triage (:stage g)))
-          (is (= :triage-report (-> g :report :format)))
-          (is (= "Verdict" (-> g :report :title)))
-          (is (= :bug (-> g :report :determination))))))))
-
-(deftest a-conductors-escalation-is-answerable-at-the-gate
-  ;; A person's carried session has no autonomy, so no agent waits in it — but the conductor's
-  ;; escalation is owed an answer, and :reply is how the person gives it.
-  (with-tmp
-    (fn [_]
-      (let [w  (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "t"}]})
-            id (:id w)]
-        (tickets/open! :brian "BR-9" {:title "t"})
-        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
-        (let [{:keys [seq]} (drive/park! :brian id {:stage :conduct :outcome :escalated
-                                                    :summary "the conductor escalated a hand-back"
-                                                    :needs "choose the rollout"})]
-          (workstream/append-stamped! :brian id {:format :conduct-decision :hand-back "m-1" :position :implementing
-                                                 :by :conductor :decision [:escalate {:needs "Which rollout do we take?" :after "The work resumes once you answer." :summary "The work stands at a step only a person takes."}]
-                                                 :parked {:seq seq}}))
-        (let [g (first (filter #(= id (:ws-id %)) (work/gates :brian)))]
-          (is (some? g) "it is a gate")
-          (is (some #{:reply} (map :id (:actions g))) "offering Reply"))
-        (is (true? (:replyable? (work/workstream :brian id))) "and the pane reads the same")))))
-
 (deftest gates-excludes-a-ready-workstream
   (with-tmp
     (fn [_]
@@ -1337,20 +972,6 @@
   (with-tmp
     (fn [_]
       (is (nil? (work/gate :brian "ws-nope"))))))
-
-(deftest all-gates-merges-across-projects
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (triaged! (:id w) "x" false)
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked)}))
-      (with-redefs [nido.platform.project/list-projects
-                    (constantly {"brian" {:directory "/tmp/brian"}})]
-        (let [gs (work/all-gates)]
-          (is (= 1 (count gs)))
-          (is (= "brian" (:project (first gs))) "project name threads through to each gate"))))))
 
 (deftest with-shared-rows-reads-each-project-once
   ;; The board asks two questions of the same rows — all-grouped for the bands,
@@ -1388,16 +1009,6 @@
   (is (nil? @#'work/*rows-memo*) "no memo before")
   (is (true? (work/with-shared-rows (fn [] (some? @#'work/*rows-memo*)))) "one during")
   (is (nil? @#'work/*rows-memo*) "and none after"))
-
-(deftest resolve-gate-promote-runs-the-promote-gesture
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})
-            calls (atom [])]
-        (with-redefs [nido.coordinator.lane.promote/promote-workstream!
-                      (fn [p id] (swap! calls conj [p id]) {:decision :promote})]
-          (is (= {:decision :promote} (work/resolve-gate! :brian (:id w) :promote)))
-          (is (= [[:brian (:id w)]] @calls)))))))
 
 (deftest resolve-gate-dismiss-settles-dismissed-and-marks-ticket
   (with-tmp
@@ -1453,28 +1064,6 @@
         (is (= [:triage] (map :stage (work/list-workstreams :brian)))
             "Restore is the way back, with no ticket record involved either")))))
 
-(deftest resolve-gate-done-closes-done
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (work/resolve-gate! :brian (:id w) :done)
-        (is (= :done (:outcome (workstream/closure (workstream/read-ws :brian (:id w))))))))))
-
-(deftest resolve-gate-reply-delegates-to-resume
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})
-            calls (atom nil)]
-        (with-redefs [nido.coordinator.lane.resume/resume!
-                      (fn [p id input] (reset! calls [p id input]) {:resumed "auto"})]
-          (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
-          (is (= [:brian (:id w)] (pop @calls)))
-          ;; The substrate delivers every message as one from another session; unmarked, a
-          ;; person's answer to a parked report read to the agent as a peer's request.
-          (is (str/starts-with? (last @calls) "A human replied at the gate"))
-          (is (str/ends-with? (last @calls) "do it")
-              "the words themselves go through unchanged"))))))
-
 (deftest resolve-gate-apply-finalizes-the-ticket-nido-side
   ;; Apply is a direct nido-side mutation (an acceptance on the ledger), NOT a
   ;; claude resume — so it works for legacy pre-notion-cli reviews whose apply
@@ -1499,22 +1088,6 @@
            :routing nil
            :questions [] :notion-writes nil :trail []}))
 
-(deftest gates-report-reads-a-triage-report-from-the-workstream-ledger
-  (with-tmp
-    (fn [_]
-      ;; a parked Notion triage gate whose report is appended to the workstream
-      ;; ledger routed by the BR-#### ref (workstream/append-to-ref!) — the
-      ;; single ledger store post ledger-unification.
-      (let [w (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
-        (tickets/open! :brian "BR-9" {:title "t"})
-        (workstream/append-to-ref! :brian "BR-9" {:kind :triage} notion-edn-report)
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked)})
-        (let [g (first (work/gates :brian))]
-          (is (= :triage-report (-> g :report :format)))
-          (is (= "Verdict" (-> g :report :title))))))))
-
 (deftest gates-excludes-settled-workstreams
   (with-tmp
     (fn [_]
@@ -1524,20 +1097,6 @@
         (workstream/close! :brian (:id w) :done))
       (is (empty? (work/gates :brian))
           "a settled (closed) workstream is never a gate, even with a :ready stage-override"))))
-
-(deftest gates-surface-the-parked-session-resume-error
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-2" :title "t"}]})]
-        (tickets/open! :brian "BR-2" {:title "t"})
-        (triaged! (:id w) "BR-2" false)
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked
-                                           :error {:reason :resume-failed :message "boom"})})
-        (let [g (first (work/gates :brian))]
-          (is (= :resume-failed (-> g :resume-error :reason)))
-          (is (= "boom" (-> g :resume-error :message))))))))
 
 (deftest gates-resume-error-nil-when-clean
   (with-tmp
@@ -2534,39 +2093,6 @@
           (is (= 2 (count (:entries (workstream/read-ws :brian (:id w)))))
               "and nothing was appended for the refusal either"))))))
 
-(deftest a-triage-under-an-escalation-is-accepted-from-the-triage
-  ;; A conductor escalating at accept-triage parks nothing and appends its decision over the
-  ;; verdict, which stays owed, as does a note appended after it. The gate's actions and the
-  ;; acceptance answer the verdict.
-  (with-tmp
-    (fn [_]
-      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
-        (fn [w]
-          (let [pos (pipeline/of :brian (:id w))]
-            (workstream/append-stamped! :brian (:id w)
-                                        {:format :conduct-decision :hand-back "m-1" :position (:at pos)
-                                         :next (:next pos) :by :conductor
-                                         :decision [:escalate {:needs "Take B?" :after "The work resumes once you answer." :summary "The work stands at a step only a person takes."}]}))
-          ;; And a record of the work over it that answers nothing: notion-sync's account of a
-          ;; status it set. The conductor's decision is a status entry; this is not.
-          (workstream/append-entry! :brian (:id w) {:kind :note} "Status moved in Notion.")
-          (is (= :triage-awaiting (:at (pipeline/of :brian (:id w)))) "the verdict is still owed")
-          (let [g (work/gate :brian (:id w))]
-            (is (= [1 :triage-report] [(:seq (:report g)) (:format (:report g))])
-                "the gate answers the verdict, not the escalation above it")
-            (is (some #{:apply} (map :id (:actions g))) "its Accept is still offered")
-            (is (every? #(= 1 (:seq %)) (filter :seq (:actions g))))
-            (is (= :apply (:submit (:ask g)))
-                "and the Ask's questions are sent by it"))
-          (let [props (atom nil) prepended (atom nil)]
-            (with-redefs-fn (notion-write-redefs props prepended)
-              (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply {:seq 1 :answers ["A"]}))))
-                (is (some? @props) "the verdict's routing reached Notion"))))
-          (is (= 1 (:triage-seq (workstream/latest-entry :brian (:id w) :triage-accepted)))
-              "the acceptance cites the verdict")
-          (is (:accepted? (standing/verdict :brian (:id w) (workstream/read-ws :brian (:id w))))))))))
-
 (deftest accepting-twice-is-refused-by-the-same-position-check
   (with-tmp
     (fn [_]
@@ -3067,36 +2593,6 @@
         (work/dismiss! :brian (:id w))
         (is (= {:decision :restored} (work/resolve-gate! :brian (:id w) :restore)))))))
 
-(deftest gates-exclude-a-dismissed-row-with-a-parked-session
-  (with-tmp
-    (fn [_]
-      ;; Seed the Notion page-facts cache so this row is notion-driven (page "pg"
-      ;; in-cache with a non-terminal status). That's the branch the new filter is
-      ;; load-bearing for: notion-stage-projection ignores the local ticket status
-      ;; entirely for :needs-you, and engagement-state is fed nil instead of
-      ;; :closed — so dismiss! (which only touches the ticket + :closed) leaves
-      ;; :needs-you true and :engagement :parked-at-gate even after the workstream
-      ;; is closed. Without seeding the cache the row takes the legacy path, whose
-      ;; :closed → :done fold already drops :needs-you on its own, and the
-      ;; assertion below would pass whether or not the new filter exists.
-      (nido.coordinator.source.state/write-state! "v1"
-        {:type :notion-view :source-config {:project :brian}
-         :pages {"pg" {:status "Needs verification" :priority nil :ball-ids #{}
-                       :title "t" :br "BR-79"}}})
-      (let [w (workstream/create! :brian
-                {:stage :triage
-                 :external-refs [{:adapter :notion :id "BR-79" :page-id "pg" :url "u"}]})]
-        (tickets/open! :brian "BR-79" {:title "t"})
-        (triaged! (:id w) "BR-79" false)
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-running :phase :parked)})
-        (is (= 1 (count (work/gates :brian))) "parked triage is a gate")
-        (work/dismiss! :brian (:id w))
-        (is (= [] (work/gates :brian))
-            "dismiss removes it from Needs-you immediately, before the daemon
-             sweep tears the session down")))))
-
 ;; ---------------------------------------------------------------------------
 ;; Bare watched-view rows — a Notion page with no workstream of its own.
 ;; Its synthetic ws-id IS the page-id (wsv/bare-row), so read-ws always misses.
@@ -3463,59 +2959,6 @@
                             {:report-format :design-decision :seq 7 :awaiting :answer-blocker}))
       "the person's judgement reaches the next round as the blocker's answer"))
 
-(deftest a-workstream-awaiting-a-person-is-a-gate
-  (with-tmp
-    (fn [_]
-      (let [id   (:id (workstream/create! :brian {:external-refs []}))
-            add! (fn [kind record]
-                   (if (= :design-decision kind) (workstream/append-decision! :brian id (pr-str record)) (workstream/append-entry! :brian id {:kind kind} (pr-str record)))
-                   (count (:entries (workstream/read-ws :brian id))))
-            row  #(first (filter (comp #{id} :ws-id) (work/list-workstreams :brian)))]
-        (add! :intent {:format :intent :goal "g" :done-when ["d"]})
-        (let [b (add! :baseline
-                      {:format :baseline :strata [] :intent {:seq 1}
-                       :area "a" :bounded-by "b" :shape "s"
-                       :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
-                               :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
-                                         :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
-                       :read ["src/a.clj"]})]
-          (add! :baseline-review {:format :baseline-review :verdict :sufficient
-                                  :baseline-seq b :reason "it holds"})
-          (is (false? (boolean (:needs-you (row))))
-              "nothing is owed while the next move is nido's own")
-
-          ;; Even a design that :challenges the stance is cleared by its proceeding
-          ;; round, which is nido's own move; a person is owed only the question a
-          ;; round raises as a blocker.
-          (let [d (add! :design
-                        {:format :design :strata [] :summary "s" :shape "sh"
-                         :model {:elements [{:id "m" :sort :module}]
-                                 :claims [{:id "one-path" :about ["m"] :statement "one path"
-                                           :falsified-by "a second path" :evidence {:by :round}}]}
-                         :standing {:relation :challenges :note "n"}
-                         :baseline {:seq b :relation :within}
-                         :intent {:seq 1} :effort :S})]
-            (add! :design-decision
-                  {:format :design-decision :recommend :proceed :design-seq d
-                   :reason "r" :asks "worth it?"
-                   :checks [{:check :relation-honest :status :held :note "n"}]})
-
-            (is (= {:stage :clear-design :mode :mechanical} (:next (:position (row))))
-                "a proceeding round owes nobody a grant, whatever the design declares")
-            (is (false? (boolean (:needs-you (row)))))
-
-            (add! :blocker {:format :blocker :summary "s" :needs "Is challenging the stance worth it now?"
-                            :after "The next decision round reads your answer."})
-            (is (= :answer-blocker (:stage (:next (:position (row)))))
-                "the pipeline says a person owes this workstream an answer")
-            (is (true? (:needs-you (row)))
-                "so the spine calls it a gate — with no session parked anywhere,
-                 which is the whole point: the round that raised it was a task")
-            (is (= [:reply]
-                   (mapv :id (:actions (work/gate :brian id))))
-                "and the gate offers the answer")))))))
-
-
 ;; ── the improvement sweep's writes ──────────────────────────────────────────
 
 (defn- seed-analysis!
@@ -3837,20 +3280,6 @@
     (workstream/close! :brian id :between-phases 4)
     id))
 
-(deftest a-between-phases-workstream-is-on-its-own-band-with-its-progress
-  (with-tmp
-    (fn [_]
-      (let [id  (landed-between-phases!)
-            g   (work/grouped :brian #{})
-            row (first (:awaiting-gate g))]
-        (is (= id (:ws-id row)))
-        (is (= :awaiting-gate (:stage row)))
-        (is (= {:current 1 :of 2 :landed? true} (select-keys (:phase row) [:current :of :landed?])))
-        (is (:needs-you row) "a person owes the gate")
-        (is (= [:awaiting-gate] (map first (work/board-bands g))))
-        (is (= [:assert-gate] (map :id (:actions (work/gate :brian id))))
-            "closed, so it reads settled — and is still in the gate inbox")))))
-
 (defn- escalate-over!
   "Record a conductor escalation that parks nothing, over the move the workstream owes now."
   [id needs]
@@ -3860,32 +3289,6 @@
                                                    :decision [:escalate {:needs needs}]}
                                             (:next pos) (assoc :next (:next pos))
                                             (:owes pos) (assoc :owes (:owes pos))))))
-
-(deftest a-phase-gate-escalation-stays-on-the-gate-it-was-made-over
-  (with-tmp
-    (fn [_]
-      (let [id (landed-between-phases!)]
-        (escalate-over! id "Watch the error budget first.")
-        (workstream/append-entry! :brian id {:kind :note} "Status moved in Notion.")
-        (is (= :awaiting-gate (:at (pipeline/of :brian id))) "the same gate is still owed")
-        (is (= "The conductor adds: Watch the error budget first." (:note (:ask (work/gate :brian id))))
-            "an unrelated append does not take the escalation off the gate it concerns")))))
-
-(deftest an-escalation-over-one-blocker-is-not-a-note-on-another
-  (with-tmp
-    (fn [_]
-      (let [id   (:id (workstream/create! :brian {:external-refs []}))
-            add! (fn [k r] (if (= :design-decision k) (workstream/append-decision! :brian id (pr-str r)) (workstream/append-entry! :brian id {:kind k} (pr-str r)))
-                   (count (:entries (workstream/read-ws :brian id))))
-            b1   (add! :blocker {:format :blocker :summary "first" :needs "Which name?" :after "The work resumes once you answer."})
-            b2   (add! :blocker {:format :blocker :summary "second" :needs "Which port?" :after "The work resumes once you answer."})]
-        (is (= b2 (:placed-by (pipeline/of :brian id))))
-        (escalate-over! id "Take port 80.")
-        (is (= "The conductor adds: Take port 80." (:note (:ask (work/gate :brian id)))))
-        (add! :blocker-answered {:format :blocker-answered :blocker-seq b2 :summary "80"})
-        (is (= b1 (:placed-by (pipeline/of :brian id))) "the older halt holds the workstream again")
-        (is (nil? (:note (:ask (work/gate :brian id))))
-            "and the advice about the port is not shown on the question about the name")))))
 
 (deftest a-retracted-design-supplies-no-plan-and-opens-no-phase
   (with-tmp
@@ -4055,25 +3458,6 @@
           (is (true? (get-in (row) [:status :live]))
               "an agent still holding its run lock is shown, not hidden"))))))
 
-(deftest work-recorded-after-a-stage-choice-outranks-it
-  (with-tmp
-    (fn [_]
-      (let [w     (workstream/create! :brian {:external-refs []})
-            row   #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
-        (workstream/advance-stage! :brian (:id w) :ready :person)
-        (is (= :ready (:stage (row))))
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
-        (is (not= :ready (:stage (row))) "a blocker recorded since the choice is where the work is")
-        (is (:needs-you (row)))
-        (let [b (:seq (last (filter #(= :blocker (:kind %)) (:entries (workstream/read-ws :brian (:id w))))))]
-          (workstream/advance-stage! :brian (:id w) :shipping :person)
-          (is (= :in-progress (:stage (row))) "a stage choice does not answer the blocker under it")
-          (workstream/append-entry! :brian (:id w) {:kind :blocker-answered}
-            (pr-str {:format :blocker-answered :blocker-seq b :summary "go"})))
-        (workstream/advance-stage! :brian (:id w) :ready :person)
-        (is (= :ready (:stage (row))) "answered, a choice newer than every record holds")))))
-
 ;; The TUI skips a board rebuild while this holds, so a write it misses is a
 ;; board that never shows the write. Sleeps keep the writes in distinct mtime
 ;; milliseconds.
@@ -4229,13 +3613,6 @@
           #(is (= {:decision :error :error :doubted} (work/apply! :brian (:id ws)))))
         (is (empty? (workstream/entries-of :brian (:id ws) :triage-accepted)))))))
 
-(deftest a-thread-verdict-gates-its-workstream
-  (with-tmp
-    (fn [_]
-      (let [ws (slack-thread-ws! {:format :proposed-tickets :title "thread"
-                                  :source-url "https://slack/p100" :doubt "Works as designed."})]
-        (is (some #(= (:id ws) (:ws-id %)) (work/gates :brian)))))))
-
 (deftest a-single-proposal-on-a-thread-workstream-is-refused
   (with-tmp
     (fn [_]
@@ -4359,22 +3736,3 @@
                                                     {:label "Hold"}]})))
       "a question's landing option is the same Land, whatever it was called"))
 
-(deftest land-grants-the-landing-and-queues-no-merge-run
-  (with-tmp
-    (fn [_]
-      (let [id   (:id (workstream/create! :brian {:external-refs []}))
-            add! (fn [kind record]
-                   (workstream/append-entry! :brian id {:kind kind} (pr-str record))
-                   (count (:entries (workstream/read-ws :brian id))))]
-        (add! :intent {:format :intent :goal "g" :done-when ["d"]})
-        (let [pr (add! :pr-opened {:format :pr-opened :url "https://x/pull/1" :title "t"})]
-          (is (= :not-landable (:decision (work/resolve-gate! :brian id :land pr)))
-              "a workstream not activated has no seat to land it, so nothing is granted")
-          (workstream/activate! :brian id nil)
-          (is (= :landing-granted (:decision (work/resolve-gate! :brian id :land pr))))
-          (is (= [:merge] (:grants (last (workstream/entries-of :brian id :grant))))
-              "the click is recorded as the person's :merge grant")
-          (is (empty? (runs/list-run-ids)) "and no merge run is queued")
-          (is (= :land-granted (:at (pipeline/of :brian id))) "the landing is now the seat's")
-          (is (= :nothing-to-land (:decision (work/resolve-gate! :brian id :land pr)))
-              "so a second click grants nothing more"))))))

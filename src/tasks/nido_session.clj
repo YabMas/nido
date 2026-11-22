@@ -226,7 +226,7 @@
               held-by (scratch/birth! p session (lifecycle/session-weight session opts) held-by)
               ;; Before it is carried, so the first turn end of a session started on a brief is
               ;; already the recipe's to read, never a plain conversation's.
-              _       (when (:activate? first-instruction) (work/activate! p held-by session {:carry? false}))
+              _       (when (:activate? first-instruction) (work/activate! p held-by session {:cwd (str (:wt-path (lifecycle/session-coords session opts)))}))
               carried (when first? (:carried (carry p held-by session first-instruction)))
               home    (state/session-home-dir project session)]
           (println)

@@ -195,7 +195,11 @@
                    (.redirectInput (java.lang.ProcessBuilder$Redirect/from (io/file "/dev/null")))
                    (.redirectOutput (io/file rdir "out"))
                    (.redirectError (io/file rdir "err")))
-              _ (.putAll (.environment pb) (update-keys (or env {}) str))
+              ;; Which turn this is, for what runs inside it — a commit gate judging a person's
+              ;; act — whatever the executor: no executor needs to know to say it.
+              _ (.putAll (.environment pb) (update-keys (merge env (cond-> {"NIDO_CORE_WS" ws "NIDO_CORE_TURN" (:id t)}
+                                                                     (:unit t) (assoc "NIDO_CORE_UNIT" (:unit t))))
+                                                        str))
               p (.start pb)]
           (watch! runner executor ws (:id t) run rdir p (or (:deadline-ms spec) default-deadline-ms)))))))
 

@@ -7,6 +7,7 @@
             [nido.session.change :as change]
             [nido.coordinator.work :as work]
             [nido.session.chat :as chat]
+            [nido.test.fake-core :as fake-core]
             [nido.ui.server :as server]
             [nido.ui.side-chat :as side-chat]
             [nido.ui.views :as views]))
@@ -64,41 +65,6 @@
       (testing "a page without a chat has none"
         (is (not (str/includes? (views/shell {:title "x"} [:p]) "<aside")))))))
 
-(deftest the-place-a-page-shows-chooses-the-conversation
-  (let [asked (atom [])]
-    (with-redefs [chat/transcript (fn [c] (swap! asked conj (select-keys c [:project :session :name]))
-                                    {:items [] :busy? false})
-                  work/chat-place (fn [_ ws-id] (when (= "ws-open" ws-id) {:session "ws-open--chat"}))]
-      (testing "no place: nido's operator"
-        (let [p (str (views/shell {:title "Needs" :side-chat (side-chat/panel true nil)} [:p]))]
-          (is (re-find #"[^a-z]/_chat/stream" p))
-          (is (= {:project "nido" :session "operator" :name "operator"} (last @asked)))))
-      (testing "an open workstream: its own chat, under a path naming it"
-        (let [p (str (views/shell {:title "Workstreams"
-                                   :side-chat (side-chat/panel true {:project "brian" :ws-id "ws-open"})}
-                                  [:p]))]
-          (is (str/includes? p "/_chat/ws/brian/ws-open/stream"))
-          (is (not (re-find #"[^a-z0-9]/_chat/stream" p)))
-          (is (= {:project "brian" :session "ws-open--chat" :name "workstream"} (last @asked)))))
-      (testing "a workstream with no chat to offer — closed, or a row no workstream stands behind: the operator"
-        (side-chat/panel true {:project "brian" :ws-id "ws-closed"})
-        (is (= "operator" (:session (last @asked))))))))
-
-(deftest a-workstreams-chat-is-briefed-on-its-workstream-and-brought-up-through-the-work-plane
-  (let [sent (atom nil) opened (atom [])]
-    (with-redefs [work/chat-place (fn [_ _] {:session "ws-1--chat"})
-                  work/open-chat! (fn [p id] (swap! opened conj [p id]) {:session "ws-1--chat"})
-                  chat/send!      (fn [c text _ _] (reset! sent [c text]) true)]
-      (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-1/send"
-                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"nidochatText\": \"where does it stand?\"}"))})
-      (let [[c text] @sent]
-        (is (= "where does it stand?" text))
-        (is (= {:project "brian" :session "ws-1--chat" :name "workstream"} (select-keys c [:project :session :name])))
-        (is (str/includes? (:instructions c) "workstream ws-1 of project brian") "it is told which workstream it is in")
-        (is (str/includes? (:instructions c) "nido:workstream:tell") "and how its word reaches the conductor")
-        ((:ready! c) c)
-        (is (= [["brian" "ws-1"]] @opened) "its session is the work plane's to bring up")))))
-
 (deftest a-workstream-path-with-no-chat-is-not-the-operators
   (with-redefs [work/chat-place (constantly nil)
                 chat/cancel!    (fn [_] (throw (ex-info "the operator's turn was cancelled" {})))]
@@ -127,15 +93,37 @@
       (is (not (str/includes? (body "/_catalog") "nido-chat-toggle")))
       (is (str/includes? (body "/development") "id=\"nido-chat-toggle\"")))))
 
-(deftest a-workstreams-chat-reads-the-same-place-as-the-operator
-  ;; Both conversations take the place from one reading, so a message to a workstream's chat names
-  ;; the page, the workstream, its gate and its open entry exactly as one to the operator would.
-  (let [sent (atom nil)]
-    (with-redefs [work/chat-place (fn [_ _] {:session "ws-1--chat"})
-                  work/workstream (fn [p w _] {:project p :ws-id w :label "a workstream" :stage :design
-                                               :gate {:ask {:question "Approve this design?"}}})
-                  chat/send!      (fn [_ _ refs & _] (reset! sent refs) true)]
+
+(deftest the-place-a-page-shows-chooses-the-conversation
+  (fake-core/with-fake-core
+    (fn [c]
+      (fake-core/seed! c :brian "ws-open" [{:command :post-chat :message "m1" :text "hello"}])
+      (let [asked (atom [])]
+        (with-redefs [chat/transcript (fn [c] (swap! asked conj (select-keys c [:project :session :name]))
+                                        {:items [] :busy? false})]
+          (testing "no place: nido's operator"
+            (let [p (str (views/shell {:title "Needs" :side-chat (side-chat/panel true nil)} [:p]))]
+              (is (re-find #"[^a-z]/_chat/stream" p))
+              (is (= {:project "nido" :session "operator" :name "operator"} (last @asked)))))
+          (testing "a workstream the core holds: its own chat, under a path naming it, read from the core"
+            (let [p (str (views/shell {:title "Workstreams"
+                                       :side-chat (side-chat/panel true {:project "brian" :ws-id "ws-open"})}
+                                      [:p]))]
+              (is (str/includes? p "/_chat/ws/brian/ws-open/stream"))
+              (is (str/includes? p "hello") "the message the core holds is drawn")
+              (is (not (re-find #"[^a-z0-9]/_chat/stream" p)))))
+          (testing "a workstream the core does not hold: the operator"
+            (side-chat/panel true {:project "brian" :ws-id "ws-closed"})
+            (is (= "operator" (:session (last @asked))))))))))
+
+(deftest a-message-to-a-workstreams-chat-is-the-persons-command-to-the-core
+  (fake-core/with-fake-core
+    (fn [c]
+      (fake-core/seed! c :brian "ws-1" [{:command :post-chat :message "m0" :text "earlier"}])
       (side-chat/handle! {:request-method :post :uri "/_chat/ws/brian/ws-1/send"
-                          :headers {"referer" "http://localhost:8800/workstreams/brian/ws-1"}
-                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"nidochatText\": \"approve this\"}"))})
-      (is (= ["page · Workstreams" "workstream · brian/ws-1" "gate · open"] (map :label @sent))))))
+                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"nidochatText\": \"where does it stand?\"}"))})
+      (let [st (get @(:states c) "brian/ws-1")]
+        (is (= ["earlier" "where does it stand?"] (map :text (:chat st))))
+        (is (= :person (:from (last (:chat st)))))
+        (is (some #(= :chat (:kind %)) (vals (:inbox st))) "the conductor's inbox holds it")
+        (is (every? :input? @(:sent c)))))))

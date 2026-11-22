@@ -968,14 +968,14 @@
     [(assoc state :status "(no workstream selected)") nil]))
 
 (defn- activate-selected
-  "Activate nido's recipe on the highlighted workstream (work/activate!). The TUI drives no
-   conversation, so the status line says how the session's agent gets its instruction."
+  "Hand the highlighted workstream to the core (work/activate!): its unit opened, in a session the
+   core provisions."
   [state]
   (if-let [ws (selected-workstream state)]
     (let [label (or (:br-id ws) (:ws-id ws))
           msg   (try (if (:already? (work/activate! (:project state) (:ws-id ws) nil))
                        (str label " was already activated")
-                       (str "activated " label " — in its session's chat, /nido-pipeline starts the agent on it"))
+                       (str "activated " label " — the core holds its unit"))
                      (catch clojure.lang.ExceptionInfo e (str "not activated — " (ex-message e))))]
       [(-> state (refresh-list (current-rows state)) (assoc :status msg)) nil])
     [(assoc state :status "(no workstream selected)") nil]))

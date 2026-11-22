@@ -25,7 +25,8 @@
    [nido.session.change :as change]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]
-   [nido.platform.jj :as jj]))
+   [nido.platform.jj :as jj]
+   [nido.coordinator.work.core :as wcore]))
 
 (defn- way-out
   "What to DO about a refusal, as commands rather than advice.
@@ -429,6 +430,21 @@
   (println (str "  " way-out))
   1)
 
+(defn- record-merge-in-core!
+  "Tell the core the landing at `tip` merged each open unit of `ws-id`, keyed by the commit so a
+   re-run is answered rather than repeated. Said and not thrown when the core is not running: the
+   work records above are written either way."
+  [project ws-id tip]
+  (try
+    (doseq [u (vals (:units (wcore/state project ws-id))) :when (= :open (:status u))]
+      (let [o (wcore/act! project ws-id {:command :record-merge :unit (:id u)}
+                          {:key (str "land-record/" (wcore/ws-key project ws-id) "/" (:id u) "/" tip)})]
+        (when-not (wcore/admitted? o)
+          (println (str "land:record · the core did not record " (:id u) " merged: "
+                        (or (some-> (get-in o [:refused :reason]) name) (:error o)))))))
+    (catch Exception e
+      (println (str "land:record · the core was not told of the merge (" (ex-message e) ")")))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
   record
   "Record the landing of `:commit`, else the worktree's tip, once origin's main holds it: close the
@@ -507,6 +523,7 @@
                                        nil))
                         outcome (phase/landing-outcome design (:entries (cws/read-ws project ws-id)))]
                     (cws/close! project ws-id outcome (when (= :between-phases outcome) (:seq design)))
+                    (record-merge-in-core! project ws-id tip)
                     (println (str "land:record ok · " ws-id " is closed "
                                   (name outcome) ", and its landing at "
                                   (subs tip 0 (min 12 (count tip))) " is "

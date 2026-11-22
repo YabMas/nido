@@ -268,28 +268,6 @@
         (is (= 2 (count (seats))) "recording a seat's layer again appends nothing")
         (is (= {:seq d} (:design (last (ws/entries-of :brian id :layer-completed)))))))))
 
-(deftest a-worded-answer-names-the-newest-unanswered-blocker
-  (with-tmp
-    (fn []
-      (let [id (:id (ws/create! :brian {:stage :in-progress}))
-            b! #(ws/append-entry! :brian id {:kind :blocker}
-                                  (pr-str {:format :blocker :summary % :needs (str % "?")
-                                           :after "The work resumes once you answer."}))]
-        (is (thrown-with-msg? Exception #"No unanswered blocker"
-                              (t/blocker-answer* {:project "brian" :ws-id id :answer "x"})))
-        (b! "first") (b! "second")
-        (t/blocker-answer* {:project "brian" :ws-id id :answer "use the new column"})
-        (let [[b1 b2] (map :seq (ws/entries-of :brian id :blocker))
-              a       (last (ws/entries-of :brian id :blocker-answered))]
-          (is (= b2 (:blocker-seq a)))
-          (is (= "use the new column" (:summary a)))
-          (testing "the older one is still owed, and is next"
-            (t/blocker-answer* {:project "brian" :ws-id id :answer "keep it"})
-            (is (= b1 (:blocker-seq (last (ws/entries-of :brian id :blocker-answered))))))
-          (testing "an answer is words"
-            (b! "third")
-            (is (thrown? Exception (t/blocker-answer* {:project "brian" :ws-id id :answer " "})))))))))
-
 (defn- raw-set!
   "A record as it stood before decisions were recorded: change the file itself, stored status
    fields and all, past the record's own write — which keeps none."

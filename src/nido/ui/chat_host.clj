@@ -41,6 +41,13 @@
   ;; streams pages opened before the reload.
   (atom {}))
 
+;; A conversation nido does not hold over ACP — a workstream's chat, held by the core — supplies
+;; its own functions under :backend, keyed as `nido.session.chat` names them; any it leaves out
+;; are `nido.session.chat`'s.
+(defn ^{:malli/schema [:=> [:cat :map :keyword fn?] fn?]} via
+  "The function `k` of conversation `chat`: its backend's, else `f`."
+  [chat k f] (or (get-in chat [:backend k]) f))
+
 (defn- streams-under [prefix]
   (get (swap! stream-registries update prefix #(or % (atom {}))) prefix))
 
@@ -184,7 +191,7 @@
      {:on-open  (fn [ch]
                   (http/send! ch {:status 200 :headers {"Content-Type"  "text/event-stream"
                                                         "Cache-Control" "no-cache"}} false)
-                  (let [t (chat/transcript chat)]
+                  (let [t ((via chat :transcript chat/transcript) chat)]
                     ;; Under the stage's lock, which every stage change broadcasts under: the
                     ;; staged images this stream opens with are current until it is registered.
                     (locking staged
@@ -196,7 +203,7 @@
                                           (apply str (when opening (opening))))
                                   false)
                       (swap! streams assoc ch {:sent t}))
-                    (let [unsub (chat/subscribe!
+                    (let [unsub ((via chat :subscribe! chat/subscribe!)
                                  chat
                                  (fn [t']
                                    (let [{:keys [sent]} (get @streams ch)]
@@ -222,7 +229,7 @@
         images (locking staged
                  (let [images @staged]
                    (when (and (seq words)
-                              (let [accept #(chat/send! chat words (vec (refs (assoc req :json body))) images)]
+                              (let [accept #((via chat :send! chat/send!) chat words (vec (refs (assoc req :json body))) images)]
                                 (if guard (guard accept) (accept))))
                      (reset! staged [])
                      (when (seq images) (broadcast! h (attachments-event h)))
@@ -260,7 +267,7 @@
    one is the chat's to answer — from its acceptance on, so none falls between the stage and it."
   [{:keys [chat staged]} digest]
   (if-let [{:keys [mime data]} (or (some #(when (= digest (:digest %)) %) @staged)
-                                   (chat/image chat digest))]
+                                   ((via chat :image chat/image) chat digest))]
     {:status 200
      :headers {"Content-Type" mime "Cache-Control" "private, max-age=31536000, immutable"}
      :body (java.io.ByteArrayInputStream. (.decode (Base64/getDecoder) ^String data))}
@@ -281,16 +288,16 @@
       (case [request-method (get segs n)]
         [:get "stream"]      (stream host req)
         [:post "send"]       (send-message host req)
-        [:post "cancel"]     (do (chat/cancel! chat) {:status 204})
+        [:post "cancel"]     (do ((via chat :cancel! chat/cancel!) chat) {:status 204})
         ;; Under the stage's lock, as a send's acceptance is: no send falls between the reset's
         ;; acceptance and the stage it discards, so the old images never reach the new conversation.
         [:post "reset"]      (do (locking staged
-                                   (when (and (chat/reset! chat) (seq @staged))
+                                   (when (and ((via chat :reset! chat/reset!) chat) (seq @staged))
                                      (reset! staged [])
                                      (broadcast! host (attachments-event host))))
                                  {:status 204})
         [:post "permission"] (do (when (= (+ n 3) (count segs))
-                                   (chat/answer-permission! chat (get segs (inc n)) (get segs (+ n 2))))
+                                   ((via chat :answer-permission! chat/answer-permission!) chat (get segs (inc n)) (get segs (+ n 2))))
                                  {:status 204})
         (when (:attach-url routes)
           (case [request-method (get segs n)]

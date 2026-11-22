@@ -53,6 +53,7 @@
    [nido.coordinator.view.recoveries :as recoveries-view]
    [nido.coordinator.view.review-queue :as review-queue-view]
    [nido.coordinator.view.workstreams :as wsv]
+   [nido.coordinator.work.core :as wcore]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
    [nido.coordinator.lane.pipeline :as pipeline]
@@ -560,7 +561,57 @@
   (when-not (and (= :session (:source doing)) (not (:live status)))
     doing))
 
+(def ^:private core-held-cache (atom {:at 0 :h {}}))
+
+(defn- core-held
+  "Every workstream's committed state in the core, as the feed delivered it. A process that does
+   not follow the feed reads it at most every two seconds, so a board of a thousand rows reads it
+   once."
+  []
+  (if (:following? @wcore/mirror)
+    (wcore/held)
+    (let [{:keys [at h]} @core-held-cache
+          now (System/currentTimeMillis)]
+      (if (< (- now at) 2000)
+        h
+        (:h (reset! core-held-cache {:at now :h (wcore/held)}))))))
+
+(defn- core-of
+  "Workstream `ws-id`'s entry in the core, as `wcore/held` holds it, or nil when the core holds
+   none."
+  [project ws-id]
+  (wcore/held-ws (core-held) project ws-id))
+
+(defn- core-overlay
+  "Row `row` with its coordination — closure, needs-you, engagement, the pause and what is
+   underway — as the core holds it. Work records place the row on its arc; nothing else on it
+   decides what awaits the person."
+  [project row]
+  (let [w (core-of project (:ws-id row))]
+    (cond
+      (:bare? row) row
+      (nil? w)     (assoc row :needs-you false)
+      :else
+      (let [closed? (get-in w [:state :closed?])
+            eng     (wcore/engagement w)]
+        (cond-> (assoc row
+                       :needs-you  (boolean (seq (:awaiting w)))
+                       :engagement eng
+                       :doing      (wcore/doing w))
+          (wcore/held-units? w) (assoc-in [:status :paused] true)
+          closed?               (assoc :stage (if (= :dismissed (:stage row)) :dismissed :done)
+                                       :needs-you false :engagement :settled :doing nil))))))
+
+(declare with-status*)
+
 (defn- with-status
+  "A spine row with its band from its work records, and its coordination from the core
+   (`core-overlay`)."
+  ([project live-names row] (with-status project live-names row false))
+  ([project live-names row whole?]
+   (core-overlay project (with-status* project live-names row whole?))))
+
+(defn- with-status*
   "A spine row with its band, needs-you, engagement and what is underway — status's answers, and
    nothing stored beneath them.
 
@@ -571,7 +622,6 @@
    process still running under it is not hidden. ~1000 workstreams sit on a board and nearly all
    are settled and drawn nowhere, so skipping status for those is what keeps a refresh to the
    rows a person can see."
-  ([project live-names row] (with-status project live-names row false))
   ([project live-names row whole?]
   (if (:bare? row)
     (to-spine row)
@@ -1583,6 +1633,74 @@
       intent (assoc :intent intent)
       note   (assoc :note note))))
 
+(defn- ask-options
+  "An operator ask's options as {:option :consequence}, whether its writer gave strings or maps."
+  [options]
+  (mapv #(if (map? %)
+           {:option (str (or (:option %) (:label %))) :consequence (some-> (:consequence %) str)}
+           {:option (str %)})
+        options))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  core-ask-card
+  "The question card for operator ask `a`, in the Ask shape every card renders: its options
+   lettered, each given by the :option-<letter> action, beside a free answer and a withdrawal."
+  [{:keys [content]}]
+  (let [{:keys [question explored recommendation]} content
+        opts (take (count option-action-ids) (ask-options (:options content)))
+        q    (or (some-> question str str/trim not-empty) "What should happen next?")]
+    {:kind        :operator-ask
+     :question    q
+     :questions   [(cond-> {:question q
+                            :context  (vec (remove str/blank? [(str explored)]))
+                            :options  (vec (map-indexed
+                                            (fn [i {:keys [option consequence]}]
+                                              (cond-> {:letter  (report/option-letter i)
+                                                       :label   option
+                                                       :summary (or consequence "")
+                                                       :action  (nth option-action-ids i)}
+                                                (= 0 i) (assoc :recommended? true)))
+                                            opts))}
+                     (not (str/blank? (str recommendation))) (assoc :recommendation (str recommendation)))]
+     :answer-does (vec (concat
+                        (map-indexed (fn [i {:keys [option]}]
+                                       {:action (nth option-action-ids i) :label (report/option-letter i)
+                                        :does (str "Answers \"" option "\"; the conductor hears it.")})
+                                     opts)
+                        [{:action :reply :label "Answer" :does "Sends your words as the answer; the conductor hears them."}
+                         {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]))}))
+
+(defn- core-gate
+  "The gate of spine row `row`: its oldest ask awaiting the person in the core, offered for answer.
+   nil when the core holds none for it."
+  [project row]
+  (when-let [a (first (sort-by :id (:awaiting (core-of project (:ws-id row)))))]
+    (let [opts    (take (count option-action-ids) (ask-options (get-in a [:content :options])))
+          actions (vec (concat
+                        (map-indexed (fn [i {:keys [option]}]
+                                       {:id (nth option-action-ids i) :label (report/option-letter i)
+                                        :title option :kind :mutation
+                                        :style (if (= 0 i) :primary :default)})
+                                     opts)
+                        [{:id :reply :label "Answer" :kind :resume :style :default}
+                         {:id :withdraw :label "Withdraw" :kind :mutation :style :danger}]))]
+      {:ws-id        (:ws-id row)
+       :project      (name project)
+       :origin       (:origin row)
+       :stage        (:stage row)
+       :label        (:label row)
+       :tag          (:tag row)
+       :links        (:links row)
+       :doing        (:doing row)
+       :report       nil
+       :actions      actions
+       :ask          (core-ask-card a)
+       :core-ask     (:id a)
+       :session      nil
+       :denials      []
+       :resume-error nil
+       :working?     false})))
+
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
    STRING (the web routes on it, e.g. /gate/<project>/…; all-machine-rows tags
@@ -1691,7 +1809,7 @@
                       ;; A drain a person paused is not put back on the list by its slices.
                       (when (and (not (get-in r [:status :paused]))
                                  (or g (not= :settled (:engagement r))))
-                        (assoc (or g (->gate project r)) :raised-by by))
+                        (some-> (or g (core-gate project r)) (assoc :raised-by by)))
                       g))))
           pairs)))
 
@@ -1704,7 +1822,7 @@
                                      (not= :awaiting-gate (:stage r))))))]
     (inbox-gates project
                  (for [r (remove #(= :dismissed (:stage %)) (list-workstreams project live-names))]
-                   [r (when (owes? r) (->gate project r))]))))
+                   [r (when (owes? r) (core-gate project r))]))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
   gate
@@ -1884,7 +2002,7 @@
                      ;; analysis, read off the position status gives it, whatever its band or
                      ;; gate. Decides nothing else; the gate above reads `settled?`.
                      :at-rest?  (or settled? (= :analysed (get-in row [:position :at])))
-                     :gate      (when gate? (->gate project row))
+                     :gate      (when gate? (core-gate project row))
                      ;; The winding-down band's row, less its live sessions, which are the
                      ;; registry's and change without this row being recomputed.
                      :wind      (when finished?
@@ -2201,7 +2319,13 @@
   ([] (hold! {}))
   ([{:keys [sweep?] :or {sweep? true}}]
    (let [held {:projects {} :hold (Object.)}]
+     ;; Coordination arrives on the core's feed: each workstream a commit changed is refreshed as
+     ;; it lands, so what is held never waits for the sweep to show an ask or a closure.
      (when (and (compare-and-set! model nil held) sweep?)
+       (wcore/follow! {:on-change (fn [k] (when-let [[p ws] (wcore/split-key k)]
+                                            (when (some #(= p (name (key %))) (project/list-projects))
+                                              (refresh-selected! p ws))))}))
+     (when (and (identical? @model held) sweep?)
        ;; The thread belongs to this hold: it ends once the model is no longer the one it
        ;; started with, so a release followed by a new hold never leaves two sweeps running.
        (let [mine? #(identical? (:hold @model) (:hold held))
@@ -2260,16 +2384,18 @@
       configured
       (canonical-default-target action))))
 
+(declare core-resolve!)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :any]}
   set-stage!
   "Move a workstream to `target` stage — the single mutation behind the
    new/promote/done surface verbs. A workstream-less ws-id (e.g. a bare
    watched-view row) is a no-op: {:decision :no-workstream}. Dispatch:
-     :in-progress → the full promote gesture (gate + start the ticket, its session brought up)
-     :done        → close the workstream (:done outcome); a drain through lane-drain's close,
-                    and a slice is refused, since it is done only by landing
+     :in-progress → the person's start, opening its unit in the core (`core-resolve!` :promote)
+     :done        → close it in the core (`core-resolve!` :done); a drain through lane-drain's
+                    close, and a slice is refused, since it is done only by landing
      other        → advance the stored stage only (no autonomous leg)
-   Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced, or
+   Returns {:decision <kw>}: :promoted, :done or :advanced, the core's refusal, or
    {:decision :refused :message …} for a slice or a drain whose exit is not observed.
 
    A person's choice is recorded even when it names the stage already stored — `advance-stage!`
@@ -2279,7 +2405,7 @@
   [project ws-id target]
   (if-let [w (cws/read-ws project ws-id)]
     (case target
-      :in-progress (promote/promote-workstream! project ws-id)
+      :in-progress (core-resolve! project ws-id :promote nil)
       ;; A slice is done only by landing, and a drain only by lane-drain's close on its observed
       ;; exit — so neither is closed done here on the person's word alone.
       :done        (cond
@@ -2291,7 +2417,7 @@
                           (catch clojure.lang.ExceptionInfo e
                             {:decision :refused :message (ex-message e)}))
                      :else
-                     (do (cws/close! project ws-id :done nil :person) {:decision :done}))
+                     (core-resolve! project ws-id :done nil))
       (do (cws/advance-stage! project ws-id target :person)
           {:decision :advanced}))
     {:decision :no-workstream}))
@@ -3165,6 +3291,95 @@
     (catch clojure.lang.ExceptionInfo e
       {:decision :phase-refused :because (ex-message e)})))
 
+(defn- core-decision
+  "A resolver's answer for core outcome `o`, deciding `decision` when it was admitted."
+  [o decision]
+  (if (wcore/admitted? o)
+    {:decision decision}
+    {:decision :core-refused
+     :because  (str (or (some-> (get-in o [:refused :reason]) name) (:error o) "refused"))}))
+
+(defn- intent-goal
+  "Workstream `ws-id`'s goal as a unit opened for it states it: its board label."
+  [project ws-id]
+  (or (some-> (cws/read-ws project ws-id) (wsv/label nil) str not-empty) ws-id))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] [:maybe :map]]}
+  core-resolve!
+  "Do what gate action `action-id` asks of the core, as the person's keyed command; nil when the
+   action is not one the core answers. An option answers the oldest open ask with its option, a
+   reply with the person's words, a withdrawal takes it back; Land grants the landing; Promote is
+   the person's start, opening the workstream's unit; Done and Drop retract its open units and
+   close it."
+  [project ws-id action-id payload]
+  (let [w    (wcore/state project ws-id)
+        ask  (first (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w)))))
+        act! #(wcore/act! project ws-id %)
+        text (some-> payload str str/trim not-empty)]
+    (cond
+      (option-action? action-id)
+      (let [opt (nth (ask-options (get-in ask [:content :options])) (option-index action-id) nil)]
+        (cond (nil? ask) {:decision :core-refused :because "nothing is asked"}
+              (nil? opt) {:decision :option-stale}
+              :else (core-decision (act! {:command :answer-operator-ask :ask (:id ask)
+                                          :answer (:option opt) :by :person})
+                                   :answered)))
+
+      (= :reply action-id)
+      (if ask
+        (if text
+          (core-decision (act! {:command :answer-operator-ask :ask (:id ask) :answer text :by :person})
+                         :answered)
+          {:decision :core-refused :because "an answer needs words"})
+        (when text
+          (core-decision (act! {:command :post-chat :message (str "m-" (random-uuid)) :text text})
+                         :posted)))
+
+      (= :withdraw action-id)
+      (if ask
+        (core-decision (act! {:command :withdraw-operator-ask :ask (:id ask)
+                              :reason (or text "withdrawn by the person") :by :person})
+                       :withdrawn)
+        {:decision :core-refused :because "nothing is asked"})
+
+      (= :land action-id)
+      (core-decision (act! {:command :give-grant :grant :merge :by "person"}) :granted)
+
+      (= :promote action-id)
+      (core-decision (act! {:command :open-unit :unit ws-id :project (name project)
+                            :goal (intent-goal project ws-id)})
+                     :promoted)
+
+      (#{:done :drop} action-id)
+      (do (doseq [u (vals (:units w)) :when (= :open (:status u))]
+            (act! {:command :retract-unit-goal :unit (:id u)}))
+          (core-decision (act! {:command :close-workstream}) (if (= :done action-id) :done :dropped)))
+
+      :else nil)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:maybe [:sequential :keyword]]] :map]}
+  person-says!
+  "What a person said to workstream `ws-id` outside a gate — from a bb verb or a chat — as their
+   commands to the core: `words` answer the oldest ask awaiting them, or, when none does, are
+   posted to the conductor's chat; each of `grants` is given. Answers {:answered ask-id-or-nil
+   :posted bool :granted [kind] :refused [reason]}."
+  [project ws-id words grants]
+  (let [w    (wcore/state project ws-id)
+        ask  (first (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w)))))
+        said (when-not (str/blank? (str words))
+               (if ask
+                 [:answered (wcore/act! project ws-id {:command :answer-operator-ask :ask (:id ask)
+                                                       :answer (str words) :by :person})]
+                 [:posted (wcore/act! project ws-id {:command :post-chat :message (str "m-" (random-uuid))
+                                                     :text (str words)})]))
+        gs   (for [g grants] [g (wcore/act! project ws-id {:command :give-grant :grant g :by "person"})])
+        outs (cond-> (vec (map second gs)) said (conj (second said)))]
+    {:answered (when (and (= :answered (first said)) (wcore/admitted? (second said))) (:id ask))
+     :posted   (boolean (and (= :posted (first said)) (wcore/admitted? (second said))))
+     :granted  (vec (for [[g o] gs :when (wcore/admitted? o)] g))
+     :refused  (vec (for [o outs :when (not (wcore/admitted? o))]
+                      (or (some-> (get-in o [:refused :reason]) name) (str (:error o)))))}))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] :map]}
   resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
@@ -3207,6 +3422,13 @@
 
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
 
+     ;; Coordination is the core's: every action it answers is the person's command to it.
+     (contains? #{:reply :withdraw :land :promote :done :drop} action-id)
+     (or (core-resolve! project ws-id action-id payload) {:decision :core-refused :because "nothing to do"})
+
+     (option-action? action-id)
+     (core-resolve! project ws-id action-id payload)
+
      ;; Not a `case` branch: the id set is derived from report/option-letters, and
      ;; case needs literals — spelling six of them here is a second copy of that
      ;; vector, free to drift from the one the buttons are built from.
@@ -3241,25 +3463,26 @@
        "baseline, design — from your understanding of this session so far, as /design says; the "
        "review loops exist to check that understanding, so do not re-derive it from scratch. Then:\n\n"))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:? [:map [:carry? {:optional true} :boolean]]]] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:? [:map [:cwd {:optional true} [:maybe :string]]]]] :map]}
   activate!
-  "Activate nido's recipe on `ws-id` for a person: append its :activated entry (once — activating
-   twice changes nothing), from `session` when the person gave it from one, and carry that session
-   into the workstream's free whole seat (`conductor/carry!` as :activation) without starting a
-   conversation on it — unless `:carry?` is false, as it is for a start activating the session it
-   is itself bringing up, whose own carry! carries it. From then the conduct pass starts its
-   conductor once a person works in it, and a person's start on it is carried. Answers {:ws-id
-   :already? :instruction :carried}, the instruction being what the session's agent is to do now
-   — the surface delivers it, since nido drives no conversation of a plain session — and :carried
-   carry!'s answer, nil when nothing was asked of it."
-  [project ws-id session & [{:keys [carry?] :or {carry? true}}]]
+  "Hand `ws-id` to the core for a person: their command opening its unit, in `session`'s working
+   copy `:cwd` when they gave it from one — that session is then the unit's, recorded ready, and
+   its turns run there — else in a session the core provisions. Activating twice changes nothing.
+   Answers {:ws-id :already? :instruction :refused}, the instruction being what the session's
+   agent is to do now — the surface delivers it."
+  [project ws-id _session & [{:keys [cwd]}]]
   (let [p        (keyword (name project))
-        already? (boolean (some-> (cws/read-ws p ws-id) standing/activated?))]
-    (cws/activate! p ws-id session)
+        already? (contains? (:units (wcore/state p ws-id)) ws-id)
+        o        (when-not already?
+                   (wcore/act! p ws-id (cond-> {:command :open-unit :unit ws-id :project (name p)
+                                                :goal (intent-goal p ws-id)}
+                                         cwd (assoc :session-cwd cwd))))]
+    (when (and o (not (wcore/admitted? o)))
+      (throw (ex-info (str "the core refused — " (or (some-> (get-in o [:refused :reason]) name) (:error o)))
+                      {:ws-id ws-id :outcome o})))
     {:ws-id       ws-id
      :already?    already?
-     :instruction (str activation-preamble (:practice (seats/default-embodiment)))
-     :carried     (when (and session carry?) (conductor/carry! p ws-id session nil nil :activation))}))
+     :instruction (str activation-preamble (:practice (seats/default-embodiment)))}))
 
 (defn- pause-of
   "The standing pause on workstream `w` as {:at :note}, or nil when none stands."
@@ -3269,32 +3492,33 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   pause!
-  "Pause `ws-id` for a person — their choice not to push it forward for now — with `note` saying
-   why. While it stands no conductor drives it and every surface reads it paused, never stalled.
-   Answers {:ws-id}."
-  [project ws-id note]
-  (cws/pause! (keyword (name project)) ws-id note)
+  "Pause `ws-id` for a person — their choice not to push it forward for now: each open unit held
+   by their command to the core, so no turn starts on it and every surface reads it paused. The
+   note is not kept. Answers {:ws-id}."
+  [project ws-id _note]
+  (doseq [u (vals (:units (wcore/state project ws-id))) :when (= :open (:status u)) :when (not (:held? u))]
+    (wcore/act! project ws-id {:command :hold-unit :unit (:id u)}))
   {:ws-id ws-id})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   resume!
-  "Lift the person's pause on `ws-id`; its conductor starts again on the next conduct pass.
+  "Lift the person's pause on `ws-id`: each held unit released by their command to the core.
    Answers {:ws-id}."
   [project ws-id]
-  (cws/resume! (keyword (name project)) ws-id)
+  (doseq [u (vals (:units (wcore/state project ws-id))) :when (:held? u)]
+    (wcore/act! project ws-id {:command :release-unit :unit (:id u)}))
   {:ws-id ws-id})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   deactivate!
-  "Take nido's recipe off `ws-id` for a person: append its :deactivated entry, from `session` when
-   given from one. From then no conductor starts on it, nothing is owed on it, and its designs no
-   longer gate its landing; activating it again turns the recipe back on. Answers {:ws-id :was?},
-   :was? false when the recipe was not running and nothing was appended."
-  [project ws-id session]
-  (let [p    (keyword (name project))
-        was? (boolean (some-> (cws/read-ws p ws-id) standing/activated?))]
-    (cws/deactivate! p ws-id session)
-    {:ws-id ws-id :was? was?}))
+  "Hold `ws-id`'s open units for a person, by their command to the core: no turn starts on a held
+   unit until they release it (`resume!`). Answers {:ws-id :was?}, :was? false when no open unit
+   was running free."
+  [project ws-id _session]
+  (let [open (filter #(and (= :open (:status %)) (not (:held? %)))
+                     (vals (:units (wcore/state project ws-id))))]
+    (doseq [u open] (wcore/act! project ws-id {:command :hold-unit :unit (:id u)}))
+    {:ws-id ws-id :was? (boolean (seq open))}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   chat-place

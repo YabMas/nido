@@ -7,6 +7,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.work]
+   [nido.test.fake-core :as fake-core]
    [tasks.nido-workstream :as task]))
 
 (defn- with-tmp [f]
@@ -33,8 +34,39 @@
           (is (= :note (-> w2 :entries first :kind))))
         (task/stage-advance* {:project "brian" :ref "BR-3" :stage "ready"})
         (is (= :ready (:stage (ws/newest-choice (ws/read-ws :brian (:id w))))))
-        (task/close* {:project "brian" :ref "BR-3" :outcome "done"})
-        (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w))))))))))
+        (fake-core/with-fake-core
+          (fn [c]
+            (task/close* {:project "brian" :ref "BR-3" :outcome "done"})
+            (is (:closed? (get @(:states c) (str "brian/" (:id w)))) "the close is the person's command to the core")
+            (is (nil? (ws/closure (ws/read-ws :brian (:id w)))) "and no closure is appended to the ledger")))))))
+
+(deftest a-blocker-answer-answers-the-ask-and-gives-the-grant
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:external-refs []})]
+        (fake-core/with-fake-core
+          (fn [c]
+            (fake-core/seed! c :brian (:id w) fake-core/asking)
+            (with-redefs [tasks.nido-workstream/here (fn [_] [:brian (:id w)])]
+              (task/blocker-answer* {:answer "Yes, ship it" :grants "merge"}))
+            (let [st (get @(:states c) (str "brian/" (:id w)))]
+              (is (= :answered (get-in st [:operator-asks "a1" :status])))
+              (is (= {:answered "Yes, ship it"} (get-in st [:turns "c1" :resolution])))
+              (is (contains? (:grants st) :merge)))
+            (is (every? :input? @(:sent c)) "every act is sent as the person's input")
+            (is (empty? (ws/entries-of :brian (:id w) :blocker-answered))
+                "an ask is the core's: no ledger entry answers it")))))))
+
+(deftest tell-posts-the-persons-word-to-the-conductor
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:external-refs []})]
+        (fake-core/with-fake-core
+          (fn [c]
+            (with-redefs [tasks.nido-workstream/here (fn [_] [:brian (:id w)])]
+              (is (:posted (task/tell* {:text "look at the flaky test"}))))
+            (is (= ["look at the flaky test"]
+                   (map :text (:chat (get @(:states c) (str "brian/" (:id w)))))))))))))
 
 (deftest an-intent-amending-a-built-on-goal-is-followed-by-what-it-owes
   ;; The append that starts an amendment is the first moment its author can be
@@ -250,16 +282,6 @@
            (mapv #(first (str/split % #"\s+")) (list-out rows {:all true})))
         ":all adds settled work; a ticket no workstream covers has no id and is never listed")))
 
-(deftest tell-passes-the-chats-word-to-the-conductor-of-the-workstream-it-runs-in
-  (let [told (atom [])]
-    (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian "ws-9"])
-                  nido.coordinator.lane.conductor/tell!  (fn [p id text grants] (swap! told conj [p id text grants]) {:id "hb-1"})]
-      (let [out (with-out-str (task/tell* {:text "drop the export"}))]
-        (is (= [[:brian "ws-9" "drop the export" nil]] @told) "the workstream is the one the chat's session is on")
-        (is (str/includes? out "hand-back hb-1")))
-      (task/tell* {:text "/land" :grants 'merge})
-      (is (= [:merge] (last (last @told))) "the person's grant is passed on as the acts it names"))))
-
 (deftest pr-land-lands-only-the-workstreams-own-pr
   (with-tmp
     (fn [_]
@@ -287,24 +309,6 @@
           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No workstream here"
                                 (task/pr-land* {:pr "412"})))
           (is (= 2 (count @landed)) "outside every workstream, nothing lands"))))))
-
-(deftest a-blocker-answer-carries-the-grant-the-person-gave-in-words
-  (with-tmp
-    (fn [_]
-      (let [w  (ws/create! :brian {:external-refs []})
-            id (:id w)]
-        (ws/append-entry! :brian id {:kind :blocker}
-                          (pr-str {:format :blocker :summary "s" :needs "land it?" :after "a"}))
-        (task/blocker-answer* {:project "brian" :ws-id id :answer "yes, land it" :grants 'merge})
-        (is (= [:merge] (:grants (last (ws/entries-of :brian id :blocker-answered)))))
-        (ws/append-entry! :brian id {:kind :blocker}
-                          (pr-str {:format :blocker :summary "s" :needs "close it?" :after "a"}))
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"stays the person's own"
-                              (task/blocker-answer* {:project "brian" :ws-id id :answer "close" :grants [:closed]}))
-            "closing cannot be granted")
-        (task/blocker-answer* {:project "brian" :ws-id id :answer "land it, please"})
-        (is (nil? (:grants (last (ws/entries-of :brian id :blocker-answered))))
-            "words with no :grants grant nothing — the text is not read")))))
 
 (deftest pr-land-runs-the-declared-procedure
   (with-tmp

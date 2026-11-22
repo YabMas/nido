@@ -784,8 +784,8 @@
   ;; The panel is drawn with the page, so the conversation it shows is the page's own: the Referer
   ;; is the page the person came from, and choosing by it would show the previous page's chat.
   (with-redefs [nido.coordinator.work/workstream (fn [p w _] {:project p :ws-id w :label w :stage :design})
-                nido.coordinator.work/chat-place (fn [_ w] {:session (str w "--chat")})
-                nido.session.chat/transcript     (constantly {:items [] :busy? false})]
+                nido.coordinator.work.core/held  (fn [] {"brian/ws-drawn" {:state {} :awaiting []}
+                                                          "brian/ws-before" {:state {} :awaiting []}})]
     (let [ctx  (#'server/rail-ctx {:uri "/workstreams" :query-string "sel=brian:ws-drawn"
                                    :headers {"referer" "http://localhost:8800/workstreams/brian/ws-before"}}
                                   :workstreams "brian" {:needs-count 0})
@@ -805,7 +805,7 @@
                 nido.coordinator.work/workstream (fn [_ _ & _] {:ws-id "ws-1" :project "brian" :origin :scratch
                                                                 :stage :in-progress :label "Page-label" :ledger nil
                                                                 :sessions []})
-                nido.coordinator.work/chat-place (fn [_ ws-id] (when (= "ws-1" ws-id) {:session "ws-1--chat"}))
+                nido.coordinator.work.core/held (fn [] {"brian/ws-1" {:state {} :awaiting []}})
                 nido.session.chat/transcript (fn [_] {:items [] :busy? false})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [body (:body (server/handle-request {:request-method :get :uri "/workstreams/brian/ws-1"}))]

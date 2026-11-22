@@ -5,7 +5,6 @@
   (:require
    [clojure.edn :as edn]
    [clojure.string :as str]
-   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.view.workstreams :as wsv]
@@ -17,6 +16,7 @@
    [nido.coordinator.lane.backfill :as backfill]
    [nido.review.stages :as stages]
    [nido.coordinator.work :as work]
+   [nido.coordinator.work.core :as wcore]
    [nido.coordinator.lane.landing :as landing]
    [babashka.fs :as fs]
    [tasks.nido-attach :as attach]))
@@ -75,8 +75,15 @@
   (work/set-stage! (keyword project) (resolve-ws-id opts) (keyword stage)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  close* [{:keys [project outcome] :as opts}]
-  (ws/close! (keyword project) (resolve-ws-id opts) (keyword (or outcome "done")) nil :person))
+  close*
+  "Close the workstream for the person, by their command to the core: its open units' goals
+   retracted, then the workstream closed. :outcome done (the default) or dropped."
+  [{:keys [project outcome] :as opts}]
+  (let [r (work/core-resolve! (keyword project) (resolve-ws-id opts)
+                              (if (= "done" (name (or outcome "done"))) :done :drop) nil)]
+    (when (= :core-refused (:decision r))
+      (throw (ex-info (str "The core refused the close — " (:because r)) r)))
+    r))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   ref-add*
@@ -392,34 +399,45 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   blocker-answer*
-  "Record a person's answer, in their words, to a blocker — :blocker-seq, else the newest one
-   nothing has answered. A :blocker-seq that names no unanswered blocker is refused: an answer
-   recorded against it would answer nothing now, or a blocker nobody has yet asked. :grants names
-   the acts the person's answer hands the seats (`grants-opt`), passed because they said so — the
-   words are not read for one."
+  "Record a person's answer, in their words: to a review's blocker — :blocker-seq, else the newest
+   one nothing has answered — as their :blocker-answered work record, and to the oldest ask
+   awaiting them in the core as their command. A :blocker-seq that names no unanswered blocker is
+   refused, and so is an answer with nothing awaiting it. :grants names the acts the person's
+   answer hands the conductor (`grants-opt`), passed because they said so — the words are not
+   read for one."
   [{:keys [answer blocker-seq grants] :as opts}]
   (let [[p id] (here opts)
         owed   (unanswered-blockers p id)
-        n      (or blocker-seq (peek owed)
-                   (throw (ex-info "No unanswered blocker on this workstream" {:ws-id id})))]
-    (when-not (some #{n} owed)
-      (throw (ex-info "No unanswered blocker at that seq" {:ws-id id :blocker-seq n :unanswered owed})))
+        asked? (some #(= :open (:status %)) (vals (:operator-asks (wcore/state p id))))
+        n      (or blocker-seq (peek owed))]
     (when (str/blank? (str answer))
       (throw (ex-info "An answer is the person's words — pass :answer \"…\"" {:ws-id id})))
-    (let [gs (grants-opt grants)]
-      (ws/append-entry! p id {:kind :blocker-answered}
-                        (pr-str (cond-> {:format :blocker-answered :blocker-seq n :summary (str answer)}
-                                  gs (assoc :grants gs)))))))
+    (when (and (nil? n) (not asked?))
+      (throw (ex-info "Nothing on this workstream awaits an answer" {:ws-id id})))
+    (when (and n (not (some #{n} owed)))
+      (throw (ex-info "No unanswered blocker at that seq" {:ws-id id :blocker-seq n :unanswered owed})))
+    (let [gs (grants-opt grants)
+          ;; A review's blocker is a work record: the person's answer to it is theirs, appended in
+          ;; their own process, before the core hears it.
+          path (when n
+                 (ws/append-entry! p id {:kind :blocker-answered}
+                                   (pr-str {:format :blocker-answered :blocker-seq n :summary (str answer)})))
+          said (work/person-says! p id (when asked? (str answer)) (vec gs))]
+      (when (seq (:refused said))
+        (binding [*out* *err*] (println "the core refused:" (str/join ", " (:refused said)))))
+      (str (or path (str "answered " (:answered said)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   tell*
-  "Pass :text on to the conductor of the workstream whose chat this runs in, and print the id of
-   the hand-back it became. :grants names the acts the person's word hands the seats
-   (`grants-opt`), recorded as their grant before the word is passed on. Refused anywhere else."
+  "Pass :text on to the conductor of the workstream this runs in, as the person's chat message —
+   or their answer, when an ask awaits them — and print where it went. :grants names the acts the
+   person's word hands the conductor (`grants-opt`), each given as the person's grant."
   [{:keys [text grants] :as opts}]
   (let [[p id] (here opts)
-        m      (conductor/tell! p id (str text) (grants-opt grants))]
-    (println (str "hand-back " (:id m) " posted to " id "'s conductor"))
+        m      (work/person-says! p id (str text) (vec (grants-opt grants)))]
+    (println (cond (:posted m)   (str "posted to " id "'s conductor")
+                   (:answered m) (str "answered " (:answered m) " on " id)
+                   :else         (str "nothing reached " id "'s conductor: " (str/join ", " (:refused m)))))
     m))
 
 (defn- worktree-of

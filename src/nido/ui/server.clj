@@ -481,6 +481,7 @@
                                  "you were not looking at. Re-read the gate.")
     ;; A gate that will not open writes nothing; the reason is the ledger's own.
     :phase-refused          (str "The gate did not open — " because)
+    :core-refused           (str "The core refused it — " because)
     :between-phases         (str "Not restored — this workstream is between phases, not "
                                  "dismissed. Assert its gate to open the next one.")
     :nothing-to-land        (str "Nothing to land — this workstream no longer owes a landing. "
