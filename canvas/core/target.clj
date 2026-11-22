@@ -106,7 +106,16 @@
    unless its key is already committed [commands-are-keyed], commits a batch of bounded size as
    one durable unit, and only then answers callers and publishes the change.
 
-   HIDES batching, group commit, ordering and the output gate. Idle, it blocks on its queue.")
+   HIDES batching, group commit, ordering and the output gate. Idle, it blocks on its queue."
+  (Operation start
+    "Start the one writer thread over a store; idle, it blocks on its queue."
+    {:signature [:=> [:catn [:store :map] [:opts :map]] :map]})
+  (Operation submit!
+    "Queue a keyed command and answer a promise of its outcome, delivered only once that outcome is durable."
+    {:signature [:=> [:catn [:writer :map] [:envelope :map]] :any]})
+  (Operation stop!
+    "Finish the batch in progress, refuse what is still queued, and end the thread."
+    {:signature [:=> [:catn [:writer :map]] :nil]}))
 
 (Module core-api
   "How anything outside the daemon changes or reads nido: commands over a local socket,
@@ -114,7 +123,28 @@
    reads of committed state.
 
    HIDES the wire format and the socket. CLIs, surfaces and agents' tools are its clients;
-   none of them writes the store.")
+   none of them writes the store."
+  (Operation serve!
+    "Listen on a Unix socket and serve commands, reads and subscriptions, one virtual thread per connection."
+    {:signature [:=> [:catn [:daemon :map]] :map]})
+  (Operation close!
+    "Stop listening and remove the socket."
+    {:signature [:=> [:catn [:server :map]] :nil]})
+  (Operation connect
+    "Open a client connection to a daemon socket."
+    {:signature [:=> [:catn [:socket :string]] :map]})
+  (Operation request
+    "Send one request and answer its reply."
+    {:signature [:=> [:catn [:conn :map] [:req :map]] :any]})
+  (Operation subscribe
+    "Turn a connection into a feed subscription from a position."
+    {:signature [:=> [:catn [:conn :map] [:from :int]] :nil]})
+  (Operation next-message
+    "The next message of a subscription stream, or nil once it ended."
+    {:signature [:=> [:catn [:conn :map]] :any]})
+  (Operation disconnect
+    "Close a client connection."
+    {:signature [:=> [:catn [:conn :map]] :nil]}))
 
 (Module core-feed
   "The change feed: what each commit changed, in commit order, keyed by commit position,
@@ -122,7 +152,25 @@
    the TUI). The asks it delivers as awaiting the person are the open operator asks.
 
    HIDES subscription, fan-out and resume-from-position, so a surface that reconnects continues from the last position
-   it rendered.")
+   it rendered."
+  (Operation create
+    "A feed with no subscribers."
+    {:signature [:=> [:catn] :map]})
+  (Operation publish!
+    "Offer a commit's changes to every subscriber without blocking, cutting off one with no room."
+    {:signature [:=> [:catn [:feed :map] [:changes [:sequential :map]]] :nil]})
+  (Operation subscribe!
+    "Subscribe from a position: what changed since, then each commit live."
+    {:signature [:=> [:catn [:feed :map] [:reader :map] [:from :int] [:opts :map]] :map]})
+  (Operation take!
+    "The next message, or the cut-off with the position to resume from."
+    {:signature [:=> [:catn [:sub :map] [:timeout-ms :int]] [:maybe :map]]})
+  (Operation unsubscribe!
+    "Stop delivering to a subscription."
+    {:signature [:=> [:catn [:sub :map]] :nil]})
+  (Operation session
+    "A read session for one api connection: committed state through a read-only handle of its own, and subscriptions that catch up through it."
+    {:signature [:=> [:catn [:feed :map] [:db-path :string]] :map]}))
 
 (Module core-turn
   "The Turn: one bounded stretch of agent work, run for a unit of work
