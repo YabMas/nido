@@ -99,6 +99,11 @@
        [{:key (str "buffer/stop/" pos)
          :command {:command :raise-conductor-stop :ask (str "conductor stopped " pos)
                    :content (stop-content max-failures)}}])
+     ;; A trigger's unit starts on its instructions once its session is up; admission refuses
+     ;; it while anything else holds the unit, and the next commit offers it again.
+     (for [{:keys [unit turn spec]} (d/first-turns-owed state)]
+       {:key (str "buffer/first/" unit)
+        :command {:command :start-turn :turn turn :unit unit :spec spec}})
      (for [{:keys [unit want]} (d/sessions-owed state)]
        {:key (str "buffer/provision/" unit "/" (name want) "/" pos)
         :command {:command :record-provision-attempt :unit unit :want want

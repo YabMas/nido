@@ -3304,6 +3304,45 @@
   [project ws-id]
   (or (some-> (cws/read-ws project ws-id) (wsv/label nil) str not-empty) ws-id))
 
+(defn ^{:malli/schema [:=> [:cat :map :string :string] :map]}
+  fire-unit
+  "The :open-unit command a trigger's fire `routed` ({:project :trigger :payload}) opens as `unit`
+   toward `goal`: its first turn is the trigger's skill on the rendered payload, run by the
+   trigger's agent once the unit's session is up."
+  [{:keys [project trigger payload]} unit goal]
+  {:command    :open-unit :unit unit :project (name project) :goal goal
+   :trigger    (name (:name trigger))
+   :first-turn {:spec {:executor     (or (:agent trigger) :claude)
+                       :instructions (str "/" (name (:skill trigger)) " "
+                                          (triggers/render-payload (:payload trigger) payload))}}})
+
+(defn- penned-fire
+  "The fire a workstream penned by queue-mode intake was held back from, rebuilt from what the pen
+   stored, or nil when it holds none or its trigger is gone."
+  [project ws-id]
+  (when-let [{:keys [trigger payload]} (:intake (cws/read-ws project ws-id))]
+    (when-let [t (triggers/find-by-name (triggers/load-for-project project) trigger)]
+      {:project project :trigger t :payload payload})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
+  core-open?
+  "Whether the core holds workstream `ws-id` open: it has heard of it, and has not closed it."
+  [project ws-id]
+  (let [s (wcore/state project ws-id)]
+    (boolean (and (seq (:units s)) (not (:closed? s))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :boolean]}
+  core-merged!
+  "Tell the core that what `ws-id`'s open units built has landed — `landing` names the landing, so
+   a retry is answered rather than repeated — and close it. Whether it is closed."
+  [project ws-id landing]
+  (let [k (wcore/ws-key project ws-id)]
+    (doseq [u (vals (:units (wcore/state project ws-id))) :when (= :open (:status u))]
+      (wcore/act! project ws-id {:command :record-merge :unit (:id u)}
+                  {:key (str "merged/" k "/" (:id u) "/" landing)}))
+    (wcore/admitted? (wcore/act! project ws-id {:command :close-workstream}
+                                 {:key (str "merged/" k "/close/" landing)}))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] [:maybe :map]]}
   core-resolve!
   "Do what gate action `action-id` asks of the core, as the person's keyed command; nil when the
@@ -3345,9 +3384,12 @@
       (= :land action-id)
       (core-decision (act! {:command :give-grant :grant :merge :by "person"}) :granted)
 
+      ;; A workstream the pen held back starts as its fire would have.
       (= :promote action-id)
-      (core-decision (act! {:command :open-unit :unit ws-id :project (name project)
-                            :goal (intent-goal project ws-id)})
+      (core-decision (act! (if-let [fire (penned-fire project ws-id)]
+                             (fire-unit fire ws-id (intent-goal project ws-id))
+                             {:command :open-unit :unit ws-id :project (name project)
+                              :goal (intent-goal project ws-id)}))
                      :promoted)
 
       (#{:done :drop} action-id)

@@ -26,7 +26,7 @@
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]
    [nido.platform.jj :as jj]
-   [nido.coordinator.work.core :as wcore]))
+   [nido.coordinator.work :as work]))
 
 (defn- way-out
   "What to DO about a refusal, as commands rather than advice.
@@ -431,17 +431,13 @@
   1)
 
 (defn- record-merge-in-core!
-  "Tell the core the landing at `tip` merged each open unit of `ws-id`, keyed by the commit so a
-   re-run is answered rather than repeated. Said and not thrown when the core is not running: the
-   work records above are written either way."
+  "Tell the core the landing at `tip` merged `ws-id`'s open units, and close it there; keyed by the
+   commit, so a re-run is answered rather than repeated. Said and not thrown when the core is not
+   running: the work records above are written either way."
   [project ws-id tip]
   (try
-    (doseq [u (vals (:units (wcore/state project ws-id))) :when (= :open (:status u))]
-      (let [o (wcore/act! project ws-id {:command :record-merge :unit (:id u)}
-                          {:key (str "land-record/" (wcore/ws-key project ws-id) "/" (:id u) "/" tip)})]
-        (when-not (wcore/admitted? o)
-          (println (str "land:record · the core did not record " (:id u) " merged: "
-                        (or (some-> (get-in o [:refused :reason]) name) (:error o)))))))
+    (when-not (work/core-merged! project ws-id tip)
+      (println "land:record · the core did not close the workstream"))
     (catch Exception e
       (println (str "land:record · the core was not told of the merge (" (ex-message e) ")")))))
 

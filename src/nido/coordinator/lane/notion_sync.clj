@@ -115,13 +115,16 @@
   [ws]
   (some #(when (= :notion (:adapter %)) (:page-id %)) (:external-refs ws)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Workstream]]}
+(defn ^{:malli/schema [:function [:=> [:cat :ProjectName] [:sequential :Workstream]] [:=> [:cat :ProjectName [:maybe :map]] [:sequential :Workstream]]]}
   open-notion-workstreams
-  "Open workstreams — no standing close on the ledger — carrying a :notion page-id."
-  [project]
-  (->> (ws/list-ids project)
-       (keep #(ws/read-ws project %))
-       (filter #(and (nil? (ws/closure %)) (notion-page-id %)))))
+  "Open workstreams carrying a :notion page-id: open as `core`'s :open? says when given, else as
+   the ledger's closure does."
+  ([project] (open-notion-workstreams project nil))
+  ([project core]
+   (->> (ws/list-ids project)
+        (keep #(ws/read-ws project %))
+        (filter #(and (if core ((:open? core) project (:id %)) (nil? (ws/closure %)))
+                      (notion-page-id %))))))
 
 (defn- state-key [project] (str "notion-sync-" (name project)))
 
@@ -160,15 +163,16 @@
 (defn- apply-action!
   "Effect one resolved action. dry? logs the would-do without mutating; otherwise
    mutates the workstream and appends an explanatory ledger entry. :noop → nil."
-  [project w action status page me dry?]
+  [project w action status page me dry? core]
   (when (not= action :noop)
     (let [desc (action-desc project action w status page me)]
       (if dry?
         (println (str "[dry-run] " (:id w) " · " desc))
         (do
           (case (if (keyword? action) action (first action))
-            :close-done    (ws/close! project (:id w) :done nil :notion)
-            :close-dropped (ws/close! project (:id w) :dropped nil :notion)
+            ;; A closure is coordination: the core's, by command, when the host runs it.
+            :close-done    (if core ((:close! core) project (:id w) :done) (ws/close! project (:id w) :done nil :notion))
+            :close-dropped (if core ((:close! core) project (:id w) :dropped) (ws/close! project (:id w) :dropped nil :notion))
             :advance       (ws/advance-stage! project (:id w) (second action)))
           (ws/append-entry! project (:id w) {:kind :note} desc)
           (println (str "notion-sync: " (:id w) " · " desc)))))))
@@ -180,14 +184,16 @@
    Notion; fail-safe per workstream. A token-wide :auth failure opens the
    half-open breaker (skips polling until cooldown). Persists state under
    (state-key project) with :type :notion-sync so it shows under coordinator:status
-   Sources:. Never throws."
-  [project {:keys [me terminal status->stage dry-run?] :as _cfg}]
+   Sources:. Never throws. `core`, when given, is {:open? (fn [project ws-id]) :close! (fn
+   [project ws-id outcome])}: which workstreams are open, and a ticket's terminal status closing
+   one, are the core's."
+  [project {:keys [me terminal status->stage dry-run?] :as _cfg} & [core]]
   (let [k     (state-key project)
         prior (sstate/read-state k)]
     (when-not (and (= :open (:breaker prior)) (not (cooldown-elapsed? prior)))
       (if-let [token (notion/keychain-token)]
         (let [auth-failed? (atom false)]
-          (doseq [w (open-notion-workstreams project)
+          (doseq [w (open-notion-workstreams project core)
                   :while (not @auth-failed?)]
             (let [page (notion/retrieve-page (notion-page-id w) token)]
               (cond
@@ -203,7 +209,7 @@
                                            :terminal       terminal
                                            :status->stage  status->stage
                                            :current-stage  (current-stage w)})]
-                  (apply-action! project w action status page me dry-run?)))))
+                  (apply-action! project w action status page me dry-run? core)))))
           (sstate/write-state!
             k (if @auth-failed?
                 (merge (or prior {:type :notion-sync :project project})

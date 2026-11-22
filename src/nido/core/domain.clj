@@ -117,6 +117,16 @@
   [state unit-id]
   (filter #(and (= unit-id (:unit %)) (active-statuses (:status %))) (vals (:turns state))))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} first-turns-owed
+  "The first turns owed: [{:unit :turn :spec}] for each open unit opened with a first turn — a
+   trigger's instructions — that no turn of it has started yet and whose session is ready."
+  [state]
+  (for [u (sort-by :id (vals (:units state)))
+        :when (and (= :open (:status u)) (:first-turn u)
+                   (= :ready (get-in u [:session :status]))
+                   (not-any? #(= (:id u) (:unit %)) (vals (:turns state))))]
+    {:unit (:id u) :turn (str (:id u) " first") :spec (get-in u [:first-turn :spec])}))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} awaiting-person
   "The asks awaiting the person: exactly the open operator asks. A unit's call is never among
    them except through an open operator ask that binds it, so this is all a surface may show as
@@ -181,12 +191,14 @@
    would have refused is never in a ledger, so evolve does not re-check it."
   (fn [_state event] (:event event)))
 
-(defmethod evolve :unit-opened [state {:keys [unit project goal session-cwd]}]
-  (assoc-in state [:units unit] {:id unit :project project :goal goal :status :open
-                                 :held? false :unknowns #{} :landing? false
-                                 :session (if session-cwd
-                                            {:status :ready :cwd session-cwd}
-                                            {:status :none})}))
+(defmethod evolve :unit-opened [state {:keys [unit project goal session-cwd trigger first-turn]}]
+  (assoc-in state [:units unit] (cond-> {:id unit :project project :goal goal :status :open
+                                         :held? false :unknowns #{} :landing? false
+                                         :session (if session-cwd
+                                                    {:status :ready :cwd session-cwd}
+                                                    {:status :none})}
+                                  trigger    (assoc :trigger trigger)
+                                  first-turn (assoc :first-turn first-turn))))
 
 (defmethod evolve :provision-attempted [state {:keys [unit attempt want]}]
   (assoc-in state [:units unit :session :attempt] {:id attempt :want want}))
@@ -387,13 +399,18 @@
 (defmethod decide :default [_ command]
   (refuse :unknown-command :command (:command command)))
 
-(defmethod decide :open-unit [state {:keys [unit project goal session-cwd]}]
+(defmethod decide :open-unit [state {:keys [unit project goal session-cwd trigger first-turn]}]
   (cond
     (:closed? state)                       (refuse :workstream-closed)
     (contains? (:units state) unit)        (refuse :unit-exists :unit unit)
     (or (nil? project) (nil? goal))        (refuse :unit-needs-project-and-goal)
+    (and first-turn (not (and (keyword? (get-in first-turn [:spec :executor]))
+                              (string? (get-in first-turn [:spec :instructions])))))
+    (refuse :turn-needs-executor-and-instructions)
     :else (accept (cond-> {:event :unit-opened :unit unit :project project :goal goal}
-                    session-cwd (assoc :session-cwd session-cwd)))))
+                    session-cwd (assoc :session-cwd session-cwd)
+                    trigger     (assoc :trigger trigger)
+                    first-turn  (assoc :first-turn first-turn)))))
 
 (defmethod decide :record-provision-attempt [state {:keys [unit attempt want]}]
   (cond

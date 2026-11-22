@@ -88,6 +88,11 @@
    :doc "Stop the core's supervised service."
    :task (nido-core/stop)}
 
+  nido:intake:run
+  {:requires ([tasks.nido-intake :as nido-intake])
+   :doc "Run the intake host in the foreground: the sources and triggers, each arrival turned into core commands [:poll-ms <n>]."
+   :task (apply nido-intake/run *command-line-args*)}
+
   nido:session:provision
   {:requires ([tasks.nido-session-provision :as nido-session-provision])
    :doc "The session verb the core calls for a unit's session: :project <p> :want up|stopped|destroyed <session> [:path <worktree>]. Works through session-lifecycle alone — no workstream, conductor, seat or agent. Its last line is an EDN result."

@@ -223,13 +223,16 @@
   (= base (:base pr)))
 
 (defn- react-to-merge!
-  "Correlate one merged PR to a workstream and react. Returns nil."
-  [project on-merge base repo {:keys [number] :as pr}]
+  "Correlate one merged PR to a workstream and react. Returns nil. `core`, when given, is where
+   coordination lives: {:open? (fn [project ws-id]) :merged! (fn [project ws-id])} — whether the
+   core still holds the workstream open, and telling it the merge."
+  [project on-merge base repo {:keys [number] :as pr} core]
   (let [id (pr-id repo number)
         w  (find-ws-by-github-id project id)]
     (cond
       (nil? w)      (warn (str "github-merge: merged PR " id " has no workstream; skipping"))
-      (ws/closure w) nil                                  ; idempotent no-op
+      ;; Idempotent: a workstream already settled is left alone — settled as the core holds it.
+      (if core (not ((:open? core) project (:id w))) (ws/closure w)) nil
       ;; A stack merges its layers into each other while it is being restacked,
       ;; and every one of those is a genuine `merged` PR carrying a ref this
       ;; workstream stamped. Only the merge into `base` shipped anything. Warn
@@ -249,6 +252,7 @@
                   outcome (phase/landing-outcome (landing-design project w d) (:entries w))]
               (record-merge! project (:id w) id pr d)
               (ws/close! project (:id w) outcome (when (= :between-phases outcome) d))
+              (when core ((:merged! core) project (:id w)))
               (if-let [page-id (when (= :done outcome) (ref-page-id ref))]
                 (nudge-notion! page-id on-merge)
                 ;; No :notion ref at all (a GitHub-issue or Slack workstream)
@@ -277,8 +281,10 @@
    breaker-cooldown-s has elapsed since :breaker-opened-at, then exactly one
    probe runs: success clears the breaker, failure re-arms the cooldown. So a
    broken `gh` auth backs off to one retry per cooldown instead of warning every
-   poll, and self-heals once the token is fixed."
-  [project {:keys [repo on-merge base]}]
+   poll, and self-heals once the token is fixed.
+
+   `core` is what `react-to-merge!` reads closure from and tells the merge to."
+  [project {:keys [repo on-merge base]} & [core]]
   (let [k     (state-key project)
         prior (sstate/read-state k)]
     (when-not (and (= :open (:breaker prior)) (not (cooldown-elapsed? prior)))
@@ -300,7 +306,7 @@
             (when-not first?
               (doseq [pr (:prs res)
                       :when (not (contains? seen (pr-id repo (:number pr))))]
-                (react-to-merge! project on-merge (or base default-landing-base) repo pr)))
+                (react-to-merge! project on-merge (or base default-landing-base) repo pr core)))
             ;; success clears the breaker (fresh map drops :breaker-opened-at).
             (sstate/write-state! k {:type :github-merge :project project
                                     :reacted ids :consecutive-failures 0 :breaker nil})))))
