@@ -88,6 +88,20 @@
 
 ;; ── a start ──────────────────────────────────────────────────────────────────
 
+(defn- live-pid? [f]
+  (let [pid (try (parse-long (str/trim (slurp f))) (catch Exception _ nil))
+        h   (when pid (java.lang.ProcessHandle/of pid))]
+    (boolean (and h (.isPresent h) (.isAlive ^java.lang.ProcessHandle (.get h))))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :keyword]]} alongside
+  "Why the core may not start over the nido home of `ps` beside the old coordinator, or nil: the
+   cut-over that stopped and disabled it has not run there (its marker is absent), or the old
+   daemon's pid file names a live process."
+  [ps]
+  (cond
+    (not (.exists (io/file (:core ps) "cut-over.edn")))              :not-cut-over
+    (live-pid? (io/file (:home ps) "coordinator" "coordinator.pid")) :old-coordinator-running))
+
 (defn- log [& xs] (binding [*out* *err*] (apply println "nido.core.release:" xs) (flush)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]} run!
@@ -99,10 +113,14 @@
      :executors  {kw executor}; default {:claude (nido.executor.claude/executor {})}
      :probes     {what argv} the gate runs; default the claude CLI and the session verb
      :wake-cap   see nido.core.buffer/start
-   Exits 3 without binding the socket when the gate refuses."
+   Exits 3 without binding the socket when the gate refuses, or when the old coordinator could
+   run beside it (`alongside`)."
   [{:keys [home rev nido-dir bb-bin executors probes wake-cap] :as opts}]
   (let [ps (paths (or home (nido-home)))
         req #(requiring-resolve %)
+        _ (when-let [why (alongside ps)]
+            (log "refused to start:" (name why))
+            (System/exit 3))
         s ((req 'nido.core.store/open) (:db ps))
         probes (or probes {:claude ["claude" "--version"]
                            :session-verb [(or bb-bin "bb") "--config" (str nido-dir "/bb.edn")
