@@ -13,11 +13,10 @@
             [canvas.core.executor-claude :refer [executor-claude]]
             [canvas.core.ask-tool :refer [core-ask-tool]]
             [canvas.core.buffer :refer [core-buffer]]
-            [canvas.core.reconcile :refer [core-reconcile]]
-            [canvas.core.release :refer [core-release]]))
+            [canvas.core.reconcile :refer [core-reconcile]]))
 
 (Claim one-writer
-  "Every durable change to nido's state goes through core-writer: one thread applies commands and is the only writer of core-store. No other thread or process — CLI, surface, hook, review loop, agent tool — writes the store."
+  "Every durable change to the coordination state the core holds — workstreams, units of work, turns, asks and each conductor's inbox — goes through core-writer: one thread applies commands and is the only writer of core-store. No other thread or process — CLI, surface, hook, review loop, agent tool — writes the store. Work records — design and baseline records, review rounds, phases, forks, standing — are not held by the core yet; until they move into it (FU-795) they are written outside it, and only then does every durable change to nido's state go through core-writer."
   {:about [core-writer core-store core-api] :evidence "round"})
 
 (Claim commands-are-keyed
@@ -26,7 +25,7 @@
 
 (Claim commit-is-the-fold
   "A batch's ledger events, the workstream state rows they produce and the open-ask index commit in one core-store transaction, so stored state always equals the fold of the ledger. Rebuilding the rows from the ledgers yields the stored rows, which tests and an explicit verify command check; a release that changes the fold ships a migration that rebuilds the rows before it serves. No ordinary start rebuilds or compares anything."
-  {:about [core-store core-domain core-release] :evidence "round"})
+  {:about [core-store core-domain] :evidence "round"})
 
 (Claim output-gate
   "core-writer releases nothing a command produced — a caller result, a change-feed message, or an external effect to be attempted — before the commit that recorded it is durable."
@@ -45,7 +44,7 @@
   {:about [core-buffer] :evidence "round"})
 
 (Claim operator-ask-lives-with-its-call
-  "Every operator ask binds at least one pending call — a unit turn's, or a conductor turn's own [conductor-asks-go-to-the-person] — and is open exactly while the pending calls it binds are: answering it, or withdrawing it on a premise change within the unit or from a sibling unit, is one commit that closes it and records a resolution for every call it binds — the answer, or a refusal and its reason. Each bound turn is resumed with its resolution only after that commit is durable [output-gate] [effects-recorded-before-attempted]."
+  "Every operator ask binds at least one pending call — a unit turn's, or a conductor turn's own [conductor-asks-go-to-the-person] — and is open exactly while every call it binds is pending. Whatever closes one of them closes the ask and all its calls in one commit, each call in exactly one way: as taken over, where a hold on its unit took it [attach-is-a-hold], or with a resolution — the person's answer, or, where the ask is withdrawn on a premise change or because a hold took another of its calls, a refusal and its reason. Each turn whose call closed with a resolution is resumed with it only after that commit is durable [output-gate] [effects-recorded-before-attempted]; a turn whose call was taken over is never resumed."
   {:about [core-buffer core-domain] :evidence "round"})
 
 (Claim turn-knows-no-provider
@@ -60,24 +59,12 @@
   "core-reconcile learns of change from events — process exit handles, executor output, filesystem notifications — and resyncs at most once a minute; no process is spawned to observe a fact an event delivers."
   {:about [core-reconcile] :evidence "round"})
 
-(Claim surfaces-render-the-feed
-  "Surfaces render state core-writer committed, delivered by core-feed in commit order keyed by position; no surface derives a workstream's position or observes the world itself, and the asks a surface shows as awaiting the person are exactly the open operator asks [buffer-answers-first]."
-  {:about [core-feed] :evidence "round"})
-
 (Claim idle-does-nothing
   "With no command, event or due timer, the daemon executes nothing — its threads block — and routine coordination (every command, event and ordinary start) costs what it touches, not the size of the ledger; only explicitly requested work — a verification of stored state, or a migration (one that changes the fold, or the legacy import) — reads all of history."
   {:about [core-writer core-reconcile] :evidence "round"})
 
-(Claim start-is-recovery
-  "Starting the daemon is its only recovery path, and it assumes nothing a crash left in flight done or not done. An ordinary start opens the store, reconciles, and takes back each turn the store records as running by its recorded handle: a turn whose run still runs is reattached, a turn whose run ended with an outcome while no daemon held it is recorded with the outcome the executor returns for it, and a turn whose run ended without an outcome is recorded failed with the actions its run took unknown. It carries out nothing again and continues no turn; what it records unknown is settled as [effects-recorded-before-attempted] says before anything on that unit proceeds. It replays nothing from history and no shutdown step is needed, so a kill at any instant loses no acknowledged command."
-  {:about [core-release core-store core-turn] :evidence "round"})
-
-(Claim upgrade-is-a-gated-restart
-  "A release goes live by a restart onto it that takes the command socket only after passing its health gate, else the previous release is restored; schema changes are expand-then-contract, so the previous release reads the store the new one wrote, and a previous release restored after a migration that changed the fold rebuilds the rows under its own fold, as a migration, before it takes the command socket. Turns in flight are not stopped by the restart: whichever release takes the socket takes them back as start-is-recovery does."
-  {:about [core-release] :evidence "round"})
-
 (Claim external-calls-are-bounded
-  "Every call nido makes outside the daemon — an executor's turn, a command such as git or gh, an observation — carries a deadline. A turn past its deadline is cancelled; any other call past its deadline is ended and its result is unknown, never success or empty."
+  "Every call the core makes outside the daemon, through core-turn's executor port or by core-reconcile — a turn's run, a command such as git or gh, an observation — carries a deadline. A turn past its deadline is cancelled; any other call past its deadline is ended and its result is unknown, never success or empty."
   {:about [core-turn core-reconcile] :evidence "round"})
 
 (Claim attach-is-a-hold
@@ -93,12 +80,8 @@
   {:about [core-buffer core-turn] :evidence "round"})
 
 (Claim input-ahead-of-background
-  "A command a surface sends on a person's input is taken by core-writer ahead of every background command (turn outcomes, observations, due timers) not already in the batch being committed, and a batch commits a bounded number of commands; core-api answers reads from committed state without waiting on core-writer; and core-feed delivers to each subscriber from a buffer of its own, cutting off one that falls behind to resume from its last position. So a surface's input waits on at most the batch in progress and earlier input, whatever the number of workstreams or the background backlog."
+  "A command a surface sends on a person's input is taken by core-writer ahead of every background command (turn outcomes, observations, due timers) not already in the batch being committed, and a batch commits a bounded number of commands; core-api answers reads from committed state without waiting on core-writer; and core-feed delivers to each subscriber from a buffer of its own, cutting off one that falls behind to resume from its last position. So input a surface sends to core-api waits on at most the batch in progress and earlier input, whatever the number of workstreams or the background backlog."
   {:about [core-writer core-api core-feed] :evidence "round"})
-
-(Claim chat-is-conductor-turns
-  "Exploratory chat in the web UI is held on a workstream (a new one when it concerns none yet): each message a person sends there is a command that runs a turn of that workstream's conductor, and the reply reaches the chat through core-feed; both are committed as the workstream's events. A chat turn holds no unit, and what is settled in chat — answering an operator ask, granting a proposed unit, a hold — takes effect only as the same recorded command a surface's control sends."
-  {:about [core-buffer core-turn core-feed core-api] :evidence "round"})
 
 (Claim conductor-asks-go-to-the-person
   "An ask raised by a conductor turn is never answered or returned for exploration by a conductor: it is raised as an operator ask bound to that turn's own pending call. Withdrawing that operator ask when its premise changes [operator-ask-lives-with-its-call] answers and returns nothing."
@@ -110,7 +93,7 @@
 
 (Claim effects-recorded-before-attempted
   "An external effect a command core-writer decides produces is attempted only after a commit records it under that command's key, and once the migration is complete every external effect nido attempts is produced so. Recovery records as unknown both an attempt whose completion is unrecorded and the actions of a turn whose run a crash ended, and the workstream's conductor settles each before anything on that unit proceeds — an attempt by carrying it out again where its receiver deduplicates on its key, otherwise by observing the outside world, or, where that cannot settle it, by an operator ask its conductor turn raises as its own [conductor-asks-go-to-the-person]. No effect takes place twice for one recorded command, and none is lost without an operator ask saying so."
-  {:about [core-writer core-release core-buffer core-reconcile] :evidence "round"})
+  {:about [core-writer core-buffer core-reconcile] :evidence "round"})
 
 (Claim events-are-inputs
   "Every event core-domain yields records an input nido cannot recompute: a person's command, a turn's outcome, a conductor's judgement — every decision core-buffer makes, whether by rule or by a turn of its own — or a point-in-time fact about the outside world such as a merge. Nothing core-domain's fold of earlier events yields is committed as such an event, and no current condition that can be observed again, such as a process being alive, is ever one. An entry imported from a legacy ledger is not such an event: it is held with its content as written, marked as imported, and read as the legacy record it is."
@@ -119,11 +102,3 @@
 (Claim executor-state-is-a-handle
   "The store holds a turn's executor handle, never the provider's session state; a handle the executor can no longer resume or take back is that turn's failed outcome, recorded like any other."
   {:about [core-turn core-store] :evidence "round"})
-
-(Claim conductor-chat-is-the-conductor
-  "A person's chat with a workstream's conductor is that conductor, resident for as long as the chat is open: a workstream's conductor runs at most one turn at a time [asks-equal-asked-turns], the outcomes and events that would wake it are delivered into the chat, and whatever the chat decides reaches units only as the conductor's commands through core-api. Asking the person inside the chat is conversation; a decision that must outlive the chat ends the resident session as an asked conductor turn, so the chat itself holds no pending call and a lost chat process loses nothing committed."
-  {:about [core-buffer core-turn] :evidence "round"})
-
-(Claim cutover-imports-and-hands-over
-  "nido moves to the new core in one cut-over, with the old coordinator stopped and no legacy agent session running: the cut-over stops every legacy agent session and imports only once the legacy agent listing, read under a deadline, shows none running, refusing while that listing cannot be read. It imports every legacy ledger from files it only reads and never writes, starts no turn it imported as running, and carries no legacy blocker over as an ask; a workstream whose legacy session it stopped has that session's actions recorded unknown, settled as [effects-recorded-before-attempted] says before anything on that workstream proceeds; each unclosed workstream's conductor makes its first decision from its imported ledger and its worktree. The old coordinator never runs alongside the new core."
-  {:about [core-release core-store core-buffer] :evidence "round"})

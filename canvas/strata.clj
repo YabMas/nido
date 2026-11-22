@@ -148,11 +148,8 @@
 
 ;; ── the coordination core, floor first ──────────────────────────────────────
 ;;
-;; core-release belongs to none: it is the composition root that starts, stops and upgrades the
-;; daemon, written in the levels below and providing a vocabulary nothing is written in. A
-;; composition root is not a level. core-buffer belongs to none either: the conductor is an
-;; application program written in core-outside's turns and core-commit's commands, and nothing
-;; is written in what it does.
+;; core-buffer belongs to none: the conductor is an application program written in
+;; core-outside's turns and core-commit's commands, and nothing is written in what it does.
 
 (Stratum core-rules
   "What a workstream, its units, their turns and asks may be, and how each changes: a command

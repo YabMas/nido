@@ -1,7 +1,9 @@
 (ns canvas.core.buffer
   "Self-spec: `nido.core.buffer`, a module of the target coordination core (the
    nido-archetecture-review design). Its claims are in canvas.claims.core-target."
-  (:require [fukan.common.vocab.code.module :refer [Module]]))
+  (:require [fukan.common.vocab.code.module :refer [Module]]
+            [fukan.common.vocab.code.operation :refer [Operation]]
+            [fukan.common.typing.malli]))
 
 (Module core-buffer
   "The workstream's one conductor, as the core runs it. Every outcome of any of
@@ -19,4 +21,31 @@
    with it.
 
    HIDES the policy that decides between them, so a unit's ask awaits the person only
-   in an operator ask it raised.")
+   in an operator ask it raised."
+  (Operation decisions
+    "The keyed commands the rules issue for a workstream at a committed state, each admitted by the domain against the state the ones before it leave."
+    {:signature [:=> [:catn [:opts :map] [:ws :string] [:state :map] [:pos :int]] [:sequential :map]]})
+  (Operation brief
+    "What a conductor turn is told: its role, what it has not yet heard, and the workstream now."
+    {:signature [:=> [:catn [:ws :string] [:state :map] [:items [:sequential :map]]] :string]})
+  (Operation call-tool
+    "Run one conductor tool for a conductor turn, through core-api; answers what the agent reads back."
+    {:signature [:=> [:catn [:conn :map] [:ws :string] [:turn :string] [:tool :string] [:args :map]] :string]})
+  (Operation respond
+    "The MCP response to one message, for the conductor tools of one turn."
+    {:signature [:=> [:catn [:ctx :map] [:msg :map]] [:maybe :map]]})
+  (Operation mcp-server
+    "The conductor tools as an MCP server entry an executor hands its agent."
+    {:signature [:=> [:catn [:opts :map]] :map]})
+  (Operation conductor-spec-fn
+    "The spec of a conductor turn as the daemon runs it: the brief, in the workstream's directory, with its tools."
+    {:signature [:=> [:catn [:opts :map]] fn?]})
+  (Operation start
+    "Start applying the rules to committed changes."
+    {:signature [:=> [:catn [:opts :map]] :map]})
+  (Operation changed!
+    "Hand the rules a commit's changes without blocking."
+    {:signature [:=> [:catn [:buffer :map] [:changes [:sequential :map]]] :nil]})
+  (Operation stop!
+    "Stop applying the rules."
+    {:signature [:=> [:catn [:buffer :map]] :nil]}))
