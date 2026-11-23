@@ -5,7 +5,8 @@
    codex judge through `baseline-review!`, the amender through `agent/launch!` —
    so nothing here spawns a process."
   (:require
-   [babashka.fs :as fs]
+   [nido.core.client :as client]
+ [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
@@ -368,7 +369,7 @@
                                        (swap! refused inc)
                                        (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
-                                     "/ws/entries/0002-baseline.edn")
+                                     2)
                   agent/launch! (fn [{:keys [first-message out-file]}]
                                   (some-> prompts (swap! conj first-message))
                                   (when writes
@@ -495,7 +496,7 @@
         answer  (str (fs/create-temp-file {:suffix ".edn"}))
         payload (atom nil)]
     (spit answer (pr-str {:record amended}))
-    (with-redefs [ws/append-entry! (fn [_ _ _ p] (reset! payload p) "/ws/entries/0006-baseline.edn")
+    (with-redefs [ws/append-entry! (fn [_ _ _ p] (reset! payload p) 6)
                   ws/entry-at-seq  (fn [_ _ n] (case n 6 (assoc (read-string @payload) :seq 6) prev))]
       (let [{:keys [record retreats err]}
             (record/append-stopped-answer! {:project :nido :ws-id "ws-1" :kind :baseline :prev prev
@@ -760,7 +761,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-baseline)
                   stages/working-copy-state (fn [_] "")
-                  ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
+                  ws/append-entry! (fn [_ _ _ _] 2)
                   agent/launch! (fn [{:keys [first-message]}]
                                   (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                         (pr-str a-baseline))
@@ -796,7 +797,7 @@
                   ws/latest-entry (fn [_ _ _] (throw (ex-info "must not be consulted" {})))
                   ws/entry-at-seq (fn [_ _ n] (assoc fixed :seq n :at "t"))
                   stages/working-copy-state (fn [_] "")
-                  ws/append-entry! (fn [_ _ _ _] "/ws/entries/0007-baseline.edn")
+                  ws/append-entry! (fn [_ _ _ _] 7)
                   agent/launch! (fn [{:keys [first-message]}]
                                   (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                         (pr-str fixed))
@@ -822,7 +823,7 @@
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ _] a-baseline)
                 stages/working-copy-state (fn [_] "")
-                ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
+                ws/append-entry! (fn [_ _ _ _] 2)
                 agent/launch! (fn [{:keys [first-message]}]
                                 (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                       (pr-str a-baseline))
@@ -879,7 +880,7 @@
                   ws/latest-entry (fn [_ _ _] baseline)
                   ws/entry-at-seq (fn [_ _ n] (when (= 5 n) baseline))
                   ws/entries-of (fn [_ _ k] (case k :baseline-review [refuted] :baseline [baseline] []))
-                  ws/append-entry! (fn [_ _ _ _] "/ws/entries/0007-baseline.edn")
+                  ws/append-entry! (fn [_ _ _ _] 7)
                   stages/working-copy-state (fn [_] "")
                   design-check/design-of (fn [_ _] nil)
                   stages/read-stance (fn [_] nil)
@@ -1064,7 +1065,7 @@
                               stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                               ws/latest-entry (fn [_ _ _] a-baseline)
                               stages/working-copy-state (fn [_] "")
-                              ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
+                              ws/append-entry! (fn [_ _ _ _] 2)
                               agent/launch! (fn [{:keys [first-message]}]
                                               (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                                     (pr-str (assoc a-baseline :area (str "amended " @round))))
@@ -1378,7 +1379,7 @@
       (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
                                 (ctx :findings [a-finding]))]
         (is (= 2 (:seq (:under-repair (:carry out))))
-            "the seq append-entry! answered with, read back off the path")))))
+            "the seq append-entry! answered with")))))
 
 (deftest a-stamp-that-cannot-be-read-back-does-not-cost-the-round
   ;; Degrading beats throwing: the amendment is already committed to the ledger
@@ -3148,14 +3149,16 @@
     [:brian id]))
 
 (defn- interrupting-the-index
-  "Run `f` with the first index write of an append failing after its entry file is on disk —
-   what an append that died between the two leaves."
+  "Run `f` with the reply to its first append lost after the core committed the entry — what an
+   append whose connection dropped on the way back leaves."
   [f]
-  (let [real ws/write! failed? (atom false)]
-    (with-redefs [ws/write! (fn [w]
-                              (if (compare-and-set! failed? false true)
-                                (throw (ex-info "disk full" {}))
-                                (real w)))]
+  (let [real client/command! failed? (atom false)]
+    (with-redefs [client/command! (fn [k key command]
+                                    (let [o (real k key command)]
+                                      (if (and (= :append-entry (:command command))
+                                               (compare-and-set! failed? false true))
+                                        (throw (ex-info "connection reset" {}))
+                                        o)))]
       (f))))
 
 (deftest a-refused-judgement-says-why-rather-than-vanishing
@@ -3179,8 +3182,8 @@
       (is (str/includes? (get-in answer [:refused :message]) "a later intent has replaced")))))
 
 (deftest an-interrupted-append-is-completed-rather-than-lost
-  ;; Watched: a round's review was written to entries/ and never indexed, the throw was swallowed,
-  ;; and the next run started on a lineage missing it.
+  ;; Watched: a round's review was written and its writer never learned so, the throw was
+  ;; swallowed, and the next run started on a lineage missing it.
   (let [[_ id :as ledger] (surveyed-ledger!)
         answer (interrupting-the-index #(record/append! ledger a-ledger-review))]
     (is (= {:seq 3} answer) "the round names the entry it wrote, as if the index had not failed")
@@ -3188,9 +3191,8 @@
         "and only once: completing an append never writes a second copy")))
 
 (deftest a-judgement-an-earlier-run-left-unindexed-is-read
-  ;; Watched: entry 19, the previous run's last review, sat on disk with its meta row but no index
-  ;; row; every lineage read was off the index, so the run after it counted one refutation too few.
-  ;; A read now holds it.
+  ;; Watched: entry 19, the previous run's last review, was written but its writer saw a throw;
+  ;; the run after it counted one refutation too few. A read holds what the core committed.
   (let [[_ id] (surveyed-ledger!)]
     (interrupting-the-index #(try (ws/append-entry! :brian id {:kind :baseline-review} (pr-str a-ledger-review))
                                   (catch Exception _ nil)))

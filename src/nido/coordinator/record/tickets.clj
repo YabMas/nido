@@ -7,6 +7,7 @@
    (nido.coordinator.record.workstream/append-to-ref!), never here."
   (:require
    [babashka.fs :as fs]
+   [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.standing :as standing]
@@ -229,13 +230,13 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :map]]}
   latest-triage-report
   "The latest workstream-ledger entry (workstream resolved by the BR-#### ref)
-   parsed as a TriageReport map, or nil when the latest entry isn't an `.edn`
+   parsed as a TriageReport map, or nil when the latest entry isn't EDN
    (e.g. a legacy markdown report or a non-triage entry)."
   [project br-id]
   (when-let [w (cws/find-by-ref-id project br-id)]
     (when-let [e (cws/newest-record w)]
-      (when (str/ends-with? (str (:file e)) ".edn")
-        (io/read-edn (str (fs/path (cstate/workstream-dir project (:id w)) (:file e))))))))
+      (when (= "edn" (:ext e))
+        (some-> (cws/entry-text w (:seq e)) edn/read-string)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :map]}
   gate-decision

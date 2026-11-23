@@ -5,6 +5,7 @@
      bb nido:core:upgrade            make this checkout's code the running release, or restore the last
      bb nido:core:status             which release runs, and whether it answers
      bb nido:core:start / stop       the supervised service
+     bb nido:core:import-ledgers     import every legacy ledger into the core, read-only, once
 
    The service runs `clojure -M -m nido.core.release run <nido-dir>` in the nido home's
    `core/current`, so an upgrade only moves that link and restarts it."
@@ -13,6 +14,7 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [nido.coordinator.daemon.supervisor :as supervisor]
+            [nido.coordinator.record.legacy-ledger :as legacy]
             [nido.core.release :as release]))
 
 (defn- nido-dir [] (str (fs/canonicalize (System/getProperty "user.dir"))))
@@ -57,6 +59,31 @@
     (let [r (supervisor/with-service k supervisor/restart!)]
       (println (str "  " (name k) ": " (if (:ok? r) "restarted" (str "NOT restarted — " (:err r))))))))
 
+(defn- imported-marker
+  "The file that says every legacy ledger of this home is in its core store."
+  []
+  (str (fs/path (:core (release/paths)) "ledgers-imported.edn")))
+
+(defn- import-ledgers!
+  "Import every legacy ledger into the core, read-only, and say what it did. Writes the marker
+   once nothing was refused; install and upgrade run it while the marker is unwritten, so each
+   run imports what is still missing."
+  []
+  (let [r (legacy/import-all!)]
+    (println (str "  ledgers: " (:imported r) " imported, " (:held r) " already held, "
+                  (count (:refused r)) " refused"))
+    (doseq [x (take 20 (:refused r))] (println "    refused" (pr-str x)))
+    (when (empty? (:refused r))
+      (spit (imported-marker) (pr-str (assoc r :at (str (java.time.Instant/now))))))
+    r))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]} import-ledgers
+  "Import every legacy ledger into the running core, read-only. A workstream the core already holds
+   is left as it is, so running it again records nothing twice. Exits 1 when any was refused."
+  [& _]
+  (when (seq (:refused (import-ledgers!)))
+    (System/exit 1)))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]} install
   "Install this checkout as a release, point `current` at it, and install and start the core's
    supervised service; once it serves, the intake host's and the dashboard's, run from this
@@ -71,6 +98,7 @@
       (println (if (:ok? r) (str "core installed: release " rev) (str "core NOT installed — " (:err r))))
       (when (and (:ok? r) (release/serving? (assoc ps :rev rev) 180000))
         (println "core serving on" (:socket ps))
+        (when-not (fs/exists? (imported-marker)) (import-ledgers!))
         (doseq [k [:intake :dashboard]]
           (let [r (supervisor/with-service k #(supervisor/install! (bb-service-spec k dir)))]
             (println (str (name k) (if (:ok? r) " installed" (str " NOT installed — " (:err r)))))))))))
@@ -92,6 +120,9 @@
                              :rebuild! rebuild!})]
     (if (:live r)
       (do (println "core upgraded: release" (:live r) "is live")
+          ;; Before the intake host and the dashboard restart onto code that reads every
+          ;; workstream from the core.
+          (when-not (fs/exists? (imported-marker)) (import-ledgers!))
           (restart-bb-services!))
       (do (println "core upgrade REFUSED —" (:why r) "— restored" (:restored r))
           (System/exit 1)))))

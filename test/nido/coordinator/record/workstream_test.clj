@@ -11,6 +11,7 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.core.client :as client]
    [nido.platform.io :as io]))
 
 
@@ -47,7 +48,7 @@
 (deftest advance-stage-rejects-a-stage-outside-the-vocabulary
   (with-tmp
     (fn [_]
-      (ws/write! example-ws)
+      (history/write! example-ws)
       ;; :implementing is a TICKET status, not a stage. Recorded, it would be ignored by every
       ;; reader, and the workstream would go missing from the board.
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown workstream stage"
@@ -73,7 +74,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (ws/write! example-ws)
+        (history/write! example-ws)
         (is (= example-ws (ws/read-ws :brian (:id example-ws)))))
       (finally (fs/delete-tree tmp)))))
 
@@ -101,7 +102,7 @@
 (deftest advance-stage-records-the-choice
   (with-tmp
     (fn [_]
-      (ws/write! example-ws)
+      (history/write! example-ws)
       (ws/advance-stage! :brian (:id example-ws) :ready)
       (is (= [{:stage :ready :by :nido}] (choices (:id example-ws))))
       (is (= :ready (:stage (ws/newest-choice (ws/read-ws :brian (:id example-ws)))))))))
@@ -109,7 +110,7 @@
 (deftest advance-stage-records-nothing-when-the-choice-stands
   (with-tmp
     (fn [_]
-      (ws/write! example-ws)
+      (history/write! example-ws)
       (ws/advance-stage! :brian (:id example-ws) :ready)
       (ws/advance-stage! :brian (:id example-ws) :ready)
       (is (= 1 (count (choices (:id example-ws)))) "a repeated event does not litter the ledger")
@@ -120,27 +121,27 @@
 (deftest close-records-the-outcome
   (with-tmp
     (fn [_]
-      (ws/write! example-ws)
+      (history/write! example-ws)
       (ws/close! :brian (:id example-ws) :dropped)
       (is (= :dropped (:outcome (ws/closure (ws/read-ws :brian (:id example-ws)))))))))
 
-(deftest append-entry-writes-file-and-indexes-it
+(deftest append-entry-commits-the-entry-and-its-row
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
-        (ws/write! example-ws)
+        (history/write! example-ws)
         (let [path (ws/append-entry! :brian (:id example-ws)
                                      {:kind :note :session "sx"}
                                      "# Triage report\nbody")
               w    (ws/read-ws :brian (:id example-ws))
               e    (last (:entries w))]
-          (is (str/ends-with? path "entries/0001-note.md"))
-          (is (= "# Triage report\nbody" (slurp path)))
+          (is (= 1 path))
+          (is (= "# Triage report\nbody" (ws/entry-text w 1)))
           (is (= 1 (:seq e)))
           (is (= :note (:kind e)))
           (is (= "sx" (:session e)))
-          (is (= "entries/0001-note.md" (:file e)))
+          (is (= "md" (:ext e)))
           (is (= "2026-06-05T12:00:00Z" (:at e)))))
       (finally (fs/delete-tree tmp)))))
 
@@ -149,7 +150,7 @@
   ;; payloads carry the same keys, so nothing could say which of them answered a question.
   (with-tmp
     (fn [_]
-      (ws/write! example-ws)
+      (history/write! example-ws)
       (ws/append-entry! :brian (:id example-ws) {:kind :note} "a person's")
       (ws/append-entry! :brian (:id example-ws) {:kind :note :amended-by "run-7"} "the amender's")
       (is (= #{2} (ws/amended-seqs :brian (:id example-ws)))
@@ -161,10 +162,10 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
-        (ws/write! example-ws)
+        (history/write! example-ws)
         (ws/append-entry! :brian (:id example-ws) {:kind :note} "a")
         (let [p2 (ws/append-entry! :brian (:id example-ws) {:kind :plan} "b")]
-          (is (str/ends-with? p2 "entries/0002-plan.md"))
+          (is (= 2 p2))
           (is (= 2 (count (:entries (ws/read-ws :brian (:id example-ws))))))))
       (finally (fs/delete-tree tmp)))))
 
@@ -255,13 +256,14 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
-        (ws/write! example-ws)
+        (history/write! example-ws)
         (let [path (ws/append-entry! :brian (:id example-ws) {:kind :implementation-plan}
                                      (pr-str {:format :implementation-plan :summary "x"
                                               :direction "Round once" :effort :S}))]
-          (is (str/ends-with? path "entries/0001-implementation-plan.edn"))
-          (is (str/includes? (slurp path) ":implementation-plan"))
-          (is (str/includes? (slurp path) "Round once"))))
+          (is (= 1 path))
+          (let [text (ws/entry-text (ws/read-ws :brian (:id example-ws)) 1)]
+            (is (str/includes? text ":implementation-plan"))
+            (is (str/includes? text "Round once")))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest append-entry-rejects-malformed-typed-event
@@ -269,7 +271,7 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
-        (ws/write! example-ws)
+        (history/write! example-ws)
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id example-ws) {:kind :blocker} "not a map"))))
       (finally (fs/delete-tree tmp)))))
@@ -981,12 +983,9 @@
                  :invariants ["a total is rounded exactly once"]
                  :standing   {:relation :conforms}
                  :assumes    [{:about "totals are per-item" :read ["src/order/calc.clj"]}]
-                 :effort     :M}
-            dir (cstate/workstream-dir :brian (:id w))]
-        ;; written by hand: append-entry! would refuse it now, which is the point
-        (io/write-text! (str (fs/path dir "entries/0001-design.edn")) (pr-str old))
-        (ws/write! (assoc w :entries [{:kind :design :seq 1 :at "2026-01-01T00:00:00Z"
-                                       :file "entries/0001-design.edn"}]))
+                 :effort     :M}]
+        ;; planted: append-entry! would refuse it now, which is the point
+        (history/append-past-the-refusal! :brian (:id w) :design old "2026-01-01T00:00:00Z")
         (is (= old (dissoc (ws/latest-entry :brian (:id w) :design) :seq :at))
             "the pre-baseline record is still readable, :assumes and all")))))
 
@@ -1079,10 +1078,9 @@
 
 (deftest concurrent-appends-each-take-their-own-sequence-number
   ;; The failure this guards is a LOST UPDATE, not a torn write. Two writers read
-  ;; the same index, derive the same :seq, write the same filename — the second
-  ;; over the first — and each write an index claiming that count. One append
-  ;; vanishes and the ledger looks consistent afterwards, which is what makes it
-  ;; worth a test: nothing downstream can notice.
+  ;; the same ledger and both take the next :seq — the second over the first. One
+  ;; append vanishes and the ledger looks consistent afterwards, which is what
+  ;; makes it worth a test: nothing downstream can notice.
   ;;
   ;; Threads rather than processes, deliberately. A file lock is held PER JVM, so
   ;; threads are the half it does not cover on its own — without the interned
@@ -1109,8 +1107,9 @@
               "every append took its own sequence number")
           (is (= (set (range 1 (inc n))) (set (map :seq (:entries w))))
               "the sequence is dense — no number skipped, none reused")
-          (is (= n (count (fs/list-dir (fs/path (cstate/workstream-dir :brian id) "entries"))))
-              "one file per append, none written over")
+          (is (= (set (map #(str "body " %) (range n)))
+                 (set (map #(ws/entry-text w (:seq %)) (:entries w))))
+              "one entry per append, none written over")
           (is (= (set (map #(keyword (str "note" %)) (range n)))
                  (set (map :kind (:entries w))))
               "every writer's own payload survived")))
@@ -1165,139 +1164,28 @@
               "neither refusal wrote anything")))
       (finally (fs/delete-tree tmp)))))
 
-(deftest an-append-numbers-itself-from-the-disk-not-the-index
-  ;; An interrupted append writes its payload and dies before write!, and from
-  ;; then on the index says a number is free that the directory says is taken.
-  ;; One live workstream reached 39 files against 37 rows: two design records
-  ;; existed that no reader could see, and a review loop judged every ruling of
-  ;; a run against a record superseded twice.
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id  (:id (ws/create! :brian {:external-refs []}))
-              _   (ws/append-entry! :brian id {:kind :note} "one")
-              dir (fs/path (cstate/workstream-dir :brian id) "entries")]
-          ;; Simulate the crash: a payload on disk that the index never learned
-          ;; about. The index still says 1; the directory says 2.
-          (spit (str (fs/path dir "0002-note.md")) "the lost append")
-          (is (= 2 (ws/highest-seq-on-disk :brian id)))
-          (is (= [1 2] (mapv :seq (:entries (ws/read-ws :brian id))))
-              "and a read holds the entry the index never learned about")
-          (let [abs (ws/append-entry! :brian id {:kind :note} "three")]
-            (is (str/includes? abs "0003-note")
-                "the next append steps over the orphan rather than onto it")
-            (is (= "the lost append" (slurp (str (fs/path dir "0002-note.md"))))
-                "and the entry the index never knew about is still there"))))
-      (finally (fs/delete-tree tmp)))))
-
-(deftest an-append-refuses-to-write-over-an-existing-entry
-  ;; The last line of defence. It should not fire now that the seq comes off the
-  ;; disk, and it is what turns a future derivation bug into a loud failure
-  ;; rather than a record that quietly stops being what it was.
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id  (:id (ws/create! :brian {:external-refs []}))
-              _   (ws/append-entry! :brian id {:kind :note} "one")
-              dir (fs/path (cstate/workstream-dir :brian id) "entries")]
-          ;; A gap: 0002 was stepped over, 0003 is on disk. Two entries, so the old derivation off
-          ;; the entry count computes 3 — a number the directory says is taken.
-          (spit (str (fs/path dir "0003-note.md")) "already here")
-          (with-redefs [ws/highest-seq-on-disk (constantly 0)]
-            (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                                  #"Refusing to overwrite"
-                                  (ws/append-entry! :brian id {:kind :note} "again"))))
-          (is (= "already here" (slurp (str (fs/path dir "0003-note.md"))))
-              "and it really did not write")))
-      (finally (fs/delete-tree tmp)))))
-
-(deftest a-gap-in-the-seq-sequence-is-not-drift
-  ;; A ledger that has once stepped over an orphan carries more numbers than
-  ;; files from then on, so the highest :seq on disk stops being the number of
-  ;; entries. A live workstream sat at 82 index rows against 82 files agreeing
-  ;; one-to-one with seqs 75 and 80 unused, and a count comparison announced two
-  ;; entries missing from the listing — which tells the review warden the record
-  ;; it is judging against may be stale.
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id  (:id (ws/create! :brian {:external-refs []}))
-              _   (ws/append-entry! :brian id {:kind :note} "one")
-              dir (fs/path (cstate/workstream-dir :brian id) "entries")]
-          ;; The orphan that consumed 0002, since cleaned up: the number it took
-          ;; is out of the sequence for good, because nothing renumbers.
-          (spit (str (fs/path dir "0002-note.md")) "the lost append")
-          (ws/append-entry! :brian id {:kind :note} "three")
-          (fs/delete (fs/path dir "0002-note.md"))
-          ;; A stray file in the directory is not a ledger entry either — and a
-          ;; false alarm here costs exactly what a real one is meant to buy.
-          (spit (str (fs/path dir ".DS_Store")) "")
-          (is (= 3 (ws/highest-seq-on-disk :brian id))
-              "the gap is permanent: the next append still numbers past it")
-          (is (= 2 (count (:entries (ws/read-ws :brian id))))
-              "more numbers than files, which is the normal state, not a defect")))
-      (finally (fs/delete-tree tmp)))))
-
-(deftest an-index-whose-rows-disagree-with-the-files-reads-as-the-files-have-it
-  ;; A present index is a cache like an absent one: a row naming a file that is not there, or
-  ;; naming another entry's file, is not an answer a reader may be given.
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id   (:id (ws/create! :brian {:external-refs []}))
-              _    (ws/append-entry! :brian id {:kind :note} "one")
-              _    (ws/append-entry! :brian id {:kind :note} "two")
-              good (:entries (ws/read-ws :brian id))
-              path (cstate/workstream-edn-path :brian id)
-              raw  (io/read-edn path)]
-          (io/write-edn! path (assoc raw :entries
-                                    [(first good)
-                                     (assoc (second good) :file "entries/0001-note.md")
-                                     {:kind :design :seq 7 :file "entries/0007-design.edn"}]))
-          (is (= good (:entries (ws/read-ws :brian id)))
-              "the misnamed row reads as the file its :seq holds, and the phantom is gone")
-          (spit (str (fs/path (cstate/workstream-dir :brian id) "entries" "0003-note.md")) "lost")
-          (io/write-edn! path (assoc raw :entries [(first good) (first good) (second good)]))
-          (is (= (conj good {:kind :note :seq 3 :file "entries/0003-note.md"})
-                 (:entries (ws/read-ws :brian id)))
-              "a repeated row reads once, and a file no row names reads as the interrupted append it
-               was — indexed at its :seq")))
-      (finally (fs/delete-tree tmp)))))
-
 (deftest an-append-identified-by-what-it-records-happens-once
-  ;; An append that died between its payload and its index row left a record no reader of the index
-  ;; could see, and retrying the same append wrote a second copy beside it.
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id     (:id (ws/create! :brian {:external-refs []}))
-              dir    (fs/path (cstate/workstream-dir :brian id) "entries")
-              landed (fn [pr] {:format :merged :pr pr :url (str "https://x/" pr) :title "t"})
-              once   (fn [pr] (ws/append-entry-once! :brian id {:kind :merged} (pr-str (landed pr))
-                                                     #(= pr (:pr %))))]
-          (is (contains? (once "o/r#1") :appended) "nothing matches, so it appends")
-          (is (contains? (once "o/r#1") :existing) "an indexed match, so it writes nothing")
-          (is (= 1 (count (:entries (ws/read-ws :brian id)))))
-          ;; The crash: the second landing's payload on disk, and no index row for it.
-          (spit (str (fs/path dir "0002-merged.edn")) (pr-str (landed "o/r#2")))
-          (is (= (str (fs/path dir "0002-merged.edn")) (:existing (once "o/r#2")))
-              "the interrupted append is read where it lies, not written again")
-          (is (= [1 2] (mapv :seq (:entries (ws/read-ws :brian id)))))
-          (is (= "o/r#2" (:pr (ws/latest-entry :brian id :merged))))
-          (is (= (:entries (ws/read-ws :brian id)) (ws/rebuilt-index :brian id {:entries []}))
-              "the row it gave the entry is kept beside it, so a rebuild answers the same")
-          (spit (str (fs/path dir "0003-merged.edn")) "{:format :merged")
-          (is (contains? (once "o/r#3") :appended) "a file that does not parse matches nothing")
-          (is (= "{:format :merged" (slurp (str (fs/path dir "0003-merged.edn"))))
-              "and is left as it is")
-          ;; The crash after the row beside the entry was written: the index takes that row.
-          (let [side {:kind :merged :seq 5 :at "2026-01-01T00:00:00Z" :file "entries/0005-merged.edn"}]
-            (spit (str (fs/path (cstate/workstream-dir :brian id) "entries.meta" "0005.edn")) (pr-str side))
-            (spit (str (fs/path dir "0005-merged.edn")) (pr-str (landed "o/r#5")))
-            (is (contains? (once "o/r#5") :existing))
-            (is (= side (last (:entries (ws/read-ws :brian id)))))
-            (is (= side (last (ws/rebuilt-index :brian id {:entries []})))))))
-      (finally (fs/delete-tree tmp)))))
+  ;; An append whose reply was lost left a record its writer never learned of, and retrying the
+  ;; same append wrote a second copy beside it.
+  (with-tmp
+    (fn [_]
+      (let [id     (:id (ws/create! :brian {:external-refs []}))
+            landed (fn [pr] {:format :merged :pr pr :url (str "https://x/" pr) :title "t"})
+            once   (fn [pr] (ws/append-entry-once! :brian id {:kind :merged} (pr-str (landed pr))
+                                                   #(= pr (:pr %))))]
+        (is (contains? (once "o/r#1") :appended) "nothing matches, so it appends")
+        (is (contains? (once "o/r#1") :existing) "a match, so it writes nothing")
+        (is (= 1 (count (:entries (ws/read-ws :brian id)))))
+        (let [real client/command!]
+          (with-redefs [client/command! (fn [k key c]
+                                          (let [o (real k key c)]
+                                            (if (= :append-entry (:command c))
+                                              (throw (ex-info "connection reset" {}))
+                                              o)))]
+            (is (thrown? Exception (once "o/r#2")) "the reply is lost after the core committed")))
+        (is (contains? (once "o/r#2") :existing) "the committed append is read, not written again")
+        (is (= [1 2] (mapv :seq (:entries (ws/read-ws :brian id)))))
+        (is (= "o/r#2" (:pr (ws/latest-entry :brian id :merged))))))))
 
 (defn- decide!
   "A decision round's record on the design at `n`, recommending `recommend`."
@@ -1342,7 +1230,7 @@
                               "a checked append"   #(ws/check-entry :brian id {:kind :design-decision} decision)}]
           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only through append-decision!" (append))
               (str how " refuses a decision")))
-        (is (string? (ws/append-decision! :brian id decision)) "the writer takes it")
+        (is (int? (ws/append-decision! :brian id decision)) "the writer takes it")
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes a :design-decision"
                               (ws/append-decision! :brian id (pr-str (design-citing 2))))
             "and takes nothing else")))))
@@ -1590,18 +1478,15 @@
    live ledgers hold them anyway. Returns the workstream id."
   []
   (let [w    (ws/create! :brian {:external-refs []})
-        id   (:id w)
-        rel4 "entries/0004-intent.edn"
-        rel  "entries/0005-design.edn"]
+        id   (:id w)]
     (seed-baseline! w)                                                         ; 1, 2
     (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))    ; 3
-    (io/write-text! (str (fs/path (cstate/workstream-dir :brian id) rel4))     ; 4
-                    (pr-str (assoc an-intent :goal "Totals match the invoice, in cents.")))
-    (io/write-text! (str (fs/path (cstate/workstream-dir :brian id) rel))      ; 5
-                    (pr-str (assoc (design-citing 2 4) :supersedes {:seq 3 :why "the goal moved"})))
-    (ws/write! (update (ws/read-ws :brian id) :entries into
-                       [{:kind :intent :seq 4 :at "2026-09-11T16:25:00Z" :file rel4}
-                        {:kind :design :seq 5 :at "2026-09-11T16:26:00Z" :file rel}]))
+    (history/append-past-the-refusal! :brian id :intent                       ; 4
+                                      (assoc an-intent :goal "Totals match the invoice, in cents.")
+                                      "2026-09-11T16:25:00Z")
+    (history/append-past-the-refusal! :brian id :design                       ; 5
+                                      (assoc (design-citing 2 4) :supersedes {:seq 3 :why "the goal moved"})
+                                      "2026-09-11T16:26:00Z")
     id))
 
 (deftest a-record-may-inherit-the-goals-a-pre-contract-design-reaches
@@ -1834,10 +1719,7 @@
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
         (decide! id 3)                                                          ; 4
-        (let [before (ws/read-ws :brian id)
-              files  #(set (map str (fs/list-dir (fs/path (cstate/workstream-dir :brian id)
-                                                          "entries"))))
-              on-disk (files)]
+        (let [before (ws/read-ws :brian id)]
           (let [refused (try (ws/append-entry! :brian id {:kind :design-approved}
                                                (pr-str {:format :design-approved
                                                         :design {:seq 3} :at-seq 4}))
@@ -1851,8 +1733,7 @@
                                        (pr-str {:format :design-approved :design {:seq 3}
                                                 :at-seq 4 :note "granted anyway"})))
               "and checking one refuses it the same way")
-          (is (= before (ws/read-ws :brian id)) "the index is unchanged")
-          (is (= on-disk (files)) "and no entry file was written"))))))
+          (is (= before (ws/read-ws :brian id)) "and the ledger is unchanged"))))))
 
 (deftest a-clearance-must-name-a-design
   (with-tmp
@@ -2053,3 +1934,20 @@
     (is (nil? (ws/own-pr w "brian-study/brian#41")) "nor does a prefix")
     (is (nil? (ws/own-pr w "BR-9")) "a ref of another adapter is no PR")
     (is (nil? (ws/own-pr {:external-refs []} "412")))))
+
+(deftest delete-leaves-the-legacy-ledger-files-untouched
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:external-refs []})
+            d   (cstate/workstream-dir :brian (:id w))
+            leg {"workstream.edn" "{:id \"x\"}" "entries/0001-intent.edn" "{}"
+                 "entries.meta/0001-intent.edn" "{}"}]
+        (doseq [[f c] leg]
+          (fs/create-dirs (fs/parent (fs/path d f)))
+          (spit (str (fs/path d f)) c))
+        (fs/create-dirs (fs/path d "sessions" "s1"))
+        (ws/delete! :brian (:id w))
+        (is (nil? (ws/read-ws :brian (:id w))))
+        (is (not (fs/exists? (fs/path d "sessions"))))
+        (doseq [[f c] leg]
+          (is (= c (slurp (str (fs/path d f)))) f))))))

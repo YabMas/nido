@@ -6,7 +6,10 @@
    Never reads or writes the live store in place. `surfaces` APFS-clones ~/.nido (less the
    per-session databases and checkouts, which no surface reads) into a temporary directory and
    runs every measurement in a child process whose NIDO_HOME is that clone, so a cache a render
-   writes beside the records lands in the clone and dies with it.
+   writes beside the records lands in the clone and dies with it. The core is not cloned: the
+   bench snapshots every workstream the live core holds into the clone, and the child answers
+   its core requests from that snapshot in memory — so a render's reads are timed, not the
+   socket round trips the daemon would add.
 
    Examples:
      bb nido:bench:surfaces
@@ -17,6 +20,9 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.work :as work]
+   [nido.core.client :as client]
+   [nido.core.domain :as d]
+   [nido.core.local :as local]
    [nido.platform.core :as core]
    [nido.ui.server :as server]
    [nido.ui.tui :as tui]))
@@ -43,64 +49,86 @@
             :when (not (contains? uncloned (str (fs/file-name f))))]
       (p/shell "cp" "-cR" (str f) (str dest "/")))))
 
-(defn- synthetic-settled!
-  "Add `n` settled workstreams to `project`'s workstreams under `home`, each closed
-   :dropped with a two-entry ledger and one archived session — the shape most of the
-   live store's closed history has."
-  [home project n]
-  (let [root (fs/path home "projects" project "workstreams")
-        at   "2026-01-01T00:00:00Z"]
+(defn- snapshot-path [home] (fs/path home "bench-core.edn"))
+
+(defn- snapshot-core!
+  "Write every workstream the live core holds — its state, and the content of every entry on its
+   ledger — into the clone at `home`, for the child to load into a core of its own. The clone of
+   the files carries no core: the daemon answers for the live home only."
+  [home]
+  (let [states (client/value! (client/states "") :states)]
+    (spit (str (snapshot-path home))
+          (pr-str {:states   states
+                   :contents (into {} (for [[k st] states]
+                                        [k (client/value! (client/entry-contents k (mapv :seq (:ledger st))) :entries)]))}))))
+
+(defn- add-synthetic!
+  "Add workstreams to the snapshot at `home`: `n` of them, the i-th with id `(id-of i)`, the
+   identity `(identity-of i)` and the entries `(entries-of i)` — [row content] pairs, numbered
+   from 1."
+  [home project n id-of identity-of entries-of]
+  (let [snap (edn/read-string (slurp (str (snapshot-path home))))
+        at   "2026-01-01T00:00:00Z"
+        snap (reduce (fn [snap i]
+                       (let [k  (client/ws-key project (id-of i))
+                             es (map-indexed (fn [n [row content]]
+                                               [(assoc row :seq (inc n) :at at :ext "edn") content])
+                                             (entries-of i))]
+                         (-> snap
+                             (assoc-in [:states k] (assoc d/empty-state
+                                                          :identity (assoc (identity-of i) :project (keyword project)
+                                                                           :created-at at)
+                                                          :ledger (mapv first es)))
+                             (assoc-in [:contents k] (into {} (map (fn [[r c]] [(:seq r) c])) es)))))
+                     snap (range n))]
+    (spit (str (snapshot-path home)) (pr-str snap))))
+
+(defn- synthetic-sessions!
+  "One archived session record per synthetic workstream, as its session directory holds it."
+  [home project n id-of name-of]
+  (let [at "2026-01-01T00:00:00Z"]
     (dotimes [i n]
-      (let [id  (format "ws-29990101-%06x" i)
-            sn  (str "bench-synthetic-" i)
-            dir (fs/path root id)
-            e1  {:kind :closed :seq 1 :at at :file "entries/0001-closed.edn"}
-            e2  {:kind :scratch :seq 2 :at at :file "entries/0002-scratch.edn"}]
-        (fs/create-dirs (fs/path dir "entries"))
-        (fs/create-dirs (fs/path dir "entries.meta"))
-        (fs/create-dirs (fs/path dir "sessions" sn))
-        (spit (str (fs/path dir "workstream.edn"))
-              (pr-str {:id id :project (keyword project) :external-refs [] :stage :scratch
-                       :stage-history [{:at at :stage :scratch}]
-                       :closed {:at at :outcome :dropped} :created-at at :entries [e1 e2]}))
-        (spit (str (fs/path dir "entries" "0001-closed.edn")) (pr-str {:format :closed :outcome :dropped :by :bench}))
-        (spit (str (fs/path dir "entries" "0002-scratch.edn")) (pr-str {:format :scratch}))
-        (spit (str (fs/path dir "entries.meta" "0001.edn")) (pr-str e1))
-        (spit (str (fs/path dir "entries.meta" "0002.edn")) (pr-str e2))
-        (spit (str (fs/path dir "sessions" sn "session.edn"))
+      (let [id (id-of i) sn (name-of i)
+            d  (fs/path home "projects" project "workstreams" id "sessions" sn)]
+        (fs/create-dirs d)
+        (spit (str (fs/path d "session.edn"))
               (pr-str {:name sn :workstream-id id :project (keyword project) :weight :heavy
                        :substrate :archived :substrate-history [{:at at :substrate :archived}]
                        :autonomy nil :created-at at}))))))
 
+(defn- synthetic-settled!
+  "Add `n` settled workstreams to `project` in the store at `home`, each closed :dropped with a
+   two-entry ledger and one archived session — the shape most of the live store's closed history
+   has."
+  [home project n]
+  (let [id-of #(format "ws-29990101-%06x" %)]
+    (add-synthetic! home project n id-of (constantly {:external-refs []})
+                    (fn [_] [[{:kind :closed} (pr-str {:format :closed :outcome :dropped :by :bench})]
+                             [{:kind :scratch} (pr-str {:format :scratch})]]))
+    (synthetic-sessions! home project n id-of #(str "bench-synthetic-" %))))
+
 (defn- synthetic-analyses!
-  "Add `n` finished review-loop analysis workstreams to `project` under `home`: open, a
+  "Add `n` finished review-loop analysis workstreams to `project` in the store at `home`: open, a
    :review-run ref, a ledger holding only its filed analysis — which status reads as :analysed —
    and one archived session, the shape of the analyses the review loop files and nobody closes."
   [home project n]
-  (let [root (fs/path home "projects" project "workstreams")
-        at   "2026-01-01T00:00:00Z"]
-    (dotimes [i n]
-      (let [id  (format "ws-29990102-%06x" i)
-            sn  (str "bench-analysis-" i)
-            run (str "bench-run-" i)
-            dir (fs/path root id)
-            e1  {:kind :review-analysis :seq 1 :at at :file "entries/0001-review-analysis.edn"}]
-        (fs/create-dirs (fs/path dir "entries"))
-        (fs/create-dirs (fs/path dir "entries.meta"))
-        (fs/create-dirs (fs/path dir "sessions" sn))
-        (spit (str (fs/path dir "workstream.edn"))
-              (pr-str {:id id :project (keyword project)
-                       :external-refs [{:adapter :review-run :id run :title run}]
-                       :stage :scratch :stage-history [{:at at :stage :scratch}]
-                       :created-at at :entries [e1]}))
-        (spit (str (fs/path dir "entries" "0001-review-analysis.edn"))
-              (pr-str {:format :review-analysis :verdict :degraded :run-id run :status "clean"
-                       :rounds 2 :summary "bench" :observations []}))
-        (spit (str (fs/path dir "entries.meta" "0001.edn")) (pr-str e1))
-        (spit (str (fs/path dir "sessions" sn "session.edn"))
-              (pr-str {:name sn :workstream-id id :project (keyword project) :weight :heavy
-                       :substrate :archived :substrate-history [{:at at :substrate :archived}]
-                       :autonomy nil :created-at at}))))))
+  (let [id-of #(format "ws-29990102-%06x" %)]
+    (add-synthetic! home project n id-of
+                    (fn [i] {:external-refs [{:adapter :review-run :id (str "bench-run-" i)
+                                              :title (str "bench-run-" i)}]})
+                    (fn [i] [[{:kind :review-analysis}
+                              (pr-str {:format :review-analysis :verdict :degraded
+                                       :run-id (str "bench-run-" i) :status "clean"
+                                       :rounds 2 :summary "bench" :observations []})]]))
+    (synthetic-sessions! home project n id-of #(str "bench-analysis-" %))))
+
+(defn- load-snapshot!
+  "Answer this process's core requests from the snapshot in the store NIDO_HOME names."
+  []
+  (let [{:keys [states contents]} (edn/read-string (slurp (str (snapshot-path (core/nido-root)))))]
+    (client/use-local!)
+    (doseq [[k st] states]
+      (local/put! k (constantly st) (get contents k)))))
 
 (defn- ms [f]
   (let [t0 (System/nanoTime)]
@@ -140,6 +168,7 @@
   [& args]
   (let [{:keys [project ws runs first] :or {runs 5 first :inbox}} (parse-opts args)
         project (name project)
+        _       (load-snapshot!)
         _       (work/hold!)
         timed   (surfaces-of project ws)
         cold    (ms (some (fn [[k f]] (when (= first k) f)) timed))
@@ -170,7 +199,8 @@
          :cold-tui-open (:cold-first-render (child-measure! home opts :tui-board))))
 
 (defn- workstream-count [home project]
-  (count (fs/list-dir (fs/path home "projects" project "workstreams"))))
+  (count (filter #(str/starts-with? % (str project "/"))
+                 (keys (:states (edn/read-string (slurp (str (snapshot-path home)))))))))
 
 (defn- print-table [results]
   (let [ks (keys (:renders (second (first results))))]
@@ -202,8 +232,9 @@
     (try
       (println "cloning the store into" (str home) "…")
       (clone-store! home)
-      (let [opts    (update opts :ws #(or % (->> (fs/list-dir (fs/path home "projects" (:project opts) "workstreams"))
-                                                 (map (comp str fs/file-name)) sort last)))
+      (snapshot-core! home)
+      (let [opts    (update opts :ws #(or % (->> (keys (client/value! (client/states (str (:project opts) "/")) :states))
+                                                 (keep (comp second client/split-key)) sort last)))
             n0      (workstream-count home (:project opts))
             live    (measure-store! home opts)
             _       (synthetic-settled! home (:project opts) (:synthetic opts))

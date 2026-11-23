@@ -9,7 +9,9 @@
        queue/<uuid>.edn
      ~/.nido/projects/<project>/triggers.edn
      ~/.nido/runs/<run-id>/{run.edn, _run-status.edn, artifacts/, agent.log, session-home}
-     ~/.nido/projects/<project>/workstreams/<ws-id>/{workstream.edn, activity.lock, activity.edn, entries/, sessions/<name>/session.edn}
+     ~/.nido/projects/<project>/workstreams/<ws-id>/{activity.lock, activity.edn, sessions/<name>/session.edn}
+       — and, from before the core held ledgers, workstream.edn, entries/ and entries.meta/, read only by
+       the legacy-ledger import
      ~/.nido/projects/<project>/_pre-unification/   (legacy run/ticket records archived by migration)"
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
@@ -132,7 +134,9 @@
   (str (fs/path (workstream-dir project ws-id) "runs")))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
-  workstream-edn-path [project ws-id]
+  workstream-edn-path
+  "One workstream's legacy record, from before the core held it — read by the import alone."
+  [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "workstream.edn")))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
@@ -165,10 +169,6 @@
    activity-lock-path is held, since nothing clears it on release."
   [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "activity.edn")))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
-  ws-entries-dir [project ws-id]
-  (str (fs/path (workstream-dir project ws-id) "entries")))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   ws-sessions-dir [project ws-id]

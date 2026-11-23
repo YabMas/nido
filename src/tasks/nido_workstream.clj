@@ -12,7 +12,6 @@
    [nido.coordinator.record.fork :as fork]
    [nido.review.merge :as unit-merge]
    [nido.platform.task-args :as task-args]
-   [nido.coordinator.lane.backfill :as backfill]
    [nido.review.stages :as stages]
    [nido.coordinator.work :as work]
    [nido.coordinator.work.core :as wcore]
@@ -63,11 +62,11 @@
   [{:keys [project kind content file] :as opts}]
   (let [p     (keyword project)
         ws-id (resolve-ws-id opts)
-        path  (ws/append-entry! p ws-id {:kind (keyword (or kind "note"))}
+        n     (ws/append-entry! p ws-id {:kind (keyword (or kind "note"))}
                                 (if file (slurp (str file)) (or content "")))]
     (when (= :intent (keyword kind))
-      (run! println (owed-lines p ws-id (ws/seq-of-path path))))
-    path))
+      (run! println (owed-lines p ws-id n)))
+    n))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   stage-advance* [{:keys [project stage] :as opts}]
@@ -212,7 +211,7 @@
           (when-let [u (get-in res [:defect :unowed])]
             (println "  claimed but not owed:") (doseq [a u] (println "   " a)))
           (System/exit 1))
-      (println (:file res)))))
+      (println "recorded at seq" (:seq res)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   reserve*
@@ -503,11 +502,6 @@
   blocker-answer-cmd [& args] (run* blocker-answer* args #{:answer}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   generation-open-cmd [& args] (run* generation-open* args #{:words :base-rev :ids}))
-(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  status-backfill-cmd [& args]
-  (let [[_ opts] (task-args/split-args args)]
-    (prn (backfill/backfill! (keyword (:project opts))))))
-
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   backfill-landings-cmd [& args]
   (let [[_ opts] (task-args/split-args args)] (backfill-landings* opts)))

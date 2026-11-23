@@ -75,12 +75,12 @@
      id)))
 
 (defn- parent-on-disk
-  "Everything a reader of `id` could see: the record, and every entry file's content by name."
+  "Everything a reader of `id` could see: the record, and every entry's content by seq."
   [id]
-  (let [dir (fs/path (cstate/workstream-dir :brian id) "entries")]
-    {:record  (ws/read-ws :brian id)
-     :entries (into (sorted-map) (map (fn [f] [(str (fs/file-name f)) (slurp (str f))]))
-                    (fs/list-dir dir))}))
+  (let [w (ws/read-ws :brian id)]
+    {:record  w
+     :entries (into (sorted-map) (map (fn [e] [(:seq e) (ws/entry-text w (:seq e))]))
+                    (:entries w))}))
 
 (def ^:private goal {:goal "store totals once" :done-when ["one stored total per order"]})
 

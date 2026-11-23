@@ -1,18 +1,54 @@
 (ns canvas.core.client
   "Self-spec: `nido.core.client`, how a process outside the daemon reaches the core."
-  (:require [fukan.common.vocab.code.module :refer [Module]]
+  (:require [fukan.common.vocab.code.kind :refer [Kind]]
+            [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.core.api :as api]
             [canvas.core.local :as local]
             [fukan.common.typing.malli]))
+
+(Kind CoreRequest
+  "A request the core answers: a keyed command, or a read of one state, the states under a key
+   prefix, entry contents by seq, or the workstreams held."
+  [:multi {:dispatch :op}
+   [:command     [:map [:op [:= :command]] [:key :string] [:ws :string] [:command :map]
+                  [:input? {:optional true} :boolean]]]
+   [:state       [:map [:op [:= :state]] [:ws :string]]]
+   [:states      [:map [:op [:= :states]] [:prefix :string]]]
+   [:entries     [:map [:op [:= :entries]] [:ws :string] [:seqs [:vector :int]]]]
+   [:workstreams [:map [:op [:= :workstreams]]]]])
+
+(Kind Unavailable
+  "No core answered: the daemon at the socket named is not running, or did not reply. Answered as
+   data, never thrown."
+  [:map [:unavailable [:map [:socket :string] [:message :string]]]])
+
+(Kind CommandOutcome
+  "What a keyed command came to: committed (its events), refused, undecided, or Unavailable."
+  [:or [:map [:events [:vector :map]]]
+       [:map [:refused :map]]
+       [:map [:error :any]]
+       Unavailable])
+
+(Kind ReadReply
+  "A read's reply — a state, the states by key, entry contents by seq, the workstreams held, an
+   error — or Unavailable."
+  [:or [:map [:state :map]]
+       [:map [:states [:map-of :string :map]]]
+       [:map [:entries [:map-of :int :string]]]
+       [:map [:workstreams [:vector :string]]]
+       [:map [:error :any]]
+       Unavailable])
 
 (Module core-client
   "One request at a time to the core, addressed by a workstream key \"<project>/<ws-id>\".
 
    HIDES which core answers: the daemon over its socket, or — for the bb test suite and the surface
    bench's measuring child only, each over a nido home of its own — an in-process core over the
-   same domain. A process that has neither gets an error naming the
-   daemon, never a quiet second store; there is no fallback to files."
+   same domain — and retrying a lost reply under the same key. Every request is a CoreRequest and
+   every answer data: a CommandOutcome or a ReadReply, Unavailable naming the daemon when no core
+   answered — never thrown, never a quiet second store; there is no fallback to files."
+  {:child [CoreRequest Unavailable CommandOutcome ReadReply]}
   (Operation ws-key
     "The core's name for a workstream of a project."
     {:signature [:=> [:catn [:project :any] [:ws-id :string]] :string]})
@@ -30,23 +66,35 @@
     "Whether this process speaks to an in-process core."
     {:signature [:=> [:catn] :boolean]})
   (Operation request!
-    "Send a request to the core and answer its reply; throws when the daemon does not answer."
-    {:signature [:=> [:catn [:req :map]] :any]
+    "Send a request to the core and answer its reply, or Unavailable when the daemon does not answer."
+    {:signature [:=> [:catn [:req CoreRequest]] [:or CommandOutcome ReadReply]]
      :delegates [api/connect api/request local/answer]})
   (Operation state
-    "A workstream's committed state."
-    {:signature [:=> [:catn [:k :string]] :map]
+    "A workstream's committed state, as a ReadReply."
+    {:signature [:=> [:catn [:k :string]] ReadReply]
      :delegates [request!]})
   (Operation states
-    "The committed state of every workstream whose key starts with a prefix."
-    {:signature [:=> [:catn [:prefix :string]] [:map-of :string :map]]
+    "The committed state of every workstream whose key starts with a prefix, as a ReadReply."
+    {:signature [:=> [:catn [:prefix :string]] ReadReply]
      :delegates [request!]})
   (Operation entry-contents
-    "The content of named entries of a workstream's ledger, by seq."
-    {:signature [:=> [:catn [:k :string] [:seqs [:sequential :int]]] [:map-of :int :string]]
+    "The content of named entries of a workstream's ledger, by seq, as a ReadReply."
+    {:signature [:=> [:catn [:k :string] [:seqs [:sequential :int]]] ReadReply]
      :delegates [request!]})
   (Operation command!
     "Send a keyed command and answer its committed outcome; a lost reply is asked for again under
      the same key, which answers what was committed rather than deciding twice."
-    {:signature [:=> [:catn [:k :string] [:key :string] [:command :map]] :map]
-     :delegates [request!]}))
+    {:signature [:=> [:catn [:k :string] [:key :string] [:command :map]] CommandOutcome]
+     :delegates [request!]})
+  (Operation unavailable?
+    "Whether an answer says no core answered."
+    {:signature [:=> [:catn [:answer :any]] :boolean]})
+  (Operation unavailable
+    "The Unavailable answer naming the daemon at a socket."
+    {:signature [:=> [:catn [:socket :string]] Unavailable]})
+  (Operation value!
+    "The value under a key of a read's reply, for a caller that cannot go on without it: an
+     Unavailable reply is raised as an error naming the daemon. The caller's conversion, not an
+     answer of the core's."
+    {:signature [:=> [:catn [:reply :map] [:k :keyword]] :any]
+     :delegates [unavailable?]}))

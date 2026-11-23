@@ -83,7 +83,7 @@
                                              :session (str (:session o))
                                              :run-id (str (:run-id o))}
                                             (slurp (str (:file o))))]
-        (println "appended" path))
+        (println "appended at seq" path))
       (catch Exception e
         (binding [*out* *err*]
           (println "append rejected:" (ex-message e))

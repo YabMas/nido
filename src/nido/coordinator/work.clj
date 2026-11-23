@@ -802,15 +802,14 @@
         (.listFiles dir)))
 
 (defn- ws-files-stamp
-  "The workstream's own files, as `board-stamp` reads them: its directory, entries/,
-   entries.meta/, sessions/ and every session's, runs/, and each run it registers with that
-   run's locks/. Directory mtimes stand for the files in them, which every writer creates or
-   renames into place."
-  [^java.io.File wd]
+  "The workstream's own records, as `board-stamp` reads them: its ledger and identity as the
+   core holds them (`cws/ledger-stamp`), and its files — its directory, sessions/ and every
+   session's, runs/, and each run it registers with that run's locks/. Directory mtimes stand
+   for the files in them, which every writer creates or renames into place."
+  [project ^java.io.File wd]
   (let [runs (java.io.File. wd "runs")]
     [(.lastModified wd)
-     (.lastModified (java.io.File. wd "entries"))
-     (.lastModified (java.io.File. wd "entries.meta"))
+     (cws/ledger-stamp project (.getName wd))
      (dir-stamps (java.io.File. wd "sessions"))
      (.lastModified runs)
      (mapv (fn [^java.io.File m]
@@ -828,8 +827,9 @@
    refresh changed a row: it reads no file, and a caller wanting the rows current makes the
    refresh first (`refresh-list!`).
 
-   Otherwise it is read off the disk. Directory mtimes stand for the files in them, which
-   every ledger, session and run writer creates or renames into place (`ws-files-stamp`), and
+   Otherwise it is read off the core and the disk: each workstream's ledger as the core holds
+   it, and directory mtimes for the files in them, which every session and run writer creates or
+   renames into place (`ws-files-stamp`), and
    the session registry and the Notion page facts are compared as values, because their files
    are rewritten on every poll whether or not anything changed. NOT covered, by construction:
    a lock released by a process exiting (an activity claim, a run's agent), a session port
@@ -845,8 +845,9 @@
 (defn- board-stamp*
   [project]
   (let [ws-root (java.io.File. (str (cstate/workstreams-dir project)))]
-    [(.lastModified ws-root)
-     (mapv ws-files-stamp (filter #(.isDirectory ^java.io.File %) (.listFiles ws-root)))
+    ;; Membership is the core's: one request for every workstream's state, which each stamp
+    ;; below then reads — so one the core holds with no directory is stamped too.
+    [(mapv #(ws-files-stamp project (java.io.File. ws-root ^String %)) (cws/list-ids project))
      (sstate/read-registry)
      (notion-cache/project-page-facts project)]))
 
@@ -1124,8 +1125,8 @@
    kind name — never blank. :supersedes is the seq this entry AMENDS (nil for the
    ordinary entry); the report is already hydrated here, so reading it costs
    nothing."
-  [base-dir entry]
-  (let [r (entry->report base-dir entry)]
+  [ledger entry]
+  (let [r (entry->report ledger entry)]
     {:seq        (:seq entry)
      :kind       (:kind entry)
      :at         (:at entry)
@@ -1161,9 +1162,9 @@
    whatever detail it points at. Callers select `seq` from the entries themselves,
    so a miss means the ledger changed under the read — nil, not the latest entry
    silently swapped in."
-  [base-dir entries seq]
+  [ledger entries seq]
   (let [by-seq (into {} (map (juxt :seq identity)) entries)]
-    (some->> (get by-seq seq) (entry->report base-dir) hydrate)))
+    (some->> (get by-seq seq) (entry->report ledger) hydrate)))
 
 (defn- intake-fallback
   "Synthetic markdown report from a workstream's stored intake text (un-triaged
@@ -1187,10 +1188,10 @@
    a gate shows — and finally falls back to stored intake text so an un-triaged
    :incoming Slack report still shows its message body."
   [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)
+  (let [{:keys [ledger entries]} (active-ledger project ws-id)
         newest (last (remove #(cws/status-kinds (:kind %)) entries))]
     (if newest
-      (hydrate (entry->report base-dir newest))
+      (hydrate (entry->report ledger newest))
       (intake-fallback project ws-id))))
 
 (defn- owed-seq
@@ -1216,10 +1217,10 @@
    (`gate-report`) as its freshness check: a click is current while the record it was rendered
    from is still the one owed."
   [project ws-id report position]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)
+  (let [{:keys [ledger entries]} (active-ledger project ws-id)
         owed (owed-seq position)]
     (if (and owed (not= owed (:seq report)))
-      (or (report-at base-dir entries owed) report)
+      (or (report-at ledger entries owed) report)
       report)))
 
 (defn- gate-report
@@ -1414,11 +1415,11 @@
            row      (with-status project (live-session-names project)
                                  (wsv/workstream-row project w (notion-cache/project-page-facts project))
                                  true)
-           {:keys [base-dir entries]} (active-ledger project ws-id)
+           {:keys [ledger entries]} (active-ledger project ws-id)
            sel      ((set (map :seq entries)) selected-seq)
            index    (when (seq entries)
                       ;; mark BEFORE reversing — mark-superseded reads oldest-first
-                      (vec (reverse (mark-superseded (mapv #(index-row base-dir %) entries)))))
+                      (vec (reverse (mark-superseded (mapv #(index-row ledger %) entries)))))
            ;; The newest record of the WORK: a close, reopen or stage move appended after a
            ;; blocker or a gate report says nothing a gate shows, so it neither displaces that
            ;; report nor makes it stale. Opening such a status entry still reads as current.
@@ -1435,7 +1436,7 @@
            ;; Only a ledger with no work record still reads (there is no entry to
            ;; bind to, and latest-report is where the intake-text fallback lives).
            latest-r (if work-e
-                      (hydrate (entry->report base-dir work-e))
+                      (hydrate (entry->report ledger work-e))
                       (latest-report project ws-id))
            ;; Read ONCE and used twice — by the heading and by the arc beneath
            ;; it. Asking pipeline/of a second time for the arc would be a second
@@ -1493,7 +1494,7 @@
         ;; A ledger renders only what the reader opened. With no record of the work —
         ;; no ledger, or only status entries a close or stage move wrote — the intake
         ;; text is the pane's only content, so it stands in unasked.
-        :report       (cond sel    (report-at base-dir entries sel)
+        :report       (cond sel    (report-at ledger entries sel)
                             work-e nil
                             :else  latest-r)
         ;; What the pane's live ACTIONS derive from — which is not what the
@@ -1593,7 +1594,7 @@
    is an escalation that parked nothing and was recorded over the very move `position` owes — its
    :owes equal to the position's."
   [project ws-id report position actions]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)
+  (let [{:keys [ledger entries]} (active-ledger project ws-id)
         owed     (owed-seq position)
         owed-e   (some #(when (= owed (:seq %)) %) entries)
         chosen   (->> entries
@@ -1601,10 +1602,10 @@
                       (group-by :kind)
                       (map (fn [[k es]] (if (and owed-e (= k (:kind owed-e))) owed-e (last es))))
                       (sort-by :seq))
-        records  (mapv #(hydrate (entry->report base-dir %)) chosen)
+        records  (mapv #(hydrate (entry->report ledger %)) chosen)
         intent   (last (filter #(= :intent (:format %)) records))
         decision (->> entries (filter #(= :conduct-decision (:kind %))) last)
-        d        (some->> decision (entry->report base-dir))
+        d        (some->> decision (entry->report ledger))
         ;; Bound by identity, never by order: the escalation names the move it was written over
         ;; (:owes), and rides only on that same move.
         note     (when (and d
@@ -1934,13 +1935,13 @@
   "`e`, the held row for `ws-id`, as a refresh that reaches it leaves it: recomputed when its
    stamp moved, or when its liveness is `due?` and `liveness-probe` finds it changed; kept
    otherwise, a probe that found nothing renewing its liveness from the listing's read. nil
-   when the workstream is gone."
+   when the workstream is gone: the core no longer holds it."
   [project ws-id e facts live-names due?]
   (let [wd    (java.io.File. (str (cstate/workstream-dir project ws-id)))
-        files (ws-files-stamp wd)
+        files (ws-files-stamp project wd)
         now   (System/currentTimeMillis)]
     (cond
-      (not (.isDirectory wd))                                  nil
+      (nil? (second files))                                    nil
       (or (nil? e)
           (not= (:stamp e) (entry-stamp files e facts live-names))) (compute-entry project ws-id files facts live-names)
       (not (due? e now))                                       e
@@ -1975,14 +1976,13 @@
 (defn- refresh-project
   "`p`, a project's held value (nil for none), refreshed as `mode` says:
      :list   every row not :at-rest?, every one at rest the registry shows a live session for, and
-             the rows whose own page's facts moved, plus a workstream new to the directory;
+             the rows whose own page's facts moved, plus a workstream new to the core;
      :sweep  those, and every row whose liveness deadline falls before the next run.
-   Both take the workstreams-directory stamp, listing it only when it moved, and the project's
-   page facts as a value."
+   Both take the project's membership from `list-ids` — one request for every workstream the core
+   holds, so one the core newly holds is reached at once — and the project's page facts as a
+   value."
   [project p mode]
-  (let [root       (java.io.File. (str (cstate/workstreams-dir project)))
-        root-stamp (.lastModified root)
-        order      (if (and p (= root-stamp (:root-stamp p))) (:order p) (cws/list-ids project))
+  (let [order      (cws/list-ids project)
         facts      (notion-cache/project-page-facts project)
         live       (live-session-names project)
         old-facts  (:facts p)
@@ -2000,7 +2000,7 @@
                                  (assoc m id e')
                                  m)))
                            {} order)]
-    (index-project project (assoc p :root-stamp root-stamp :order order :facts facts :live live
+    (index-project project (assoc p :order order :facts facts :live live
                                     :entries entries))))
 
 (defn- refresh-one
@@ -2012,7 +2012,7 @@
         live  (live-session-names project)
         e     (get (:entries p) ws-id)
         due?  (fn [e now] (<= (deadline e) now))]
-    (if (or e (fs/directory? (cstate/workstream-dir project ws-id)))
+    (if (or e (cws/ledger-stamp project ws-id))
       (let [e' (refresh-entry project ws-id e (cond-> (:facts p)
                                                 (:page-id e) (assoc (:page-id e) (get facts (:page-id e))))
                               live due?)]
@@ -2065,7 +2065,6 @@
    [:project :string]
    [:held [:map
            [:order [:vector :string]]
-           [:root-stamp :int]
            [:facts [:maybe :map]]
            [:live [:set :string]]
            [:entries [:map-of :string HeldEntry]]]]])
@@ -2088,7 +2087,7 @@
   [project]
   (fs/path (core/nido-root) "cache" (name project) "held-rows.transit.json"))
 
-(def ^:private snapshot-keys [:order :root-stamp :facts :live :entries])
+(def ^:private snapshot-keys [:order :facts :live :entries])
 
 (defn- write-snapshot!
   "Write `p`, `project`'s held value, as its snapshot: the rows as they were observed, their
@@ -2149,7 +2148,7 @@
   "The list refresh, for `project` or every registered project: what the gate inbox, the
    Workstreams overview without a selection and the TUI board make before they render. Reaches
    every workstream not at rest, every one at rest with a live session, the rows whose own page's
-   Notion facts moved and any workstream new to the directory, and recomputes the ones whose
+   Notion facts moved and any workstream new to the core, and recomputes the ones whose
    stamp moved or whose liveness came due. At rest is settled history and finished review-loop
    analyses; only the sweep reaches those. A no-op when this process holds nothing."
   ;; A project that cannot be read keeps the rows it had, as `all-gates` and `all-grouped` skip
@@ -3838,12 +3837,12 @@
                        (not (str/blank? (str note))) (assoc :note note))))]
     (if (map? res)
       {:decision :stale :latest (:latest res)}
-      {:decision :recorded :file res})))
+      {:decision :recorded :seq res})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   record-landing!
   "Record that an approved proposal is now carried by `rev`. Returns
-   {:landed :recorded :file <path>}.
+   {:landed :recorded :seq <seq>}.
 
    No `at-seq` guard, unlike `decide-proposal!`. That guard exists because a
    decision is an answer to a page, and answering a page that has moved is not
@@ -3867,7 +3866,7 @@
     (throw (ex-info (str "No proposal at " ws-id "/" analysis-seq "." observation)
                     {:ws-id ws-id :analysis-seq analysis-seq :observation observation})))
   {:landed :recorded
-   :file (cws/append-entry!
+   :seq (cws/append-entry!
           (keyword (name project)) ws-id
           {:kind :improvement-landed}
           (pr-str (cond-> {:format       :improvement-landed
@@ -4091,7 +4090,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   record-plan!
-  "Append one day's plan, or refuse it. Returns {:plan :recorded :file <path>}
+  "Append one day's plan, or refuse it. Returns {:plan :recorded :seq <seq>}
    or {:plan :refused :defect <map>}.
 
    The refusal is the point. A plan claims to partition what is owed, and the
@@ -4124,7 +4123,7 @@
           (if defect
             {:plan :refused :defect defect}
             {:plan :recorded
-             :file (cws/append-entry!
+             :seq (cws/append-entry!
                     pk ws-id {:kind :improvement-plan}
                     (pr-str {:format :improvement-plan :date date
                              :frontier frontier :claims (vec claims)}))}))))))

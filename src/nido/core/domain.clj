@@ -80,7 +80,7 @@
   "What unit `unit`'s session should be in `state`: :up, :stopped or :destroyed."
   [state unit]
   (cond
-    (:closed? state)            :destroyed
+    (or (:closed? state) (:discarded? state)) :destroyed
     (= :open (:status unit))    :up
     :else                       :stopped))
 
@@ -710,8 +710,10 @@
 ;; than kept as an empty record every reader would find. What it recorded stays in its events.
 (defmethod decide :discard-workstream [state _]
   (cond
-    (not (recorded? state))                       (refuse :no-such-workstream)
-    (or (seq (:units state)) (seq (:turns state))) (refuse :work-in-flight)
+    (not (recorded? state))                                         (refuse :no-such-workstream)
+    ;; An open unit or an active turn holds it; a merged or retracted unit and an ended turn do not.
+    (or (some #(= :open (:status %)) (vals (:units state)))
+        (some #(active-statuses (:status %)) (vals (:turns state)))) (refuse :work-in-flight)
     :else (accept {:event :workstream-discarded})))
 
 (defmethod decide :revise-identity [state {:keys [changes]}]

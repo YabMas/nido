@@ -2,6 +2,7 @@
   "The hand-over plan: each unclosed workstream handed over, one with a live session opening its
    unit over it, an unknown where that session was stopped mid-turn; a closed one left alone."
   (:require
+   [nido.platform.io :as io]
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.record.session :as session]
@@ -24,7 +25,13 @@
               c (ws/create! :brian {:external-refs []})]
           (session/create! :brian (:id a) {:name "s1" :weight :heavy})
           (session/create! :brian (:id b) {:name "s2" :weight :heavy})
-          (ws/close! :brian (:id c) :done nil)
+          ;; The cut-over plans from the files a legacy home kept, before any core holds them.
+          (doseq [[w entries] [[a []] [b []]
+                               [c [{:kind :closed :seq 1 :at "t" :file "entries/0001-closed.edn"}]]]]
+            (io/write-edn! (cstate/workstream-edn-path :brian (:id w))
+                           (assoc (dissoc w :entries) :entries entries)))
+          (io/write-edn! (str (fs/path (cstate/workstream-dir :brian (:id c)) "entries" "0001-closed.edn"))
+                         {:format :closed :outcome :done})
           (let [plan (into {} (map (juxt :ws :commands)) (cutover/plan #{wt}))]
             (is (= #{(str "brian/" (:id a)) (str "brian/" (:id b))} (set (keys plan))))
             (is (= [:open-unit :record-unknown :hand-over] (map :command (plan (str "brian/" (:id a))))))

@@ -348,3 +348,18 @@
             (with-redefs [work/liveness-interval-ms 0]
               (work/sweep!))
             (is (not= stamp (:stamp (held-entry x))) "the sweep recomputes it")))))))
+
+(deftest a-workstream-the-core-newly-holds-reaches-the-board-at-once
+  ;; Which workstreams exist is the core's to say, not the workstreams directory's: a list
+  ;; refresh takes membership from the core, so one with no directory beside it is reached too.
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (let [a (open-one! "a")]
+          (work/hold! {:sweep? false})
+          (work/grouped :p)
+          (let [b (:id (workstream/create! :p {:external-refs []}))]
+            (fs/delete-tree (fs/path (cstate/workstreams-dir :p) b))
+            (work/refresh-list! :p)
+            (is (= #{a b} (set (map :ws-id (work/list-workstreams :p))))
+                "the new workstream is on the board after one list refresh")))))))

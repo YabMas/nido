@@ -36,7 +36,6 @@
         (is (str/ends-with? (cstate/workstreams-dir :brian) "projects/brian/workstreams"))
         (is (str/ends-with? (cstate/workstream-dir :brian "ws-1") "workstreams/ws-1"))
         (is (str/ends-with? (cstate/workstream-edn-path :brian "ws-1") "ws-1/workstream.edn"))
-        (is (str/ends-with? (cstate/ws-entries-dir :brian "ws-1") "ws-1/entries"))
         (is (str/ends-with? (cstate/ws-sessions-dir :brian "ws-1") "ws-1/sessions"))
         (is (str/ends-with? (cstate/session-dir :brian "ws-1" "sx") "sessions/sx"))
         (is (str/ends-with? (cstate/session-edn-path :brian "ws-1" "sx") "sx/session.edn"))

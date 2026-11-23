@@ -27,6 +27,8 @@
             [canvas.core.writer :refer [core-writer]]
             [canvas.core.api :refer [core-api]]
             [canvas.core.feed :refer [core-feed]]
+            [canvas.core.client :refer [core-client]]
+            [canvas.core.local :refer [core-local]]
             [canvas.core.turn :refer [core-turn]]
             [canvas.core.executor-claude :refer [executor-claude]]
             [canvas.core.ask-tool :refer [core-ask-tool]]
@@ -47,11 +49,14 @@
   {:provided-by [report-model]
    :rests-on    [record-vocabulary]})
 
+(declare core-commit)
+
 (Stratum ledger
-  "A workstream's entries, appended only when the cross-record checks hold — the baseline a design
-   cites, every health observation routed, a seam's phase planned — and read back by kind."
+  "A workstream's identity and entries, appended only when the cross-record checks hold — the
+   baseline a design cites, every health observation routed, a seam's phase planned — each append
+   committed as a core command after the ledger it was checked against, and read back by kind."
   {:provided-by [record-workstream record-generation]
-   :rests-on    [record-model record-vocabulary]})
+   :rests-on    [record-model record-vocabulary core-commit]})
 
 ;; ── what the records mean, above the ledger ─────────────────────────────────
 
@@ -158,7 +163,7 @@
 
 (Stratum core-persistence
   "Committed state: a batch of events and the rows they fold to, made durable together, refused
-   where the store's own constraints are broken, rebuilt and checked from the ledgers on request.
+   where the store's own constraints are broken, rebuilt from its events on request.
    A workstream's work-record entries are kept by seq from the events that append them, so their
    content is read by seq and never carried in state."
   {:provided-by [core-store]
@@ -166,8 +171,10 @@
 
 (Stratum core-commit
   "Commands in, committed changes out: a keyed command submitted and answered with its committed
-   outcome, committed state read, and the change feed subscribed to from a position."
-  {:provided-by [core-writer core-api core-feed]
+   outcome, committed state read, and the change feed subscribed to from a position. A process
+   outside the daemon reaches it through core-client; core-local answers the same requests from
+   memory for the bb test suite and the surface bench's measuring child."
+  {:provided-by [core-writer core-api core-feed core-client core-local]
    :rests-on    [core-persistence core-rules]})
 
 (Stratum core-outside

@@ -2,7 +2,8 @@
   "A workstream's ledger read as generations: which entry belongs to which, what the current span
    holds, which design governs it and which ids it fixes — and the appends that hold to them."
   (:require
-   [babashka.fs :as fs]
+   [nido.coordinator.record.history :as history]
+ [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.coordinator.record.activity :as activity]
@@ -131,7 +132,7 @@
             r   (recut! stamped ["agg" "split"])
             t   (:seq (first (filter #(= :tension (:kind %)) (:entries (w)))))
             row (first (filter #(= t (:seq %)) (:entries (w))))]
-        (spit (str (fs/path (cstate/workstream-dir :brian id) (:file row))) "{:not")
+        (history/rewrite! :brian id t "{:not")
         (is (thrown-with-msg? Exception #"cannot be read"
                               (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "w"
                                                               :ids ["agg" "split"] :base-rev "abc"})))
@@ -265,26 +266,6 @@
         (is (nil? (generation/generation-of (:entries (w)) x)))
         (is (some #(= x (:seq %)) (generation/current-span (:entries (w)))))))))
 
-(deftest a-retraction-indexed-before-targets-were-mirrored-still-belongs-to-none
-  ;; A row written before retractions mirrored their target holds none; the target is read from
-  ;; its entry instead, so the retraction of a baseline is still read in every generation.
-  (with-tmp
-    (fn []
-      (let [[id add stamped w] (ledger)
-            _ (add :design (a-design 2 []))
-            r (recut! stamped ["agg"])
-            _ (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "w"
-                                              :ids ["agg"] :base-rev "r"})
-            x (add :retraction {:format :retraction :retracts {:seq 2} :because "wrong survey" :evidence ["src/a.clj:1"]})
-            dir  (cstate/workstream-dir :brian id)
-            side (str (fs/path dir (format "entries.meta/%04d.edn" x)))
-            edn-path (cstate/workstream-edn-path :brian id)
-            strip #(if (= x (:seq %)) (dissoc % :retracts) %)]
-        (spit side (pr-str (strip (read-string (slurp side)))))
-        (spit edn-path (pr-str (update (read-string (slurp edn-path)) :entries #(mapv strip %))))
-        (is (= 2 (:retracts (some #(when (= x (:seq %)) %) (:entries (w))))))
-        (is (nil? (generation/generation-of (:entries (w)) x)))))))
-
 (deftest a-citation-naming-its-own-workstream-is-held-to-the-generation
   (with-tmp
     (fn []
@@ -339,7 +320,7 @@
             d2 (add :design (a-design 2 ["agg"] :supersedes {:seq d1 :why "re-cut"}))
             _  (decide d2)
             row (some #(when (= x1 (:seq %)) %) (:entries (w)))]
-        (spit (str (fs/path (cstate/workstream-dir :brian id) (:file row))) "{:not")
+        (history/rewrite! :brian id x1 "{:not")
         (is (nil? (#'ws/check-clearance-owed! (w) :design-cleared
                                               (pr-str {:format :design-cleared :design {:seq d2}})))
             "an unreadable decision of the generation before is not one this clearance rests on")))))

@@ -87,10 +87,15 @@
 
 (Band Record
   "The durable records the work plane is about: workstreams, tickets, runs, sessions, and the
-   filesystem paths and clock they are read and written through. Depends on no other stratum —
-   everything else depends on it."
+   filesystem paths and clock they are read and written through. Depends on no other stratum of
+   the work plane — everything else depends on it.
+
+   It reaches Core because a workstream's records are the core's: its identity and its ledger
+   are committed by the core's writer and read back from the core's store, through
+   `nido.core.client`. The ledger module keeps its interface and the core is where it keeps
+   what it records — one store per workstream, written by one writer."
   {:prefix ["nido.coordinator.record."]
-   :may-depend [Platform Session Report]})
+   :may-depend [Platform Session Report Core]})
 
 (Band Agent
   "`nido.coordinator.agent` — launch a headless agent for a run and wait for it, under a budget.

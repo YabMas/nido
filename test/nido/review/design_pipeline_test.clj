@@ -823,7 +823,7 @@
                                        (swap! refused inc)
                                        (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
-                                     "/ws/entries/0005-design.edn")
+                                     5)
                   agent/launch! (fn [{:keys [first-message out-file]}]
                                   (some-> prompts (swap! conj first-message))
                                   (when writes
@@ -1359,7 +1359,7 @@
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/cited-baseline (fn [_ _] nil)
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
-                  ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
+                  ws/append-entry! (fn [_ _ _ _] 5)
                   agent/launch! (fn [{:keys [first-message]}]
                                   (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                         (pr-str {:record a-design}))
@@ -1377,7 +1377,7 @@
                 ws/latest-entry (fn [_ _ _] a-design)
                 stages/cited-baseline (fn [_ _] nil)
                 stages/working-copy-state (fn [_] {:identity "t" :entries {}})
-                ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
+                ws/append-entry! (fn [_ _ _ _] 5)
                 agent/launch! (fn [{:keys [first-message]}]
                                 (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                       (pr-str {:record a-design}))
@@ -2287,8 +2287,7 @@
   ;; A design is cleared by its proceeding decision's append, which here would answer the carried
   ;; question for nobody.
   (let [cleared (atom 0)]
-    (with-redefs [ws/append-decision! (fn [& _] "/l/7.edn")
-                  ws/seq-of-path (constantly 7)
+    (with-redefs [ws/append-decision! (fn [& _] 7)
                   record/clear-proceeding! (fn [& _] (swap! cleared inc) nil)]
       (record/append! [:nido "ws-1"] {:format :design-decision :recommend :proceed :design-seq 4
                                       :checks [(check :goal-served :held)] :asks "a"

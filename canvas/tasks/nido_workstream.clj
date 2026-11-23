@@ -101,9 +101,6 @@
   (Operation blocker-answer-cmd
     "bb nido:workstream:blocker:answer — the entry point for `blocker-answer*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation status-backfill-cmd
-    "bb nido:status:backfill — record as entries the status every workstream's records hold."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation backfill-landings-cmd
     "bb nido:improvement:backfill-landings — the entry point for `backfill-landings*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

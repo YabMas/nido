@@ -4196,17 +4196,17 @@
 
 (defn- write-record!
   "Append `record` as an entry of its :format, answering the :seq it was given. When the append
-   throws, the throw may have come after the entry was written — which a read of the ledger then
-   holds — so the :seq of an entry this append wrote, one numbered past what the ledger held when
+   throws, the throw may have come after the core committed the entry — a reply lost on the way,
+   which a read of the ledger then holds — so the :seq of an entry this append wrote, one numbered past what the ledger held when
    it began that is this record, answers instead, and only when there is none is what the ledger
    refused thrown."
   [project ws-id record]
   (let [kind   (:format record)
-        before (ws/highest-seq-on-disk project ws-id)]
+        before (ws/latest-seq project ws-id)]
     (try
-      (ws/seq-of-path (if (= :design-decision kind)
-                        (ws/append-decision! project ws-id (pr-str record))
-                        (ws/append-entry! project ws-id {:kind kind} (pr-str record))))
+      (if (= :design-decision kind)
+        (ws/append-decision! project ws-id (pr-str record))
+        (ws/append-entry! project ws-id {:kind kind} (pr-str record)))
       (catch Exception e
         (let [mine (entry-as-read kind record)]
           (or (some #(when (and (> (:seq %) before) (= mine (dissoc % :seq :at))) (:seq %))
@@ -5967,7 +5967,7 @@
    amender to repair — up to `amend-reasks` times — so a refused amendment is repaired rather than
    lost.
 
-   `append` takes a record and returns `{:record r}`, with where it wrote — `:path`, or `:seq` — when
+   `append` takes a record and returns `{:record r}`, with the `:seq` it was given, when
    the ledger took it, or
    `{:err refusal :record r}` when it did not, `r` being the record as offered. `stem` names this
    round's answer files. Returns what the accepting `append` returned plus `:refusals`, every
@@ -6534,9 +6534,8 @@
    Degrades to the unstamped record rather than throwing. A stamp that could not
    be read back is a worse answer than no stamp, not a reason to lose a round
    whose work is already committed to the ledger."
-  [project ws-id path record]
-  (or (some->> path fs/file-name (re-find #"^(\d+)-") second parse-long
-               (ws/entry-at-seq project ws-id))
+  [project ws-id n record]
+  (or (some->> n (ws/entry-at-seq project ws-id))
       record))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
@@ -6560,9 +6559,9 @@
                                    {:iter iter :run-id run-id
                                     :resolve #(ws/entry-at-seq project ws-id %)})]
         (try
-          (let [path (ws/append-entry! project ws-id {:kind kind :amended-by (str run-id)}
-                                         (pr-str (ws/unstamp record)))]
-            {:record   (appended project ws-id path record)
+          (let [n (ws/append-entry! project ws-id {:kind kind :amended-by (str run-id)}
+                                      (pr-str (ws/unstamp record)))]
+            {:record   (appended project ws-id n record)
              :retreats (if (= :design kind)
                          (retreat/design-retreats prev record)
                          (retreat/baseline-retreats prev record))})
@@ -7484,7 +7483,7 @@
                                                               prev record (mapcat refuted-ids (:findings ctx)))]
                                                   {:record record :err why}
                                                   (try {:record record
-                                                        :path (ws/append-entry!
+                                                        :seq (ws/append-entry!
                                                                project ws-id {:kind :baseline :amended-by (str run-id)}
                                                                (pr-str (ws/unstamp record)))}
                                                        (catch Exception e
@@ -7510,7 +7509,7 @@
                           ;; record on to be CITED by :seq — neither of which a
                           ;; record still in the shape it was written in can
                           ;; answer, since :seq is the ledger's to give.
-                          stamped  (appended project ws-id (:path written) record)
+                          stamped  (appended project ws-id (:seq written) record)
                           ctx' (assoc ctx
                                       :retreats retreats
                                       :widened-spent (retreat/widened-spent
@@ -9452,9 +9451,8 @@
                                                 {:record record :err err}
                                                 (let [record (cite record)]
                                                   (try {:record record
-                                                        :seq    (ws/seq-of-path
-                                                                 (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
-                                                                                   (pr-str (ws/unstamp record))))}
+                                                        :seq    (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
+                                                                                  (pr-str (ws/unstamp record)))}
                                                        (catch Exception e
                                                          {:record record :err (ledger-refusal e)})))))})
                       record  (:record written)]

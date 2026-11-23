@@ -1,15 +1,16 @@
 (ns tasks.nido-core-cutover-cmd
   "`bb nido:core:cutover` — move this nido home to the core, once — and `bb nido:core:restore`, which
-   undoes it until the core has started over the imported store.
+   undoes it until the core has started over the handed-over store.
 
    The cut-over, in order, each step refusing the rest when it cannot be shown done:
      1. snapshot the nido home (`snapshot!`), with the root checkout's commit the old daemon ran;
      2. stop and disable the old coordinator, and wait for its pid to go;
      3. stop every legacy background agent session, then read the agent listing again, under a
         deadline, until it shows none running;
-     4. read the hand-over plan from the legacy records (`plan`) and have the JVM import every
-        ledger and commit the plan (`nido.core.cutover`), which marks the home cut over;
-     5. install and start the core, the intake host and the dashboard (`nido:core:install`).
+     4. read the hand-over plan from the legacy records (`plan`) and have the JVM commit it
+        (`nido.core.cutover`), which marks the home cut over;
+     5. install and start the core, import every legacy ledger into it read-only, and start the
+        intake host and the dashboard (`nido:core:install`).
 
    The snapshot leaves out the databases (`unsnapshotted`): the cut-over neither reads nor writes
    them, and a copy of a running cluster's files is not a snapshot of it."
@@ -19,8 +20,8 @@
             [clojure.string :as str]
             [cheshire.core :as json]
             [nido.coordinator.daemon.supervisor :as supervisor]
+            [nido.coordinator.record.legacy-ledger :as legacy]
             [nido.coordinator.record.session :as session]
-            [nido.coordinator.record.workstream :as ws]
             [nido.coordinator.view.workstreams :as wsv]
             [nido.coordinator.work.core :as wcore]
             [nido.core.release :as release]
@@ -123,9 +124,9 @@
    one gets its hand-over item. No session is provisioned and no blocker carried over."
   [mid]
   (for [p (map keyword (keys (project/list-projects)))
-        id (ws/list-ids p)
-        :let [w (ws/read-ws p id)]
-        :when (and w (nil? (ws/closure w)))
+        id (legacy/legacy-ids p)
+        :let [w (legacy/legacy-record p id)]
+        :when (and w (not (legacy/closed? w)))
         :let [label (or (some-> (wsv/label w nil) str not-empty) id)
               s (->> (session/list-sessions p id) (remove :conductor)
                      (keep #(when-let [cwd (session-cwd p %)] (assoc % :cwd cwd)))
@@ -158,19 +159,19 @@
       (let [r (p/sh {:dir (str (fs/canonicalize (System/getProperty "user.dir")))}
                     "clojure" "-J--enable-native-access=ALL-UNNAMED" "-M" "-m" "nido.core.cutover" f)
             out (try (edn/read-string (last (str/split-lines (:out r)))) (catch Exception _ nil))]
-        (when-not (and (zero? (:exit r)) out) (refuse! "the import: " (:err r)))
-        (say "imported " (pr-str (:import out)) "; " (count (:refused out)) " command(s) refused")
+        (when-not (and (zero? (:exit r)) out) (refuse! "the hand-over: " (:err r)))
+        (say "handed over " (:handed out) "; " (count (:refused out)) " command(s) refused")
         (doseq [x (:refused out)] (say "  refused " (pr-str x)))))
     (nido-core/install)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]} restore
   "Put the snapshot back in place of the nido home and start the old coordinator again from the
-   root checkout at the commit it ran — refused once the core has started over the imported store."
+   root checkout at the commit it ran — refused once the core has started over the handed-over store."
   [& _]
   (let [ps (release/paths) dir (snapshot-dir)
         {:keys [entries root root-commit]} (try (edn/read-string (slurp (str dir "/snapshot.edn")))
                                                 (catch Exception _ (refuse! "no snapshot at " dir)))]
-    (when (fs/exists? (:release-file ps)) (refuse! "the core has started over the imported store"))
+    (when (fs/exists? (:release-file ps)) (refuse! "the core has started over the handed-over store"))
     (supervisor/with-service :core supervisor/uninstall!)
     (doseq [n entries]
       (fs/delete-tree (str (home) "/" n))

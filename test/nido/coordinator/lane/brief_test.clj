@@ -73,8 +73,7 @@
             (is (some? (brief/ensure-ticket-brief! :brian (:id w) tref "tok")))
             (let [entries (:entries (ws/read-ws :brian (:id w)))]
               (is (= [:ticket] (mapv :kind entries)))
-              (is (str/includes? (slurp (str (fs/path (cstate/workstream-dir :brian (:id w))
-                                                      (:file (first entries)))))
+              (is (str/includes? (ws/entry-text (ws/read-ws :brian (:id w)) (:seq (first entries)))
                                  "the ticket body"))))
           (testing "and never a second time — one telling, not two to reconcile"
             (is (nil? (brief/ensure-ticket-brief! :brian (:id w) tref "tok")))

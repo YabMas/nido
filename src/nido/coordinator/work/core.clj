@@ -3,8 +3,8 @@
    delivered it, and what a person does to coordination, as a keyed command.
 
    A workstream is addressed in the core by `ws-key` — \"<project>/<ws-id>\" — so the core needs
-   no table of projects, and the ledger directory a workstream's work records live in is readable
-   from its key.
+   no table of projects. Which core answers is core-client's to decide: the key, the socket and
+   every request come from there.
 
    READS. A long-lived surface `follow!`s the feed: one connection, subscribed from the last
    position it rendered, holding each workstream's state at its latest commit in `mirror`. A
@@ -14,39 +14,38 @@
    ACTS. `act!` sends one command for a person, marked as input so the writer takes it ahead of
    background commands, under a key of its own unless the caller names one (a retried click
    naming the same key is answered with the first outcome)."
-  (:require [clojure.string :as str]
-            [nido.core.api :as api]
-            [nido.core.release :as release]))
+  (:require [nido.core.api :as api]
+            [nido.core.client :as client]
+            [nido.core.domain :as d]))
 
 ;; ── addressing ───────────────────────────────────────────────────────────────
+;; Which core answers — the daemon, or an in-process one — is core-client's to decide; this
+;; namespace takes its key, its socket and every request from there.
 
 (defn ^{:malli/schema [:=> [:cat :any :string] :string]} ws-key
   "The core's name for workstream `ws-id` of `project`."
   [project ws-id]
-  (str (name project) "/" ws-id))
+  (client/ws-key project ws-id))
 
 (defn ^{:malli/schema [:=> [:cat :string] [:maybe [:tuple :string :string]]]} split-key
   "[project ws-id] of a core workstream key, or nil when it is not one."
   [k]
-  (let [i (str/index-of (str k) "/")]
-    (when (and i (pos? i)) [(subs k 0 i) (subs k (inc i))])))
+  (client/split-key k))
 
 (defn ^{:malli/schema [:=> [:cat] :string]} socket
   "The core daemon's command socket."
   []
-  (:socket (release/paths)))
+  (client/socket))
 
 ;; ── one-shot requests ────────────────────────────────────────────────────────
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]} request!
-  "Send `req` to the core over a connection of its own. Throws ex-info {:core :unreachable} when
-   the daemon does not answer."
+  "Send `req` to the core through core-client and answer its reply. Throws ex-info
+   {:core :unreachable}, naming the daemon, when core-client answers `Unavailable`."
   [req]
-  (let [c (try (api/connect (socket))
-               (catch Exception e
-                 (throw (ex-info "the core daemon is not running (bb nido:core:status)"
-                                 {:core :unreachable} e))))]
-    (try (api/request c req) (finally (api/disconnect c)))))
+  (let [r (client/request! req)]
+    (when (client/unavailable? r) (client/value! r :state))
+    r))
 
 (defn ^{:malli/schema [:=> [:cat :any :string] [:maybe :map]]} state
   "Workstream `ws-id`'s committed state in the core; a workstream the core never heard of reads
@@ -87,7 +86,8 @@
    (fn [ws-key]) called after each message is applied."
   ([] (follow! {}))
   ([{:keys [on-change]}]
-   (when-not (:following? (first (swap-vals! mirror assoc :following? true)))
+   (when-not (or (client/local?)
+                 (:following? (first (swap-vals! mirror assoc :following? true))))
      (doto (Thread.
             (fn []
               (loop []
@@ -115,10 +115,18 @@
 (defn ^{:malli/schema [:=> [:cat] :map]} held
   "Every workstream's state the feed has delivered: {ws-key {:state :awaiting :pos}}. Read once
    from the daemon when nothing follows the feed in this process, so a one-shot surface renders the
-   same committed state a following one does."
+   same committed state a following one does. A process whose core-client answers in-process has
+   no feed; it reads what that core holds from core-client."
   []
-  (if (:following? @mirror)
+  (cond
+    (client/local?)
+    (into {} (for [[k st] (client/value! (client/states "") :states)]
+               [k {:state st :awaiting (vec (d/awaiting-person st)) :pos 0}]))
+
+    (:following? @mirror)
     (:ws @mirror)
+
+    :else
     (try
       (let [c (api/connect (socket))]
         (try

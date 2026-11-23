@@ -313,9 +313,18 @@
       (let [[s2] (d/step s {:command :discard-workstream})]
         (is (= :workstream-exists (refusal s2 {:command :create-workstream :identity id*})))
         (is (= :no-such-workstream (refusal s2 {:command :append-entry :after 0 :row (row* :note) :content "x"})))))
-    (testing "nor is one with work in flight discarded"
-      (let [[s2] (d/step s {:command :open-unit :unit "u" :project "nido" :goal "g"})]
-        (is (= :work-in-flight (refusal s2 {:command :discard-workstream})))))))
+    (testing "an open unit holds it; a retracted one does not, and its session is then wanted destroyed"
+      (let [[s2] (d/step s {:command :open-unit :unit "u" :project "nido" :goal "g"})
+            _    (is (= :work-in-flight (refusal s2 {:command :discard-workstream})))
+            [s3] (d/step s2 {:command :retract-unit-goal :unit "u"})
+            [s4 _ r] (d/step s3 {:command :discard-workstream})]
+        (is (nil? r))
+        (is (= :destroyed (d/session-want s4 (get-in s4 [:units "u"]))))))
+    (testing "nor is one with a turn running discarded"
+      (let [[s2] (d/step s {:command :open-unit :unit "u" :project "nido" :goal "g" :session-cwd "/w"})
+            [s3 _ r] (d/step s2 {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}})]
+        (is (nil? r) "the turn starts")
+        (is (= :work-in-flight (refusal s3 {:command :discard-workstream})))))))
 
 (deftest a-legacy-ledger-is-imported-whole-with-its-seqs
   (let [entries [{:row {:kind :intent :seq 1 :at "a" :ext "edn" :session "s"} :content "{}"}

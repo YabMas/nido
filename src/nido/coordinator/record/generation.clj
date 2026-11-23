@@ -14,10 +14,7 @@
    element matters: that changing it makes a new generation. How a marked element is carried is
    decided above."
   (:require
-   [babashka.fs :as fs]
-   [nido.coordinator.record.state :as cstate]
-   [nido.coordinator.report :as report]
-   [nido.platform.io :as io]))
+   [nido.coordinator.record.entry :as entry]))
 
 (def ^:private spanless-kinds
   "Kinds that belong to no generation."
@@ -95,11 +92,7 @@
 (defn- entry-at
   "The entry at `n` on `w`, through the read contract — nil when absent or unreadable."
   [w n]
-  (when-let [row (row-at (:entries w) n)]
-    (try (report/parse-event (:kind row)
-                             (io/read-edn (str (fs/path (cstate/workstream-dir (:project w) (:id w))
-                                                        (:file row)))))
-         (catch Throwable _ nil))))
+  (some-> (entry/parsed w n) (dissoc :seq :at)))
 
 (defn- governing
   "The seq of the design whose plan governs over `rows`: the newest phase gate's design while no

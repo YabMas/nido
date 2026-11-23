@@ -5,8 +5,8 @@
 
    A process may instead be given a core of its own (`use-local!`), which answers the same
    requests from memory; the bb test suite and the surface bench's measuring child are the two
-   such processes, each over a nido home of its own. A process that has neither
-   gets an error naming the daemon, never a quiet second store."
+   such processes, each over a nido home of its own. A process that has neither is answered
+   `Unavailable`, naming the daemon, never a quiet second store."
   (:require [clojure.string :as str]
             [nido.core.api :as api]
             [nido.core.local :as local]
@@ -48,42 +48,104 @@
   []
   @local-core)
 
-(defn ^{:malli/schema [:=> [:cat :map] :any]} request!
-  "Send `req` to the core and answer its reply. Throws ex-info {:core :unreachable} when the daemon
-   does not answer."
+;; ── what the core answers ──────────────────────────────────────────────────────
+;; Every request is one of the variants core-api serves, and every answer is data — a command's
+;; outcome, a read's reply, or `Unavailable` when no core answered. Nothing here throws; a caller
+;; that needs the value turns `Unavailable` into its error with `value!`.
+
+(def CoreRequest
+  "A request the core answers: a keyed command, or a read."
+  [:multi {:dispatch :op}
+   [:command     [:map [:op [:= :command]] [:key :string] [:ws :string] [:command :map]
+                  [:input? {:optional true} :boolean]]]
+   [:state       [:map [:op [:= :state]] [:ws :string]]]
+   [:states      [:map [:op [:= :states]] [:prefix :string]]]
+   [:entries     [:map [:op [:= :entries]] [:ws :string] [:seqs [:vector :int]]]]
+   [:workstreams [:map [:op [:= :workstreams]]]]])
+
+(def Unavailable
+  "No core answered: the daemon at `:socket` is not running, or did not reply."
+  [:map [:unavailable [:map [:socket :string] [:message :string]]]])
+
+(def CommandOutcome
+  "What a keyed command came to: committed, refused, undecided, or no core to ask."
+  [:or [:map [:events [:vector :map]]]
+       [:map [:refused :map]]
+       [:map [:error :any]]
+       Unavailable])
+
+(def ReadReply
+  "A read's reply, or no core to ask."
+  [:or [:map [:state :map]]
+       [:map [:states [:map-of :string :map]]]
+       [:map [:entries [:map-of :int :string]]]
+       [:map [:workstreams [:vector :string]]]
+       [:map [:error :any]]
+       Unavailable])
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]} unavailable?
+  "Whether `answer` says no core answered."
+  [answer]
+  (contains? answer :unavailable))
+
+(defn ^{:malli/schema [:=> [:cat :string] Unavailable]} unavailable
+  "The `Unavailable` answer for the daemon at `socket`."
+  [socket]
+  {:unavailable {:socket socket
+                 :message (str "the core daemon is not running at " socket " (bb nido:core:status)")}})
+
+(defn ^{:malli/schema [:=> [:cat :map :keyword] :any]} value!
+  "The value under `k` of a read's `reply`, for a caller that cannot go on without it: an
+   `Unavailable` reply is thrown as an error naming the daemon, {:core :unreachable}."
+  [reply k]
+  (if (unavailable? reply)
+    (throw (ex-info (get-in reply [:unavailable :message])
+                    {:core :unreachable :socket (get-in reply [:unavailable :socket])}))
+    (get reply k)))
+
+(defn ^{:malli/schema [:=> [:cat CoreRequest] [:or CommandOutcome ReadReply]]} request!
+  "Send `req` to the core and answer its reply, or `Unavailable` when the daemon does not answer."
   [req]
   (if @local-core
     (local/answer req)
-    (let [c (try (api/connect (socket))
-                 (catch Exception e
-                   (throw (ex-info "the core daemon is not running (bb nido:core:status)"
-                                   {:core :unreachable} e))))]
-      (try (api/request c req) (finally (api/disconnect c))))))
+    (let [s (socket)
+          c (try (api/connect s) (catch Exception _ nil))]
+      (if-not c
+        (unavailable s)
+        (try (or (api/request c req) (unavailable s))
+             (catch Exception _ (unavailable s))
+             (finally (api/disconnect c)))))))
 
 ;; ── reads and commands ───────────────────────────────────────────────────────
 
-(defn ^{:malli/schema [:=> [:cat :string] :map]} state
-  "Workstream `k`'s committed state; the state before any event when the core never heard of it."
+(defn ^{:malli/schema [:=> [:cat :string] ReadReply]} state
+  "Workstream `k`'s committed state as {:state st} — the state before any event when the core
+   never heard of it — or `Unavailable`."
   [k]
-  (:state (request! {:op :state :ws k})))
+  (request! {:op :state :ws k}))
 
-(defn ^{:malli/schema [:=> [:cat :string] [:map-of :string :map]]} states
-  "The committed state of every workstream whose key starts with `prefix`, by key."
+(defn ^{:malli/schema [:=> [:cat :string] ReadReply]} states
+  "{:states {key state}} for every workstream whose key starts with `prefix`, or `Unavailable`."
   [prefix]
-  (or (:states (request! {:op :states :prefix prefix})) {}))
+  (let [r (request! {:op :states :prefix prefix})]
+    (if (unavailable? r) r (update r :states #(or % {})))))
 
-(defn ^{:malli/schema [:=> [:cat :string [:sequential :int]] [:map-of :int :string]]} entry-contents
-  "The content of each entry of workstream `k` named in `seqs`, by seq."
+(defn ^{:malli/schema [:=> [:cat :string [:sequential :int]] ReadReply]} entry-contents
+  "{:entries {seq content}} for each entry of workstream `k` named in `seqs`, or `Unavailable`."
   [k seqs]
-  (if (empty? seqs) {} (or (:entries (request! {:op :entries :ws k :seqs (vec seqs)})) {})))
+  (if (empty? seqs)
+    {:entries {}}
+    (let [r (request! {:op :entries :ws k :seqs (vec seqs)})]
+      (if (unavailable? r) r (update r :entries #(or % {}))))))
 
-(defn ^{:malli/schema [:=> [:cat :string :string :map] :map]} command!
-  "Send `command` on workstream `k` under `key` and answer its committed outcome: {:events [...]},
-   {:refused {...}}, or {:error ...}. A reply lost on the way is asked for again under the same
-   key, which answers the outcome committed under it rather than deciding the command twice."
+(defn ^{:malli/schema [:=> [:cat :string :string :map] CommandOutcome]} command!
+  "Send `command` on workstream `k` under `key` and answer its outcome: {:events [...]},
+   {:refused {...}}, {:error ...} or `Unavailable`. A reply lost on the way is asked for again
+   under the same key, which answers the outcome committed under it rather than deciding the
+   command twice."
   [k key command]
   (loop [tries 3]
     (let [o (request! {:op :command :key key :ws k :command command})]
-      (if (and (contains? o :error) (> tries 1) (#{:timeout} (:error o)))
+      (if (and (> tries 1) (or (unavailable? o) (= :timeout (:error o))))
         (recur (dec tries))
         o))))

@@ -127,8 +127,8 @@
     :unreadable-ledger
     (str "  An entry this depends on will not parse, so standing cannot be\n"
          "  derived — and it fails closed rather than waving the branch through.\n"
-         "  Find the unreadable entry under the workstream's entries/ and repair\n"
-         "  it; a ledger nobody can read is not a ledger anybody may land on.")
+         "  Find the unreadable entry with bb nido:workstream:show and supersede or\n"
+         "  retract it; a ledger nobody can read is not a ledger anybody may land on.")
 
     (str "  No route recorded for " reason " — say so rather than working around it.")))
 

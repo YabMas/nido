@@ -1,6 +1,7 @@
 (ns nido.coordinator.view.workstreams-test
   (:require
-   [babashka.fs :as fs]
+   [nido.coordinator.record.history :as history]
+ [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.coordinator.record.session :as session]
@@ -36,7 +37,7 @@
    so tests can set :external-refs / :closed / :entries / :stage-history."
   [project overrides]
   (let [w (workstream/create! project {:stage (:stage overrides :triaging)})]
-    (workstream/write! (merge w overrides {:id (:id w) :project project}))))
+    (history/write! (merge w overrides {:id (:id w) :project project}))))
 
 (defn- make-session!
   "Create a session under a workstream, then apply overrides (substrate, autonomy)."

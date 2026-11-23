@@ -161,9 +161,7 @@
             d (add :design (a-design b))
             r (add :retraction {:format :retraction :retracts {:seq b}
                                 :because "x" :evidence ["src/a.clj:1"]})]
-        (io/write-text! (str (fs/path (cstate/workstream-dir :brian id)
-                                      (format "entries/%04d-retraction.edn" r)))
-                        "{:format :retraction :this-will-not")
+        (history/rewrite! :brian id r "{:format :retraction :this-will-not")
         (let [st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
           (is (true? (:indeterminate? st)))
           (is (= :unreadable-ledger (:reason (:blocked st))))
@@ -190,16 +188,11 @@
             "checked and found wrong is not checked and found sound")))))
 
 (defn- add-from-an-older-era!
-  "Write an entry the write contract no longer accepts, the way a ledger from
-   that era actually holds it — file plus index row. `append-entry!` cannot: it
-   validates against what is writable NOW, which is the point of the read eras."
+  "Write an entry the write contract no longer accepts, the way a ledger from that era holds it.
+   `append-entry!` cannot: it validates against what is writable NOW, which is the point of the
+   read eras."
   [ws-id kind record]
-  (let [w (ws/read-ws :brian ws-id)
-        n (inc (count (:entries w)))
-        f (format "entries/%04d-%s.edn" n (name kind))]
-    (io/write-text! (str (fs/path (cstate/workstream-dir :brian ws-id) f)) (pr-str record))
-    (ws/write! (update w :entries conj {:kind kind :seq n :at "2026-01-01T00:00:00Z" :file f}))
-    n))
+  (history/append-past-the-refusal! :brian ws-id kind record "2026-01-01T00:00:00Z"))
 
 (deftest a-baseline-checked-under-the-older-question-was-still-checked
   ;; :accurate is what :sufficient replaced, and it is read-only now — a ledger
@@ -371,9 +364,7 @@
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
             v (add :design-verdict (a-verdict d :invalidated))]
-        (io/write-text! (str (fs/path (cstate/workstream-dir :brian id)
-                                      (format "entries/%04d-design-verdict.edn" v)))
-                        "{:format :design-verdict :truncated")
+        (history/rewrite! :brian id v "{:format :design-verdict :truncated")
         (let [st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
           (is (true? (:indeterminate? st)))
           (is (= :unreadable-ledger (:reason (:blocked st)))))))))
@@ -392,10 +383,8 @@
             d (add :design (a-design b))
             _ (history/grant! :brian id d d)
             v (add :design-verdict (dissoc (a-verdict d :strained) :needs))
-            path (str (fs/path (cstate/workstream-dir :brian id)
-                               (format "entries/%04d-design-verdict.edn" v)))
             from-a-newer-writer (fn [verdict]
-                                  (io/write-text! path (pr-str (-> (a-verdict d verdict)
+                                  (history/rewrite! :brian id v (pr-str (-> (a-verdict d verdict)
                                                                    (assoc :added-later "r-1")
                                                                    (assoc-in [:invariants-broken 0 :added-later] true)))))]
         (from-a-newer-writer :strained)

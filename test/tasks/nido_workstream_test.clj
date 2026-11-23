@@ -210,7 +210,7 @@
         (let [e (first (:entries (ws/read-ws :brian (:id w))))]
           (is (= :note (:kind e)))
           (is (= "found a bug in the parser"
-                 (slurp (str (fs/path (cstate/workstream-dir :brian (:id w)) (:file e)))))
+                 (ws/entry-text (ws/read-ws :brian (:id w)) (:seq e)))
               "an untyped body is still stored verbatim, not EDN-mangled"))))))
 
 (deftest ref-add-keeps-a-stack-pr-title-verbatim
@@ -246,7 +246,7 @@
         (let [e (last (:entries (ws/read-ws :brian (:id w))))]
           (is (= :pr-opened (:kind e)))
           (is (str/includes?
-                (slurp (str (fs/path (cstate/workstream-dir :brian (:id w)) (:file e))))
+                (ws/entry-text (ws/read-ws :brian (:id w)) (:seq e))
                 "2 layers: copy, then behaviour")
               "the whole sentence survives, not the leading 2"))))))
 

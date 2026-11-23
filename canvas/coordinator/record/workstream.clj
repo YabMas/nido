@@ -8,7 +8,9 @@
             [canvas.coordinator.record.session :as session]
             [canvas.coordinator.record.phase :as phase]
             [canvas.coordinator.record.state :as state :refer [Path WorkstreamId]]
+            [canvas.coordinator.record.entry :as entry]
             [canvas.coordinator.report :as report]
+            [canvas.core.client :as client]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -23,8 +25,8 @@
    SHAPELESS. The closed malli schema in the code is validated on every write.")
 
 (Kind LedgerEntry
-  "One immutable append on a workstream's ledger: its `:seq`, its `:kind`, and the file holding
-   what was said. The payload is a `LedgerEvent`; this is the envelope around it.
+  "One immutable append on a workstream's ledger: its `:seq`, its `:kind`, and the content
+   holding what was said, kept by the core under that seq. The payload is a `LedgerEvent`; this is the envelope around it.
 
    Immutability is load-bearing rather than tidy: a design record CITES a baseline by seq, so an
    entry that could be rewritten would silently move the ground under every judgement made
@@ -33,11 +35,13 @@
 (Module record-workstream
   "The workstream: its record, its stage, and the append-only ledger everything else cites.
 
-   The ledger is the part with teeth. Appends are SERIALISED under a per-workstream lock, and the
-   whole read-derive-write sits inside it — `:seq` is derived from the index, so two writers
-   reading the same index both compute the same number and the second overwrites the first.
-   Per workstream rather than globally, so two unrelated workstreams never queue behind each
-   other.
+   The ledger is the part with teeth, and the core holds it: identity and entries are core
+   commands, committed by the core's writer and read back from its store. An append names the
+   seq its author read, and the core refuses it when the ledger has moved since, so no two
+   authors can number the same entry. The cross-record checks an append runs read other
+   workstreams, so they run here, before the command, under a per-workstream lock that
+   serialises nido's own multi-step writers; the core's compare-and-append is what makes the
+   number right whatever holds the lock.
 
    Reads go through the READ contract, not the write one: an entry that was legitimately
    writable when it was written stays readable after the schema moves on, and a reader that
@@ -53,24 +57,17 @@
     {:signature [:=> [:catn] WorkstreamId]
      :delegates [clock/now-iso]})
   (Operation read-ws
-    "One workstream by id, or nil, without the stored status fields older records carry. Reads
-     its index as the entries directory has it: an absent index rebuilt, a row naming a file the
-     directory does not hold under that :seq and kind replaced or dropped, and every other row
-     read as the row kept beside its entry — kept there by this read when none was, which freezes
-     the facts only the index held. A file no row names — an append that died before indexing
-     it, having passed the append's checks and owing the record nothing else — reads as indexed
-     at its :seq."
+    "One workstream by id, or nil: its identity and its ledger's index as the core holds them,
+     without the stored status fields older records carry. A project's sweep reads every
+     workstream of it in one request and serves reads from that for a moment; a read under the
+     workstream's lock always asks the core."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Workstream]]
-     :delegates [state/workstream-edn-path]})
-  (Operation write!
-    "Validate, then write atomically. A reader never observes half a record."
-    {:signature [:=> [:catn [:w Workstream]] Workstream]
-     :delegates [validate state/workstream-edn-path]})
+     :delegates [client/state client/states]})
   (Operation create!
     "Mint an id and persist a fresh workstream, holding no status — where it is placed, chosen to
      be or settled is what its ledger comes to record."
     {:signature [:=> [:catn [:project ProjectName] [:base :map]] Workstream]
-     :delegates [mint-id write! clock/now-iso]})
+     :delegates [mint-id validate client/command! clock/now-iso]})
   (Operation advance-stage!
     "Choose a stage for a workstream: append a :stage-set entry naming it and who decided. A no-op
      when the newest choice already names it, so a repeated event does not litter the ledger —
@@ -81,16 +78,16 @@
   (Operation set-facets!
     "Overwrite a workstream's classification facets."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:facets :map]] Workstream]
-     :delegates [read-ws write!]})
+     :delegates [read-ws client/command!]})
   (Operation set-title!
     "Overwrite a workstream's generated display title, with the basis it was generated from."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:text :string]
                       [:basis :string]] Workstream]
-     :delegates [read-ws write!]})
+     :delegates [read-ws client/command!]})
   (Operation clear-title!
     "Remove a workstream's generated display title."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Workstream]
-     :delegates [read-ws write!]})
+     :delegates [read-ws client/command!]})
   (Operation close!
     "Settle a workstream: append a :closed entry naming the outcome."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:outcome :keyword]] Workstream]
@@ -140,29 +137,19 @@
     "The goal the newest :intent entry states, or nil — what the work is for, once anyone has
      said."
     {:signature [:=> [:catn [:w Workstream]] [:maybe :string]]})
-  (Operation rebuilt-index
-    "The index the entries directory implies: each entry's row as kept beside it, else the row the
-     given record's index holds, else the row its file name implies — a kept or held row only when it names that file. The
-     index is a cache of this."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:vector :map]]
-     :delegates [state/workstream-dir]})
-  (Operation freeze-index!
-    "Keep beside every indexed entry the row its index holds, for each that has none — the only
-     copy of an earlier entry's :at and :amended-by — so the index can be deleted and rebuilt.
-     `read-ws` is what keeps them; this reads under the lock and counts what that read kept."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :int]
-     :delegates [append-lock-path read-ws state/workstream-dir state/workstream-edn-path]})
   (Operation append-entry!
-    "Append an immutable entry and record it in the index, under the workstream's lock."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] Path]
-     :delegates [append-lock-path read-ws write! report/entry-payload
+    "Append an immutable entry and record it in the index, under the workstream's lock. Answers
+     the seq the core committed it at — which entry this append wrote, since the ledger's newest
+     entry, reread once the lock is released, may be another writer's."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] :int]
+     :delegates [append-lock-path read-ws client/command! report/entry-payload
                  generation/opened-by generation/current generation/generation-of
                  generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation append-decision!
     "Append a :design-decision — the kind's one writer, which a decision round alone calls; every
      generic append refuses the kind. Every other check an append makes holds."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:content :string]] Path]
-     :delegates [append-lock-path read-ws write! report/entry-payload
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:content :string]] :int]
+     :delegates [append-lock-path read-ws client/command! report/entry-payload
                  generation/opened-by generation/current generation/generation-of
                  generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation open-generation!
@@ -179,7 +166,7 @@
      append makes holds. The payload may be a function of the workstream read under the lock, so
      a writer is stamped against the generation its entry joins."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
-                       [:payload [:or :map [:=> [:cat Workstream] :map]]]] Path]
+                       [:payload [:or :map [:=> [:cat Workstream] :map]]]] :int]
      :delegates [append-lock-path read-ws
                  generation/opened-by generation/current generation/generation-of
                  generation/closed-design generation/fixed-ids generation/defining-ids]})
@@ -222,20 +209,21 @@
      record — the kind's one writer. Refused unless the workstream is closed :between-phases, the evidence is not blank, and the
      gate opens the phase immediately after the current one of the plan it cites."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:gate :map]] Workstream]
-     :delegates [append-lock-path read-ws write! phase/progress]})
-  (Operation highest-seq-on-disk
-    "The largest entry number under entries/, or 0.
-
-     The index is a projection and can fall behind the directory it projects; the entries are
-     the record. Numbering an append off the index alone is what let one workstream reach 39
-     files against 37 rows, silently overwriting two."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :int]})
-  (Operation seq-of-path
-    "The :seq of the entry file an append returned, read off its name, or nil.
-
-     Which entry an append wrote is answered by what it returned. The ledger's newest entry,
-     reread once the lock is released, may be another writer's."
-    {:signature [:=> [:catn [:path :any]] [:maybe :int]]})
+     :delegates [append-lock-path read-ws client/command! phase/progress]})
+  (Operation latest-seq
+    "The seq of the newest entry on a workstream's ledger as the core holds it now, or 0 — what an
+     author names as the entry it read before appending after it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :int]
+     :delegates [read-ws]})
+  (Operation ledger-stamp
+    "A value that moves whenever a workstream's ledger or identity does, for a cache keyed on what
+     changed."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
+     :delegates [read-ws]})
+  (Operation entry-text
+    "The content of one entry of a workstream record, as it was written, or nil."
+    {:signature [:=> [:catn [:w :any] [:seq-n :int]] [:maybe :string]]
+     :delegates [entry/text]})
   (Operation check-entry
     "Throw what an append of this entry would throw now, and write nothing — for an author checking
      a record before handing it over, never a guard in place of the append's own."
@@ -243,14 +231,16 @@
      :delegates [read-ws report/entry-payload]})
   (Operation append-entry-at!
     "Append only if the ledger's latest entry is still the one the caller read. The optimistic
-     lock that stops two people deciding the same thing from both writing the decision."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:expected-seq :int] [:entry :map] [:content :string]] :map]
-     :delegates [append-lock-path read-ws write! report/entry-payload
+     lock that stops two people deciding the same thing from both writing the decision. Answers
+     the seq committed, or a refusal naming the ledger's latest seq."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:expected-seq :int] [:entry :map] [:content :string]] [:or :int :map]]
+     :delegates [append-lock-path read-ws client/command! report/entry-payload
                  generation/opened-by generation/current generation/generation-of
                  generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation append-entry-once!
     "Append an entry only when none of its kind is already the one the caller's identity names — an
-     entry an interrupted append wrote included, which a read holds — rather than write a second."
+     entry an interrupted append wrote included, which a read holds — rather than write a second.
+     Answers {:appended seq} or {:existing seq}."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string] [:same? :any]] :map]
      :delegates [append-lock-path read-ws report/parse-event
                  generation/opened-by generation/current generation/generation-of
@@ -279,13 +269,16 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:set :int]]
      :delegates [read-ws]})
   (Operation list-ids
-    "Every workstream id a project has."
+    "Every workstream id a project has in the core, from one read of every workstream of it."
     {:signature [:=> [:catn [:project ProjectName]] [:vector WorkstreamId]]
-     :delegates [state/workstreams-dir]})
+     :delegates [client/states]})
   (Operation delete!
-    "Remove a workstream and everything under it. Idempotent."
+    "Discard a workstream in the core and remove its sessions and Runs, leaving the legacy ledger
+     files where they are. Idempotent. An open unit or a turn still running on it stops the
+     discard — a merged or retracted unit does not: the core refuses, the refusal is
+     thrown, and nothing is removed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
-     :delegates [state/workstream-dir]})
+     :delegates [client/command! state/workstream-dir]})
   (Operation find-by-ref
     "The workstream answering to an external ref from a named adapter, or nil."
     {:signature [:=> [:catn [:project ProjectName] [:adapter :keyword] [:external-id :string]] [:maybe Workstream]]
@@ -324,7 +317,7 @@
   (Operation append-to-ref!
     "Append to whichever workstream carries this external id, minting it when none does — how an
      inbound event reaches its workstream without the caller knowing the id."
-    {:signature [:=> [:catn [:project ProjectName] [:external-id :string] [:entry :map] [:content :string]] [:maybe Path]]
+    {:signature [:=> [:catn [:project ProjectName] [:external-id :string] [:entry :map] [:content :string]] [:maybe :int]]
      :delegates [find-or-mint-by-ref! append-entry!]})
   (Operation add-ref!
     "Append an external ref, deduped on adapter and id.
@@ -344,7 +337,7 @@
      `[:?]` describes the contract where `[:function …]` would describe the implementation."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ref :map]
                             [:opts [:? [:maybe :map]]]] Workstream]
-     :delegates [read-ws write! append-entry!]})
+     :delegates [read-ws client/command! append-entry!]})
   (Operation unit-of
     "The unit an entry belongs to, addressed by its root goal's `:seq` — or nil where the
      entry is the WORKSTREAM's rather than any unit's.

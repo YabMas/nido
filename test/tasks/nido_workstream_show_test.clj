@@ -34,16 +34,3 @@
             (is (str/includes? out (:id w)))                ; prints the ws-id
             (is (str/includes? out "Findings round 1"))      ; renders the findings event
             (is (str/includes? out "Save button 500s"))))))))
-
-
-(deftest show-lists-an-entry-an-interrupted-append-left
-  (with-tmp
-    (fn []
-      (let [w   (ws/create! :brian {:external-refs []})
-            _   (ws/append-entry! :brian (:id w) {:kind :note} "one")
-            dir (fs/path (cstate/workstream-dir :brian (:id w)) "entries")]
-        ;; An interrupted append: the payload reached the disk and the index never learned of it.
-        ;; A read holds it, so the listing does too.
-        (spit (str (fs/path dir "0002-note.md")) "the lost append")
-        (let [out (with-out-str (t/show* {:project "brian" :ws-id (:id w)}))]
-          (is (re-find #"(?m)^\s+2\s+note" out)))))))

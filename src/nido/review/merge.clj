@@ -154,7 +154,7 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :string :map] :map]}
   merge!
   "Append to the parent the merged design whose own fields `authored` carries, when no conflict
-   stands. Returns `{:proposal p :appended <path>}`, or `{:proposal p}` having appended nothing.
+   stands. Returns `{:proposal p :appended <seq>}`, or `{:proposal p}` having appended nothing.
 
    The proposal supplies what a merged design is not free to author: its model and the strata that
    model lists, the baseline and intent the parent's current design cites, that it supersedes that

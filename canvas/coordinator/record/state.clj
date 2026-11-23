@@ -144,10 +144,7 @@
     "One workstream's directory."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
   (Operation workstream-edn-path
-    "One workstream's record."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
-  (Operation ws-entries-dir
-    "A workstream's append-only ledger — one immutable file per entry."
+    "One workstream's legacy record, from before the core held it — read by the import alone."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
   (Operation activity-lock-path
     "The lock whose holder IS the workstream's current activity. Holds no content: it is a

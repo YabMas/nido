@@ -1434,7 +1434,7 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (ws/write! (assoc (ws/read-ws :brian id) :closed {:at "t" :outcome :done}))
+        (history/write! (assoc (ws/read-ws :brian id) :closed {:at "t" :outcome :done}))
         (is (= :intent-stated (:at (p/of :brian id))) "a stored close no entry records is not read")
         (ws/close! :brian id :done)
         (is (= :shipped (:at (p/of :brian id))))
@@ -1451,7 +1451,7 @@
         (ws/close! :brian id :done)
         (let [w      (ws/read-ws :brian id)
               newest (last (filter #(= :closed (:kind %)) (:entries w)))]
-          (spit (str (fs/path (cstate/workstream-dir :brian id) (:file newest))) "{:not edn")
+          (history/rewrite! :brian id (:seq newest) "{:not edn")
           (let [c (ws/closure (ws/read-ws :brian id))]
             (is (= (:seq newest) (:seq c)))
             (is (nil? (:outcome c)) "the older :between-phases is not revived"))

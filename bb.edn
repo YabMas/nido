@@ -88,6 +88,11 @@
    :doc "Stop the core's supervised service."
    :task (nido-core/stop)}
 
+  nido:core:import-ledgers
+  {:requires ([tasks.nido-core :as nido-core])
+   :doc "Import every legacy ledger (workstream.edn and its entries) into the running core, reading the files only. A workstream the core already holds is left as it is, so a second run records nothing. Exits 1 when any ledger was refused."
+   :task (nido-core/import-ledgers)}
+
   nido:core:cutover
   {:requires ([tasks.nido-core-cutover-cmd :as nido-core-cutover-cmd])
    :doc "Move this nido home to the core, once: snapshot it, stop the old coordinator and every legacy agent session, import the ledgers read-only, hand over each unclosed workstream, and start the core."
@@ -671,11 +676,6 @@
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Record a person's answer to a blocker, in their words: :answer \"…\" [:blocker-seq <n>] (default: the newest unanswered) [:grants merge|intent] — :grants only when the person's answer hands the seats that act. Resolves the workstream from cwd, or :project with :ws-id/:ref."
    :task (apply nido-workstream/blocker-answer-cmd *command-line-args*)}
-
-  nido:status:backfill
-  {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Record as entries the status every workstream's records already hold — closes, one-offs, stages, findings resolutions, Notion statuses — and keep each index row beside its entry. Idempotent. :project <p>"
-   :task (apply nido-workstream/status-backfill-cmd *command-line-args*)}
 
   nido:improvement:backfill-landings
   {:requires ([tasks.nido-workstream :as nido-workstream])

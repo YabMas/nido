@@ -122,33 +122,3 @@
      it is deleted."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [scratch? workstream/list-ids workstream/read-ws workstream/delete!]}))
-
-(Module lane-backfill
-  "Record as entries the status a workstream's mutable records already hold, so a status read off
-   the ledger alone answers for workstreams decided before decisions were recorded. Idempotent:
-   it appends only what the ledger does not already say."
-  (Operation unaccepted-triage
-    "The :seq of the newest triage no acceptance cites, or nil."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :int]]
-     :delegates [workstream/read-ws workstream/entries-of]})
-  (Operation backfill-workstream!
-    "Bring one workstream's ledger level with its records; the kinds appended, in order."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:facts :map]] [:vector :keyword]]
-     :delegates [workstream/freeze-index! workstream/append-entry!]})
-  (Operation backfill-orphan-tickets!
-    "Give every ticket whose record holds a status, and that no workstream carries, a workstream
-     closed as the record says it ended — so the status derived off a ledger is the one the
-     record held."
-    {:signature [:=> [:catn [:project ProjectName]] [:vector :keyword]]
-     :delegates [tickets/list-ids tickets/read-meta workstream/find-or-mint-by-ref!
-                 workstream/close!]})
-  (Operation register-runs!
-    "Register every run of a project with its workstream, so the runs minted before registration
-     are found from it."
-    {:signature [:=> [:catn [:project ProjectName]] :int]
-     :delegates [runs/register!]})
-  (Operation backfill!
-    "Give orphan tickets a workstream, register the project's runs, then backfill every
-     workstream; counts appended by kind, and what failed."
-    {:signature [:=> [:catn [:project ProjectName]] :map]
-     :delegates [backfill-orphan-tickets! register-runs! backfill-workstream!]}))

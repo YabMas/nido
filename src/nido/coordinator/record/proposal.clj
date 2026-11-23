@@ -17,13 +17,11 @@
    Nothing here writes. The verbs that record a decision or a landing stay in
    the work vocabulary, where the surface reaches them."
   (:require
-   [babashka.fs :as fs]
+   [clojure.edn :as edn]
    [clojure.string :as str]
    [clojure.set]
-   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as cws]
-   [nido.coordinator.report :as report]
-   [nido.platform.io :as io]))
+   [nido.coordinator.report :as report]))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:maybe :string]]}
   first-heading
@@ -36,25 +34,25 @@
 
 (defn ^{:malli/schema [:=> [:cat :any :map] :map]}
   entry->report
-  "Render a ledger entry as a `:format`-tagged gate report. An `.edn` file is a
-   typed event — read + validated against the schema for its `:kind`
+  "Render the entry `entry` (an index row) of the workstream record `ledger` as a
+   `:format`-tagged gate report. An entry written as EDN is a typed event — read + validated against the schema for its `:kind`
    (report/parse-event — the read contract, which accepts any shape that was
    writable when the entry was written), :seq/:at stamped from the entry (the same
-   stamp cws/latest-entry applies); any other file is markdown
-   (:format :markdown). A typed `.edn` that fails to read/validate degrades to a
+   stamp cws/latest-entry applies); any other entry is markdown
+   (:format :markdown). A typed EDN entry that fails to read/validate degrades to a
    :markdown payload of its raw text rather than blanking the pane.
 
    :seq is load-bearing, not decoration: it is the ledger position a rendered
    gate binds its buttons to, so a click can be checked against the report that
    drew it (option-actions -> choose-option!)."
-  [base-dir entry]
-  (let [f    (str (fs/path base-dir (:file entry)))
-        edn? (str/ends-with? (str (:file entry)) ".edn")]
+  [ledger entry]
+  (let [text (when ledger (cws/entry-text ledger (:seq entry)))
+        edn? (= "edn" (:ext entry))]
     (or (when edn?
-          (try (-> (report/parse-event (:kind entry) (io/read-edn f))
+          (try (-> (report/parse-event (:kind entry) (edn/read-string text))
                    (assoc :seq (:seq entry) :at (:at entry)))
                (catch Throwable _ nil)))
-        (let [md (when (fs/exists? f) (slurp f))]
+        (let [md text]
           (cond-> {:format   :markdown
                    :kind     (:kind entry)
                    :seq      (:seq entry)
@@ -76,12 +74,12 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   active-ledger
-  "The workstream's own ledger — the single event store. {:base-dir <string|nil>
-   :entries <vector>}, oldest-first."
+  "The workstream's own ledger — the single event store. {:ledger <the record|nil>
+   :entries <vector>}, oldest-first; `entry->report` reads an entry's content through :ledger."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
-    {:base-dir (cstate/workstream-dir project ws-id) :entries (vec (:entries w))}
-    {:base-dir nil :entries []}))
+    {:ledger w :entries (vec (:entries w))}
+    {:ledger nil :entries []}))
 
 (defn- analysis-entries
   "Oldest-first [seq entry-map] for every :review-analysis on this workstream,
@@ -89,11 +87,11 @@
    record too old or too new for this reader degrades the same way it does
    everywhere else rather than blanking the proposal list."
   [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+  (let [{:keys [ledger entries]} (active-ledger project ws-id)]
     (->> entries
          (filter #(= :review-analysis (:kind %)))
          (keep (fn [e]
-                 (let [r (entry->report base-dir e)]
+                 (let [r (entry->report ledger e)]
                    (when (= :review-analysis (:format r)) r)))))))
 
 (defn- decisions-by-address
@@ -104,11 +102,11 @@
    the one made last. Nothing enforces one decision per proposal, and nothing
    should — the record of having changed it is the point."
   [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+  (let [{:keys [ledger entries]} (active-ledger project ws-id)]
     (->> entries
          (filter #(= :improvement-decision (:kind %)))
          (keep (fn [e]
-                 (let [r (entry->report base-dir e)]
+                 (let [r (entry->report ledger e)]
                    (when (= :improvement-decision (:format r)) r))))
          (reduce (fn [m d] (assoc m [(:analysis-seq d) (:observation d)] d)) {}))))
 
@@ -120,11 +118,11 @@
    should point at the one a reader should go read. The earlier record stays on
    the ledger, which is where the full history belongs."
   [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+  (let [{:keys [ledger entries]} (active-ledger project ws-id)]
     (->> entries
          (filter #(= :improvement-landed (:kind %)))
          (keep (fn [e]
-                 (let [r (entry->report base-dir e)]
+                 (let [r (entry->report ledger e)]
                    (when (= :improvement-landed (:format r)) r))))
          (reduce (fn [m l] (assoc m [(:analysis-seq l) (:observation l)] l)) {}))))
 
@@ -399,11 +397,11 @@
   (let [pk (keyword (name project))]
     (->> (cws/list-ids pk)
          (mapcat (fn [ws-id]
-                   (let [{:keys [base-dir entries]} (active-ledger pk ws-id)]
+                   (let [{:keys [ledger entries]} (active-ledger pk ws-id)]
                      (->> entries
                           (filter #(= :improvement-plan (:kind %)))
                           (keep (fn [e]
-                                  (let [r (entry->report base-dir e)]
+                                  (let [r (entry->report ledger e)]
                                     (when (= :improvement-plan (:format r))
                                       (assoc r :ws-id ws-id)))))))))
          (sort-by :at)

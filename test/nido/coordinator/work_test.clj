@@ -1,6 +1,7 @@
 (ns nido.coordinator.work-test
   (:require
-   [babashka.fs :as fs]
+   [nido.coordinator.record.history :as history]
+ [babashka.fs :as fs]
    [clojure.set :as set]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
@@ -80,7 +81,7 @@
     (when accepted?
       (workstream/append-entry! :brian ws-id {:kind :triage-accepted}
                                 (pr-str {:format :triage-accepted
-                                         :triage-seq (workstream/seq-of-path path)})))))
+                                         :triage-seq path})))))
 
 (deftest stages-is-the-canonical-spine
   ;; STORED stage names (see spine-is-exactly-the-stages-the-board-honors).
@@ -3272,7 +3273,7 @@
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:external-refs []})]
-        (workstream/write! (assoc (workstream/read-ws :brian (:id w)) :stage :planning))
+        (history/write! (assoc (workstream/read-ws :brian (:id w)) :stage :planning))
         (is (thrown-with-msg? Exception #"Unknown workstream stage"
                               (work/set-stage! :brian (:id w) :planning))
             "naming the stage already stored does not skip the vocabulary check")

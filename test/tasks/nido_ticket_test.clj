@@ -28,7 +28,7 @@
     (with-redefs [workstream/append-to-ref!
                   (fn [project external-id entry content]
                     (swap! calls conj [project external-id entry content])
-                    "/ws/x/entries/0001-note.md")]
+                    1)]
       (t/append-cmd ":project" "brian" ":br" "BR-7" ":kind" "note"
                     ":session" "s1" ":run-id" "r1" ":file" (.getPath f))
       (is (= [[:brian "BR-7" {:kind :note :session "s1" :run-id "r1"} "body text"]]

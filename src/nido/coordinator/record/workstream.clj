@@ -2,7 +2,15 @@
   "The workstream: the source-agnostic spine. Owns the append-only log and the
    descriptive workflow stage. Engagement state is NOT stored here — it is a
    projection over this workstream's session records (see nido.coordinator.record.session).
-   See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md."
+   See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md.
+
+   STORED IN THE CORE. A workstream's identity and its ledger are core state, written only as
+   core commands (`nido.core.client`) and read back from the core: the identity and the index
+   rows from the workstream's committed state, an entry's content by its seq. An append names
+   the seq the ledger stood at when its checks were made, and the core refuses it once anything
+   was appended since, so no entry is numbered twice or written over. The per-workstream append
+   lock still serialises nido's own processes, because several callers decide from one reading
+   and append more than once before letting go (`appending!`, `holding-ledger`)."
   (:require
    [babashka.fs :as fs]
    [clojure.edn :as edn]
@@ -10,12 +18,15 @@
    [malli.core :as m]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.entry :as entry]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as report-model]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
+   [nido.core.client :as client]
+   [nido.platform.core :as core]
    [nido.platform.io :as io]))
 
 (def ExternalRef
@@ -64,18 +75,6 @@
         suf  (subs (str (java.util.UUID/randomUUID)) 0 6)]
     (str "ws-" date "-" suf)))
 
-(def ^:private stored-status-keys
-  "Fields a workstream record carried before its ledger was the only place its status lived — a
-   stage, its history, a close, a findings tracker. The ledger records each as entries now
-   (`status-kinds`), and the status backfill turned every one these held into an entry."
-  #{:stage :stage-history :closed :findings})
-
-(defn- shed
-  "`w` without the stored status fields a record written before the ledger was the only place
-   its status lived still carries, so no reader can reach them and any rewrite drops them."
-  [w]
-  (apply dissoc w stored-status-keys))
-
 (def status-kinds
   "Entry kinds that record a decision about a workstream's status — settled, reopened, put at a
    stage, findings resolved, born a one-off, the pipeline activated, a Notion status seen, a
@@ -93,49 +92,72 @@
   [w]
   (last (remove #(status-kinds (:kind %)) (:entries w))))
 
-(declare rebuilt-index reconciled-index)
+(def ^:dynamic ^:private *under-lock*
+  "True while this thread holds a workstream's append lock: every read under it is asked of the
+   core, never taken from a sweep's snapshot, so a decision made under the lock is made from the
+   ledger the append will join."
+  false)
 
-(defn- with-retraction-targets
-  "`rows` with the target of every retraction row that does not mirror one read from its entry
-   file. A row written before retractions mirrored their target holds none, and
-   `record.generation` reads the target off the row to tell a retraction belonging to no
-   generation from one that does; without it that retraction would be placed in a generation.
-   A file that does not parse leaves its row as it was."
-  [project ws-id rows]
-  (let [dir (cstate/workstream-dir project ws-id)]
-    (mapv (fn [row]
-            (if (and (= :retraction (:kind row)) (not (contains? row :retracts)) (:file row))
-              (let [body (try (edn/read-string (slurp (str (fs/path dir (:file row)))))
-                              (catch Exception _ nil))]
-                (cond-> row (map? body) (assoc :retracts (get-in body [:retracts :seq]))))
-              row))
-          rows)))
+(defonce ^:private swept
+  (atom {}))
+
+(def ^:private sweep-ms
+  "How long a workstream's state read in a sweep of its project (`list-ids`) answers `read-ws`
+   outside the append lock. A sweep reads thousands of workstreams in one request rather than one
+   each; a reader that needs the ledger as it stands now takes the lock."
+  2000)
+
+(defn- sweep-key [project ws-id]
+  [(str (core/nido-root)) (client/ws-key project ws-id)])
+
+(defn- forget!
+  "Drop what a sweep held of workstream `ws-id`, so this process reads its own writes."
+  [project ws-id]
+  (swap! swept dissoc (sweep-key project ws-id)))
+
+(defn- core-state
+  "Workstream `ws-id`'s committed state in the core."
+  [project ws-id]
+  (let [hit (when-not *under-lock* (get @swept (sweep-key project ws-id)))]
+    (if (and hit (< (- (System/currentTimeMillis) (:at hit)) sweep-ms))
+      (:state hit)
+      (client/value! (client/state (client/ws-key project ws-id)) :state))))
+
+(defn- record-of
+  "The workstream record a committed core `state` holds for `ws-id`, or nil when it holds none."
+  [ws-id state]
+  (when-let [i (when-not (:discarded? state) (:identity state))]
+    (-> i (assoc :id ws-id :entries (vec (:ledger state))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
   read-ws
-  "Read a workstream.edn by project + id. Returns nil if absent. Stored status fields a record
-   written before the ledger held them still carries are left out (`shed`).
-
-   A record whose index is MISSING reads the index entries/ rebuilds. One that has an index reads
-   it as entries/ holds it (`reconciled-index`) — an entry an append wrote and died before
-   indexing included. Every retraction row carries its target (`with-retraction-targets`)."
+  "The workstream `ws-id` of `project` as the core holds it — its identity and its ledger's index
+   rows — or nil when the core holds no such workstream."
   [project ws-id]
-  (some-> (io/read-edn-cached (cstate/workstream-edn-path project ws-id))
-          shed
-          (as-> w (assoc w :entries (with-retraction-targets
-                                      project ws-id
-                                      (if (contains? w :entries)
-                                        (reconciled-index project ws-id w)
-                                        (rebuilt-index project ws-id w)))))))
+  (record-of ws-id (core-state project ws-id)))
 
-(defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
-  write!
-  "Validate then write a Workstream record (atomic; parent dirs created), without any stored
-   status field it still carried (`shed`)."
-  [w]
-  (let [w (validate (shed w))]
-    (io/write-edn! (cstate/workstream-edn-path (:project w) (:id w)) w)
-    w))
+(defn- create-command!
+  "Send `command` on workstream `ws-id` under `key`, and throw unless the core admits it."
+  [project ws-id key command]
+  (let [k (client/ws-key project ws-id)
+        o (client/command! k key command)]
+    (forget! project ws-id)
+    (when (client/unavailable? o) (client/value! o :events))
+    (when-not (contains? o :events)
+      (throw (ex-info (str "The core refused " (name (:command command)) " on " ws-id ": "
+                           (pr-str (or (:refused o) (:error o))))
+                      {:ws-id ws-id :command (:command command) :outcome o})))
+    o))
+
+(defn- revise!
+  "Revise the identity of workstream `ws-id` with `changes` (a nil value removes the key), and
+   return the record. Throws if the workstream is absent."
+  [project ws-id changes what]
+  (when-not (read-ws project ws-id)
+    (throw (ex-info (str "Cannot " what " on absent workstream") {:project project :ws-id ws-id})))
+  (create-command! project ws-id (str "identity/" (client/ws-key project ws-id) "/" (random-uuid))
+                   {:command :revise-identity :changes changes})
+  (validate (read-ws project ws-id)))
 
 (defn- check-stage!
   "Throw unless `stage` is in the closed vocabulary (session/storable-stages).
@@ -161,14 +183,19 @@
    It holds no status: where it is placed, chosen to be or settled is what its ledger comes to
    record."
   [project {:keys [external-refs intake facets]}]
-  (let [w (cond-> {:id            (mint-id)
-                   :project       project
-                   :external-refs (vec (or external-refs []))
-                   :created-at    (clock/now-iso)
-                   :entries       []}
-            intake       (assoc :intake intake)
-            (seq facets) (assoc :facets facets))]
-    (write! w)))
+  (let [w (validate (cond-> {:id            (mint-id)
+                             :project       project
+                             :external-refs (vec (or external-refs []))
+                             :created-at    (clock/now-iso)
+                             :entries       []}
+                      intake       (assoc :intake intake)
+                      (seq facets) (assoc :facets facets)))]
+    (create-command! project (:id w) (str "create/" (client/ws-key project (:id w)))
+                     {:command :create-workstream :identity (dissoc w :id :entries)})
+    ;; The directory its sessions, Runs and locks are kept in. Which workstreams exist is the
+    ;; core's to say (`list-ids`), not this directory's.
+    (fs/create-dirs (cstate/workstream-dir project (:id w)))
+    w))
 
 (declare record-status! closure newest-choice)
 
@@ -195,33 +222,21 @@
   "Overwrite a workstream's :facets map. Throws if the workstream is absent.
    Returns the updated record. An empty map removes the key."
   [project ws-id facets]
-  (let [w (read-ws project ws-id)]
-    (when-not w
-      (throw (ex-info "Cannot set facets on absent workstream"
-                      {:project project :ws-id ws-id})))
-    (write! (if (seq facets) (assoc w :facets facets) (dissoc w :facets)))))
+  (revise! project ws-id {:facets (not-empty facets)} "set facets"))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string :string] :Workstream]}
   set-title!
   "Overwrite a workstream's generated :title with `text`, generated from `basis`.
    Throws if the workstream is absent. Returns the updated record."
   [project ws-id text basis]
-  (let [w (read-ws project ws-id)]
-    (when-not w
-      (throw (ex-info "Cannot set title on absent workstream"
-                      {:project project :ws-id ws-id})))
-    (write! (assoc w :title {:text text :basis basis}))))
+  (revise! project ws-id {:title {:text text :basis basis}} "set title"))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Workstream]}
   clear-title!
   "Remove a workstream's generated :title. Throws if the workstream is absent.
    Returns the updated record."
   [project ws-id]
-  (let [w (read-ws project ws-id)]
-    (when-not w
-      (throw (ex-info "Cannot clear title on absent workstream"
-                      {:project project :ws-id ws-id})))
-    (write! (dissoc w :title))))
+  (revise! project ws-id {:title nil} "clear title"))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   close!
@@ -339,27 +354,12 @@
                   (fn [w] (when (= :activated (activation w))
                             (cond-> {:format :deactivated :by :person} session (assoc :session session))))))
 
-(def ^:private parsed-entries
-  "Entry file → its parsed payload, keyed on [path kind file-stamp].
-
-   An entry is written once and never rewritten, yet every reader re-parsed it:
-   one `pipeline/of` on a 236-entry ledger parsed 526 files (~180ms), and the
-   board asks it for every drawn row on every refresh. The file's stamp is in the
-   key anyway, so a file that did change is re-read rather than trusted.
-
-   Bounded, because the daemon lives for days and the ledgers run to ~100MB of
-   EDN between them: as `io/cache-store` bounds it, at twice `parsed-entry-cap`."
-  (atom {}))
-
-(def ^:private parsed-entry-cap 8192)
-
-(defn- parse-entry-file
-  "`report/parse-event` of the entry file `f` as `kind`, through `parsed-entries`.
-   Throws as an uncached read would — a failure is never cached."
-  [kind f]
-  (let [k [f kind (io/file-stamp f)]]
-    (or (io/cache-lookup parsed-entries k)
-        (io/cache-store parsed-entries parsed-entry-cap k (report/parse-event kind (io/read-edn f))))))
+(defn ^{:malli/schema [:=> [:cat :any :int] [:maybe :string]]}
+  entry-text
+  "The content of the entry at `seq-n` on the workstream record `w`, as it was written, or nil —
+   `nido.coordinator.record.entry/text`."
+  [w seq-n]
+  (entry/text w seq-n))
 
 (defn- read-entry-at
   "Parse the entry at `seq-n` on the workstream record `w`, through the READ
@@ -367,11 +367,7 @@
    to nil for the same reason latest-entry does: a reader following a citation
    has to be able to find nothing without the caller crashing."
   [w seq-n]
-  (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
-    (let [f (str (fs/path (cstate/workstream-dir (:project w) (:id w)) (:file e)))]
-      (try (-> (parse-entry-file (:kind e) f)
-               (assoc :seq (:seq e) :at (:at e)))
-           (catch Throwable _ nil)))))
+  (entry/parsed w seq-n))
 
 (defn- span-of
   "The index rows of `kind` in the current generation's span of `w`, in ledger order — the one
@@ -1312,70 +1308,25 @@
   [project ws-id]
   (cstate/append-lock-path project ws-id))
 
-(defn- refuse-if-taken!
-  "Throw rather than write over an entry that already exists.
-
-   The last line of defence, and it should never fire now that the seq comes off
-   the disk: a ledger is append-only by contract, and silently replacing an
-   entry breaks every citation keyed on its number. Cheap enough to keep as the
-   thing that turns a future derivation bug into a loud failure instead of a
-   record that quietly stops being what it was."
-  [abs seq-n]
-  (when (fs/exists? abs)
-    (throw (ex-info "Refusing to overwrite an existing ledger entry"
-                    {:seq seq-n :file abs}))))
-
-(def ^:private entry-file-pattern
-  "The prefix `append-entry!` gives every entry file: a four-digit :seq, then a
-   hyphen. Group 1 is the number.
-
-   Shared by the two readings of entries/ — what the next :seq must clear, and
-   which files the index does not name — so a stray file in the directory is
-   either an entry to both of them or to neither."
-  #"^(\d{4})-")
-
-(defn ^{:malli/schema [:=> [:cat :any] [:maybe :int]]}
-  seq-of-path
-  "The :seq of the entry file at `path` — what `append-entry!` returns — read off its name, or nil.
-
-   The one answer to which entry an append wrote. Rereading the ledger's newest entry afterwards is
-   not: the append lock is released by then, and another writer's entry may be the newest."
-  [path]
-  (some-> (re-find entry-file-pattern (str (fs/file-name path))) second parse-long))
-
-(defn- entry-filenames
-  "The entry filenames under entries/, in :seq order. Empty when the workstream
-   has no entries directory yet.
-
-   Name order IS :seq order because the number is zero-padded; unpad it and this
-   sorts 0010 before 0009."
-  [project ws-id]
-  (let [dir (fs/path (cstate/workstream-dir project ws-id) "entries")]
-    (if-not (fs/exists? dir)
-      []
-      (->> (fs/list-dir dir)
-           (map fs/file-name)
-           (filter #(re-find entry-file-pattern %))
-           sort
-           vec))))
+(defn- locked
+  "Answer `f` holding workstream `ws-id`'s append lock, every read under it asked of the core."
+  [project ws-id f]
+  (io/with-file-lock (append-lock-path project ws-id)
+    (fn [] (binding [*under-lock* true] (f)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :int]}
-  highest-seq-on-disk
-  "The largest entry number under entries/, or 0.
-
-   The index is a projection of that directory and can fall behind it — an
-   interrupted append writes the payload and dies before `write!`, and every
-   later append then computes a seq the count says is free and the disk says is
-   taken. One workstream reached 39 files against 37 index rows, which meant two
-   design records existed that no reader could see: the review loop judged every
-   ruling of a run against a record superseded twice.
-
-   The directory is the ledger. The index is a convenience over it, and where
-   they disagree the files win."
+  latest-seq
+  "The seq of the newest entry on workstream `ws-id`'s ledger as the core holds it now, or 0."
   [project ws-id]
-  (->> (entry-filenames project ws-id)
-       (keep #(some-> (re-find entry-file-pattern %) second parse-long))
-       (reduce max 0)))
+  (or (:seq (peek (vec (:entries (binding [*under-lock* true] (read-ws project ws-id)))))) 0))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  ledger-stamp
+  "A value that moves whenever workstream `ws-id`'s ledger or identity does: its newest seq and
+   its identity. For a cache keyed on what changed, so it is not itself a read of the record."
+  [project ws-id]
+  (when-let [w (record-of ws-id (core-state project ws-id))]
+    [(:seq (peek (:entries w))) (hash (dissoc w :entries))]))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream :int] [:maybe :int]]}
   unit-of
@@ -1469,8 +1420,8 @@
   (boolean (seq (span-of w :design))))
 
 (defn- index-row
-  "The index row for an entry: what `entry` carried, plus the ledger's own
-   stamps, plus the design it names.
+  "The index row for an entry, short of its :seq, which the core numbers it with: what `entry`
+   carried, plus the ledger's own stamps, plus the design it names.
 
    `:under` MIRRORS the record's `:design :seq` onto the index, and is the one
    field here that comes out of the payload. It is a citation the author wrote,
@@ -1481,12 +1432,12 @@
    attribution only readable by parsing every trail entry would have cost exactly
    that. Absent on rows written before the citation existed, where
    `reentry/generation` is still the answer."
-  [entry seq-n payload rel]
+  [entry payload ext]
   (let [gate?    (= :phase-gate (:kind entry))
         retract? (= :retraction (:kind entry))
         body     (when (or gate? retract? (contains? trail-kinds (:kind entry))) (edn/read-string payload))
         under    (get-in body [:design :seq])]
-    (cond-> (assoc entry :seq seq-n :at (clock/now-iso) :file rel)
+    (cond-> (assoc entry :at (clock/now-iso) :ext ext)
       under (assoc :under under)
       ;; A gate's phase is mirrored for the same reason: `record.phase/progress`
       ;; reads the index it is handed and parses nothing.
@@ -1495,161 +1446,6 @@
       ;; And a retraction's target, which `record.generation` reads to tell a retraction that
       ;; belongs to no generation — of a baseline or an intent — from one that does.
       retract? (assoc :retracts (get-in body [:retracts :seq])))))
-
-(defn- meta-rel
-  "Where the index row of the entry numbered `seq-n` is kept beside the ledger.
-
-   Its own directory rather than a second file under entries/, because entries/ IS the ledger
-   and every reading of it — the next :seq, the drift report — takes any numbered file there for
-   an entry."
-  [seq-n]
-  (format "entries.meta/%04d.edn" seq-n))
-
-(defn- write-entry-files!
-  "Write an entry's index row beside it, then the entry itself. The row first, so any entry file
-   an append wrote has the row its index would have held: :at, :session and :amended-by exist
-   nowhere in the payload, and an index rebuilt without them would answer differently."
-  [project ws-id row abs payload]
-  (io/write-edn! (str (fs/path (cstate/workstream-dir project ws-id) (meta-rel (:seq row)))) row)
-  (io/write-text! abs payload))
-
-(defn- implied-row
-  "The row an entry file's name implies when nothing kept or held one, with what `index-row`
-   mirrors out of the payload — `:under`, a gate's `:opens` and `:phase`, a retraction's `:retracts` — read back out of it, since a
-   reader of the index parses nothing. A payload that does not parse mirrors nothing."
-  [dir rel seq-n kind]
-  (let [gate?    (= :phase-gate kind)
-        retract? (= :retraction kind)
-        body     (when (or gate? retract? (contains? trail-kinds kind))
-                   (try (edn/read-string (slurp (str (fs/path dir rel)))) (catch Exception _ nil)))
-        under    (when (map? body) (get-in body [:design :seq]))]
-    (cond-> {:kind kind :seq seq-n :file rel}
-      under                    (assoc :under under)
-      (and gate? (map? body))  (assoc :opens (:opens body))
-      (and gate? (map? body) (:phase body)) (assoc :phase (:phase body))
-      (and retract? (map? body)) (assoc :retracts (get-in body [:retracts :seq])))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:vector :map]]}
-  rebuilt-index
-  "The :entries index entries/ implies, in :seq order: each file's row as written beside it, else
-   the row `w`'s index holds for that :seq — the only copy of an earlier entry's :at and
-   :amended-by, which `freeze-index!` keeps beside it — else the row its file name implies
-   (`implied-row`). A row kept or held is taken only when it names that file.
-
-   Files a row names go in however they were written, so this is the index of the directory, not
-   of the appends that succeeded: a file an interrupted append left is in it."
-  [project ws-id w]
-  (let [dir    (cstate/workstream-dir project ws-id)
-        frozen (into {} (map (juxt :seq identity)) (:entries w))]
-    (vec (for [fname (entry-filenames project ws-id)
-               :let  [[_ n kind] (re-find #"^(\d{4})-(.+)\.[a-z]+$" fname)
-                      seq-n      (parse-long n)
-                      side       (io/read-edn (str (fs/path dir (meta-rel seq-n))))]]
-           (or (some #(when (= (str "entries/" fname) (:file %)) %) [side (frozen seq-n)])
-               (implied-row dir (str "entries/" fname) seq-n (keyword kind)))))))
-
-(defn- reconcile-index
-  "`reconciled-index`, computed."
-  [project ws-id w]
-  (let [dir    (cstate/workstream-dir project ws-id)
-        files  (into {} (keep (fn [fname]
-                                (when-let [[_ n kind] (re-find #"^(\d{4})-(.+)\.[a-z]+$" fname)]
-                                  [(str "entries/" fname) [(parse-long n) (keyword kind)]])))
-                     (entry-filenames project ws-id))
-        by-seq (into {} (map (fn [[rel [n _]]] [n rel])) files)
-        sound? (fn [{:keys [file seq kind]}] (= [seq kind] (files file)))
-        side   (fn [n] (io/read-edn (str (fs/path dir (meta-rel n)))))
-        ;; A sound row reads as the row kept beside its entry; one with none kept is kept now,
-        ;; which is the freeze, while its index still holds it.
-        kept   (fn [row]
-                 (let [path (str (fs/path dir (meta-rel (:seq row))))
-                       s    (io/read-edn path)]
-                   (cond
-                     (= (:file row) (:file s)) s
-                     (fs/exists? path)         row
-                     :else                     (do (io/write-edn! path row) row))))
-        implied (fn [n]
-                  (let [rel (by-seq n)
-                        s   (side n)]
-                    (if (= rel (:file s))
-                      s
-                      (let [[seq-n kind] (files rel)] (implied-row dir rel seq-n kind)))))]
-    (let [{:keys [rows seen]}
-          (reduce (fn [{:keys [seen] :as acc} row]
-                    (let [n (:seq row)]
-                      (cond
-                        (nil? (:file row)) (update acc :rows conj row)
-                        (seen n)           acc
-                        (sound? row)       (-> acc (update :rows conj (kept row)) (update :seen conj n))
-                        (by-seq n)         (-> acc (update :rows conj (implied n)) (update :seen conj n))
-                        :else              acc)))
-                  {:rows [] :seen #{}}
-                  (:entries w))
-          ;; An entry file no row names is an append that died after writing it and before its
-          ;; row reached the index. It passed every check the append makes before its payload was
-          ;; written, and nothing beside its index row was owed with it, so it reads as indexed.
-          adopted (for [n (sort (keys by-seq)) :when (not (seen n))] (implied n))]
-      (if (seq adopted)
-        (vec (sort-by :seq (concat rows adopted)))
-        rows))))
-
-(defonce ^:private reconciled (atom {}))
-
-(defn- reconciled-index
-  "`w`'s index as entries/ has it. A row naming a file entries/ holds under that name, :seq and
-   kind reads as the row kept beside that file, and the row is kept there when none is — so a
-   rebuild answers what the index did, :at and :amended-by included, once the index has been read.
-   A row naming a file entries/ does not hold so is replaced by the row kept beside the file its
-   :seq does name, else the row that file's name implies; dropped when no file carries that :seq,
-   as is a second row naming a :seq an earlier one did. A row that names no file is kept as it is.
-
-   A file no row names — an append that died between its entry and its index row — reads as the
-   row kept beside it, else the row its name implies, at its :seq: it passed the append's checks
-   before it was written, and an entry implies no change to the record besides its row.
-
-   Memoised per workstream on the stamps of its record and of both directories: every write to
-   either directory renames a file into it, which moves the directory's stamp. The board reads
-   every workstream on every render, and this reads a file per entry."
-  [project ws-id w]
-  (let [wdir (cstate/workstream-dir project ws-id)
-        k    (cstate/workstream-edn-path project ws-id)
-        st   [(io/file-stamp k)
-              (io/file-stamp (str (fs/path wdir "entries")))
-              (io/file-stamp (str (fs/path wdir "entries.meta")))
-              (:entries w)]
-        hit  (get @reconciled k)]
-    (if (= st (:stamp hit))
-      (:rows hit)
-      (let [rows (reconcile-index project ws-id w)]
-        ;; The stamp after the read, since a freeze moves entries.meta's.
-        (swap! reconciled assoc k {:stamp (assoc st 2 (io/file-stamp (str (fs/path wdir "entries.meta"))))
-                                   :rows  rows})
-        rows))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :int]}
-  freeze-index!
-  "Keep beside every indexed entry the row its index holds, for each that has none. Returns how
-   many were written.
-
-   Rows written before entries carried them are the only record of those entries' :at and
-   :amended-by; once kept beside the ledger, the index can be deleted and rebuilt with nothing
-   lost. Idempotent: a row already kept is never rewritten.
-
-   `read-ws` is what keeps them, as it reads each row against the directory; this reads the
-   workstream and counts the rows that were kept by it."
-  [project ws-id]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
-    (fn []
-      (let [dir     (cstate/workstream-dir project ws-id)
-            path    #(str (fs/path dir (meta-rel (:seq %))))
-            missing (->> (:entries (io/read-edn (cstate/workstream-edn-path project ws-id)))
-                         (filter :file)
-                         (remove #(fs/exists? (path %)))
-                         vec)]
-        (read-ws project ws-id)
-        (count (filter #(fs/exists? (path %)) missing))))))
-
 
 ;; ── Generations ──────────────────────────────────────────────────────────────
 
@@ -1862,37 +1658,40 @@
     (check-append! project w (:kind entry) payload)
     nil))
 
+(defn- commit-entry!
+  "Commit the entry `row` with `payload` to workstream `ws-id`, appended after the ledger `w` was
+   read as, and answer the seq the core committed it at. The core refuses it as stale when anything was appended since
+   `w` was read — which the append lock should make impossible — and that refusal is thrown, so
+   no entry is ever numbered from a ledger it was not checked against."
+  [project ws-id w row payload]
+  (let [after (or (:seq (peek (vec (:entries w)))) 0)
+        k     (client/ws-key project ws-id)
+        o     (client/command! k (str "append/" k "/" (random-uuid))
+                               {:command :append-entry :after after :row row :content payload})]
+    (forget! project ws-id)
+    (when (client/unavailable? o) (client/value! o :events))
+    (if (contains? o :events)
+      (:seq (:row (first (:events o))))
+      (throw (ex-info (str "The core refused the " (name (:kind row)) " append on " ws-id ": "
+                           (pr-str (or (:refused o) (:error o))))
+                      {:ws-id ws-id :kind (:kind row) :outcome o})))))
+
 (defn- append-locked!
-  "The append, for a caller already holding the append lock over `w`: number the entry off the
-   disk, make every check, write the payload and then its index row. Returns the absolute path.
+  "The append, for a caller already holding the append lock over `w`: make every check, then
+   commit the entry to the core after the ledger `w` was read as. Returns the entry's seq.
    An entry implies no change to the record beside its index row: whatever it decides, the ledger
    is where it is read from."
   [project ws-id w entry content]
-    (let [;; From the DISK, not from the index count. The two agree until an
-          ;; append writes its payload and dies before updating the index, and
-          ;; from then on every append computes a number the index says is
-          ;; free and the directory says is taken — overwriting a real entry
-          ;; and leaving the ledger looking consistent.
-          seq-n (inc (max (count (:entries w))
-                          (highest-seq-on-disk project ws-id)))
-          [ext payload] (report/entry-payload (:kind entry) content)
-          _     (check-append! project w (:kind entry) payload)
-          fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
-          rel   (str "entries/" fname)
-          abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))
-          row   (index-row entry seq-n payload rel)]
-      (refuse-if-taken! abs seq-n)
-      (write-entry-files! project ws-id row abs payload)
-      (write! (update w :entries (fnil conj []) row))
-      abs))
+  (let [[ext payload] (report/entry-payload (:kind entry) content)]
+    (check-append! project w (:kind entry) payload)
+    (commit-entry! project ws-id w (index-row entry payload ext) payload)))
 
 (defn- record-status!
   "Append the status entry `entry-of` makes of the record, or nothing when it answers nil because
    there is nothing to record. Under the append lock, so the decision and its entry are one step:
    two closes, or a close and a reopen, cannot both decide from the same reading."
   [project ws-id entry-of]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [w (or (read-ws project ws-id)
                   (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
@@ -1901,27 +1700,19 @@
               (read-ws project ws-id))
           w)))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :int]}
   append-entry!
-  "Write an immutable entry file under entries/ and record it in :entries.
-   `entry` = {:kind <kw> :session <str>? :amended-by <run-id>?}, kept as the entry's index row;
-   :amended-by is for a review loop's amender alone (`amended-seqs`). Returns the absolute file path.
+  "Append an immutable entry to the workstream's ledger in the core, after the checks every
+   append runs. `entry` = {:kind <kw> :session <str>? :amended-by <run-id>?}, kept as the entry's
+   index row; :amended-by is for a review loop's amender alone (`amended-seqs`). Returns the
+   seq the core committed the entry at — the one answer to which entry this append wrote, since
+   the ledger's newest entry, reread once the lock is released, may be another writer's.
 
-   SERIALISED, and the whole read-derive-write has to be inside the lock rather
-   than any one write of it. :seq is derived from the index count and the
-   filename from the :seq, so two writers reading the same index both compute the
-   same number, both write `entries/000N-…` — the second over the first — and
-   both then write an index claiming N entries. The surviving payload is decided
-   by write order, one append is lost outright, and the ledger looks consistent
-   afterwards: the count matches, and nothing records that anything went missing.
-   That is not a torn write, which write-edn!'s temp-and-rename already prevents;
-   it is a lost update, which nothing prevented.
-
-   Nothing raced before this because a human drove the stages one at a time.
-   :seq is the identity every citation in the ledger is keyed on, so an
-   unattended driver appending beside a session agent is exactly the condition
-   under which `it does not in fact race` stops being a property of the system
-   and starts being a property of the operator.
+   The core numbers the entry, one past the seq this append read, and refuses it when the
+   ledger has moved since — so two authors can never both be given the same :seq, the identity
+   every citation in the ledger is keyed on. The checks read the ledger and other workstreams,
+   so the read and the checks run under the workstream's lock, which keeps nido's own writers
+   from deciding against a ledger that another of them is about to move.
 
    A :design-cleared is refused here: it records a reading of the ledger at a
    position, so it is written only through `append-entry-at!`."
@@ -1930,8 +1721,7 @@
     (throw (ex-info "A :design-cleared is written at a position — through append-entry-at!"
                     {:kind (:kind entry) :ws-id ws-id})))
   (refuse-unguarded-gate! (:kind entry))
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (append-locked! project ws-id
                       (or (read-ws project ws-id)
@@ -1954,27 +1744,26 @@
                          " — write a superseding design to have it decided again")
                     {:ws-id (:id w) :design design-seq :cleared-by (:seq e)}))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :Path]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :int]}
   append-decision!
   "Append `content`, a `:design-decision`, as every other append's checks allow. The one writer of
    the kind, which a decision round alone calls: every generic append refuses it
-   (`refuse-unguarded-gate!`). Returns the absolute path."
+   (`refuse-unguarded-gate!`). Returns the seq the core committed it at."
   [project ws-id content]
   (let [decision (edn/read-string content)]
     (when-not (= :design-decision (:format decision))
       (throw (ex-info "append-decision! takes a :design-decision" {:ws-id ws-id})))
-    (io/with-file-lock
-      (append-lock-path project ws-id)
+    (locked project ws-id
       (fn []
         (let [w (or (read-ws project ws-id)
                     (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
           (refuse-judging-a-cleared-design! w (:design-seq decision))
           (append-locked! project ws-id w {:kind :design-decision} content))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :string] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :string] [:or :int :map]]}
   append-entry-at!
   "Append only if `expected-seq` is still the ledger's latest entry. Returns the
-   absolute path on success, or {:refused :stale :latest <seq>} without writing.
+   seq the core committed it at on success, or {:refused :stale :latest <seq>} without writing.
 
    The compare and the write are ONE operation because they share the append
    lock — which is the whole point, and the reason this is a ledger operation
@@ -1992,8 +1781,7 @@
    a decision to whatever the ledger happens to hold now."
   [project ws-id expected-seq entry content]
   (refuse-unguarded-gate! (:kind entry))
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [w      (or (read-ws project ws-id)
                        (throw (ex-info "Workstream not found"
@@ -2002,11 +1790,8 @@
         (if (or (nil? expected-seq) (not= expected-seq latest))
           {:refused :stale :latest latest}
           ;; Re-entering append-entry! would deadlock on the lock this holds, so
-          ;; the write is the same steps inline. They are few, and the
-          ;; alternative — a lock that counts its holders — buys a shared body at
-          ;; the price of the one property this whole function exists for.
-          (let [seq-n (inc (max latest (highest-seq-on-disk project ws-id)))
-                [ext payload] (report/entry-payload (:kind entry) content)
+          ;; the checks are made inline before the same commit.
+          (let [[ext payload] (report/entry-payload (:kind entry) content)
                 _     (refuse-design-between-phases! w (:kind entry))
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
@@ -2023,41 +1808,31 @@
                 _     (check-generation-ids! w (:kind entry) payload)
                 _     (check-first-design-supersedes! w (:kind entry) payload)
                 _     (check-clearance-earned! w (:kind entry) payload latest)
-                fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
-                rel   (str "entries/" fname)
-                abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))
-                row   (index-row entry seq-n payload rel)]
-            (refuse-if-taken! abs seq-n)
-            (write-entry-files! project ws-id row abs payload)
-            (write! (update w :entries (fnil conj []) row))
-            abs))))))
+                row   (index-row entry payload ext)]
+            (commit-entry! project ws-id w row payload)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string :any] :map]}
   append-entry-once!
   "Append an entry of `entry`'s kind only when no entry of that kind is already the one `same?`
-   identifies. Returns `{:appended path}` for a new entry, or `{:existing path}` when one already
-   matches — an append that died before indexing the entry it wrote included, since a read holds
-   it (`reconciled-index`), so a retry never writes a second copy.
+   identifies. Returns `{:appended seq}` for a new entry, or `{:existing seq}` when one already
+   matches, so a retry never writes a second copy.
 
    `same?` is the caller's identity for the record: a predicate over an entry parsed through the
    read contract, so only a kind whose entries are EDN can ever match. Asked under the append
    lock."
   [project ws-id entry content same?]
   (refuse-unguarded-gate! (:kind entry))
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [w       (or (read-ws project ws-id)
                         (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
             kind    (:kind entry)
-            dir     (cstate/workstream-dir project ws-id)
-            abs     #(str (fs/path dir %))
-            match?  (fn [rel]
-                      (try (boolean (same? (report/parse-event kind (io/read-edn (abs rel)))))
+            match?  (fn [row]
+                      (try (boolean (same? (report/parse-event kind (edn/read-string (entry-text w (:seq row))))))
                            (catch Throwable _ false)))
-            indexed (->> (:entries w) (filter #(= kind (:kind %))) (map :file) (filter match?) first)]
+            indexed (->> (:entries w) (filter #(= kind (:kind %))) (filter match?) first)]
         (if indexed
-          {:existing (abs indexed)}
+          {:existing (:seq indexed)}
           {:appended (append-locked! project ws-id w entry content)})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
@@ -2077,8 +1852,7 @@
    Throws ex-info naming the precondition that failed; writes nothing then.
    Returns the record."
   [project ws-id gate]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [w      (or (read-ws project ws-id)
                        (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
@@ -2148,8 +1922,7 @@
    read from that cannot be read refuses the opening rather than carrying less. Throws naming the
    precondition that failed and writes nothing then. Returns the record."
   [project ws-id gen]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [w      (or (read-ws project ws-id)
                        (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
@@ -2202,17 +1975,16 @@
                                     (seq falsified) (assoc :falsified falsified)))))
         (read-ws project ws-id)))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:or :map [:=> [:cat :Workstream] :map]]] :Path]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:or :map [:=> [:cat :Workstream] :map]]] :int]}
   append-stamped!
   "Append a `:tension`, `:accord`, `:withdrawal`, `:recut` or `:conduct-decision` whose `:by` the caller stamped from
    where it runs. The ledger cannot tell where that was; the one caller is the verb that can, and
    the generic appends refuse these kinds so nothing else takes a writer on its word — `appending!`
    alone takes them on the same terms. Every other check an append makes holds. `payload` is the entry, or a function of the workstream read under
    the append lock answering it — so a writer stamped from that read is stamped against the same
-   generation the entry joins, which no generation can open between. Returns the absolute path."
+   generation the entry joins, which no generation can open between. Returns the seq the core committed it at."
   [project ws-id payload]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [w       (or (read-ws project ws-id)
                         (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
@@ -2235,8 +2007,7 @@
    that no other append, no generation's opening and no design approval falls between. Neither
    takes the lock again: `f` must append through `append!` alone."
   [project ws-id f]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [read   #(or (read-ws project ws-id)
                         (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
@@ -2263,8 +2034,7 @@
    The one way a drain kind is written — called by `nido.coordinator.record.drain` alone, which
    checks what its kinds cite before it appends, under this same lock."
   [project ws-id f]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (let [read #(or (read-ws project ws-id)
                       (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
@@ -2284,8 +2054,7 @@
    generation's opening, holds — so what `f` decides from that read stays true until it returns.
    `f` must not append: the lock is not reentrant."
   [project ws-id f]
-  (io/with-file-lock
-    (append-lock-path project ws-id)
+  (locked project ws-id
     (fn []
       (f (or (read-ws project ws-id)
              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))))))
@@ -2307,10 +2076,7 @@
                       (filter #(= kind (:kind %)))
                       (sort-by :seq)
                       last)]
-      (let [f (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))]
-        (try (-> (parse-entry-file kind f)
-                 (assoc :seq (:seq e) :at (:at e)))
-             (catch Throwable _ nil))))))
+      (read-entry-at w (:seq e)))))
 
 (defn ^{:malli/schema [:=> [:cat :LedgerEntry] :map]}
   unstamp
@@ -2411,12 +2177,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :WorkstreamId]]}
   list-ids
-  "Vector of ws-ids under a project's workstreams dir; [] if none."
+  "The ids of every workstream of `project` the core holds, in id order; [] if none. Reads them
+   all in one request, and each read answers `read-ws` for a moment after (`sweep-ms`), so a
+   sweep over the ids does not ask the core once per workstream."
   [project]
-  (let [d (cstate/workstreams-dir project)]
-    (if (fs/exists? d)
-      (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
-      [])))
+  (let [prefix (client/ws-key project "")
+        sts    (client/value! (client/states prefix) :states)
+        now    (System/currentTimeMillis)
+        root   (str (core/nido-root))]
+    (swap! swept into (for [[k st] sts] [[root k] {:state st :at now}]))
+    (->> sts
+         (keep (fn [[k st]] (when (record-of k st) (subs k (count prefix)))))
+         sort
+         vec)))
 
 (defn- published-design
   "The design the work a PR publishes was done under: what the publisher names,
@@ -2499,18 +2272,33 @@
                     (:external-refs w))]
      (if dup?
        w
-       (let [w' (write! (update w :external-refs (fnil conj []) ref))]
+       (let [w' (revise! project ws-id {:external-refs (conj (vec (:external-refs w)) ref)} "add a ref")]
          (when (= :github (:adapter ref))
            (record-pr-opened! project w' ref opts))
          w')))))
 
+(def ^:private legacy-ledger-files
+  "The names under a workstream's directory that hold its legacy ledger, which nothing writes."
+  #{"workstream.edn" "entries" "entries.meta"})
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   delete!
-  "Remove a workstream's directory (and everything under it). Idempotent —
-   no-op if absent. Used to clean up an orphan minted by a failed spawn."
+  "Discard a workstream — an orphan minted by a failed spawn — so no reader finds it again, and
+   remove what its directory holds beside the legacy ledger files (its sessions and Runs).
+   Idempotent — no-op if absent. The core keeps what was recorded of it. An open unit or a turn
+   still running on it stops the discard — a merged or retracted unit does not: the
+   core refuses, the refusal is thrown, and nothing is removed. The legacy files — workstream.edn, entries/ and entries.meta/
+   — are the import's source and are never touched."
   [project ws-id]
+  (when (read-ws project ws-id)
+    (create-command! project ws-id (str "discard/" (client/ws-key project ws-id))
+                     {:command :discard-workstream}))
   (let [d (cstate/workstream-dir project ws-id)]
-    (when (fs/exists? d) (fs/delete-tree d))))
+    (when (fs/exists? d)
+      (doseq [f (fs/list-dir d)
+              :when (not (legacy-ledger-files (str (fs/file-name f))))]
+        (fs/delete-tree f))
+      (when (empty? (fs/list-dir d)) (fs/delete d)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :keyword :string] [:maybe :Workstream]]}
   find-by-ref
@@ -2561,10 +2349,10 @@
                                             :slack-message :notion)
                                  :id external-id}]})))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :string :map :string] [:maybe :Path]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :map :string] [:maybe :int]]}
   append-to-ref!
   "Append a ledger entry to the workstream carrying `external-id`, found or minted by
-   `find-or-mint-by-ref!`. Returns the entry file path."
+   `find-or-mint-by-ref!`. Returns the seq the core committed it at."
   [project external-id entry content]
   (append-entry! project (:id (find-or-mint-by-ref! project external-id)) entry content))
 

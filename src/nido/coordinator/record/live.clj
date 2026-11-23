@@ -6,9 +6,9 @@
    without anything writing to it: it is open and activated, it is an open drain or a slice an
    open drain started, a session record under it has a home that still stands or names a
    conversation Claude Code lists, or an unfinished Run names it. Anything else changes only when
-   something writes to it, and every write nido makes moves a stamp the census reads —
-   workstream.edn and seat-messages.edn are renamed into the workstream's directory, entries into
-   entries/, a session record into its session's directory, a Run's record into its run's
+   something writes to it, and every write nido makes moves a stamp the census reads — an
+   identity or an entry the core commits moves the ledger's stamp, seat-messages.edn is renamed
+   into the workstream's directory, a session record into its session's directory, a Run's record into its run's
    directory, a hook event appended to its conversation's log, a first event creating that log in
    the events directory. So a pass over the subjects and what the last census found MOVED — a
    drain counting as moved when a slice it started did — misses nothing a pass over everything
@@ -63,17 +63,14 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- ws-stamp
-  "What moves whenever anything a pass reads of the workstream is written: its directory (records
-   renamed into it), the stamps `ws/read-ws` keys its reconciled index on (workstream.edn,
-   entries/, entries.meta/ — an append that died before its index row moves these alone), its
+  "What moves whenever anything a pass reads of the workstream is written: its ledger and identity
+   as the core holds them (`ws/ledger-stamp`), its directory (records renamed into it), its
    sessions directory (a session added) and each session's directory."
   [project ws-id]
   (let [sdir (cstate/ws-sessions-dir project ws-id)
         wdir (cstate/workstream-dir project ws-id)]
     [(stamp wdir)
-     (stamp (cstate/workstream-edn-path project ws-id))
-     (stamp (fs/path wdir "entries"))
-     (stamp (fs/path wdir "entries.meta"))
+     (ws/ledger-stamp project ws-id)
      (stamp sdir)
      (mapv #(stamp (fs/path sdir %)) (dir-names sdir))]))
 
