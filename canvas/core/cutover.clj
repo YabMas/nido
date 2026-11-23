@@ -7,17 +7,17 @@
 
 (Module core-cutover
   "The one-shot cut-over from the old work plane to the core: the old daemon and every legacy agent
-   session stopped, the legacy ledgers imported read-only, each unclosed workstream handed to its
-   conductor.
+   session stopped, each unclosed workstream handed to its conductor. The legacy ledgers are not
+   its to import: they reach the core through the import verb (record-legacy-ledger).
 
-   HIDES the order of the cut-over and how the legacy world is read."
+   HIDES the order of the cut-over."
   (Operation apply-plan!
-    "Import the nido home's legacy ledgers into its core store and commit `plan`, a sequence of
-     {:ws :commands}. Answers {:import :handed :refused}; a refusal stops nothing else."
+    "Commit `plan`, a sequence of {:ws :commands}, to the nido home's core store. Answers {:handed
+     :refused}; a refusal stops nothing else."
     {:signature [:=> [:catn [:paths :map] [:plan [:sequential :map]]] :map]})
   (Operation marker
     "The file under the core's directory that says the cut-over ran: the old daemon was stopped and
-     disabled before anything was imported."
+     disabled before anything was handed over."
     {:signature [:=> [:catn [:paths :map]] :string]})
   (Operation -main
     "Apply the plan file at `plan-path` to the nido home's core store, and print the outcome as EDN."

@@ -282,3 +282,51 @@
         (let [[s3] (d/step s2 {:command :open-unit :unit "z" :project "p" :goal "g" :session-cwd "/w"})]
           (is (= :unit-has-open-operator-ask (refusal s3 {:command :start-turn :turn "tz" :unit "z" :spec spec}))
               "a unit opened while it is open is held still too"))))))
+
+(def ^:private id* {:project :nido :external-refs [] :created-at "2026-11-23T00:00:00Z"})
+(defn- row* [kind] {:kind kind :at "t" :ext "edn"})
+
+(deftest a-ledger-is-appended-after-the-seq-its-author-read
+  (let [[s events] (run [{:command :create-workstream :identity id*}
+                         {:command :append-entry :after 0 :row (row* :intent) :content "{:format :intent}"}
+                         {:command :append-entry :after 1 :row (row* :note) :content "n"}])]
+    (is (= [1 2] (map :seq (:ledger s))) "the domain numbers each entry past the one it was read after")
+    (is (= "n" (:content (last events))) "the content is the event's, never the state's")
+    (is (not-any? #(contains? % :content) (:ledger s)))
+    (is (= {:reason :stale :latest 2}
+           (nth (d/step s {:command :append-entry :after 1 :row (row* :note) :content "late"}) 2))
+        "an append made against a ledger that has moved since is refused")
+    (is (= s (d/fold events)))))
+
+(deftest a-ledger-belongs-to-a-workstream-the-core-holds
+  (is (= :no-such-workstream (refusal d/empty-state {:command :append-entry :after 0 :row (row* :note) :content "x"})))
+  (is (= :no-such-workstream (refusal d/empty-state {:command :revise-identity :changes {:facets {:a 1}}})))
+  (let [[s] (run [{:command :create-workstream :identity id*}])]
+    (is (= :workstream-exists (refusal s {:command :create-workstream :identity id*})))
+    (is (= :workstream-exists (refusal s {:command :import-ledger :identity id* :entries []})))
+    (is (= :identity-not-revisable (refusal s {:command :revise-identity :changes {:project :brian}})))
+    (let [[s2] (d/step s {:command :revise-identity :changes {:facets {:a 1} :title {:text "t" :basis "b"}}})
+          [s3] (d/step s2 {:command :revise-identity :changes {:title nil}})]
+      (is (= {:a 1} (get-in s3 [:identity :facets])))
+      (is (not (contains? (:identity s3) :title)) "a nil change removes the key"))
+    (testing "a discarded workstream is found by nothing and created again by nothing"
+      (let [[s2] (d/step s {:command :discard-workstream})]
+        (is (= :workstream-exists (refusal s2 {:command :create-workstream :identity id*})))
+        (is (= :no-such-workstream (refusal s2 {:command :append-entry :after 0 :row (row* :note) :content "x"})))))
+    (testing "nor is one with work in flight discarded"
+      (let [[s2] (d/step s {:command :open-unit :unit "u" :project "nido" :goal "g"})]
+        (is (= :work-in-flight (refusal s2 {:command :discard-workstream})))))))
+
+(deftest a-legacy-ledger-is-imported-whole-with-its-seqs
+  (let [entries [{:row {:kind :intent :seq 1 :at "a" :ext "edn" :session "s"} :content "{}"}
+                 {:row {:kind :note :seq 3 :at "b" :ext "md"} :content "gap kept"}]
+        [s events] (run [{:command :open-unit :unit "u" :project "nido" :goal "g" :session-cwd "/w"}
+                         {:command :import-ledger :identity id* :entries entries}])]
+    (is (= [1 3] (map :seq (:ledger s))) "the seqs it was written under, gaps and all")
+    (is (= "s" (:session (first (:ledger s)))))
+    (is (= :open (get-in s [:units "u" :status])) "coordination already held is kept")
+    (is (= 3 (d/latest-seq s)))
+    (is (= s (d/fold events)))
+    (is (= :seqs-not-increasing
+           (refusal d/empty-state {:command :import-ledger :identity id*
+                                   :entries (reverse entries)})))))

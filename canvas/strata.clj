@@ -158,8 +158,9 @@
 
 (Stratum core-persistence
   "Committed state: a batch of events and the rows they fold to, made durable together, refused
-   where the store's own constraints are broken, rebuilt and checked from the ledgers on request,
-   and legacy ledgers imported as they were written."
+   where the store's own constraints are broken, rebuilt and checked from the ledgers on request.
+   A workstream's work-record entries are kept by seq from the events that append them, so their
+   content is read by seq and never carried in state."
   {:provided-by [core-store]
    :rests-on    [core-rules]})
 

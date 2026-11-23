@@ -1,6 +1,7 @@
 (ns nido.core.cutover-test
-  "The cut-over imports the legacy ledgers read-only and commits the hand-over plan once; the core
-   will not start over a home the cut-over has not run on."
+  "The cut-over commits the hand-over plan once, writing nothing under the legacy ledgers; the core
+   will not start over a home the cut-over has not run on. The ledgers themselves are imported by
+   the ledger import once the core serves."
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [nido.core.cutover :as cutover]
@@ -18,7 +19,7 @@
                {:command :hand-over :summary "Handed over: Fix it."}]}
    {:ws "brian/ws-2" :commands [{:command :hand-over :summary "Handed over: penned."}]}])
 
-(deftest the-cut-over-imports-and-hands-over-once
+(deftest the-cut-over-hands-over-once
   (let [home (tmp) ps (release/paths home)
         entry (io/file home "projects/brian/workstreams/ws-1/entries/0001.edn")]
     (io/make-parents entry)
@@ -27,9 +28,9 @@
       (is (= :not-cut-over (release/alongside ps))))
     (io/make-parents (io/file (:db ps)))
     (let [r (cutover/apply-plan! ps plan)]
-      (is (= {:imported 1 :unchanged 0 :changed []} (:import r)))
+      (is (= 2 (:handed r)))
       (is (= [] (:refused r))))
-    (is (= "{:kind :intent}" (slurp entry)) "the legacy file is only read")
+    (is (= "{:kind :intent}" (slurp entry)) "the legacy file is left as it was")
     (is (nil? (release/alongside ps)))
     (let [s (store/open-reader (:db ps))]
       (try

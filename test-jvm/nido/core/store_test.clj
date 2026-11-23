@@ -120,34 +120,36 @@
     (store/rebuild! s)
     (is (empty? (store/verify s)) "a rebuild restores the cache from the ledger")))
 
-(defn- write! [home rel content]
-  (let [f (io/file home rel)] (io/make-parents f) (spit f content) f))
+(def ^:private identity* {:project :nido :external-refs [] :created-at "2026-11-23T00:00:00Z"})
 
-(deftest legacy-entries-are-imported-as-written-and-the-files-only-read
-  (let [home (temp-dir)
-        f1   (write! home "projects/nido/workstreams/ws-a/entries/0001-intent.edn" "{:format :intent, :goal \"g\"}\n")
-        f2   (write! home "projects/brian/workstreams/ws-b/entries/0001-baseline.edn" ";; odd spacing kept\n{:a   1}")
-        before (into {} (for [f [f1 f2]] [f [(slurp f) (.lastModified f)]]))]
-    (with-store [s]
-      (is (= {:imported 2 :unchanged 0 :changed []} (store/import-legacy! s home)))
-      (is (= [{:file "0001-baseline.edn" :content ";; odd spacing kept\n{:a   1}"}]
-             (store/legacy-entries s "brian" "ws-b")))
-      (testing "a re-run imports nothing twice"
-        (is (= {:imported 0 :unchanged 2 :changed []} (store/import-legacy! s home))))
-      (testing "an entry edited after import is reported, never overwritten"
-        (spit f1 "{:format :intent, :goal \"edited\"}\n")
-        (is (= [["nido" "ws-a" "0001-intent.edn"]] (:changed (store/import-legacy! s home))))
-        (is (= "{:format :intent, :goal \"g\"}\n" (:content (first (store/legacy-entries s "nido" "ws-a")))))))
-    (is (= (get before f2) [(slurp f2) (.lastModified f2)]) "the import never wrote a legacy file")))
+(defn- row [kind at] {:kind kind :at at :ext "edn"})
 
-(deftest a-real-nido-home-imports-without-loss
-  ;; QA for the cut-over: run with NIDO_CORE_IMPORT_HOME pointing at a nido home (a snapshot, or
-  ;; the real one, which the import only reads). Skipped when it is unset.
-  (when-let [home (System/getenv "NIDO_CORE_IMPORT_HOME")]
-    (with-store [s]
-      (let [r (store/import-legacy! s home)
-            files (count (#'store/legacy-entry-files home))]
-        (println "import of" home ":" (dissoc r :changed) "of" files "entry files")
-        (is (= files (:imported r)))
-        (is (empty? (:changed r)))
-        (is (= {:imported 0 :unchanged files :changed []} (store/import-legacy! s home)))))))
+(deftest an-entry-is-kept-by-seq-in-the-commit-that-appends-it
+  (with-store [s]
+    (is (nil? (commit-command! s "nido/ws" "c" {:command :create-workstream :identity identity*})))
+    (is (nil? (commit-command! s "nido/ws" "a1" {:command :append-entry :after 0
+                                                 :row (row :intent "t1") :content "{:format :intent}"})))
+    (is (nil? (commit-command! s "nido/ws" "a2" {:command :append-entry :after 1
+                                                 :row (row :note "t2") :content "a note"})))
+    (is (= [1 2] (map :seq (:ledger (store/state s "nido/ws")))))
+    (is (= {1 "{:format :intent}" 2 "a note"} (store/entry-contents s "nido/ws" [1 2 3]))
+        "a seq the ledger does not hold is left out")
+    (is (= #{"nido/ws"} (set (keys (store/states s "nido/")))))
+    (is (empty? (store/states s "brian/")))
+    (testing "an append made against a ledger that has moved writes nothing"
+      (is (= :stale (:reason (commit-command! s "nido/ws" "a3" {:command :append-entry :after 1
+                                                                :row (row :note "t3") :content "late"}))))
+      (is (= {2 "a note"} (store/entry-contents s "nido/ws" [2]))))
+    (testing "the entries table is a cache the events rebuild"
+      (jdbc/execute! (:conn s) ["DELETE FROM entries"])
+      (is (= #{:entries-differ-from-events} (set (map :problem (store/verify s)))))
+      (store/rebuild! s)
+      (is (empty? (store/verify s)))
+      (is (= {1 "{:format :intent}" 2 "a note"} (store/entry-contents s "nido/ws" [1 2]))))))
+
+(deftest nothing-rewrites-an-entry
+  (with-store [s]
+    (commit-command! s "nido/ws" "c" {:command :create-workstream :identity identity*})
+    (commit-command! s "nido/ws" "a1" {:command :append-entry :after 0 :row (row :note "t") :content "one"})
+    (is (thrown? Exception (jdbc/execute! (:conn s) ["INSERT INTO entries(ws,seq,content) VALUES ('nido/ws',1,'two')"])))
+    (is (= {1 "one"} (store/entry-contents s "nido/ws" [1])))))

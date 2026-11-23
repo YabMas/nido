@@ -18,7 +18,9 @@
    HIDES the transition rules — which commands a state admits and what each yields —
    so that an illegal state (an open ask whose turn is not asked, two
    active turns on one unit, a workstream landed before its units) has no command
-   that produces it."
+   that produces it. A workstream's identity and its ledger of work records are part of its
+   state: an entry is appended only after the seq its author read, so a ledger that moved
+   under an author refuses the append rather than numbering past it."
   (Operation decide
     "Decide a command against the whole workstream: the events it yields, or a refusal naming
      why, which changes nothing."
@@ -56,4 +58,7 @@
   (Operation first-turns-owed
     "The first turns owed: each open unit opened with a first turn that no turn of it has started
      yet and whose session is ready."
-    {:signature [:=> [:catn [:state :map]] [:sequential :map]]}))
+    {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation latest-seq
+    "The seq of the newest entry on a workstream's ledger; 0 when it holds none."
+    {:signature [:=> [:catn [:state :map]] :int]}))

@@ -12,7 +12,9 @@
    HIDES the schema, the transaction boundary and the durability settings. A batch's events and the
    rows they produce commit as one transaction, so stored state is always the fold
    of the ledger and can be rebuilt from it; the rows are a declared
-   cache over the ledger, not a second truth."
+   cache over the ledger, not a second truth. A workstream's work-record entries are among them:
+   an entry's content is carried by the event that appends it and kept by seq in the same
+   transaction, so state carries only the ledger's index and a reader asks for content by seq."
   (Operation open
     "Open the store for writing, creating it and its schema if absent; one writer holds it."
     {:signature [:=> [:catn [:path :string]] :map]})
@@ -49,9 +51,9 @@
   (Operation rebuild!
     "Recompute every stored state and its rows from the ledger, as a release that changes the fold does."
     {:signature [:=> [:catn [:store :map]] :int]})
-  (Operation import-legacy!
-    "Import every legacy ledger entry under a nido home as written, only reading the files."
-    {:signature [:=> [:catn [:store :map] [:home :string]] :map]})
-  (Operation legacy-entries
-    "A workstream's imported legacy entries."
-    {:signature [:=> [:catn [:store :map] [:project :string] [:ws :string]] [:sequential :map]]}))
+  (Operation states
+    "The committed state of every workstream whose key starts with a prefix, by key — one read for a sweep of a project."
+    {:signature [:=> [:catn [:store :map] [:prefix :string]] [:map-of :string :map]]})
+  (Operation entry-contents
+    "The content of each named entry of a workstream's ledger, by seq; an entry is kept once, by the commit that appends it, and never rewritten."
+    {:signature [:=> [:catn [:store :map] [:ws :string] [:seqs [:sequential :int]]] [:map-of :int :string]]}))

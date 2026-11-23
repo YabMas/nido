@@ -13,6 +13,7 @@
    [babashka.process :as p]
    [clojure.string :as str]
    [clojure.test :as t]
+   [nido.core.client :as client]
    [nido.platform.core :as core]
    [nido.platform.task-args :as task-args]))
 
@@ -89,6 +90,9 @@
     (binding [*out* *err*]
       (println (str "bb nido:test refused: " why)))
     (System/exit 2))
+  ;; No core daemon serves a test home: the suite's workstreams are held by an in-process core
+  ;; over the same domain, one per nido home a test points at.
+  (client/use-local!)
   (let [only (some-> (:only opts) str)
         nses (discover-test-namespaces only)]
     (when (empty? nses)

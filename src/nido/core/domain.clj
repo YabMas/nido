@@ -58,7 +58,12 @@
    :conductor-stopped? false ; a stop ask is open on the conductor; nothing wakes it until answered
    :grants        {}    ; grant kind -> {:by str}: what the person granted and has not yet spent
    :chat          []    ; [{:id :from #{:person :conductor} :text :turn}] in the order posted
-   :closed?       false})
+   :closed?       false
+   :identity      nil   ; what the workstream is: {:project :external-refs :created-at :intake?
+                        ; :facets? :title?}; nil until it is created or imported
+   :ledger        []})  ; the work records' index rows, in seq order: {:seq :kind :at :ext ...}.
+                        ; An entry's content is in its :entry-appended event, never in the state,
+                        ; so every feed message about a workstream stays the size of its index.
 
 (def person-input-kinds
   "The inbox items that carry a person's input. A wake for an inbox holding one is never capped."
@@ -351,6 +356,19 @@
       (update-in [:units unit] assoc :status :merged :landing? false)
       (update :grants dissoc :merge)
       (hear-later {:kind :unit-merged :unit unit})))
+
+(defmethod evolve :workstream-created [state {:keys [identity]}]
+  (assoc state :identity identity))
+
+(defmethod evolve :identity-revised [state {:keys [changes]}]
+  (update state :identity
+          #(reduce-kv (fn [i k v] (if (nil? v) (dissoc i k) (assoc i k v))) % changes)))
+
+(defmethod evolve :workstream-discarded [state _]
+  (assoc state :discarded? true))
+
+(defmethod evolve :entry-appended [state {:keys [row]}]
+  (update state :ledger (fnil conj []) row))
 
 (defmethod evolve :workstream-closed [state _]
   (assoc state :closed? true))
@@ -659,6 +677,80 @@
   (if (:closed? state)
     (accept {:event :workstream-reopened})
     (refuse :workstream-not-closed)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :int]} latest-seq
+  "The seq of the newest entry on the workstream's ledger; 0 when it holds none."
+  [state]
+  (or (:seq (peek (vec (:ledger state)))) 0))
+
+(def revisable-identity
+  "The parts of a workstream's identity that change after it is created. Its project and
+   creation time never do."
+  #{:external-refs :intake :facets :title})
+
+(defn- entry-malformed
+  "Why `row` and `content` cannot be an entry, or nil."
+  [row content]
+  (cond
+    (not (keyword? (:kind row)))  :entry-needs-a-kind
+    (not (string? (:at row)))     :entry-needs-a-time
+    (not (string? (:ext row)))    :entry-needs-an-extension
+    (not (string? content))       :entry-needs-content))
+
+(defmethod decide :create-workstream [state {:keys [identity]}]
+  (cond
+    (or (:identity state) (:discarded? state)) (refuse :workstream-exists)
+    (not (keyword? (:project identity)))   (refuse :identity-needs-a-project)
+    (not (string? (:created-at identity))) (refuse :identity-needs-a-creation-time)
+    :else (accept {:event :workstream-created :identity identity})))
+
+(defn- recorded? [state] (and (:identity state) (not (:discarded? state))))
+
+;; A workstream minted for work that never started — a spawn that failed — is discarded rather
+;; than kept as an empty record every reader would find. What it recorded stays in its events.
+(defmethod decide :discard-workstream [state _]
+  (cond
+    (not (recorded? state))                       (refuse :no-such-workstream)
+    (or (seq (:units state)) (seq (:turns state))) (refuse :work-in-flight)
+    :else (accept {:event :workstream-discarded})))
+
+(defmethod decide :revise-identity [state {:keys [changes]}]
+  (cond
+    (not (recorded? state))                           (refuse :no-such-workstream)
+    (not (map? changes))                              (refuse :revision-needs-changes)
+    (seq (remove revisable-identity (keys changes)))
+    (refuse :identity-not-revisable :keys (vec (sort (remove revisable-identity (keys changes)))))
+    :else (accept {:event :identity-revised :changes changes})))
+
+;; An append names the ledger's newest seq as its author read it. The domain numbers the entry
+;; past it, and refuses the append once anything else has been appended since: the author's
+;; checks were made against a ledger that is no longer the one the entry would join.
+(defmethod decide :append-entry [state {:keys [after row content]}]
+  (let [latest (latest-seq state)]
+    (cond
+      (not (recorded? state))            (refuse :no-such-workstream)
+      (not= after latest)                (refuse :stale :latest latest)
+      (entry-malformed row content)      (refuse (entry-malformed row content))
+      :else (accept {:event :entry-appended
+                     :row (assoc (dissoc row :file) :seq (inc latest))
+                     :content content}))))
+
+;; A legacy ledger arrives whole, with the seqs and times it was written under, as long as the
+;; workstream has no identity yet: an import is answered once.
+(defmethod decide :import-ledger [state {:keys [identity entries]}]
+  (let [seqs (map #(get-in % [:row :seq]) entries)]
+    (cond
+      (or (:identity state) (:discarded? state)) (refuse :workstream-exists)
+      (not (keyword? (:project identity)))      (refuse :identity-needs-a-project)
+      (not (every? pos-int? seqs))              (refuse :entry-needs-a-seq)
+      (not (apply < 0 seqs))                    (refuse :seqs-not-increasing)
+      (some #(entry-malformed (:row %) (:content %)) entries)
+      (refuse :entry-malformed
+              :seq (some #(when (entry-malformed (:row %) (:content %)) (get-in % [:row :seq])) entries))
+      :else (apply accept
+                   {:event :workstream-created :identity identity :imported true}
+                   (for [{:keys [row content]} entries]
+                     {:event :entry-appended :row (dissoc row :file) :content content})))))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]} step
   "Decide `command` against `state`: [new-state events] when admitted, [state nil refusal] when not."

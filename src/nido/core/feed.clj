@@ -80,6 +80,8 @@
   [feed db-path]
   (let [reader (store/open-reader db-path)]
     {:state       #(store/state reader %)
+     :states      #(store/states reader %)
+     :entries     #(store/entry-contents reader %1 %2)
      :workstreams #(store/workstreams reader)
      :subscribe   (fn [from]
                     (let [sub (subscribe! feed reader from {})]

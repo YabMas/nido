@@ -19,14 +19,15 @@
        are checked by the `violations` view at commit, because they span rows written in either
        order
 
-   Legacy ledger entries are imported as they were written, marked as imported, and are never
-   folded. The import only reads the legacy files.
+   A workstream's work records are entries on its ledger: each one's index row is part of the
+   state, and its content is kept once more in the entries table, by workstream and seq, so an
+   entry is read without reading the events. Both are written from the :entry-appended event in
+   the transaction that commits it, and an entry is never rewritten.
 
    One writer only. core-writer holds the connection `open` returns; readers use `open-reader`,
    which never writes and, under WAL, never waits on the writer."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [nido.core.domain :as d])
@@ -107,12 +108,11 @@
         AND (a.concerns IS NULL OR a.concerns = t.unit
              OR EXISTS (SELECT 1 FROM ask_binds b JOIN turns bt ON bt.ws = b.ws AND bt.id = b.turn
                         WHERE b.ws = a.ws AND b.ask = a.id AND bt.unit = t.unit))"
-   "CREATE TABLE IF NOT EXISTS legacy_entries(
-      project TEXT NOT NULL,
+   "CREATE TABLE IF NOT EXISTS entries(
       ws      TEXT NOT NULL,
-      file    TEXT NOT NULL,
+      seq     INTEGER NOT NULL,
       content TEXT NOT NULL,
-      PRIMARY KEY (project, ws, file))"])
+      PRIMARY KEY (ws, seq))"])
 
 (defn- exec! [^Connection c sql] (with-open [st (.createStatement c)] (.execute st sql)))
 
@@ -174,6 +174,13 @@
     (doseq [k [:units :turns :asks :binds], r (get rows k)]
       (jdbc/execute! c (into [(row-sql k)] r)))))
 
+(defn- insert-entries!
+  "Keep the content of every entry `events` append to workstream `ws`. An entry already kept
+   under its seq refuses the insert, so nothing can rewrite one."
+  [c ws events]
+  (doseq [{:keys [event row content]} events :when (= :entry-appended event)]
+    (jdbc/execute! c ["INSERT INTO entries(ws,seq,content) VALUES (?,?,?)" ws (:seq row) content])))
+
 (defn- violation-rows [c]
   (jdbc/execute! c ["SELECT ws, ask, violation FROM violations"]
                  {:builder-fn rs/as-unqualified-lower-maps}))
@@ -199,6 +206,7 @@
             (jdbc/execute! tx ["INSERT INTO events(ws,cmd_key,data) VALUES (?,?,?)" ws key (pr-str e)])
             (vreset! last-pos (:pos (jdbc/execute-one! tx ["SELECT last_insert_rowid() AS pos"]
                                                        {:builder-fn rs/as-unqualified-lower-maps}))))
+          (insert-entries! tx ws events)
           (jdbc/execute! tx ["INSERT INTO commands(key,ws,outcome) VALUES (?,?,?)" key ws (pr-str outcome)])
           (when (seq events)
             (jdbc/execute! tx ["INSERT INTO workstreams(ws,state,pos) VALUES (?,?,?)
@@ -232,6 +240,27 @@
   [store]
   (mapv :ws (jdbc/execute! (:conn store) ["SELECT ws FROM workstreams ORDER BY ws"]
                            {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] [:map-of :string :map]]} states
+  "The committed state of every workstream whose id starts with `prefix`, by id."
+  [store prefix]
+  (into {}
+        (map (fn [{:keys [ws state]}] [ws (edn/read-string state)]))
+        (jdbc/execute! (:conn store)
+                       ["SELECT ws, state FROM workstreams WHERE substr(ws, 1, ?) = ? ORDER BY ws"
+                        (count prefix) prefix]
+                       {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map :string [:sequential :int]] [:map-of :int :string]]} entry-contents
+  "The content of each entry of workstream `ws` named in `seqs`, by seq; a seq the ledger does not
+   hold is left out."
+  [store ws seqs]
+  (into {}
+        (for [n (distinct seqs)
+              :let [r (jdbc/execute-one! (:conn store) ["SELECT content FROM entries WHERE ws = ? AND seq = ?" ws n]
+                                         {:builder-fn rs/as-unqualified-lower-maps})]
+              :when r]
+          [n (:content r)])))
 
 (defn ^{:malli/schema [:=> [:cat :map :string] [:sequential :map]]} events
   "Workstream `ws`'s events, in commit order."
@@ -275,6 +304,15 @@
 (defn- expected-rows [ws state]
   (update-vals (rows-of ws state) #(set (map vec %))))
 
+(defn- stored-entries [c ws]
+  (into {} (map (juxt :seq :content))
+        (jdbc/execute! c ["SELECT seq, content FROM entries WHERE ws = ?" ws]
+                       {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn- expected-entries [events]
+  (into {} (for [{:keys [event row content]} events :when (= :entry-appended event)]
+             [(:seq row) content])))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} verify
   "Every way the stored state disagrees with the fold of the ledger, as data; empty when the cache
    is faithful. Reads all of history, so it runs only when explicitly requested (a verify command,
@@ -289,64 +327,23 @@
                     (when (not= folded stored) [{:ws ws :problem :state-differs-from-fold}])
                     (when (not= (stored-rows c ws) (expected-rows ws stored))
                       [{:ws ws :problem :rows-differ-from-state}])
+                    (when (not= (stored-entries c ws) (expected-entries (events store ws)))
+                      [{:ws ws :problem :entries-differ-from-events}])
                     (for [v (d/violations folded)] {:ws ws :problem :violation :violation v}))]
        problem))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :int]} rebuild!
-  "Recompute every workstream's stored state and rows from its events, in one transaction, and
-   answer how many workstreams were rebuilt. This is what a release that changes the fold runs
+  "Recompute every workstream's stored state, its rows and its entries from its events, in one
+   transaction, and answer how many workstreams were rebuilt. This is what a release that changes the fold runs
    before it serves."
   [store]
   (let [c (:conn store) wss (workstreams store)]
     (jdbc/with-transaction [tx c]
       (doseq [ws wss]
-        (let [s (d/fold (events store ws))]
+        (let [evs (events store ws)
+              s   (d/fold evs)]
           (jdbc/execute! tx ["UPDATE workstreams SET state = ? WHERE ws = ?" (pr-str s) ws])
-          (replace-rows! tx ws s))))
+          (replace-rows! tx ws s)
+          (jdbc/execute! tx ["DELETE FROM entries WHERE ws = ?" ws])
+          (insert-entries! tx ws evs))))
     (count wss)))
-
-;; ── legacy import ────────────────────────────────────────────────────────────
-
-(defn- legacy-entry-files
-  "Every legacy ledger entry under `home`, as [project ws-id file-name path]. Reads directories
-   only."
-  [home]
-  (for [proj (some-> (io/file home "projects") .listFiles seq)
-        :when (.isDirectory proj)
-        ws   (some-> (io/file proj "workstreams") .listFiles seq)
-        :when (.isDirectory ws)
-        f    (some-> (io/file ws "entries") .listFiles seq)
-        :when (and (.isFile f) (str/ends-with? (.getName f) ".edn"))]
-    [(.getName proj) (.getName ws) (.getName f) f]))
-
-(defn ^{:malli/schema [:=> [:cat :map :string] :map]} import-legacy!
-  "Import every legacy ledger entry under nido home `home`, each held with its content exactly as
-   written. The legacy files are only read. Re-running imports what is new, and reports any entry
-   whose stored content no longer matches its file without overwriting it. Answers
-   {:imported n :unchanged n :changed [[project ws file] ...]}."
-  [store home]
-  (let [c (:conn store)]
-    (jdbc/with-transaction [tx c]
-      (reduce
-       (fn [acc [project ws file f]]
-         (let [content (slurp f)
-               stored  (:content (jdbc/execute-one!
-                                  tx ["SELECT content FROM legacy_entries WHERE project=? AND ws=? AND file=?"
-                                      project ws file]
-                                  {:builder-fn rs/as-unqualified-lower-maps}))]
-           (cond
-             (nil? stored)
-             (do (jdbc/execute! tx ["INSERT INTO legacy_entries(project,ws,file,content) VALUES (?,?,?,?)"
-                                    project ws file content])
-                 (update acc :imported inc))
-             (= stored content) (update acc :unchanged inc)
-             :else              (update acc :changed conj [project ws file]))))
-       {:imported 0 :unchanged 0 :changed []}
-       (legacy-entry-files home)))))
-
-(defn ^{:malli/schema [:=> [:cat :map :string :string] [:sequential :map]]} legacy-entries
-  "Workstream `ws`'s imported legacy entries in `project`, each {:file :content}, by file name."
-  [store project ws]
-  (jdbc/execute! (:conn store)
-                 ["SELECT file, content FROM legacy_entries WHERE project=? AND ws=? ORDER BY file" project ws]
-                 {:builder-fn rs/as-unqualified-lower-maps}))

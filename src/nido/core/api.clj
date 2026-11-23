@@ -5,6 +5,8 @@
      {:op :command :key k :ws ws :command {...} :input? bool}
          -> the outcome committed under k (see `nido.core.writer/submit!`)
      {:op :state :ws ws}            -> {:state ...}, read from committed state
+     {:op :states :prefix p}        -> {:states {ws state}}, every workstream whose key starts with p
+     {:op :entries :ws ws :seqs [n]} -> {:entries {n content}}, the content of ledger entries
      {:op :workstreams}             -> {:workstreams [...]}
      {:op :subscribe :from pos}     -> a stream of feed messages, one per line, ending in
                                        {:cut-off true :resume-from pos} if the reader falls behind
@@ -12,8 +14,8 @@
 
    The server is given what it serves as functions, and requires nothing of the daemon:
      :submit        (fn [envelope]) -> a promise of the outcome (`nido.core.writer/submit!`)
-     :open-session  (fn []) -> {:state (fn [ws]) :workstreams (fn []) :subscribe (fn [from])
-                     :close (fn [])}, one per connection, opened on its first read; :subscribe
+     :open-session  (fn []) -> {:state (fn [ws]) :states (fn [prefix]) :entries (fn [ws seqs])
+                     :workstreams (fn []) :subscribe (fn [from]) :close (fn [])}, one per connection, opened on its first read; :subscribe
                      answers {:next (fn [timeout-ms]) -> message, nil or a cut-off; :close (fn [])}
    Reads never go through the writer: a session reads committed state through a read-only handle
    of its own, so a read never waits on a commit. Each connection is served by a virtual thread
@@ -59,6 +61,12 @@
     :command     (deref (submit (select-keys req [:key :ws :command :input?]))
                         command-timeout-ms {:error :timeout})
     :state       (if (string? (:ws req)) {:state ((:state @session) (:ws req))} {:error :workstream-missing})
+    :states      (if (string? (:prefix req))
+                   {:states ((:states @session) (:prefix req))}
+                   {:error :prefix-missing})
+    :entries     (if (and (string? (:ws req)) (sequential? (:seqs req)) (every? int? (:seqs req)))
+                   {:entries ((:entries @session) (:ws req) (:seqs req))}
+                   {:error :entries-need-a-workstream-and-seqs})
     :workstreams {:workstreams ((:workstreams @session))}
     {:error :unknown-op :op (:op req)}))
 
