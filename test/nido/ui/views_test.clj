@@ -184,8 +184,8 @@
     (is (= 1 (count (re-seq #"class=\"btn btn-primary\"" pane))) "Accept is the one primary")
     (is (< (at "Should the receipt show it?") (at "/workstreams/brian/ws-1/gate/apply") (at "/workstreams/brian/ws-1/gate/defer"))
         "Accept and Defer sit after the questions")
-    (is (str/includes? pane "Recommended</span>Round once — the smallest fix."))
-    (is (str/includes? pane "Once answered</span>The fix is built."))
+    (is (str/includes? pane "Recommended</div><div class=\"md\"><p>Round once — the smallest fix.</p>"))
+    (is (str/includes? pane "Once answered</div><div class=\"md\"><p>The fix is built.</p>"))
     (is (str/includes? pane "Accept the triage of “Checkout off by a cent”?") "the headline leads")))
 
 (deftest a-pending-stepper-shows-its-choices-without-buttons
@@ -1279,8 +1279,7 @@
     (is (str/includes? html "has no schema for"))
     (is (str/includes? html "restart the"))
     (is (str/includes? html "<pre>")
-        "the payload goes in a pre — md/render has no code block and would turn
-         every line of EDN into its own paragraph")))
+        "the payload goes in a pre — md/render would read the EDN as prose")))
 
 (deftest a-schema-mismatch-is-named-as-a-different-failure
   (let [ws   (assoc sample-ws :report

@@ -11,7 +11,8 @@
    dissolved into the workstream pane without the card changing, and why a scene can host it
    with a router that goes nowhere."
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]))
+            [clojure.walk :as walk]
+            [nido.ui.markdown :as md]))
 
 ;; ---------------------------------------------------------------------------
 ;; An action, as the button that gives it
@@ -137,8 +138,9 @@
         body   (list [:span.qc-opt-label [:strong label]
                       (when recommended? [:span.chip.c-opt-rec "recommended"])
                       (when-not action [:span.qc-chosen {"data-show" chosen} "✓ chosen"])]
-                     (when-not (str/blank? summary) [:span.qc-opt-sum summary])
-                     (when consequence [:span.qc-opt-cons consequence]))
+                     ;; Rendered inside the option's <button>, where an <a> is invalid HTML.
+                     (when-not (str/blank? summary) [:div.qc-opt-sum (md/render summary {:links? false})])
+                     (when-not (str/blank? consequence) [:div.qc-opt-cons (md/render consequence {:links? false})]))
         d      (when action (by-id action))]
     (cond
       (or pending? (and action (nil? d))) [:div.qc-opt.static body]
@@ -155,13 +157,14 @@
 (defn- question-section
   "Question `i` of `n`: its line, then its context, recommendation and what follows the answer as
    body text, then its options — or, for a question with none on a card whose submit records
-   words, a field for the answer in words. Only the shown one is visible when there are several."
+   words, a field for the answer in words. Every piece of it is agent prose and renders as
+   Markdown. Only the shown one is visible when there are several."
   [ctx i n {:keys [question context recommendation after options]}]
   [:section (cond-> {:class "qc-question"} (> n 1) (assoc "data-show" (str (step-signal (:ws-id ctx)) " === " i)))
-   [:p.qc-q question]
-   (when (seq context) (into [:div.qc-ctx] (map (fn [c] [:p c])) context))
-   (when recommendation [:p.qc-rec [:span.qc-k "Recommended"] recommendation])
-   (when after [:p.qc-after [:span.qc-k "Once answered"] after])
+   [:div.qc-q (md/render question)]
+   (when (seq context) (into [:div.qc-ctx] (map md/render) context))
+   (when-not (str/blank? recommendation) [:div.qc-rec [:div.qc-k "Recommended"] (md/render recommendation)])
+   (when-not (str/blank? after) [:div.qc-after [:div.qc-k "Once answered"] (md/render after)])
    (when (seq options)
      (into [:div.qc-opts] (map #(option-choice ctx i %)) options))
    (when (and (:words? ctx) (empty? options) (not (:pending? ctx)))
@@ -241,7 +244,7 @@
                           "}}}"))))
      (when (and error-msg (not pending?)) [:div.action-err "⚠ " error-msg])
      (when (and (> n 1) (not= question (:question (first questions))))
-       [:p.qc-head question])
+       [:div.qc-head (md/render question)])
      (when (> n 1) (stepper-nav ws-id n words?))
      (map-indexed #(question-section ctx %1 n %2) questions)
      (when (> n 1)

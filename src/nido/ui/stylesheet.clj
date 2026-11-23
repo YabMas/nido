@@ -170,9 +170,17 @@
         .qc-mark.current { color:var(--text-strong); text-decoration:underline; }
         .qc-q { font-size:var(--fs-lg); font-weight:500; color:var(--text-strong); margin:0 0 10px;
                 line-height:1.4; max-width:var(--measure); }
-        .qc-ctx p, .qc-rec, .qc-after { font-size:var(--fs-md); color:var(--text); margin:0 0 8px;
-                                       max-width:var(--measure); }
-        .qc-k { font-weight:600; color:var(--text-muted); margin-right:6px; }
+        .qc-ctx > .md, .qc-rec, .qc-after { font-size:var(--fs-md); color:var(--text); margin:0 0 8px;
+                                           max-width:var(--measure); }
+        .qc-k { font-weight:600; color:var(--text-muted); margin:0 0 2px; }
+        /* Agent prose rendered inside the card (md/render) sits in the card's own type, without
+           the bordered box .md draws on its own. */
+        .qcard .md { font:inherit; color:inherit; background:none; border:none; border-radius:0;
+                     padding:0; line-height:inherit; }
+        .qcard .md p { margin:0 0 6px; }
+        .qcard .md ul, .qcard .md ol { margin:2px 0 6px; padding-left:20px; }
+        .qcard .md li { margin:0 0 3px; }
+        .qcard .md > :last-child, .qcard .md li > :last-child { margin-bottom:0; }
         .qc-opts { display:grid; gap:8px; margin:12px 0 6px; }
         .qc-opt { display:block; width:100%; max-width:var(--measure); text-align:left; font:inherit;
                   color:var(--text); background:var(--surface); border:1px solid var(--border);
@@ -361,6 +369,12 @@
               font-size:var(--fs-sm); line-height:1.7; color:var(--text); background:var(--surface-sunken);
               border:1px solid var(--border); border-radius:6px; padding:16px 18px; }
         .md code { background:var(--surface-code); padding:1px 5px; border-radius:3px; color:var(--accent-strong); }
+        .md pre { background:var(--surface-code); padding:8px 10px; border-radius:4px; overflow-x:auto;
+                  white-space:pre; font-size:var(--fs-xs); line-height:1.5; }
+        .md pre code { background:none; padding:0; color:inherit; }
+        /* Prose rendered into a host that is already a card (a ledger card is itself .md) sits
+           in the host's box rather than drawing a second one inside it. */
+        .md .md { background:none; border:none; border-radius:0; padding:0; }
         .options { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
         .option { border:1px solid var(--border); border-radius:6px; background:var(--surface-raised);
                   padding:10px 12px 11px; }

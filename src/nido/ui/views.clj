@@ -605,9 +605,9 @@
          :when (seq directions)]
      [:div
       [:h3 (or question "Solution directions")]
-      (when-not (str/blank? context) [:p context])
-      (when-not (str/blank? recommendation) [:p [:span.meta "Recommended: "] recommendation])
-      (when-not (str/blank? after) [:p [:span.meta "Once answered: "] after])
+      (md/render context)
+      (when-not (str/blank? recommendation) [:div [:span.meta "Recommended:"] (md/render recommendation)])
+      (when-not (str/blank? after) [:div [:span.meta "Once answered:"] (md/render after)])
       (into [:div.options]
             (for [{:keys [label shape effort confidence]} directions]
               [:div.option
@@ -615,7 +615,7 @@
                 [:strong label]
                 [:span.meta (report/effort-label effort)
                  (when confidence (str " · " (name (:level confidence)) " confidence"))]]
-               [:p shape]]))])
+               (md/render shape)]))])
    (when notion-writes
      [:div
       [:h3 "On apply →"]
@@ -840,12 +840,13 @@
     [:span.option-letter (report/option-letter i)]
     [:strong label]
     (when recommended? [:span.chip.c-opt-rec "recommended"])]
-   [:p (:summary opt)]
-   (when consequence [:p.meta consequence])])
+   (md/render (:summary opt))
+   (when-not (str/blank? consequence) [:div.meta (md/render consequence)])])
 
 (defn- blocker-card
   "A blocker as it reads back on the timeline: its context, then each question it asks with its
-   own branches (report/blocker-questions) — under Needs when it asks one."
+   own branches (report/blocker-questions) — under Needs when it asks one. The agent's prose in
+   it renders as Markdown."
   [{:keys [summary] :as blocker}]
   (let [qs (report/blocker-questions blocker)]
     (into [:div.md [:h2 "Blocker"] (md/render summary)]
@@ -854,11 +855,11 @@
                   :let [own (if (= "q1" id) (rest context) context)]]
               [:div
                [:h3 (str (str/upper-case id) " — " question)]
-               (for [c own] [:p c])
-               (when recommendation [:p.meta (str "Recommended: " recommendation)])
+               (map md/render own)
+               (when recommendation [:div.meta [:strong "Recommended: "] (md/render recommendation)])
                (when (seq options) (into [:div.options] (map-indexed option-card options)))])
             [[:h3 "Needs"]
-             [:p (report/blocker-question-text blocker)]
+             (md/render (report/blocker-question-text blocker))
              (when (seq (:options (first qs)))
                [:div
                 [:h3 "Options"]
@@ -886,9 +887,9 @@
       [:div.option-head
        [:span.option-letter letter]
        [:strong label]]
-      [:p summary]]
+      (md/render summary)]
      ;; An answer a person gave in words, recorded from the session's chat.
-     :else [:blockquote summary])
+     :else [:blockquote (md/render summary)])
    [:p.meta "answers the blocker at entry " blocker-seq
     (if resumed
       (list " · resumed " [:code resumed])
@@ -911,7 +912,7 @@
                   (list [:div.option-head
                          [:strong (:label direction)]
                          [:span.meta (report/effort-label (:effort direction))]]
-                        [:p (:shape direction)])
+                        (md/render (:shape direction)))
                   [:p "Left open — for whoever builds it."])]))
        [:p "No direction chosen — the routing stands and the implementation "
         "direction is left open."])
@@ -1206,7 +1207,7 @@
       (into [:ul] (for [{:keys [item answer]} standing-answered]
                     [:li item [:div.meta answer]]))])
    (when needs
-     [:div [:h3 (report/verdict-needs-heading verdict)] [:p needs]])])
+     [:div [:h3 (report/verdict-needs-heading verdict)] (md/render needs)])])
 
 (defn- record-findings-list
   "Findings from a round over a record. What each cites leads, because that is
@@ -1215,7 +1216,7 @@
   (into [:ul]
         (for [{:keys [cites claim evidence blocks needs]} findings]
           [:li [:strong (str/join "; " cites)]
-           [:div claim]
+           (md/render claim)
            ;; A gap says which derivation it blocks and what the baseline would
            ;; have to say; without those two a reader sees a claim and no reason.
            (when blocks
@@ -1261,13 +1262,13 @@
             [:div.meta note]]))
    (when (seq findings)
      [:div [:h3 "What the derivation found"] (record-findings-list findings)])
-   [:div [:h3 "For you to decide"] [:p asks]]])
+   [:div [:h3 "For you to decide"] (md/render asks)]])
 
 (defn- degraded-card
   "A typed entry this reader could not parse. Shown as what it is — an intact
    record and an inadequate reader — with the payload in a <pre> rather than
-   through md/render, which has no code block and turns every line of EDN into
-   its own paragraph.
+   through md/render, which would read the EDN as prose: its * and _ as emphasis,
+   its - lines as a list.
 
    Naming which of the two failures it is matters: an unknown kind means this
    process predates the record and the fix is to restart it on newer code, while

@@ -33,8 +33,11 @@
 
 (Module ui-markdown
   "Markdown as renderable markup."
-  (Operation render "A markdown string as hiccup."
-    {:signature [:=> [:catn [:s [:maybe :string]]] :any]}))
+  (Operation render "A markdown string as hiccup; `{:links? false}` renders its links as their
+    text, for a host that is itself interactive (an option inside its <button>)."
+    {:signature [:function
+                 [:=> [:catn [:s [:maybe :string]]] :any]
+                 [:=> [:catn [:s [:maybe :string]] [:opts [:map [:links? {:optional true} :boolean]]]] :any]]}))
 
 (Module ui-stylesheet
   "The dashboard's stylesheet, as text a page chrome emits.
