@@ -54,9 +54,11 @@
          (finally (fs/delete-tree tmp)))))
 
 (defn- in-turn
-  "Run `f` as if from inside a core turn on brian's workstream `ws-id` (nil: outside every turn)."
+  "Run `f` as if from inside a core conductor turn on brian's workstream `ws-id` (nil: outside every
+   turn) — whatever turn the suite itself runs in."
   [ws-id f]
-  (with-redefs-fn {#'lane/turn-ws (fn [] (when ws-id ["brian" ws-id]))} f))
+  (with-redefs-fn {#'lane/turn-ws (fn [] (when ws-id ["brian" ws-id]))
+                   #'lane/turn-unit (constantly nil)} f))
 
 (defn- start-slice! [d plan] (#'lane/start-slice! *core* p d plan))
 

@@ -79,11 +79,17 @@
     (let [i (.indexOf ^String k "/")]
       (when (pos? i) [(subs k 0 i) (subs k (inc i))]))))
 
+(defn- turn-unit
+  "The unit the core turn this process runs in works for, or nil for a conductor turn and outside
+   every turn. The core names it in NIDO_CORE_UNIT."
+  []
+  (System/getenv "NIDO_CORE_UNIT"))
+
 (defn- coordinating?
   "Whether the process runs in drain `drain-id`'s conductor turn — its coordinator: a core turn on
    the drain with no unit."
   [project drain-id]
-  (and (= [(name project) drain-id] (turn-ws)) (nil? (System/getenv "NIDO_CORE_UNIT"))))
+  (and (= [(name project) drain-id] (turn-ws)) (nil? (turn-unit))))
 
 (defn- slice-calling
   "The slice workstream of drain `drain-id` whose core turn the process runs in, or nil."
