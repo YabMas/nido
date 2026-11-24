@@ -1639,54 +1639,92 @@
       note   (assoc :note note))))
 
 (defn- ask-options
-  "An operator ask's options as {:option :consequence}, whether its writer gave strings or maps."
+  "An operator ask's options as {:option :consequence :recommended?}, whether its writer gave
+   strings or maps. A string option recommends nothing: which one is recommended is the writer's
+   to say, never its position."
   [options]
   (mapv #(if (map? %)
-           {:option (str (or (:option %) (:label %))) :consequence (some-> (:consequence %) str)}
+           (cond-> {:option (str (or (:option %) (:label %))) :consequence (some-> (:consequence %) str)}
+             (true? (:recommended %)) (assoc :recommended? true))
            {:option (str %)})
         options))
 
+(defn- core-questions
+  "The questions operator ask content puts to the person, one per decision, each as
+   {:question :context :options :recommendation}: its `:questions` when it asks several, else its
+   one question with its options."
+  [{:keys [question explored options questions recommendation]}]
+  (let [q (or (some-> question str str/trim not-empty) "What should happen next?")]
+    (if (seq questions)
+      (vec (map-indexed (fn [i x]
+                          {:question       (str/trim (str (:question x)))
+                           ;; What was explored is what every question depends on: it leads.
+                           :context        (vec (remove str/blank? (cond-> [(str (:context x))]
+                                                                    (= 0 i) (->> (cons (str explored))))))
+                           :options        (ask-options (:options x))
+                           :recommendation (some-> (:recommendation x) str str/trim not-empty)})
+                        questions))
+      [{:question q :context (vec (remove str/blank? [(str explored)]))
+        :options (ask-options options)
+        :recommendation (some-> recommendation str str/trim not-empty)}])))
+
+(defn- several? [content] (boolean (seq (:questions content))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   core-ask-card
-  "The question card for operator ask `a`, in the Ask shape every card renders: its options
-   lettered, each given by the :option-<letter> action, beside a free answer and a withdrawal."
+  "The question card for operator ask `a`, in the Ask shape every card renders. One decision is
+   answered by its lettered options, each given by the :option-<letter> action, beside a free
+   answer and a withdrawal. Several are asked one at a time and sent together by
+   :answer-questions, each as a choice, the person's words or left open."
   [{:keys [content]}]
-  (let [{:keys [question explored recommendation]} content
-        opts (take (count option-action-ids) (ask-options (:options content)))
-        q    (or (some-> question str str/trim not-empty) "What should happen next?")]
-    {:kind        :operator-ask
-     :question    q
-     :questions   [(cond-> {:question q
-                            :context  (vec (remove str/blank? [(str explored)]))
-                            :options  (vec (map-indexed
-                                            (fn [i {:keys [option consequence]}]
-                                              (cond-> {:letter  (report/option-letter i)
-                                                       :label   option
-                                                       :summary (or consequence "")
-                                                       :action  (nth option-action-ids i)}
-                                                (= 0 i) (assoc :recommended? true)))
-                                            opts))}
-                     (not (str/blank? (str recommendation))) (assoc :recommendation (str recommendation)))]
-     :answer-does (vec (concat
-                        (map-indexed (fn [i {:keys [option]}]
-                                       {:action (nth option-action-ids i) :label (report/option-letter i)
-                                        :does (str "Answers \"" option "\"; the conductor hears it.")})
-                                     opts)
-                        [{:action :reply :label "Answer" :does "Sends your words as the answer; the conductor hears them."}
-                         {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]))}))
+  (let [qs     (core-questions content)
+        multi? (several? content)
+        after  (some-> (:after content) str str/trim not-empty)
+        head   (or (some-> (:question content) str str/trim not-empty) (:question (first qs)))
+        card-q (fn [i {:keys [question context options recommendation]}]
+                 (cond-> {:question question
+                          :context  context
+                          :options  (vec (map-indexed
+                                          (fn [j {:keys [option consequence recommended?]}]
+                                            (cond-> {:letter  (report/option-letter j)
+                                                     :label   option
+                                                     :summary (or consequence "")}
+                                              (not multi?)  (assoc :action (nth option-action-ids j))
+                                              recommended? (assoc :recommended? true)))
+                                          options))}
+                   recommendation                           (assoc :recommendation recommendation)
+                   (and after (= i (dec (count qs))))       (assoc :after after)))
+        opts   (:options (first qs))]
+    (cond-> {:kind        :operator-ask
+             :question    head
+             :questions   (vec (map-indexed card-q qs))
+             :answer-does (vec (concat
+                                (if multi?
+                                  [{:action :answer-questions :label "Send answers"
+                                    :does "Sends your answer to each question — a choice, your words, or left open; the conductor hears them."}]
+                                  (map-indexed (fn [i {:keys [option]}]
+                                                 {:action (nth option-action-ids i) :label (report/option-letter i)
+                                                  :does (str "Answers \"" option "\"; the conductor hears it.")})
+                                               opts))
+                                [{:action :reply :label "Answer" :does "Sends your words as the answer; the conductor hears them."}
+                                 {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]))}
+      multi? (assoc :submit :answer-questions))))
 
 (defn- core-gate
   "The gate of spine row `row`: its oldest ask awaiting the person in the core, offered for answer.
    nil when the core holds none for it."
   [project row]
   (when-let [a (first (sort-by :id (:awaiting (core-of project (:ws-id row)))))]
-    (let [opts    (take (count option-action-ids) (ask-options (get-in a [:content :options])))
+    (let [content (:content a)
           actions (vec (concat
-                        (map-indexed (fn [i {:keys [option]}]
-                                       {:id (nth option-action-ids i) :label (report/option-letter i)
-                                        :title option :kind :mutation
-                                        :style (if (= 0 i) :primary :default)})
-                                     opts)
+                        (if (several? content)
+                          ;; :words? — a question may be answered in words, so the card offers a field.
+                          [{:id :answer-questions :label "Send answers" :kind :mutation :style :primary :words? true}]
+                          (map-indexed (fn [i {:keys [option recommended?]}]
+                                         {:id (nth option-action-ids i) :label (report/option-letter i)
+                                          :title option :kind :mutation
+                                          :style (if recommended? :primary :default)})
+                                       (take (count option-action-ids) (ask-options (:options content)))))
                         [{:id :reply :label "Answer" :kind :resume :style :default}
                          {:id :withdraw :label "Withdraw" :kind :mutation :style :danger}]))]
       {:ws-id        (:ws-id row)
@@ -1705,6 +1743,24 @@
        :denials      []
        :resume-error nil
        :working?     false})))
+
+(defn- questions-answer
+  "The person's answers to the several questions of ask content, as the words the conductor
+   hears: one line per question, each its choice, the person's words, or left open. nil when every
+   question was left open."
+  [content picks]
+  (let [qs (core-questions content)
+        line (fn [i {:keys [question options]}]
+               (let [{:keys [letter words]} (get (vec picks) i)
+                     j   (when letter (first (keep-indexed #(when (= letter %2) %1) report/option-letters)))
+                     opt (when j (get options j))]
+                 [(boolean (or opt (not (str/blank? (str words)))))
+                  (str (inc i) ". " question " — "
+                       (cond opt (str (:option opt))
+                             (not (str/blank? (str words))) (str/trim (str words))
+                             :else "(left open)"))]))
+        lines (map-indexed line qs)]
+    (when (some first lines) (str/join "\n" (map second lines)))))
 
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :Gate]]}
@@ -3192,14 +3248,15 @@
   core-resolve!
   "Do what gate action `action-id` asks of the core, as the person's keyed command; nil when the
    action is not one the core answers. An option answers the oldest open ask with its option, a
-   reply with the person's words, a withdrawal takes it back; Land grants the landing; Promote is
+   reply with the person's words, Send answers with one answer per question it asks, a withdrawal
+   takes it back; Land grants the landing; Promote is
    the person's start, opening the workstream's unit; Done and Drop retract its open units and
    close it."
   [project ws-id action-id payload]
   (let [w    (wcore/state project ws-id)
         ask  (first (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w)))))
         act! #(wcore/act! project ws-id %)
-        text (some-> payload str str/trim not-empty)]
+        text (when-not (map? payload) (some-> payload str str/trim not-empty))]
     (cond
       (option-action? action-id)
       (let [opt (nth (ask-options (get-in ask [:content :options])) (option-index action-id) nil)]
@@ -3207,6 +3264,13 @@
               (nil? opt) {:decision :option-stale}
               :else (core-decision (act! {:command :answer-operator-ask :ask (:id ask)
                                           :answer (:option opt) :by :person})
+                                   :answered)))
+
+      (= :answer-questions action-id)
+      (let [said (when ask (questions-answer (:content ask) (:answers payload)))]
+        (cond (nil? ask) {:decision :core-refused :because "nothing is asked"}
+              (nil? said) {:decision :core-refused :because "every question was left open"}
+              :else (core-decision (act! {:command :answer-operator-ask :ask (:id ask) :answer said :by :person})
                                    :answered)))
 
       (= :reply action-id)
@@ -3324,7 +3388,7 @@
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
 
      ;; Coordination is the core's: every action it answers is the person's command to it.
-     (contains? #{:reply :withdraw :land :promote :done :drop} action-id)
+     (contains? #{:reply :withdraw :land :promote :done :drop :answer-questions} action-id)
      (or (core-resolve! project ws-id action-id payload) {:decision :core-refused :because "nothing to do"})
 
      ;; Not a `case` branch: the id set is derived from report/option-letters, and case needs

@@ -32,7 +32,8 @@
    two leaves an attempt pending that a start finds and makes again.
 
    Pure: no clock, no ids minted, no I/O. Ids and times arrive in commands."
-  (:require [clojure.set :as set]))
+  (:require [clojure.set :as set]
+            [clojure.string :as str]))
 
 ;; ── the state ────────────────────────────────────────────────────────────────
 
@@ -467,14 +468,18 @@
       (concerns-open-ask? state unit-id)   :unit-has-open-operator-ask)))
 
 (def decision-ready-keys
-  "What every operator ask states: what was explored, the options with their consequences, and a
-   recommendation."
-  [:explored :options :recommendation])
+  "What every operator ask states besides its options: what was explored, and a recommendation."
+  [:explored :recommendation])
 
-(defn- decision-ready? [content]
+(defn- decision-ready?
+  "Whether `content` puts a decision to the person: what was explored, a recommendation, and
+   either the options of one decision or several questions, each a question of its own."
+  [content]
   (and (map? content)
        (every? #(some? (get content %)) decision-ready-keys)
-       (seq (:options content))))
+       (or (seq (:options content))
+           (and (seq (:questions content))
+                (every? #(and (map? %) (not (str/blank? (str (:question %))))) (:questions content))))))
 
 (defmulti ^{:malli/schema [:=> [:cat :map :map] [:or [:map [:events [:vector :map]]] [:map [:refused :map]]]]} decide
   "Decide `command` against the whole workstream `state`: {:events [...]} when it is admitted,

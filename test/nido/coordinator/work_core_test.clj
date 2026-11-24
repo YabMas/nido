@@ -59,6 +59,61 @@
       (is (= :core-refused (:decision (work/resolve-gate! :brian ws-id :option-b nil)))
           "a second answer finds nothing asked"))))
 
+(def ^:private several
+  "An ask putting two decisions to the person, each with its own options."
+  [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}
+   {:command :start-turn :turn "c1" :unit nil :spec {:executor :fake :instructions "i"}}
+   {:command :record-outcome :turn "c1" :run 1 :outcome :asked :call {:id "call-1" :question "q?"}}
+   {:command :raise-operator-ask :ask "a1" :binds #{"c1"}
+    :content {:question "Two decisions about pictures" :explored "Read the code."
+              :questions [{:question "Drop the question or keep it without its picture?"
+                           :context "Creation drops it."
+                           :options [{:option "Drop it" :consequence "Fewer questions." :recommended true}
+                                     {:option "Keep it" :consequence "A missing diagram."}]
+                           :recommendation "Drop it."}
+                          {:question "Tell the teacher?"
+                           :options [{:option "Tell them"} {:option "Stay silent"}]}]
+              :recommendation "Drop it; tell them." :after "The design is written next."}}])
+
+(deftest several-decisions-are-asked-one-question-each-and-sent-together
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id several)
+      (let [[g] (work/gates :brian)
+            ask (:ask g)]
+        (is (= "Two decisions about pictures" (:question ask)))
+        (is (= ["Drop the question or keep it without its picture?" "Tell the teacher?"]
+               (map :question (:questions ask))) "each decision is a question of its own")
+        (is (= [["Read the code." "Creation drops it."] []] (map :context (:questions ask)))
+            "what was explored leads the first question")
+        (is (= [[["A" "Drop it" true] ["B" "Keep it" nil]] [["A" "Tell them" nil] ["B" "Stay silent" nil]]]
+               (for [q (:questions ask)] (map (juxt :letter :label :recommended?) (:options q))))
+            "the recommended branch is the one its writer marked, never the first by position")
+        (is (every? nil? (mapcat #(map :action (:options %)) (:questions ask)))
+            "no option answers the whole ask by itself")
+        (is (= :answer-questions (:submit ask)))
+        (is (= "The design is written next." (:after (last (:questions ask)))))
+        (is (= [:answer-questions :reply :withdraw] (map :id (:actions g)))))
+      (is (= :core-refused (:decision (work/resolve-gate! :brian ws-id :answer-questions {:answers [{} {}]})))
+          "nothing chosen answers nothing")
+      (is (= {:decision :answered}
+             (work/resolve-gate! :brian ws-id :answer-questions {:answers [{:letter "A"} {:words "Only on the first failure"}]})))
+      (is (= {:answered (str "1. Drop the question or keep it without its picture? — Drop it\n"
+                             "2. Tell the teacher? — Only on the first failure")}
+             (get-in (core-state c ws-id) [:turns "c1" :resolution]))))))
+
+(deftest a-single-decision-recommends-only-what-its-writer-marked
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       (conj (pop fake-core/asking)
+                             {:command :raise-operator-ask :ask "a1" :binds #{"c1"}
+                              :content {:question "Ship it?" :explored "x" :recommendation "No"
+                                        :options ["Yes" {:option "No" :recommended true}]}}))
+      (let [[g] (work/gates :brian)]
+        (is (= [nil true] (map :recommended? (get-in g [:ask :questions 0 :options]))))
+        (is (= [:default :primary] (map :style (take 2 (:actions g)))))))))
+
 (deftest a-reply-answers-in-words-and-a-withdrawal-takes-the-ask-back
   (with-ws
     (fn [c ws-id]

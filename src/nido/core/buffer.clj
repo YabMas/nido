@@ -28,6 +28,7 @@
    bb as well, because the tools run under bb."
   (:require [clojure.data.json :as json]
             [clojure.java.io]
+            [nido.core.ask-tool :as ask-tool]
             [clojure.string :as str]
             [nido.core.api :as api]
             [nido.core.domain :as d]))
@@ -91,7 +92,7 @@
                   :ask (str "ask " (:id t) " " (:id call))
                   :binds [(:id t)]
                   :concerns nil
-                  :content (select-keys call [:question :explored :options :recommendation])}})
+                  :content (select-keys call ask-tool/content-keys)}})
      (for [t (sort-by :id (filter #(= :resolved (:status %)) (vals (:turns state))))]
        {:key (str "buffer/resume/" (:id t) "/" (:run t) "/" pos)
         :command {:command :resume-turn :turn (:id t)}})
@@ -191,10 +192,12 @@
      "Act ONLY through the nido conductor tools (mcp__nido-conductor__*); read the workstream with the state tool."
      ""
      "Rules:"
-     "- Every ask a unit's turn raised is disposed of exactly once: answer_call, return_call (send it to explore further), or raise_operator_ask (bind its call; you may consolidate asks of several units)."
+     "- Every ask a unit's turn raised is disposed of exactly once: answer_call, return_call (send it to explore further), or raise_operator_ask (bind its call; you may consolidate asks of several units). Raising a unit's ask, carry its questions and options over as the unit wrote them; consolidating, give each decision its own entry in `questions`."
      "- Answer a unit yourself only when the answer follows from the goal and what is recorded. Anything that is the person's to decide goes to them."
      "- For a decision of your own that only the person can make (a new unit, a change of goal, a trade-off), ask with mcp__nido__ask as the ONLY tool call in its turn. A new unit is proposed that way and opened only once granted."
      "- Every ask you raise states what was explored, the options with their consequences, and a recommendation."
+     (str "- How an ask is written: " ask-tool/guidance)
+     "- Directing a unit to ask several product questions, tell it to give each its own entry in the ask's `questions`."
      "- A unit with an unknown runs nothing until you settle it (settle_unknown) by observing what happened."
      "- Start a unit's next turn with start_unit_turn when its goal needs more work; it runs in the unit's own session. Stop when there is nothing left to decide."
      "- The person's chat messages reach you as they decided, often passed on by the workstream's chat agent, which answers their questions itself; each is the person's word. Answer every chat message the person sent with reply_chat. What you settle in chat takes effect only through the same tools."
@@ -221,16 +224,15 @@
    "return_call"           {:description "Send a unit turn's ask back for further exploration, with instructions."
                             :properties {:turn {:type "string"} :instructions {:type "string"}} :required ["turn" "instructions"]
                             :command (fn [{:keys [turn instructions]}] {:command :return-call :turn turn :instructions instructions})}
-   "raise_operator_ask"    {:description "Put a decision to the person, bound to the pending calls of the unit turns it answers."
-                            :properties {:binds {:type "array" :items {:type "string"}} :concerns {:type "string"}
-                                         :question {:type "string"} :explored {:type "string"}
-                                         :options {:type "array" :items {:type "string"}} :recommendation {:type "string"}}
-                            :required ["binds" "question" "explored" "options" "recommendation"]
-                            :command (fn [{:keys [binds concerns question explored options recommendation]}]
+   "raise_operator_ask"    {:description (str "Put a decision to the person, bound to the pending calls of the unit turns it answers. "
+                                               ask-tool/guidance)
+                            :properties (assoc ask-tool/properties
+                                               :binds {:type "array" :items {:type "string"}} :concerns {:type "string"})
+                            :required ["binds" "question" "explored" "recommendation"]
+                            :command (fn [{:keys [binds concerns] :as args}]
                                        {:command :raise-operator-ask :ask (str "ask " (random-uuid)) :binds binds
                                         :concerns (not-empty concerns)
-                                        :content {:question question :explored explored :options options
-                                                  :recommendation recommendation}})}
+                                        :content (ask-tool/content args)})}
    "withdraw_operator_ask" {:description "Withdraw an operator ask whose premise changed; its calls are refused with the reason."
                             :properties {:ask {:type "string"} :reason {:type "string"}} :required ["ask" "reason"]
                             :command (fn [{:keys [ask reason]}] {:command :withdraw-operator-ask :ask ask :reason reason})}

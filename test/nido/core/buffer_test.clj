@@ -45,6 +45,15 @@
     (let [s2 (state-after-from s [(:command raise) {:command :answer-operator-ask :ask "ask k c" :answer "yes"}])]
       (is (= [{:command :resume-turn :turn "k"}] (map :command (b/decisions opts "ws" s2 5)))))))
 
+(deftest a-conductor-s-several-questions-reach-the-person-as-written
+  (let [qs [{:question "a?" :options [{:option "x" :recommended true}]} {:question "b?" :options [{:option "y"}]}]
+        s  (state-after [{:command :start-turn :turn "k" :unit nil :spec spec}
+                         {:command :record-outcome :turn "k" :outcome :asked
+                          :call {:id "c" :question "two" :explored "x" :questions qs :recommendation "x"}}])
+        [raise] (b/decisions opts "ws" s 3)]
+    (is (= {:question "two" :explored "x" :questions qs :recommendation "x"}
+           (get-in raise [:command :content])))))
+
 (deftest failing-conductor-turns-stop-the-waking
   (let [s (state-after (concat [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                                 {:command :start-turn :turn "t" :unit "u" :spec spec}

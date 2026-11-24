@@ -102,7 +102,14 @@
                             {:command :record-outcome :turn "t9" :outcome :asked :call {:id "c"}}))]
         (is (= :ask-not-decision-ready
                (refusal s3 {:command :raise-operator-ask :ask "a3" :binds ["t9"]
-                            :content (dissoc ready :recommendation)})))))))
+                            :content (dissoc ready :recommendation)})))
+        (testing "several decisions are ready as questions of their own, each with a question"
+          (let [several (-> ready (dissoc :options)
+                            (assoc :questions [{:question "a?" :options [{:option "x"}]} {:question "b?"}]))]
+            (is (nil? (refusal s3 {:command :raise-operator-ask :ask "a3" :binds ["t9"] :content several})))
+            (is (= :ask-not-decision-ready
+                   (refusal s3 {:command :raise-operator-ask :ask "a3" :binds ["t9"]
+                                :content (assoc several :questions [{:question " "}])})))))))))
 
 (deftest an-ask-about-a-unit-holds-it
   (let [[s] (run (conj two-units

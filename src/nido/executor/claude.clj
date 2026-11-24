@@ -25,7 +25,8 @@
   (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [nido.core.ask-tool :as ask-tool])
   (:import [java.util UUID]))
 
 (def ^:private ask-tool-name
@@ -148,10 +149,8 @@
   (when-let [{:keys [stop_reason deferred_tool_use is_error subtype result]} (result-event run-dir)]
     (cond
       (and (= "tool_deferred" stop_reason) (= ask-tool-name (:name deferred_tool_use)))
-      (let [{:keys [question explored options recommendation]} (:input deferred_tool_use)]
-        {:outcome :asked
-         :call {:id (:id deferred_tool_use) :question question :explored explored
-                :options options :recommendation recommendation}})
+      {:outcome :asked
+       :call (assoc (ask-tool/content (:input deferred_tool_use)) :id (:id deferred_tool_use))}
 
       (str/starts-with? (str stop_reason) "tool_deferred")
       {:outcome :failed :detail {:reason :deferred-another-tool :tool (:name deferred_tool_use)}}
