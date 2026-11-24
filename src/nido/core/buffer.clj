@@ -158,6 +158,27 @@
     :arrival       (str "work arrived and waits for the person to promote or dismiss it: " (:summary item))
     (pr-str kind)))
 
+(defn- recipe-lines
+  "Where nido's recipe stands on the workstream, as the conductor is told it."
+  [state]
+  (let [l        (:ledger state)
+        kinds    (set (map :kind l))
+        act      (:kind (last (filter #(#{:activated :deactivated} (:kind %)) l)))
+        recorded (filter kinds [:intent :baseline :design :design-cleared])]
+    (cond
+      (not= :activated act)
+      ["Recipe: not running on this workstream; unit turns may change code."]
+
+      (d/code-held state)
+      [(str "Recipe: running, and the design is NOT cleared"
+            (if (seq recorded) (str " (recorded: " (str/join ", " (map name recorded)) ")") " (nothing recorded yet)")
+            ". Until it is, every unit turn runs read-only on the code — do not direct a unit to build.")
+       "  Direct units through what the recipe owes, in order: the intent (the person's to state: ask them, or for an :intent grant so a unit may write it), the baseline (judged by `bb nido:review:baseline`), the design (/design, judged and cleared by `bb nido:review:design`)."
+       "  A product question is a design question: put it to the person while designing, never after building."]
+
+      :else
+      ["Recipe: running, and the design is cleared: unit turns may change code, to build what the cleared design says."])))
+
 (defn ^{:malli/schema [:=> [:cat :string :map [:sequential :map]] :string]} brief
   "What a conductor turn is told: its role, what it has not yet heard, and the workstream now."
   [ws state items]
@@ -182,7 +203,9 @@
      "Units:"]
     (for [u (sort-by :id (vals (:units state)))]
       (str "- " (:id u) " [" (name (:status u)) (when (:held? u) ", HELD")
-           ", session " (name (get-in u [:session :status] :none)) "] in " (:project u) ": " (:goal u))))))
+           ", session " (name (get-in u [:session :status] :none)) "] in " (:project u) ": " (:goal u)))
+    [""]
+    (recipe-lines state))))
 
 ;; ── the conductor tools ──────────────────────────────────────────────────────
 
@@ -213,7 +236,7 @@
                             :properties {:unit {:type "string"} :project {:type "string"} :goal {:type "string"}}
                             :required ["unit" "project" "goal"]
                             :command (fn [{:keys [unit project goal]}] {:command :open-unit :unit unit :project project :goal goal})}
-   "start_unit_turn"       {:description "Start a unit's next turn: an agent working in the unit's session on `instructions`."
+   "start_unit_turn"       {:description "Start a unit's next turn: an agent working in the unit's session on `instructions`. While the recipe holds the workstream's design uncleared, the turn runs read-only on the code."
                             :properties {:unit {:type "string"} :instructions {:type "string"}
                                          :executor {:type "string"}}
                             :required ["unit" "instructions"]

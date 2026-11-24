@@ -359,3 +359,30 @@
                                                     :images ["nope"]})))
     (is (= :too-many-images (refusal d/empty-state {:command :post-chat :message "m" :text "x"
                                                     :images (repeat 5 digest-a)})))))
+
+(deftest the-recipe-holds-code-until-a-design-stands-cleared
+  (let [append (fn [s kind] (first (d/step s {:command :append-entry :after (d/latest-seq s)
+                                                :row (row* kind) :content "{}"})))
+        ledger (fn [& kinds] (reduce append (first (run [{:command :create-workstream :identity id*}
+                                                          {:command :open-unit :unit "u" :project "brian"
+                                                           :goal "g" :session-cwd "/w"}]))
+                                     kinds))
+        started (fn [s] (get-in (first (d/step s {:command :start-turn :turn "t" :unit "u" :spec spec}))
+                                [:turns "t" :spec]))]
+    (testing "a workstream the recipe does not run on changes code freely"
+      (is (nil? (d/code-held (ledger :ticket))))
+      (is (nil? (:read-only? (started (ledger :ticket))))))
+    (testing "running it, nothing may change code before a design stands cleared"
+      (doseq [s [(ledger :activated) (ledger :activated :intent :baseline :design)
+                 (ledger :activated :design :design-cleared :design)
+                 (ledger :activated :design :design-cleared :retraction)]]
+        (is (= :design-not-cleared (d/code-held s)) (pr-str (map :kind (:ledger s))))
+        (let [sp (started s)]
+          (is (:read-only? sp) "the turn starts read-only, whatever the command said")
+          (is (re-find #"may not change code" (:instructions sp)))
+          (is (re-find #"do the thing$" (:instructions sp)) "and keeps its own instructions"))))
+    (testing "a cleared design frees it, and so does taking the recipe off"
+      (is (nil? (d/code-held (ledger :activated :intent :baseline :design :design-cleared))))
+      (is (nil? (d/code-held (ledger :activated :design :design-approved))))
+      (is (nil? (d/code-held (ledger :activated :deactivated))))
+      (is (nil? (:read-only? (started (ledger :activated :design :design-cleared))))))))

@@ -12,7 +12,8 @@
 
    Every run is passed the same permission policy, because `--resume` restores none: permissions
    skipped, nothing nobody could answer (AskUserQuestion, ScheduleWakeup), and only the user's and
-   project's own settings beneath the run's.
+   project's own settings beneath the run's. A read-only turn (`:read-only?` on its spec) has a
+   second PreToolUse hook, which refuses every file-editing tool pointed into its working copy.
 
    A turn's first run is prompted with the spec's `:instructions`, followed, when the spec names
    `:images` (digests), by one image block per image in order, read through the executor's `:image`
@@ -35,6 +36,12 @@
   "Tools a run never gets: AskUserQuestion opens a dialog no one is at the terminal to answer,
    and ScheduleWakeup schedules a wakeup nothing delivers."
   ["AskUserQuestion" "ScheduleWakeup"])
+
+(def ^:private file-editors
+  "The tools that change files, which a read-only turn (`:read-only?` on its spec) may not point at
+   its working copy: a hook guards them rather than their being withheld, because a skill writes
+   its reports to files elsewhere."
+  "Edit|MultiEdit|Write|NotebookEdit")
 
 (defn- src-dir
   "The source root this namespace was loaded from, which the hook and the ask tool run from."
@@ -103,10 +110,16 @@
                                        (str (stdin-file run-dir))])))
      :env {"CLAUDE_CODE_DISABLE_CRON" "1"}
      :files (cond-> {settings (json/write-str
-                               {:hooks {:PreToolUse [{:matcher ask-tool-name
-                                                      :hooks [{:type "command"
-                                                               :command (str bb-bin " --classpath " src
-                                                                             " -m nido.executor.claude hook " run-dir)}]}]}})
+                               {:hooks {:PreToolUse
+                                        (cond-> [{:matcher ask-tool-name
+                                                  :hooks [{:type "command"
+                                                           :command (str bb-bin " --classpath " src
+                                                                         " -m nido.executor.claude hook " run-dir)}]}]
+                                          (and (:read-only? spec) (:cwd spec))
+                                          (conj {:matcher file-editors
+                                                 :hooks [{:type "command"
+                                                          :command (str bb-bin " --classpath " src
+                                                                        " -m nido.executor.claude guard " (:cwd spec))}]}))}})
                      ;; nido's ask tool, and any MCP servers the turn's spec brings (a conductor's
                      ;; tools): MCP is no provider's, so a spec may name servers and stay neutral.
                      mcp (json/write-str
@@ -182,9 +195,33 @@
               {:permissionDecision "defer"
                :permissionDecisionReason "nido holds this ask"}))}))
 
+(defn- canonical [base p]
+  (let [f (io/file p)]
+    (.getCanonicalPath (if (.isAbsolute f) f (io/file (or base ".") p)))))
+
+(defn- guard-decision
+  "The read-only hook's answer for `event`: a denial when the file-editing tool it names points
+   into working copy `cwd`, else nil."
+  [cwd {:keys [tool_input] :as event}]
+  (when-let [p (or (:file_path tool_input) (:notebook_path tool_input))]
+    (let [root (canonical nil cwd)
+          path (canonical (:cwd event) p)]
+      (when (or (= path root) (str/starts-with? path (str root "/")))
+        {:hookSpecificOutput
+         {:hookEventName "PreToolUse"
+          :permissionDecision "deny"
+          :permissionDecisionReason
+          (str "nido's recipe holds this workstream's code until its design is cleared: this turn "
+               "may not change files in its working copy. Write what the recipe owes through nido's "
+               "verbs instead.")}}))))
+
 (defn ^:export -main
-  "`hook <run-dir>`: answer one PreToolUse event on stdin."
-  [& [cmd run-dir]]
-  (when (= "hook" cmd)
-    (let [event (json/read-str (slurp *in*) :key-fn keyword)]
-      (println (json/write-str (hook-decision run-dir event))))))
+  "`hook <run-dir>`: answer one PreToolUse event on stdin. `guard <cwd>`: refuse a file edit into
+   working copy `cwd`, for a read-only turn."
+  [& [cmd arg]]
+  (case cmd
+    "hook"  (let [event (json/read-str (slurp *in*) :key-fn keyword)]
+              (println (json/write-str (hook-decision arg event))))
+    "guard" (when-let [d (guard-decision arg (json/read-str (slurp *in*) :key-fn keyword))]
+              (println (json/write-str d)))
+    nil))

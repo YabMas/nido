@@ -132,3 +132,14 @@
     (let [s (state-after [{:command :post-chat :message "m1" :text "hi"}])
           f (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :src "/src" :ws-dir (constantly "/ws")})]
       (is (not (contains? (f "ws" "c1" s (vals (:inbox s))) :images))))))
+
+(deftest the-conductor-is-told-where-the-recipe-stands
+  (let [s     (state-after [{:command :create-workstream :identity {:project :brian :external-refs [] :created-at "2026-11-24T00:00:00Z"}}])
+        add   (fn [s kind] (first (d/step s {:command :append-entry :after (d/latest-seq s)
+                                              :row {:kind kind :at "t" :ext "edn"} :content "{}"})))
+        brief #(b/brief "brian/ws" % [])]
+    (is (re-find #"Recipe: not running" (brief s)))
+    (let [held (reduce add s [:activated :intent])]
+      (is (re-find #"design is NOT cleared \(recorded: intent\)" (brief held)))
+      (is (re-find #"do not direct a unit to build" (brief held)))
+      (is (re-find #"the design is cleared" (brief (reduce add held [:baseline :design :design-cleared])))))))

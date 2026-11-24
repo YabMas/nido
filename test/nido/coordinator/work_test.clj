@@ -3316,7 +3316,9 @@
           (doseq [w [penned fired bare minted]]
             (is (standing/activated? (workstream/read-ws :brian (:id w))) (str (:id w))))
           (is (= :intake (:at (pipeline/of :brian (:id fired))))
-              "activation is a status entry: the arc still starts at the intent"))))))
+              "activation is a status entry: the arc still starts at the intent")
+          (is (nil? (workstream/activation (work/ensure-workstream! :brian {:id "BR-79"} true)))
+              "a skill carrying its own recipe is born without nido's"))))))
 
 (deftest a-stage-choice-takes-a-ticket-back-from-a-notion-settlement
   (with-tmp

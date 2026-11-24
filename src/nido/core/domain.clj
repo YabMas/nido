@@ -128,6 +128,22 @@
   [state unit-id]
   (filter #(and (= unit-id (:unit %)) (active-statuses (:status %))) (vals (:turns state))))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :keyword]]} code-held
+  "Why a unit's turn may not change code on this workstream, or nil when it may: nido's recipe
+   runs on it — the newer of its :activated and :deactivated entries is an :activated — and no
+   design stands cleared, :design-not-cleared. A design stands cleared when a :design-cleared or
+   :design-approved is newer than the newest :design and the newest :retraction. Read off the
+   ledger's index, so the arc is judged in the one place every turn starts through."
+  [state]
+  (let [l      (:ledger state)
+        newest (fn [kinds] (or (:seq (last (filter #(kinds (:kind %)) l))) 0))
+        act    (last (filter #(#{:activated :deactivated} (:kind %)) l))]
+    (when (= :activated (:kind act))
+      (let [d (newest #{:design})
+            c (newest #{:design-cleared :design-approved})]
+        (when-not (and (pos? d) (> c d) (> c (newest #{:retraction})))
+          :design-not-cleared)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} first-turns-owed
   "The first turns owed: [{:unit :turn :spec}] for each open unit opened with a first turn — a
    trigger's instructions — that no turn of it has started yet and whose session is ready."
@@ -468,6 +484,12 @@
     (seq (active-turns state unit))                   (refuse :unit-has-active-turn :unit unit)
     :else (accept {:event :unit-goal-retracted :unit unit})))
 
+(def ^:private read-only-preamble
+  (str "nido's recipe runs on this workstream and its design is not cleared, so this turn may not "
+       "change code: its file-editing tools are refused in its working copy, and it must not change files there any other way. Explore, "
+       "and write what the recipe owes — the baseline, the design (/design) — through nido's verbs; "
+       "a product question is a design question, to ask now rather than after building."))
+
 (defmethod decide :start-turn [state {:keys [turn unit spec hears]}]
   (cond
     (:closed? state)                       (refuse :workstream-closed)
@@ -484,9 +506,13 @@
     (if-let [why (or (unit-blocker state unit)
                      (when-not (= :ready (get-in state [:units unit :session :status])) :session-not-ready))]
       (refuse why :unit unit)
-      ;; A unit turn works in its unit's session, whatever the command said.
+      ;; A unit turn works in its unit's session, whatever the command said — and changes no code
+      ;; while the recipe holds it (`code-held`), whatever the command said either.
       (accept {:event :turn-started :turn turn :unit unit
-               :spec (assoc spec :cwd (get-in state [:units unit :session :cwd]))}))))
+               :spec (cond-> (assoc spec :cwd (get-in state [:units unit :session :cwd]))
+                       (code-held state)
+                       (assoc :read-only? true
+                              :instructions (str read-only-preamble "\n\n" (:instructions spec))))}))))
 
 (defmethod decide :record-outcome [state {:keys [turn run outcome call detail actions-unknown?]}]
   (let [t (get-in state [:turns turn])]

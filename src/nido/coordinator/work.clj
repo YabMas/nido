@@ -3021,16 +3021,19 @@
         (:url payload)     (assoc :url (:url payload))
         (:page-id payload) (assoc :page-id (:page-id payload))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :Workstream]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map [:? :boolean]] :Workstream]}
   ensure-workstream!
   "The workstream an arrival's `payload` is for: the one its ref already names, or a new one
-   stamped with the payload's facets. Not atomic: arrivals are dispatched one at a time."
-  [project payload]
-  (let [facets (facets/select-facets (views/facet-properties project) payload)]
-    (if-let [ref (external-ref payload)]
-      (or (cws/find-by-ref project (:adapter ref) (:id ref))
-          (cws/create! project {:external-refs [ref] :facets facets :activated? true}))
-      (cws/create! project {:external-refs [] :facets facets :activated? true}))))
+   stamped with the payload's facets, born running nido's recipe unless `own-recipe?` says the
+   arrival's skill carries its own. Not atomic: arrivals are dispatched one at a time."
+  ([project payload] (ensure-workstream! project payload false))
+  ([project payload own-recipe?]
+   (let [facets (facets/select-facets (views/facet-properties project) payload)
+         base   {:facets facets :activated? (not own-recipe?)}]
+     (if-let [ref (external-ref payload)]
+       (or (cws/find-by-ref project (:adapter ref) (:id ref))
+           (cws/create! project (assoc base :external-refs [ref])))
+       (cws/create! project (assoc base :external-refs []))))))
 
 (declare core-open?)
 
@@ -3051,7 +3054,8 @@
       (and pre (true? (:once-per-ref? (:payload routed)))) :settled
       (and pre (some #(and (= :open (:status %)) (= tname (:trigger %))) (units (:id pre)))) :running
       :else
-      (let [w    (or pre (ensure-workstream! project (:payload routed)))
+      (let [w    (or pre (ensure-workstream! project (:payload routed)
+                                             (true? (-> routed :trigger :own-recipe?))))
             unit (str tname "-" (subs (str (random-uuid)) 0 8))
             goal (str/trim (str (name (-> routed :trigger :skill)) " "
                                 (or (-> routed :payload :title) (-> routed :payload :id) "")))

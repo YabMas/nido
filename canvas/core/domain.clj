@@ -55,6 +55,10 @@
   (Operation attempts-pending
     "Every provisioning attempt recorded and not yet resolved."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation code-held
+    "Why a unit's turn may not change code, or nil when it may: the recipe runs on the workstream
+     and no design of it stands cleared. A turn started while it holds runs read-only."
+    {:signature [:=> [:catn [:state :map]] [:maybe :keyword]]})
   (Operation first-turns-owed
     "The first turns owed: each open unit opened with a first turn that no turn of it has started
      yet and whose session is ready."

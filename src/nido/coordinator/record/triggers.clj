@@ -60,6 +60,10 @@
    [:dry-run?       {:optional true} boolean?]
    [:enabled?       {:optional true} boolean?]
    [:uncapped?      {:optional true} boolean?]
+   ;; The trigger's skill carries a gated recipe of its own — it lands what it builds through
+   ;; nido's verbs (implement-improvement, recover-session) — so the workstream a fire mints is
+   ;; born without nido's recipe, which would hold its code until a design it never writes.
+   [:own-recipe?    {:optional true} boolean?]
    [:max-in-flight  {:optional true} pos-int?]
    [:session-name-prefix {:optional true} string?]
    [:on-promote          {:optional true} [:map-of keyword? any?]]])

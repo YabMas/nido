@@ -2,6 +2,7 @@
   "The Claude Code executor's resumption: what the agent reads as its ask's answer."
   (:require
    [babashka.fs :as fs]
+   [clojure.data.json :as json]
    [clojure.edn :as edn]
    [clojure.test :refer [deftest is]]
    [nido.executor.claude :as claude]))
@@ -57,4 +58,21 @@
             (is (= "/home/me/Code/nido" (nth a (inc i))))
             (is (.startsWith ^String (nth a (+ 2 i)) "--") "the next option ends the variadic list")))
         (is (not-any? #{"--add-dir"} (argv {} 1))))
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-read-only-turn-may-not-edit-its-working-copy
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (let [hooks (fn [spec]
+                    (let [{:keys [files]} ((:launch (claude/executor {:src "/src"}))
+                                           {:turn-dir dir :run-dir dir :run 1 :spec (merge {:instructions "i"} spec)})]
+                      (->> (get files (str (fs/path dir "settings.json"))) json/read-str
+                           (#(get-in % ["hooks" "PreToolUse"])) (map #(get % "matcher")))))
+            guard #'claude/guard-decision]
+        (is (some #{"Edit|MultiEdit|Write|NotebookEdit"} (hooks {:read-only? true :cwd "/w"})))
+        (is (= 1 (count (hooks {:cwd "/w"}))) "a turn that may build has the ask hook alone")
+        (is (some? (guard "/w" {:tool_input {:file_path "/w/src/a.clj"}})))
+        (is (some? (guard "/w" {:cwd "/w" :tool_input {:file_path "src/a.clj"}})) "relative to the tool's cwd")
+        (is (nil? (guard "/w" {:tool_input {:file_path "/tmp/report.edn"}})) "a report elsewhere is the skill's")
+        (is (nil? (guard "/w" {:tool_input {:file_path "/wx/a"}}))))
       (finally (fs/delete-tree dir)))))
