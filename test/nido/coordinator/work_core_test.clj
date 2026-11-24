@@ -109,3 +109,16 @@
       (is (:already? (work/activate! :brian ws-id "s1" {:cwd "/wt/s1"})))
       (is (:was? (work/deactivate! :brian ws-id nil)))
       (is (get-in (core-state c ws-id) [:units ws-id :held?])))))
+
+(deftest a-workstream-the-core-works-unrecorded-reads-as-its-core-state
+  (with-ws
+    (fn [c ws-id]
+      (let [row #(first (work/list-workstreams :brian #{}))]
+        (is (= :intake (get-in (row) [:position :at])) "nothing done anywhere: not started")
+        (fake-core/seed! c :brian ws-id fake-core/asking)
+        (is (= {:at :core-asking :next {:stage :answer-ask :mode :human}} (:position (row)))
+            "the ledger records none of it, and the core asks the person")
+        (work/resolve-gate! :brian ws-id :option-a nil)
+        (fake-core/seed! c :brian ws-id
+                         [{:command :start-turn :turn "u1" :unit "u" :spec {:executor :fake :instructions "i"}}])
+        (is (= :core-under-way (get-in (row) [:position :at])) "a unit's turn ran: under way")))))

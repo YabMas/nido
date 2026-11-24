@@ -586,11 +586,17 @@
       (nil? w)     (assoc row :needs-you false)
       :else
       (let [closed? (get-in w [:state :closed?])
-            eng     (wcore/engagement w)]
+            eng     (wcore/engagement w)
+            ;; The ledger reads :intake when it records none of the work — so does a workstream
+            ;; nobody activated, whose units the core ran all the same. Its coordination says
+            ;; where it stands, and a workstream under way is out of the triage pen.
+            core-at (when (= :intake (get-in row [:position :at])) (wcore/position w))]
         (cond-> (assoc row
                        :needs-you  (boolean (seq (:awaiting w)))
                        :engagement eng
                        :doing      (wcore/doing w))
+          core-at               (assoc :position core-at)
+          (and core-at (#{:triage :ready} (:stage row))) (assoc :stage :in-progress)
           (wcore/held-units? w) (assoc-in [:status :paused] true)
           closed?               (assoc :stage (if (= :dismissed (:stage row)) :dismissed :done)
                                        :needs-you false :engagement :settled :doing nil))))))

@@ -63,7 +63,9 @@
    :intent-retracted  "Intent retracted"
    :design-invalidated "Design invalidated"
    :goal-superseded   "Goal moved"
-   :unplaceable       "Cannot place"})
+   :unplaceable       "Cannot place"
+   :core-asking       "Asking you"
+   :core-under-way    "Under way"})
 
 (def ^:private stage-label
   {:establish-intent      "establish intent"
@@ -77,6 +79,7 @@
    :rebaseline            "re-do the baseline"
    :address-findings      "address findings"
    :answer-blocker        "your answer"
+   :answer-ask            "your answer"
    :assert-gate           "your gate"
    :land                  "your landing"
    :accept-triage         "your triage call"})

@@ -170,6 +170,18 @@
   (when-let [t (first (filter #(= :running (:status %)) (vals (:turns state))))]
     {:source :core :stage (if (:unit t) :unit-turn :conductor-turn) :turn (:id t) :unit (:unit t)}))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} position
+  "Where held workstream `w` stands by its coordination, for a workstream whose ledger records none
+   of the work: {:at :core-asking} — the next move the person's — while an ask awaits them,
+   {:at :core-under-way} once a unit's turn has run, else nil. A unit turn records its outcome in
+   the core and writes no record of the arc, so the ledger alone reads such a workstream as never
+   started."
+  [{:keys [state awaiting]}]
+  (cond
+    (:closed? state) nil
+    (seq awaiting)   {:at :core-asking :next {:stage :answer-ask :mode :human}}
+    (some :unit (vals (:turns state))) {:at :core-under-way}))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]} open-asks
   "Every ask awaiting the person across held map `h`: [{:project :ws-id :ask}], oldest workstream
    key first."
