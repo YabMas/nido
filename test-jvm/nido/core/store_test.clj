@@ -153,3 +153,56 @@
     (commit-command! s "nido/ws" "a1" {:command :append-entry :after 0 :row (row :note "t") :content "one"})
     (is (thrown? Exception (jdbc/execute! (:conn s) ["INSERT INTO entries(ws,seq,content) VALUES ('nido/ws',1,'two')"])))
     (is (= {1 "one"} (store/entry-contents s "nido/ws" [1])))))
+
+(deftest a-summary-is-kept-with-the-state-it-reads
+  (with-store [s]
+    (commit-command! s "nido/a" "c-a" {:command :create-workstream
+                                        :identity (assoc identity* :title {:text "Alpha" :basis "b"})})
+    (commit-command! s "nido/b" "c-b" {:command :create-workstream :identity identity*})
+    (commit-command! s "brian/c" "c-c" {:command :create-workstream :identity (assoc identity* :project :brian)})
+    (testing "every committed workstream is summarised under the project its key names"
+      (is (= #{"nido/a" "nido/b"} (set (keys (store/summaries s "nido")))))
+      (is (= "Alpha" (get-in (store/summaries s "nido") ["nido/a" :title])))
+      (is (= #{"brian/c"} (set (keys (store/summaries s "brian"))))))
+    (testing "only a workstream with an open ask is asking, and asking answers its state"
+      (is (empty? (store/asking s "nido")))
+      (is (nil? (commit-command! s "nido/a" "stop" {:command :raise-conductor-stop :ask "ask-1"
+                                                    :content {:question "Go on?" :explored "e" :recommendation "r" :options ["yes" "no"]}})))
+      (is (= ["nido/a"] (keys (store/asking s "nido"))))
+      (is (= ["ask-1"] (get-in (store/summaries s "nido") ["nido/a" :asks])))
+      (is (= "ask-1" (:id (first (d/awaiting-person (get (store/asking s "nido") "nido/a"))))))
+      (is (empty? (store/asking s "brian"))))
+    (testing "a closed workstream owes no move, whatever ask is open on it"
+      (commit-command! s "nido/a" "close" {:command :close-workstream})
+      (is (empty? (store/asking s "nido"))))
+    (is (empty? (store/verify s)))
+    (testing "a summary that drifted from its state is reported, and a rebuild restores it"
+      (jdbc/execute! (:conn s) ["UPDATE summaries SET data = '{}' WHERE ws = 'nido/b'"])
+      (is (= [{:ws "nido/b" :problem :summary-differs-from-state}] (store/verify s)))
+      (store/rebuild! s)
+      (is (empty? (store/verify s))))))
+
+(deftest a-store-without-summaries-is-summarised-when-opened
+  (let [path (str (temp-dir) "/core.db")
+        s    (store/open path)]
+    (commit-command! s "nido/a" "c-a" {:command :create-workstream :identity identity*})
+    (jdbc/execute! (:conn s) ["DELETE FROM summaries"])
+    (store/close s)
+    (let [s (store/open path)]
+      (try
+        (is (= #{"nido/a"} (set (keys (store/summaries s "nido")))))
+        (is (empty? (store/verify s)))
+        (finally (store/close s))))))
+
+(def ^:private every-summary-equals-the-fold
+  (prop/for-all [commands (gen/vector dt/gen-command 0 40)]
+    (with-store [s]
+      (doseq [[i c] (map-indexed vector commands)]
+        (commit-command! s "nido/ws" (str "k" i) c))
+      (let [stored (store/summaries s "nido")]
+        (or (empty? (store/workstreams s))
+            (= {"nido/ws" (d/summary (d/fold (store/events s "nido/ws")))} stored))))))
+
+(deftest every-command-keeps-its-summary-equal-to-the-fold
+  (let [r (tc/quick-check 60 every-summary-equals-the-fold)]
+    (is (:pass? r) (pr-str (select-keys r [:shrunk])))))

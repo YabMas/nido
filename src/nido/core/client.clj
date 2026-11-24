@@ -61,6 +61,8 @@
    [:state       [:map [:op [:= :state]] [:ws :string]]]
    [:states      [:map [:op [:= :states]] [:prefix :string]]]
    [:entries     [:map [:op [:= :entries]] [:ws :string] [:seqs [:vector :int]]]]
+   [:summaries   [:map [:op [:= :summaries]] [:project :string]]]
+   [:asking      [:map [:op [:= :asking]] [:project :string]]]
    [:workstreams [:map [:op [:= :workstreams]]]]])
 
 (def Unavailable
@@ -79,6 +81,8 @@
   [:or [:map [:state :map]]
        [:map [:states [:map-of :string :map]]]
        [:map [:entries [:map-of :int :string]]]
+       [:map [:summaries [:map-of :string :map]]]
+       [:map [:asking [:map-of :string :map]]]
        [:map [:workstreams [:vector :string]]]
        [:map [:error :any]]
        Unavailable])
@@ -129,6 +133,20 @@
   [prefix]
   (let [r (request! {:op :states :prefix prefix})]
     (if (unavailable? r) r (update r :states #(or % {})))))
+
+(defn ^{:malli/schema [:=> [:cat :any] ReadReply]} summaries
+  "{:summaries {key summary}} for every workstream of `project` (`nido.core.domain/summary`), or
+   `Unavailable`."
+  [project]
+  (let [r (request! {:op :summaries :project (name project)})]
+    (if (unavailable? r) r (update r :summaries #(or % {})))))
+
+(defn ^{:malli/schema [:=> [:cat :any] ReadReply]} asking
+  "{:asking {key state}} for every workstream of `project` a person owes a move now — an open ask
+   on a workstream that is not closed — or `Unavailable`."
+  [project]
+  (let [r (request! {:op :asking :project (name project)})]
+    (if (unavailable? r) r (update r :asking #(or % {})))))
 
 (defn ^{:malli/schema [:=> [:cat :string [:sequential :int]] ReadReply]} entry-contents
   "{:entries {seq content}} for each entry of workstream `k` named in `seqs`, or `Unavailable`."

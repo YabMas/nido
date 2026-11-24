@@ -7,6 +7,10 @@
      {:op :state :ws ws}            -> {:state ...}, read from committed state
      {:op :states :prefix p}        -> {:states {ws state}}, every workstream whose key starts with p
      {:op :entries :ws ws :seqs [n]} -> {:entries {n content}}, the content of ledger entries
+     {:op :summaries :project p}   -> {:summaries {ws summary}}, every workstream of project p
+                                       summarised (`nido.core.domain/summary`)
+     {:op :asking :project p}      -> {:asking {ws state}}, the states of project p's workstreams
+                                       a person owes a move now
      {:op :workstreams}             -> {:workstreams [...]}
      {:op :subscribe :from pos}     -> a stream of feed messages, one per line: the catch-up,
                                        then {:caught-up true :pos p}, then live, ending in
@@ -16,6 +20,7 @@
    The server is given what it serves as functions, and requires nothing of the daemon:
      :submit        (fn [envelope]) -> a promise of the outcome (`nido.core.writer/submit!`)
      :open-session  (fn []) -> {:state (fn [ws]) :states (fn [prefix]) :entries (fn [ws seqs])
+                     :summaries (fn [project]) :asking (fn [project])
                      :workstreams (fn []) :subscribe (fn [from]) :close (fn [])}, one per connection, opened on its first read; :subscribe
                      answers {:next (fn [timeout-ms]) -> message, nil or a cut-off; :close (fn [])}
    Reads never go through the writer: a session reads committed state through a read-only handle
@@ -68,6 +73,12 @@
     :entries     (if (and (string? (:ws req)) (sequential? (:seqs req)) (every? int? (:seqs req)))
                    {:entries ((:entries @session) (:ws req) (:seqs req))}
                    {:error :entries-need-a-workstream-and-seqs})
+    :summaries   (if (string? (:project req))
+                   {:summaries ((:summaries @session) (:project req))}
+                   {:error :project-missing})
+    :asking      (if (string? (:project req))
+                   {:asking ((:asking @session) (:project req))}
+                   {:error :project-missing})
     :workstreams {:workstreams ((:workstreams @session))}
     {:error :unknown-op :op (:op req)}))
 

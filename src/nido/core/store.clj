@@ -19,6 +19,10 @@
        are checked by the `violations` view at commit, because they span rows written in either
        order
 
+   Each workstream's summary (`nido.core.domain/summary`) is kept beside its state, written in the
+   same transaction, so a reader of a whole project reads one small row per workstream, and finds
+   the workstreams a person owes a move without reading any other state.
+
    A workstream's work records are entries on its ledger: each one's index row is part of the
    state, and its content is kept once more in the entries table, by workstream and seq, so an
    entry is read without reading the events. Both are written from the :entry-appended event in
@@ -28,6 +32,7 @@
    which never writes and, under WAL, never waits on the writer."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [nido.core.domain :as d])
@@ -112,7 +117,15 @@
       ws      TEXT NOT NULL,
       seq     INTEGER NOT NULL,
       content TEXT NOT NULL,
-      PRIMARY KEY (ws, seq))"])
+      PRIMARY KEY (ws, seq))"
+   "CREATE TABLE IF NOT EXISTS summaries(
+      ws      TEXT PRIMARY KEY,
+      project TEXT,
+      asking  INTEGER NOT NULL CHECK (asking IN (0,1)),
+      data    TEXT NOT NULL)"
+   "CREATE INDEX IF NOT EXISTS summaries_by_project ON summaries(project, asking)"])
+
+(declare backfill-summaries!)
 
 (defn- exec! [^Connection c sql] (with-open [st (.createStatement c)] (.execute st sql)))
 
@@ -128,6 +141,7 @@
     (exec! c "PRAGMA journal_mode=WAL")
     (exec! c "PRAGMA synchronous=FULL")
     (doseq [s schema] (exec! c s))
+    (backfill-summaries! c)
     {:conn c :path (str path)}))
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]} open-reader
@@ -181,6 +195,33 @@
   (doseq [{:keys [event row content]} events :when (= :entry-appended event)]
     (jdbc/execute! c ["INSERT INTO entries(ws,seq,content) VALUES (?,?,?)" ws (:seq row) content])))
 
+(defn- project-of
+  "The project a workstream key names: what precedes its first slash, or nil."
+  [ws]
+  (let [i (str/index-of ws "/")] (when (and i (pos? i)) (subs ws 0 i))))
+
+(defn- put-summary!
+  "Keep `state`'s summary (`nido.core.domain/summary`) as workstream `ws`'s row of the summaries
+   table, under the project its key names."
+  [c ws state]
+  (let [sm (d/summary state)]
+    (jdbc/execute! c ["INSERT INTO summaries(ws,project,asking,data) VALUES (?,?,?,?)
+                       ON CONFLICT(ws) DO UPDATE SET project = excluded.project,
+                         asking = excluded.asking, data = excluded.data"
+                      ws (project-of ws) (if (:asking? sm) 1 0) (pr-str sm)])))
+
+(defn- backfill-summaries!
+  "Give every workstream the summaries table holds no row for its summary, from its stored state:
+   a store written before the table existed reads whole from the first open."
+  [c]
+  (let [missing (jdbc/execute! c ["SELECT w.ws, w.state FROM workstreams w
+                                   LEFT JOIN summaries s ON s.ws = w.ws WHERE s.ws IS NULL"]
+                               {:builder-fn rs/as-unqualified-lower-maps})]
+    (when (seq missing)
+      (jdbc/with-transaction [tx c]
+        (doseq [{:keys [ws state]} missing]
+          (put-summary! tx ws (edn/read-string state)))))))
+
 (defn- violation-rows [c]
   (jdbc/execute! c ["SELECT ws, ask, violation FROM violations"]
                  {:builder-fn rs/as-unqualified-lower-maps}))
@@ -212,7 +253,8 @@
             (jdbc/execute! tx ["INSERT INTO workstreams(ws,state,pos) VALUES (?,?,?)
                                 ON CONFLICT(ws) DO UPDATE SET state = excluded.state, pos = excluded.pos"
                                ws (pr-str state) @last-pos])
-            (replace-rows! tx ws state))
+            (replace-rows! tx ws state)
+            (put-summary! tx ws state))
           (vswap! positions conj (when (seq events) @last-pos)))
         (when-let [v (seq (violation-rows tx))]
           (throw (ex-info "commit breaks a store constraint" {:violations (vec v)})))
@@ -249,6 +291,25 @@
         (jdbc/execute! (:conn store)
                        ["SELECT ws, state FROM workstreams WHERE substr(ws, 1, ?) = ? ORDER BY ws"
                         (count prefix) prefix]
+                       {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] [:map-of :string :map]]} summaries
+  "The summary (`nido.core.domain/summary`) of every workstream of `project`, by key — one read of
+   a small row per workstream, never a state."
+  [store project]
+  (into {}
+        (map (fn [{:keys [ws data]}] [ws (edn/read-string data)]))
+        (jdbc/execute! (:conn store) ["SELECT ws, data FROM summaries WHERE project = ? ORDER BY ws" project]
+                       {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] [:map-of :string :map]]} asking
+  "The committed state of every workstream of `project` a person owes a move now — an open ask on
+   a workstream that is not closed — by key. Reads only those, through the summaries' index."
+  [store project]
+  (into {}
+        (map (fn [{:keys [ws state]}] [ws (edn/read-string state)]))
+        (jdbc/execute! (:conn store) ["SELECT w.ws, w.state FROM summaries s JOIN workstreams w ON w.ws = s.ws
+                                       WHERE s.project = ? AND s.asking = 1 ORDER BY w.ws" project]
                        {:builder-fn rs/as-unqualified-lower-maps})))
 
 (defn ^{:malli/schema [:=> [:cat :map :string [:sequential :int]] [:map-of :int :string]]} entry-contents
@@ -309,6 +370,11 @@
         (jdbc/execute! c ["SELECT seq, content FROM entries WHERE ws = ?" ws]
                        {:builder-fn rs/as-unqualified-lower-maps})))
 
+(defn- stored-summary [c ws]
+  (some-> (jdbc/execute-one! c ["SELECT data FROM summaries WHERE ws = ?" ws]
+                             {:builder-fn rs/as-unqualified-lower-maps})
+          :data edn/read-string))
+
 (defn- expected-entries [events]
   (into {} (for [{:keys [event row content]} events :when (= :entry-appended event)]
              [(:seq row) content])))
@@ -329,6 +395,8 @@
                       [{:ws ws :problem :rows-differ-from-state}])
                     (when (not= (stored-entries c ws) (expected-entries (events store ws)))
                       [{:ws ws :problem :entries-differ-from-events}])
+                    (when (not= (stored-summary c ws) (d/summary stored))
+                      [{:ws ws :problem :summary-differs-from-state}])
                     (for [v (d/violations folded)] {:ws ws :problem :violation :violation v}))]
        problem))))
 
@@ -344,6 +412,7 @@
               s   (d/fold evs)]
           (jdbc/execute! tx ["UPDATE workstreams SET state = ? WHERE ws = ?" (pr-str s) ws])
           (replace-rows! tx ws s)
+          (put-summary! tx ws s)
           (jdbc/execute! tx ["DELETE FROM entries WHERE ws = ?" ws])
           (insert-entries! tx ws evs))))
     (count wss)))

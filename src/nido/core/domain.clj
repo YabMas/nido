@@ -819,6 +819,40 @@
   [state]
   (or (:seq (peek (vec (:ledger state)))) 0))
 
+(def ^:private birth-kinds
+  "The ledger kinds that say what a workstream was born as: a drain, a slice, a one-off."
+  #{:drain :slice :scratch})
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]} summary
+  "What a reader of many workstreams needs of one, read off its state alone: its project, title,
+   refs, facets and birth, whether it is closed, where its ledger stands, whether a turn runs or a
+   person holds its units, and the ids of the asks awaiting the person. `:asking?` is whether a
+   person owes it a move now — an open ask on a workstream that is not closed.
+
+   A reading, never an event: core-store keeps it beside the state it is read from, in the same
+   transaction, and rebuilds it with the state."
+  [state]
+  (let [{:keys [project title external-refs facets intake created-at]} (:identity state)
+        closed? (boolean (:closed? state))
+        asks    (vec (sort (map :id (awaiting-person state))))
+        last-e  (peek (vec (:ledger state)))
+        open-us (filter #(= :open (:status %)) (vals (:units state)))]
+    {:project       (some-> project name)
+     :title         (get title :text)
+     :external-refs (vec external-refs)
+     :facets        facets
+     :intake?       (some? intake)
+     :created-at    created-at
+     :born          (into (sorted-set) (comp (map :kind) (filter birth-kinds)) (:ledger state))
+     :closed?       closed?
+     :discarded?    (boolean (:discarded? state))
+     :last-seq      (or (:seq last-e) 0)
+     :last-at       (:at last-e)
+     :asks          asks
+     :asking?       (boolean (and (seq asks) (not closed?)))
+     :running?      (boolean (some #(= :running (:status %)) (vals (:turns state))))
+     :held?         (boolean (and (seq open-us) (every? :held? open-us)))}))
+
 (def revisable-identity
   "The parts of a workstream's identity that change after it is created. Its project and
    creation time never do."

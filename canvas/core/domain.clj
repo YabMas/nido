@@ -74,4 +74,10 @@
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
   (Operation latest-seq
     "The seq of the newest entry on a workstream's ledger; 0 when it holds none."
-    {:signature [:=> [:catn [:state :map]] :int]}))
+    {:signature [:=> [:catn [:state :map]] :int]})
+  (Operation summary
+    "What a reader of many workstreams needs of one, read off its state alone — project, title,
+     refs, facets, birth, closure, ledger position, liveness and the asks awaiting the person, and
+     whether a person owes it a move now."
+    {:signature [:=> [:catn [:state :map]] :map]
+     :delegates [awaiting-person]}))

@@ -94,6 +94,8 @@
   (let [reader (store/open-reader db-path)]
     {:state       #(store/state reader %)
      :states      #(store/states reader %)
+     :summaries   #(store/summaries reader %)
+     :asking      #(store/asking reader %)
      :entries     #(store/entry-contents reader %1 %2)
      :workstreams #(store/workstreams reader)
      :subscribe   (fn [from]

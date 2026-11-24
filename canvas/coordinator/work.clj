@@ -26,6 +26,14 @@
    The gate is DERIVED from the workstream's own position and its parked halt, never stored — so
    a gate cannot outlive the thing it was gating.")
 
+(Kind GateReading
+  "What reading every project's gates came to: the gates of the projects the core answered for,
+   and, by project name, why each other project could not be read. A project is in exactly one of
+   them, so an unread project is never mistaken for one with nothing to ask."
+  [:map
+   [:gates [:vector :map]]
+   [:unavailable [:map-of :string :string]]])
+
 (Kind Screen
   "The whole rendered state of a surface, from view-state alone. Pure: the same view-state always
    produces the same screen, which is what lets the TUI and the dashboard render the same board
@@ -41,7 +49,7 @@
    Ships as a PROJECTION over today's storage. Nothing here has its own records: every reading
    is derived from workstreams, sessions and the ledger, so the facade could be replaced without
    a migration."
-  {:child [Gate Screen]}
+  {:child [Gate GateReading Screen]}
   (Operation board-bands "The ordered stage bands the board shows: the work nido drives."
     {:signature [:=> [:catn [:grouped :map]] :any]})
   (Operation option-action? "Whether an action id names one of a blocker's options."
@@ -139,8 +147,14 @@
   (Operation gate "Full gate detail for one workstream, or nil when it is not gating."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Gate]]
      :delegates [gates]})
-  (Operation all-gates "Gates across every registered project."
-    {:signature [:=> [:catn] [:vector Gate]] :delegates [gates]})
+  (Operation read-gates
+    "Every registered project's gates, read from the core — one request per project for the
+     workstreams a person owes a move — and never from held rows or a ledger fold: the boundary
+     where each project's core reply becomes its outcome, its gates or its reason in :unavailable."
+    {:signature [:=> [:catn] GateReading] :delegates [classify-origin workstream/record-of-state]})
+  (Operation all-gates
+    "The gates read-gates reads: every project's the core answered for."
+    {:signature [:=> [:catn] [:vector Gate]] :delegates [read-gates]})
   (Operation all-denials
     "Every open workstream with an auto-mode denial in a session nido drives, across projects —
      an operational notice for the Operations page, never a gate."
@@ -307,6 +321,10 @@
      :delegates [proposals record-landing!]})
   (Operation all-grouped "Grouped boards across every registered project."
     {:signature [:=> [:catn] [:vector :map]] :delegates [grouped]})
+  (Operation held-candidates
+    "The release candidates among the rows this process already holds, building and refreshing
+     none: what a screen with no board shows of them."
+    {:signature [:=> [:catn] [:vector :map]]})
   (Operation screen
     "The single pure derivation from view-state to what a surface shows. Pure, so the TUI and
      the dashboard render the same board without either being its definition."

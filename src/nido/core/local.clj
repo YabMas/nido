@@ -50,6 +50,13 @@
                                             :let [t (get-in (c) [:entries [(:ws req) n]])]
                                             :when t]
                                         [n t]))}
+      :summaries   {:summaries (into {} (for [[k st] (:states (c))
+                                                  :when (str/starts-with? k (str (:project req) "/"))]
+                                              [k (d/summary st)]))}
+      :asking      {:asking (into {} (for [[k st] (:states (c))
+                                            :when (and (str/starts-with? k (str (:project req) "/"))
+                                                       (:asking? (d/summary st)))]
+                                        [k st]))}
       :workstreams {:workstreams (vec (sort (keys (:states (c)))))}
       {:error :unknown-op :op (:op req)})))
 

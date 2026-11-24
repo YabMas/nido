@@ -14,7 +14,10 @@
    of the ledger and can be rebuilt from it; the rows are a declared
    cache over the ledger, not a second truth. A workstream's work-record entries are among them:
    an entry's content is carried by the event that appends it and kept by seq in the same
-   transaction, so state carries only the ledger's index and a reader asks for content by seq."
+   transaction, so state carries only the ledger's index and a reader asks for content by seq.
+   Each workstream's summary is kept beside its state in the same transaction, so a whole
+   project is read as one small row per workstream, and the workstreams a person owes a move are
+   found by an index rather than by reading every state."
   (Operation open
     "Open the store for writing, creating it and its schema if absent; one writer holds it."
     {:signature [:=> [:catn [:path :string]] :map]})
@@ -54,6 +57,13 @@
   (Operation states
     "The committed state of every workstream whose key starts with a prefix, by key — one read for a sweep of a project."
     {:signature [:=> [:catn [:store :map] [:prefix :string]] [:map-of :string :map]]})
+  (Operation summaries
+    "The summary of every workstream of a project, by key: one small row each, never a state."
+    {:signature [:=> [:catn [:store :map] [:project :string]] [:map-of :string :map]]})
+  (Operation asking
+    "The committed state of every workstream of a project a person owes a move now — an open ask
+     on a workstream not closed — by key, found through the summaries' index."
+    {:signature [:=> [:catn [:store :map] [:project :string]] [:map-of :string :map]]})
   (Operation entry-contents
     "The content of each named entry of a workstream's ledger, by seq; an entry is kept once, by the commit that appends it, and never rewritten."
     {:signature [:=> [:catn [:store :map] [:ws :string] [:seqs [:sequential :int]]] [:map-of :int :string]]}))

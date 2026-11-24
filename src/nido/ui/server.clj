@@ -91,29 +91,32 @@
     (and selection (= :workstreams surface))    (work/refresh-selected! (:project selection) (:ws-id selection))
     :else                                       (work/refresh-list!)))
 
-(defn ^{:malli/schema [:=> [:cat :any] :Screen]}
+(defn ^{:malli/schema [:=> [:cat :any [:? :map]] :Screen]}
   derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
    resolve keys), hand off to the pure work/screen, then attach the selection
    detail. Selection detail is attached HERE (not in work) because it needs the
    dev layer, which work must not depend on. Every /workstreams + / render route
-   runs through this one function, so no two render sites disagree."
-  [view-state]
-  (refresh-for! view-state)
-  (let [{:keys [groups gates]}
-        ;; Both inside ONE with-shared-rows: they are two folds of the same
-        ;; per-project rows, and sharing is what stops the render reading every
-        ;; ledger twice.
-        (work/with-shared-rows
-          (fn [] {:groups (work/all-grouped) :gates (work/all-gates)}))
+   runs through this one function, so no two render sites disagree.
+
+   `{:board? false}` is a screen with no board: no refresh and no bands, only the gates, which
+   the core answers (`work/read-gates`), and the release candidates among rows already held
+   (`work/held-candidates`) — what Needs you and every page's rail badge render, so neither waits
+   on held rows being built."
+  ([view-state] (derive-screen view-state {}))
+  ([view-state {:keys [board?] :or {board? true}}]
+  (when board? (refresh-for! view-state))
+  (let [{:keys [gates unavailable]} (work/read-gates)
+        groups (if board? (work/all-grouped) [])
         screen (work/screen view-state
                             {:groups           groups
                              :gates            gates
+                             :unavailable      unavailable
                              :pending          (dev/pending-resolve-keys)
                              :winddown-pending (dev/pending-winddown-keys)})
         sel (:selection view-state)
         ws-errors (dev/failed-ws-errors)]
-    (-> screen
+    (-> (cond-> screen (not board?) (assoc :candidates (work/held-candidates)))
         (assoc :selection
                (when sel
                  ;; The two pages that draw a pane beside their list; every other render with a
@@ -163,7 +166,7 @@
                                                    (pos? total) (assoc :rss-str (proc/human-bytes total))
                                                    (and err (not (:pending? row))) (assoc :error-msg err))))
                                              rows))))
-                        groups))))))
+                        groups)))))))
 
 (defn- project-names [] (vec (sort (map (comp name key) (project/list-projects)))))
 
@@ -177,9 +180,10 @@
     (assoc vs :scope (if (some #{(:scope vs)} known) (:scope vs) (first known)))))
 
 (defn- needs-screen
-  "The screen Needs you renders: every project's gates, whatever is focused."
+  "The screen Needs you renders: every project's gates, whatever is focused — read from the
+   core, with no board behind them."
   [vs]
-  (derive-screen (assoc vs :scope "all")))
+  (derive-screen (assoc vs :scope "all") {:board? false}))
 
 (defn- rail-ctx
   "Chrome context: the slice or page that is `active`, the focused project, the
@@ -192,6 +196,7 @@
    :scope       focus
    :needs-count (:needs-count screen)
    :candidates-count (count (:candidates screen))
+   :needs-unread (:unavailable screen)
    :daemon      (read-rail-daemon)
    :projects    (project-names)})
 
@@ -201,6 +206,7 @@
     (str (views/needs-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
                                       :candidates-count (count (:candidates screen))
+                                      :needs-unread (:unavailable screen)
                                       :daemon (read-rail-daemon)})))))
 
 (defn- workstreams-fragment-response [screen]
@@ -209,6 +215,7 @@
     (str (views/workstreams-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
                                       :candidates-count (count (:candidates screen))
+                                      :needs-unread (:unavailable screen)
                                       :daemon (read-rail-daemon)})))))
 
 (defn- fleet-context
@@ -395,9 +402,11 @@
   (sse-response
    (sse-fragment
     (str (views/ops-panel-fragment (ops-context))
-         (views/rail-status-fragment
-          {:needs-count (count (work/all-gates))
-           :daemon (read-rail-daemon)})))))
+         (let [{:keys [gates unavailable]} (work/read-gates)]
+           (views/rail-status-fragment
+            {:needs-count  (count gates)
+             :needs-unread unavailable
+             :daemon       (read-rail-daemon)}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Routing

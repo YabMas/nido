@@ -67,6 +67,29 @@
     (is (not (str/includes? html "href=\"/workstreams/brian/ws-1\"")))
     (is (not (str/includes? html "gate-card sel")) "nothing is selected, so no row is marked")))
 
+(deftest needs-fragment-says-a-project-was-not-loaded
+  (let [html (views/needs-fragment {:gates [] :selection nil :scope "all"
+                                    :unavailable {"brian" "the core daemon is not running"}})]
+    (is (str/includes? html "brian: not loaded"))
+    (is (not (str/includes? html "Nothing needs you right now."))
+        "an unread project is never shown as nothing waiting"))
+  (is (str/includes? (views/needs-fragment {:gates [] :selection nil :scope "all"})
+                     "Nothing needs you right now.")))
+
+(deftest the-badge-says-a-project-was-not-read
+  (let [unread (views/rail-status-fragment {:needs-count 0 :needs-unread {"brian" "no core"}})
+        read   (views/rail-status-fragment {:needs-count 0 :needs-unread {}})]
+    (is (str/includes? unread "rail-badge unread"))
+    (is (not (str/includes? unread "zero")) "an unread project never shows the empty badge")
+    (is (str/includes? unread "0?") "the count is marked as not fully read")
+    (is (str/includes? read "rail-badge zero") "a fully read empty count keeps the zero style"))
+  (is (str/includes? (views/needs-page {:needs-count 2 :needs-unread {"brian" "no core"}
+                                        :scope "brian" :projects ["brian"]}
+                                       {:gates [] :scope "all" :selection nil
+                                        :unavailable {"brian" "no core"}})
+                     "2?")
+      "the page chrome's badge says it too"))
+
 (deftest needs-fragment-marks-the-open-row
   (let [html (views/needs-fragment {:gates [sample-gate (assoc sample-gate :ws-id "ws-2")]
                                     :selection {:project "brian" :ws-id "ws-2"} :scope "all"})]

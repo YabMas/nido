@@ -1524,11 +1524,12 @@
         ;; heading and the arc under it are one reading and cannot disagree.
         ;; What is running rides beside it, on the stage it is running in.
         :arc          (arc-at entries position (:doing row) (:needs-you row))
-        ;; The gate `gates` lists for this workstream, when it is one: its question, the actions
-        ;; that answer it and the session a reply reaches, which the pane renders through the
-        ;; question card. The same value the needs-you list holds, so the two cannot ask different
-        ;; things.
-        :gate         (gate project ws-id)
+        ;; This workstream's card on the needs-you list, when it holds one: its question, the
+        ;; actions that answer it and the session a reply reaches, which the pane renders through
+        ;; the question card. Read from the core as the list's is, so the two cannot ask different
+        ;; things. A core that does not answer leaves the pane without a card — the rail badge
+        ;; says the project was not read — rather than failing the whole pane.
+        :gate         (try (gate project ws-id) (catch Exception _ nil))
         ;; A phased workstream's plan, phase by phase — nil for an unphased one.
         :plan         (plan project ws-id w)
         :holds        (holds project ws-id)
@@ -1741,11 +1742,11 @@
                                  {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]))}
       multi? (assoc :submit :answer-questions))))
 
-(defn- core-gate
-  "The gate of spine row `row`: its oldest ask awaiting the person in the core, offered for answer.
-   nil when the core holds none for it."
-  [project row]
-  (when-let [a (first (sort-by :id (:awaiting (core-of project (:ws-id row)))))]
+(defn- gate-of-asks
+  "The gate of spine row `row` whose asks awaiting the person are `awaiting`: the oldest of them,
+   offered for answer. nil when there are none."
+  [project row awaiting]
+  (when-let [a (first (sort-by :id awaiting))]
     (let [content (:content a)
           actions (vec (concat
                         (if (several? content)
@@ -1792,6 +1793,51 @@
                              :else "(left open)"))]))
         lines (map-indexed line qs)]
     (when (some first lines) (str/join "\n" (map second lines)))))
+
+(defn- core-gate
+  "The gate of spine row `row`: its oldest ask awaiting the person in the core, offered for answer.
+   nil when the core holds none for it."
+  [project row]
+  (gate-of-asks project row (:awaiting (core-of project (:ws-id row)))))
+
+(defn- asking-gate
+  "What Needs you shows of workstream `ws-id`, which the core answered as asking with `held`
+   ({:state :awaiting}): its gate, built from no row but what the record and its sessions say of
+   it — label, tag, links and origin as the board names them, :awaiting-gate as its stage, what
+   runs as the core holds it — and, for a slice, the drain it belongs to. No gate for one its
+   ledger says was dismissed: a dismissal is never a card, whatever the core still holds open."
+  [project ws-id held]
+  (let [w        (cws/record-of-state ws-id (:state held))
+        dismissed? (and w (= :dismissed (:outcome (cws/closure w))))
+        sessions (when w (csession/list-sessions project ws-id))
+        origin   (if w (classify-origin w) :notion)
+        row      {:ws-id  ws-id
+                  :origin origin
+                  :stage  :awaiting-gate
+                  :label  (if w (wsv/label w sessions) ws-id)
+                  :tag    (if w (wsv/tag w sessions) ws-id)
+                  :links  (if w (wsv/ref-links w) [])
+                  :doing  (wcore/doing held)}]
+    {:row      row
+     :slice-of (when (= :slice origin) (rdrain/drain-of w))
+     :gate     (when-not dismissed? (gate-of-asks project row (:awaiting held)))}))
+
+(defn- asking-gates
+  "`project`'s gates as the core answers them in one request (`wcore/asking`): one per workstream
+   a person owes a move now, in key order. A slice is never a card of its own: its drain's card,
+   when the drain is asking too, names it in :raised-by. Throws when the core does not answer."
+  [project]
+  (let [built  (for [[ws-id held] (sort-by key (wcore/asking project))]
+                 (asking-gate project ws-id held))
+        raised (reduce (fn [m {:keys [row slice-of]}]
+                         (if slice-of (update m slice-of (fnil conj []) (:ws-id row)) m))
+                       {} built)]
+    (into []
+          (keep (fn [{:keys [row gate]}]
+                  (when (and gate (not= :slice (:origin row)))
+                    (cond-> gate
+                      (get raised (:ws-id row)) (assoc :raised-by (get raised (:ws-id row)))))))
+          built)))
 
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :Gate]]}
@@ -1859,9 +1905,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
   gate
-  "Full gate detail for one workstream, or nil when it is absent or not a gate."
+  "Full gate detail for one workstream — the card the Needs you list holds for it, from one core
+   request for its project (`asking-gates`) — or nil when it holds none. Reads no held row; throws
+   when the core does not answer."
   [project ws-id]
-  (->> (gates project)
+  (->> (asking-gates project)
        (filter #(= ws-id (:ws-id %)))
        first))
 
@@ -1869,27 +1917,35 @@
 ;; belongs beside those, and both cross-project projections need it up here.
 (declare live-session-names)
 
+(def GateReading
+  "What reading every project's gates came to: the gates of the projects the core answered for,
+   and, by project name, why each other project could not be read. A project is in exactly one
+   of them, so an unread project is never mistaken for one with nothing to ask."
+  [:map
+   [:gates [:vector :map]]
+   [:unavailable [:map-of :string :string]]])
+
+(defn ^{:malli/schema [:=> [:cat] GateReading]}
+  read-gates
+  "Every registered project's gates, in list-projects order, each project's in key order — read
+   from the core, one request per project (`asking-gates`), never from held rows or a ledger
+   fold, so they answer as soon as the core does, whatever this process holds. The boundary where
+   each project's core reply becomes its outcome: its gates, or its key in :unavailable with the
+   reason it could not be read."
+  []
+  (reduce (fn [acc [pname _entry]]
+            (try (update acc :gates into (asking-gates pname))
+                 (catch Throwable t
+                   (assoc-in acc [:unavailable (name pname)] (or (ex-message t) (str t))))))
+          {:gates [] :unavailable {}}
+          (project/list-projects)))
+
 (defn ^{:malli/schema [:=> [:cat] [:vector :Gate]]}
   all-gates
-  "Gates across every registered project, in list-projects order, each project's in
-   `gates` order — the order its workstream directories are listed in; nothing sorts them.
-   Mirrors the dashboard's cross-project aggregation (see all-machine-rows).
-   `->gate` canonicalizes each gate's :project to a string, so the raw
-   list-projects key threads straight through. A project that can't be read
-   contributes no gates rather than failing the board.
-
-   Threads `live-session-names` for the same reason `all-grouped` does: engagement
-   is projected from it, and a downed one-off reads :active without it. It cannot
-   change WHICH rows are gates — :settled is a function of :closed alone, and the
-   liveness reconciliation only ever moves a row from :active toward :idle — so
-   what it buys is that the two cross-project projections describe the same
-   workstream the same way, from one read of it."
+  "The gates `read-gates` reads: every project's the core answered for. A caller that must tell an
+   unread project from one with nothing to ask reads `read-gates`."
   []
-  (->> (project/list-projects)
-       (mapcat (fn [[pname _entry]]
-                 (try (gates pname)
-                      (catch Throwable _ []))))
-       vec))
+  (:gates (read-gates)))
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   all-denials
@@ -2249,6 +2305,17 @@
   (when-let [m @model]
     (or (get-in m [:projects (name project)])
         (swap-project! project (fn [pr p] (or p (read-snapshot pr) (refresh-project pr nil :list)))))))
+
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  held-candidates
+  "`release-candidates` over only the rows this process already holds, building and refreshing
+   none: what a screen with no board (Needs you, the rail) shows of them. Empty before the first
+   build, and as fresh as the last refresh — a candidate asks nothing, so a late one costs a wait,
+   never a missed question."
+  []
+  (release-candidates
+   (vec (for [[pname p] (:projects @model) :when p]
+          {:project (name pname) :grouped (held-grouped p)}))))
 
 (defn ^{:malli/schema [:=> [:cat] :boolean]}
   holding?
@@ -4100,7 +4167,7 @@
   "The single pure derivation from view-state to the screen-model. Every render
    site (full page + SSE poll, overview + detail) renders a slice of THIS value,
    so they cannot disagree. `data` injects what only IO can produce:
-     :groups  (all-grouped)  :gates (all-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys)
+     :groups  (all-grouped)  :gates / :unavailable (read-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys)
      :winddown-pending (#{\"project/ws-id\"} optimistic bridge keys for pending bring-down!s).
    Selection detail is attached by the caller (needs work/workstream + dev-states).
 
@@ -4108,7 +4175,7 @@
    filtering here is what hid every :in-progress row behind the source chip's
    `source=notion` default."
   [{:keys [scope] :or {scope "all"}}
-   {:keys [groups gates pending winddown-pending]
+   {:keys [groups gates unavailable pending winddown-pending]
     :or {groups [] gates [] pending #{} winddown-pending #{}}}]
   (let [scoped     (->> (scope-keep scope groups)
                         (mapv (fn [{:keys [project] :as g}]
@@ -4125,6 +4192,9 @@
     {:scope       scope
      :groups      scoped
      :gates       kept-gates
+     ;; The projects whose gates could not be read (`read-gates`), so Needs you says so rather
+     ;; than reading as nothing waiting.
+     :unavailable (or unavailable {})
      ;; Every project's, not the scope's: Needs you spans all projects whatever
      ;; a view is focused on, and this is the count its badge shows.
      :needs-count (count gates)

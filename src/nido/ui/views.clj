@@ -23,8 +23,16 @@
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
 
-(defn- rail-needs-badge [n]
-  [:span {:id "rail-needs-count" :class (str "rail-badge" (when (zero? (or n 0)) " zero"))} n])
+(defn- rail-needs-badge
+  "The Needs-you count. `unread` names the projects whose gates could not be read: while any is
+   left the count is marked as not fully read — never the zero style — so an unread project never
+   shows as nothing needing you."
+  [n unread]
+  (if (seq unread)
+    [:span {:id "rail-needs-count" :class "rail-badge unread"
+            :title (str "not fully read: " (str/join ", " (sort (keys unread))))}
+     (str (or n 0) "?")]
+    [:span {:id "rail-needs-count" :class (str "rail-badge" (when (zero? (or n 0)) " zero"))} n]))
 
 (defn- rail-candidates-badge [n]
   [:span {:id "rail-candidates-count" :class (str "rail-badge rail-badge-rc" (when (zero? (or n 0)) " zero"))}
@@ -80,7 +88,7 @@
   "What spans every project: the project switcher, Needs you, the release candidates — kept
    apart from Needs you because a candidate asks nothing, it only waits to be landed — and the
    menu holding nido's own pages. Each of the two is an icon and its count."
-  [{:keys [active needs-count candidates-count] :as ctx}]
+  [{:keys [active needs-count needs-unread candidates-count] :as ctx}]
   [:header.topbar
    [:a.topbar-brand {:href "/" :title "nido"}
     [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 44 :height 44}]]
@@ -88,7 +96,7 @@
    [:div.topbar-gap]
    [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/#needs-you"
         :title "Needs you — questions waiting on you" :aria-label "Needs you"}
-    [:span.topbar-icon needs-icon] (rail-needs-badge needs-count)]
+    [:span.topbar-icon needs-icon] (rail-needs-badge needs-count needs-unread)]
    [:a {:class "topbar-link" :href "/#candidates"
         :title "Release candidates — ready to land" :aria-label "Release candidates"}
     [:span.topbar-icon candidates-icon] (rail-candidates-badge candidates-count)]
@@ -115,8 +123,8 @@
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   rail-status-fragment
   "The live top-bar elements, for SSE patching alongside a surface fragment."
-  [{:keys [needs-count candidates-count daemon]}]
-  (str (h/html (rail-needs-badge needs-count))
+  [{:keys [needs-count needs-unread candidates-count daemon]}]
+  (str (h/html (rail-needs-badge needs-count needs-unread))
        ;; Patched only by a poll that read the candidates: the ops poll reads none.
        (when candidates-count (h/html (rail-candidates-badge candidates-count)))
        (h/html (rail-health daemon))))
@@ -257,7 +265,7 @@
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   shell
   "Page chrome: top bar, sidebar, content area. `ctx` carries
-   {:active :title :needs-count :daemon :scope :projects}, where :scope is the
+   {:active :title :needs-count :needs-unread :daemon :scope :projects}, where :scope is the
    focused project — always one project, never \"all\" — and :bleed?, true for a page
    that fills the content area edge to edge and scrolls within itself, and :side-chat, the chat's
    side panel (hiccup) when the page carries one — the grid gives it a column; `content` is hiccup.
@@ -547,14 +555,20 @@
   "The home lists — initial render + SSE refresh — as two sections: Needs you, one row per gate,
    and the release candidates, one row per workstream ready to land. Each row opens that
    workstream's pane beside the lists (/?sel=), where its question is answered or its Land is,
-   and the open one is marked. Apart because a candidate asks nothing."
-  [{:keys [gates selection] :as screen}]
+   and the open one is marked. Apart because a candidate asks nothing. A project whose gates
+   could not be read is named as not loaded, never shown as an empty list."
+  [{:keys [gates selection unavailable] :as screen}]
   (str
    (h/html
     [:div {:id "needs"}
      [:h3.inbox-head {:id "needs-you"} [:span.topbar-icon needs-icon] " Needs you"]
-    (if (seq gates)
+     (if (or (seq gates) (seq unavailable))
       [:div {:id "needs-gates"}
+       ;; A project whose gates could not be read is said to be so: an empty list would read as
+       ;; nothing waiting on the person there.
+       (for [[project message] (sort-by key unavailable)]
+         [:div.gate-err {:data-unavailable project}
+          (str "⚠ " project ": not loaded — its gates could not be read (" message ")")])
        (for [g gates
              :let [sel (str (:project g) ":" (:ws-id g))]]
          (list

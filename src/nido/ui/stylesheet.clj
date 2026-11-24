@@ -360,6 +360,7 @@
      .topbar-icon { font-size:var(--fs-md); line-height:1; }
      .inbox-head { margin:var(--space-12) var(--space-16) var(--space-4); font-size:var(--fs-sm); color:var(--text-muted); }
      .candidate-mark { margin-right:var(--space-6); }
+     .rail-badge.unread { background:var(--neutral-bg); color:var(--accent-strong); font-style:italic; }
      .rail-health { margin-top:auto; padding-top:var(--space-14); font-size:var(--fs-xs); color:var(--text-muted); }
      .rail-health-btn { background:none; border:none; color:inherit; font:inherit;
                         cursor:pointer; padding:0; display:flex; align-items:center; }

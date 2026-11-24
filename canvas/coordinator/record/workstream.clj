@@ -63,6 +63,10 @@
      workstream's lock always asks the core."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Workstream]]
      :delegates [client/state client/states]})
+  (Operation record-of-state
+    "The workstream record a committed core state holds for an id — what read-ws answers for it —
+     or nil, for a reader the core handed states in bulk."
+    {:signature [:=> [:catn [:ws-id WorkstreamId] [:state :map]] [:maybe Workstream]]})
   (Operation create!
     "Mint an id and persist a fresh workstream, holding no status — where it is placed, chosen to
      be or settled is what its ledger comes to record."

@@ -4,7 +4,8 @@
  [babashka.fs :as fs]
    [clojure.set :as set]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
+   [nido.core.client :as client]
    [nido.platform.core :as core]
    [nido.platform.config]
    [nido.coordinator.lane.start :as start]
@@ -906,10 +907,8 @@
       (is (nil? (work/gate :brian "ws-nope"))))))
 
 (deftest with-shared-rows-reads-each-project-once
-  ;; The board asks two questions of the same rows — all-grouped for the bands,
-  ;; all-gates for the queue. Sharing is a property of the RENDER, invisible to
-  ;; every output assertion (both answers are identical either way), so nothing
-  ;; else would notice it being lost — which is exactly how it would come back.
+  ;; The board's bands are a fold of every row; the gates are not — the core answers them — so a
+  ;; render reads each project's rows once, shared or not, and the gates read none.
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:external-refs []})]
@@ -925,14 +924,65 @@
                                               (swap! reads inc)
                                               (apply orig args))]
             (reset! reads 0)
-            (work/all-grouped)
             (work/all-gates)
-            (is (= 2 @reads) "unshared, each projection reads the project for itself")
+            (is (= 0 @reads) "the gates read no row: the core answers them")
 
             (reset! reads 0)
-            (work/with-shared-rows (fn [] (work/all-grouped) (work/all-gates)))
+            (work/with-shared-rows (fn [] (work/all-grouped) (work/all-grouped)))
             (is (= 1 @reads)
                 "shared, the second projection reuses the first's rows")))))))
+
+(def ^:private stop-content
+  {:question "Carry on with the rebase?" :explored "e" :recommendation "r" :options ["yes" "no"]})
+
+(deftest all-gates-are-the-core-s-open-asks
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects
+                    (constantly {"brian" {:directory "/tmp/brian"}})]
+        (let [a (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "Fix the thing"}]})
+              b (workstream/create! :brian {:external-refs []})]
+          (is (empty? (work/all-gates)) "no open ask, no gate")
+          (is (= {:gates [] :unavailable {}} (work/read-gates)))
+          (client/command! (client/ws-key :brian (:id a)) "stop-a"
+                           {:command :raise-conductor-stop :ask "ask-1" :content stop-content})
+          (let [[g :as gs] (work/all-gates)]
+            (is (= 1 (count gs)) "only the workstream with an open ask is a gate")
+            (is (= [(:id a) "brian" "Fix the thing" "BR-9" "Carry on with the rebase?" "ask-1"]
+                   ((juxt :ws-id :project :label :tag (comp :question :ask) :core-ask) g))))
+          (testing "a closed workstream is no gate, whatever ask is open on it"
+            (client/command! (client/ws-key :brian (:id a)) "close-a" {:command :close-workstream})
+            (is (empty? (work/all-gates))))
+          (is (some? b)))))))
+
+(deftest the-pane-s-gate-is-the-list-s-card
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects
+                    (constantly {"brian" {:directory "/tmp/brian"}})]
+        (let [a (workstream/create! :brian {:external-refs []})
+              b (workstream/create! :brian {:external-refs []})]
+          (client/command! (client/ws-key :brian (:id a)) "stop-a"
+                           {:command :raise-conductor-stop :ask "ask-1" :content stop-content})
+          (let [reads (atom 0)
+                orig  wsv/workstream-rows]
+            (with-redefs [wsv/workstream-rows (fn [& args] (swap! reads inc) (apply orig args))]
+              (is (= (first (filter #(= (:id a) (:ws-id %)) (work/all-gates)))
+                     (work/gate :brian (:id a)))
+                  "the pane's card is the one the list holds")
+              (is (nil? (work/gate :brian (:id b))) "a workstream the list holds no card for has none")
+              (is (= 0 @reads) "and it reads no held row"))))))))
+
+(deftest a-project-the-core-cannot-read-is-unavailable-not-empty
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects
+                    (constantly {"brian" {:directory "/tmp/brian"}})
+                    client/asking (fn [_] (client/unavailable "/tmp/core.sock"))]
+        (let [r (work/read-gates)]
+          (is (empty? (:gates r)))
+          (is (= ["brian"] (keys (:unavailable r))))
+          (is (= ["brian"] (keys (:unavailable (work/screen {:scope "all"} r))))))))))
 
 (deftest shared-rows-memo-does-not-outlive-its-render
   ;; Scoped, never global: the rows project the ledger on disk and nothing here

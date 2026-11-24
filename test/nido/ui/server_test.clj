@@ -63,7 +63,7 @@
     (is (= "/workstreams" (get-in resp [:headers "Location"])))))
 
 (deftest home-route-renders-needs-page
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.ui.dev/pending-resolve-keys (fn [] #{})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
@@ -72,8 +72,21 @@
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "Needs you")))))
 
+(deftest needs-you-renders-from-the-core-without-the-board
+  ;; Needs you and its badge read the gates the core answers; they never wait on held rows being
+  ;; built, which a landing makes every dashboard do.
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {"brian" "down"}})
+                nido.coordinator.work/all-grouped (fn [] (throw (ex-info "the board was read" {})))
+                nido.coordinator.work/refresh-list! (fn [& _] (throw (ex-info "rows were refreshed" {})))
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get :uri "/"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "brian: not loaded")))))
+
 (deftest needs-fragment-route-is-sse-and-patches-rail
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.ui.dev/pending-resolve-keys (fn [] #{})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
@@ -90,7 +103,7 @@
 (deftest home-with-a-selection-opens-its-pane-in-place
   ;; Needs you keeps the list in view: ?sel= draws the selected workstream's pane beside it,
   ;; whichever separator names it.
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.coordinator.work/refresh-list! (fn [] nil)
                 nido.coordinator.work/workstream (fn [p id & _] {:project p :ws-id id :label "Pane of ws-1"
@@ -113,7 +126,7 @@
 (deftest post-gate-mutation-calls-resolve-and-returns-sse
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:decision :dropped})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/skip"})]
         (Thread/sleep 50)   ; resolve runs on a background future
         (is (= [["brian" "ws-1" :skip nil]] @calls))
@@ -122,7 +135,7 @@
 (deftest post-gate-apply-resolves-with-no-body
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/apply"})]
         (Thread/sleep 50)   ; resolve runs on a background future
         (is (= 200 (:status resp)))
@@ -132,7 +145,7 @@
 (deftest post-gate-reply-passes-input-from-body
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"ask_bar\":{\"ws_1\":{\"reply\":\"do the fix\"}}}"))]
         (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})
         (Thread/sleep 50)
@@ -141,7 +154,7 @@
 (deftest post-gate-option-passes-the-rendered-entry-position
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/option-a"
                               :query-string "entry=4"})
       ;; ws-2, not ws-1: gate-resolve!'s in-flight guard is keyed per workstream
@@ -165,7 +178,7 @@
 (deftest workstreams-route-renders
   (with-redefs [nido.coordinator.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :incoming []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
-                nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams"})]
       (is (= 200 (:status resp)))
@@ -184,7 +197,7 @@
                                    :in-progress [{:ws-id "p" :origin :scratch :stage :in-progress
                                                   :label "Scratch-row"}]
                                    :shipping []}}])
-                nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (doseq [q [nil "tab=intake"]]
@@ -197,7 +210,7 @@
 (deftest workstream-pane-route-renders
   (with-redefs [nido.coordinator.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :incoming []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
-                nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/workstream (fn [_ _ & _] {:ws-id "ws-1" :project "brian" :origin :notion
                                                   :stage :triage :label "BR-7" :ledger nil
                                                   :report {:markdown "# V\n\nbody"} :sessions []})
@@ -207,7 +220,7 @@
       (is (str/includes? (:body resp) "BR-7")))))
 
 (deftest dashboard-routes-smoke
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
@@ -266,9 +279,9 @@
   ;; and read by nothing, so the click looked like a no-op. pending-resolve-keys
   ;; drops :failed (to keep the action retryable), so the gate must carry the
   ;; reason instead.
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [{:ws-id "ws-1" :project "brian" :origin :slack
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:ws-id "ws-1" :project "brian" :origin :slack
                                              :stage :triage :label "L" :report nil
-                                             :actions [] :session nil}])
+                                             :actions [] :session nil}] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.ui.dev/pending-resolve-keys (fn [] #{})
                 nido.ui.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
@@ -285,9 +298,9 @@
           "the pane's card renders it, and keeps the Apply button clickable to retry"))))
 
 (deftest derive-screen-hides-a-stale-error-on-a-gate-that-is-working-again
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [{:ws-id "ws-1" :project "brian" :origin :slack
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:ws-id "ws-1" :project "brian" :origin :slack
                                              :stage :triage :label "L" :report nil
-                                             :actions [] :session nil}])
+                                             :actions [] :session nil}] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.ui.dev/pending-resolve-keys (fn [] #{"brian/ws-1"})
                 nido.ui.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
@@ -303,10 +316,10 @@
       (finally (dev/clear-app-state! "brian/ws-notion-ok")))))
 
 (deftest needs-spans-every-project-whatever-the-focus
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [{:ws-id "a" :project "brian" :origin :notion :stage :triage
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:ws-id "a" :project "brian" :origin :notion :stage :triage
                                              :label "BR-1" :report nil :actions [] :session nil}
                                             {:ws-id "b" :project "foo" :origin :notion :stage :triage
-                                             :label "FOO-1" :report nil :actions [] :session nil}])
+                                             :label "FOO-1" :report nil :actions [] :session nil}] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.ui.dev/pending-resolve-keys (fn [] #{})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})
@@ -316,7 +329,7 @@
       (is (str/includes? (:body resp) "FOO-1")))))
 
 (deftest a-page-remembers-its-focus
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.ui.dev/pending-resolve-keys (fn [] #{})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})
@@ -331,7 +344,7 @@
       (is (str/includes? (:body gone) "href=\"/domain?scope=brian\"") "a project since removed falls back to the first"))))
 
 (deftest a-workstream-link-focuses-its-project
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 nido.coordinator.work/workstream (fn [& _] nil)
                 nido.ui.dev/pending-resolve-keys (fn [] #{})
@@ -345,7 +358,7 @@
   ;; A ?sel= beside a deep-link path names another workstream; the page drawn and the
   ;; chat chosen beside it must both be the path's.
   (let [asked (atom #{})]
-    (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+    (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                   nido.coordinator.work/all-grouped (fn [] [])
                   nido.coordinator.work/refresh-selected! (fn [& _] nil)
                   nido.coordinator.work/workstream
@@ -367,7 +380,7 @@
 ;;  see nido.coordinator.work-test's screen-does-not-filter-rows.)
 
 (deftest removed-routes-404
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
@@ -377,7 +390,7 @@
           (str uri " is gone")))))
 
 (deftest live-routes-still-200
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [])
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/all-grouped (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
@@ -397,7 +410,7 @@
                  :incoming []
                  :shipping []}]
     (with-redefs [nido.coordinator.work/all-grouped (fn [] [{:project "brian" :grouped grouped}])
-                  nido.coordinator.work/all-gates   (fn [] [])
+                  nido.coordinator.work/read-gates   (fn [] {:gates [] :unavailable {}})
                   nido.coordinator.work/workstream  (fn [_ _ _] {:project "brian" :ws-id "r1" :origin :notion
                                                      :stage :ready :label "BR-1" :sessions []})
                   nido.ui.dev/pending-resolve-keys (fn [] #{})
@@ -508,7 +521,7 @@
   (with-redefs [nido.coordinator.work/grouped (fn [_] {:triage {:in-flight [] :queued []}
                                            :ready [] :in-progress [] :incoming []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
-                nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/workstream
                 (fn [_ _ sel] {:ws-id "ws-1" :project "brian" :origin :notion
                                :stage :triage :label "BR-7" :ledger nil
@@ -535,7 +548,7 @@
   (with-redefs [nido.coordinator.work/grouped (fn [_] {:triage {:in-flight [] :queued []}
                                            :ready [] :in-progress [] :incoming []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
-                nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/workstream
                 (fn [_ _ sel] {:ws-id "ws-1" :project "brian" :origin :notion
                                :stage :triage :label "BR-7" :ledger nil
@@ -555,7 +568,7 @@
 (deftest post-pane-gate-promote-resolves-and-targets-ws-pane
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:decision :triaging})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (let [resp (server/handle-request
                   {:request-method :post :uri "/workstreams/brian/ws-1/gate/promote"})]
         (Thread/sleep 50)   ; resolve runs on a background future
@@ -567,7 +580,7 @@
 (deftest post-pane-gate-dismiss-resolves
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:decision :dismissed})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/drop"})
       (Thread/sleep 50)
       (is (= [["brian" "ws-1" :drop nil]] @calls)))))
@@ -600,7 +613,7 @@
   (let [called (atom nil)]
     (with-redefs [nido.coordinator.work/bring-down! (fn [p w] (reset! called [p w]) {:downed []})
                   nido.coordinator.work/all-grouped (fn [] [])
-                  nido.coordinator.work/all-gates (fn [] [])
+                  nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                   server/read-rail-daemon (fn [] {:state :up})]
       (let [resp (server/handle-request {:request-method :post
                                          :uri "/workstreams/p/w1/winddown"})]
@@ -625,16 +638,16 @@
                   nido.coordinator.control/tripped-triggers (fn [] [])
                   nido.coordinator.control/triggers-for (fn [_] [])
                   server/read-rail-daemon (fn [] {:state :up})
-                  nido.coordinator.work/all-gates (fn [] [])]
+                  nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})]
       (let [resp (server/handle-request {:request-method :post :uri "/ops/halt"})]
         (is @halted)
         (is (str/includes? (:body resp) "ops-panel"))))))
 
 (deftest ops-fragment-badge-counts-every-project
   ;; Needs you spans every project, so the badge ignores the focus.
-  (with-redefs [nido.coordinator.work/all-gates (fn [] [{:project "brian" :ws-id "w1"}
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:project "brian" :ws-id "w1"}
                                             {:project "brian" :ws-id "w2"}
-                                            {:project "fukan" :ws-id "w3"}])
+                                            {:project "fukan" :ws-id "w3"}] :unavailable {}})
                 nido.coordinator.control/halt-info (fn [] nil)
                 nido.coordinator.control/tripped-triggers (fn [] [])
                 nido.coordinator.control/triggers-for (fn [_] [])
@@ -649,7 +662,7 @@
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"ask_bar\":{\"ws_1\":{\"reply\":\"do the fix\"}}}"))]
         (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})
         (Thread/sleep 50)
@@ -746,7 +759,7 @@
 (deftest post-accept-folds-the-card-answers-in-question-order
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-qc/gate/apply"
                               :query-string "entry=6"
                               :body (java.io.ByteArrayInputStream.
@@ -759,7 +772,7 @@
 (deftest post-answer-questions-sends-each-question-its-letter-or-words
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-qc/gate/answer-questions"
                               :query-string "entry=8"
                               :body (java.io.ByteArrayInputStream.
@@ -774,7 +787,7 @@
 (deftest post-accept-without-a-card-carries-only-the-position
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
-                  nido.coordinator.work/all-gates    (fn [] [])]
+                  nido.coordinator.work/read-gates    (fn [] {:gates [] :unavailable {}})]
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-old/gate/apply"
                               :query-string "entry=3"})
       (Thread/sleep 50)
@@ -798,7 +811,7 @@
                                                            :grouped {:in-progress [{:ws-id "other" :origin :scratch
                                                                                     :stage :in-progress :label "Other-row"}]}}])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
-                nido.coordinator.work/all-gates (fn [] [])
+                nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
                 nido.coordinator.work/refresh-selected! (fn [& _] nil)
                 nido.coordinator.work/workstream (fn [_ _ & _] {:ws-id "ws-1" :project "brian" :origin :scratch
                                                                 :stage :in-progress :label "Page-label" :ledger nil

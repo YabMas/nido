@@ -24,11 +24,11 @@
   {:about [list-workstreams] :evidence "test"})
 
 (Claim passes-read-held-rows
-  "grouped, all-grouped, winding-down, gates and all-gates answer from selections coordinator-work updates whenever a held row is recomputed: each band's members, the gates, the finished workstreams holding a live session. None of them visits a held row it does not return, or reads a record other than through a refresh of [refresh-paths]. facet-values keeps no selection: it computes its values on each call from every non-done held row."
-  {:about [grouped all-grouped winding-down gates all-gates facet-values] :evidence "round"})
+  "grouped, all-grouped, winding-down and gates answer from selections coordinator-work updates whenever a held row is recomputed: each band's members, the gates, the finished workstreams holding a live session. None of them visits a held row it does not return, or reads a record other than through a refresh of [refresh-paths]. facet-values keeps no selection: it computes its values on each call from every non-done held row. all-gates reads no held row: the core answers it [gates-from-the-core]."
+  {:about [grouped all-grouped winding-down gates facet-values] :evidence "round"})
 
 (Claim detail-derives-one
-  "Once a process holds its rows, a dashboard selection request, meaning /workstreams/<project>/<id>, /workstreams?sel=<project>:<id>, or the pane fragment, refreshes no held row but its selected one's, as [refresh-paths] says, and draws what it shows besides the detail — the list where it draws one, other gates and the rail badge — from what is held. The overview's poll, /_fragment/workstreams?sel=…, is not a selection request: it makes a list refresh. Before rows are held it waits on the first build like any page."
+  "Once a process holds its rows, a dashboard selection request, meaning /workstreams/<project>/<id>, /workstreams?sel=<project>:<id>, or the pane fragment, refreshes no held row but its selected one's, as [refresh-paths] says, and draws the list beside the detail, where it draws one, from what is held; its gates and the rail badge's count come from read-gates and its pane's question card from gate [pane-gate-from-the-core]. The overview's poll, /_fragment/workstreams?sel=…, is not a selection request: it makes a list refresh. Before rows are held its list waits on the first build like any board page, and the response, badge included, goes out with it [needs-you-without-the-board]."
   {:about [ui-server all-gates] :evidence "round"})
 
 (Claim tui-detail-reads-one

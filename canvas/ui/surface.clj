@@ -324,8 +324,11 @@
     {:signature [:=> [:catn] :map] :delegates [control/read-daemon-health]})
   (Operation derive-screen
     "Gather what the screen needs and derive it — the gate inbox's casualty card from the
-     workstreams owed a revive, beside the gates and never among them."
-    {:signature [:=> [:catn [:view-state :any]] Screen] :delegates [work/screen work/owed-revivals]})
+     workstreams owed a revive, beside the gates and never among them. Without the board it
+     refreshes no row and reads only the gates, which the core answers: what Needs you and the
+     rail badge render."
+    {:signature [:=> [:catn [:view-state :any] [:opts [:? :map]]] Screen]
+     :delegates [work/screen work/owed-revivals work/read-gates]})
   (Operation wrap-slow-request-log
     "Wrap a handler so a request slower than the threshold leaves one line in the daemon log.
      The dashboard's own latency is otherwise unobservable after the fact."

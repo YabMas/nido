@@ -184,6 +184,22 @@
           (finally (api/disconnect c))))
       (catch Exception _ {}))))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:map-of :string :map]]} asking
+  "Every workstream of `project` a person owes a move now, as the core answers it in one request:
+   {ws-id {:state :awaiting}}, the same shape `held` keeps. Read from the core's summaries, never
+   from the feed or a ledger, so it answers as soon as the core does. Throws ex-info
+   {:core :unreachable} when no core answers, and {:core :error} when it answers an error."
+  [project]
+  (let [r (client/asking project)]
+    (when (contains? r :error)
+      (throw (ex-info (str "the core could not read " (name project) "'s asks: " (pr-str (:error r)))
+                      {:core :error :error (:error r)})))
+    (into {}
+          (for [[k st] (client/value! r :asking)
+                :let [[_ ws-id] (split-key k)]
+                :when ws-id]
+            [ws-id {:state st :awaiting (vec (d/awaiting-person st))}]))))
+
 (defn ^{:malli/schema [:=> [:cat :map :any :string] [:maybe :map]]} held-ws
   "Workstream `ws-id`'s entry in `held` map `h`, or nil."
   [h project ws-id]

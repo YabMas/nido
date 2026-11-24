@@ -129,6 +129,13 @@
   (when-let [i (when-not (:discarded? state) (:identity state))]
     (-> i (assoc :id ws-id :entries (vec (:ledger state))))))
 
+(defn ^{:malli/schema [:=> [:cat :WorkstreamId :map] [:maybe :Workstream]]}
+  record-of-state
+  "The workstream record committed core `state` holds for `ws-id` — what `read-ws` answers for
+   it — or nil when it holds none. For a reader handed states by the core in bulk."
+  [ws-id state]
+  (record-of ws-id state))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
   read-ws
   "The workstream `ws-id` of `project` as the core holds it — its identity and its ledger's index

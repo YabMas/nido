@@ -9,13 +9,16 @@
 
 (Kind CoreRequest
   "A request the core answers: a keyed command, or a read of one state, the states under a key
-   prefix, entry contents by seq, or the workstreams held."
+   prefix, entry contents by seq, a project's summaries, the states of a project's workstreams a
+   person owes a move, or the workstreams held."
   [:multi {:dispatch :op}
    [:command     [:map [:op [:= :command]] [:key :string] [:ws :string] [:command :map]
                   [:input? {:optional true} :boolean]]]
    [:state       [:map [:op [:= :state]] [:ws :string]]]
    [:states      [:map [:op [:= :states]] [:prefix :string]]]
    [:entries     [:map [:op [:= :entries]] [:ws :string] [:seqs [:vector :int]]]]
+   [:summaries   [:map [:op [:= :summaries]] [:project :string]]]
+   [:asking      [:map [:op [:= :asking]] [:project :string]]]
    [:workstreams [:map [:op [:= :workstreams]]]]])
 
 (Kind Unavailable
@@ -36,6 +39,8 @@
   [:or [:map [:state :map]]
        [:map [:states [:map-of :string :map]]]
        [:map [:entries [:map-of :int :string]]]
+       [:map [:summaries [:map-of :string :map]]]
+       [:map [:asking [:map-of :string :map]]]
        [:map [:workstreams [:vector :string]]]
        [:map [:error :any]]
        Unavailable])
@@ -76,6 +81,15 @@
   (Operation states
     "The committed state of every workstream whose key starts with a prefix, as a ReadReply."
     {:signature [:=> [:catn [:prefix :string]] ReadReply]
+     :delegates [request!]})
+  (Operation summaries
+    "The summary of every workstream of a project, by key, as a ReadReply."
+    {:signature [:=> [:catn [:project :any]] ReadReply]
+     :delegates [request!]})
+  (Operation asking
+    "The committed state of every workstream of a project a person owes a move now — an open ask
+     on a workstream not closed — by key, as a ReadReply."
+    {:signature [:=> [:catn [:project :any]] ReadReply]
      :delegates [request!]})
   (Operation entry-contents
     "The content of named entries of a workstream's ledger, by seq, as a ReadReply."
