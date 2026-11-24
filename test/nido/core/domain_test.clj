@@ -398,6 +398,10 @@
       (let [[s] (run (into [{:command :open-unit :unit "u" :project "p" :goal "g"
                              :first-turn {:spec spec}}] (up "u")))]
         (is (empty? (:inbox s)))))
+    (testing "a provisioning recorded before the rule folds as it did: no item, no shifted inbox ids"
+      (is (empty? (:inbox (d/fold [{:event :unit-opened :unit "u" :project "p" :goal "g"}
+                                   {:event :provision-attempted :unit "u" :attempt "a" :want :up}
+                                   {:event :provision-recorded :unit "u" :attempt "a" :outcome :done :cwd "/w"}])))))
     (testing "a unit given a session of its own never waits on provisioning"
       (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}])]
         (is (empty? (:inbox s)))))))

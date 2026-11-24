@@ -230,7 +230,7 @@
 (defmethod evolve :provision-attempted [state {:keys [unit attempt want]}]
   (assoc-in state [:units unit :session :attempt] {:id attempt :want want}))
 
-(defmethod evolve :provision-recorded [state {:keys [unit outcome cwd detail]}]
+(defmethod evolve :provision-recorded [state {:keys [unit outcome cwd detail unit-ready?]}]
   (let [want (get-in state [:units unit :session :attempt :want])
         status (if (= :failed outcome) :failed (reached want))]
     (cond-> (update-in state [:units unit :session]
@@ -238,12 +238,7 @@
                           cwd    (assoc :cwd cwd)
                           detail (assoc :detail detail)))
       (= :failed outcome) (hear-later {:kind :session-failed :unit unit :want want :detail detail})
-      ;; A unit that comes up with no first turn and none run yet has nothing to start it but the
-      ;; conductor, which wakes only on its inbox: without this it waits on nothing, for good.
-      (and (= :done outcome) (= :up want)
-           (not (get-in state [:units unit :first-turn]))
-           (not-any? #(= unit (:unit %)) (vals (:turns state))))
-      (hear-later {:kind :unit-ready :unit unit}))))
+      unit-ready?         (hear-later {:kind :unit-ready :unit unit}))))
 
 (defmethod evolve :provision-retried [state {:keys [unit]}]
   (update-in state [:units unit :session] #(-> % (assoc :status :none) (dissoc :detail))))
@@ -477,7 +472,14 @@
       (refuse :ready-needs-a-cwd)
       :else (accept (cond-> {:event :provision-recorded :unit unit :attempt attempt :outcome outcome}
                       cwd    (assoc :cwd cwd)
-                      detail (assoc :detail detail))))))
+                      detail (assoc :detail detail)
+                      ;; A unit that comes up with no first turn and none run yet has nothing to
+                      ;; start it but the conductor, which wakes only on its inbox. Decided here and
+                      ;; carried on the event, so a ledger recorded before the rule folds as it did.
+                      (and (= :done outcome) (= :up (:want a))
+                           (not (get-in state [:units unit :first-turn]))
+                           (not-any? #(= unit (:unit %)) (vals (:turns state))))
+                      (assoc :unit-ready? true))))))
 
 (defmethod decide :retry-provision [state {:keys [unit]}]
   (if (= :failed (get-in state [:units unit :session :status]))
