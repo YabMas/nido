@@ -3566,22 +3566,6 @@
 
 
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :string]]}
-  chat-dir
-  "The directory workstream `ws-id`'s side chat runs its agent in, so it reads the workstream's
-   code: the working copy of a unit of it whose session is ready — an open unit's first — else the
-   worktree of the session `open-target` lands on, else the project's own checkout; nil when none
-   of them exists. Brings nothing up."
-  [project ws-id]
-  (let [dir?  #(when (and % (fs/directory? %)) (str %))
-        units (vals (:units (try (wcore/state project ws-id) (catch Exception _ nil))))
-        ready (filter #(= :ready (get-in % [:session :status])) units)]
-    (or (some (comp dir? :cwd :session) (concat (filter #(= :open (:status %)) ready) ready))
-        (when-let [{:keys [session]} (open-target project ws-id)]
-          (dir? (:wt-path (try (lifecycle/session-coords session {:project (name project)})
-                               (catch Exception _ nil)))))
-        (dir? (:directory (project-entry (config/read-projects) project))))))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :boolean]}
   reclaimed?
   "True iff `session` under `ws-id` is owned by a Run whose ephemeral

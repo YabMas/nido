@@ -780,18 +780,16 @@
       (Thread/sleep 50)
       (is (= [["brian" "ws-old" :apply 3]] @calls)))))
 
-(deftest a-page-reached-from-another-shows-the-chat-for-the-page-being-drawn
-  ;; The panel is drawn with the page, so the conversation it shows is the page's own: the Referer
-  ;; is the page the person came from, and choosing by it would show the previous page's chat.
+(deftest every-page-shows-the-operator-whatever-it-has-open
+  ;; One conversation on every page: a workstream selected, or its own page, changes nothing.
   (with-redefs [nido.coordinator.work/workstream (fn [p w _] {:project p :ws-id w :label w :stage :design})
-                nido.coordinator.work.core/held  (fn [] {"brian/ws-drawn" {:state {} :awaiting []}
-                                                          "brian/ws-before" {:state {} :awaiting []}})]
-    (let [ctx  (#'server/rail-ctx {:uri "/workstreams" :query-string "sel=brian:ws-drawn"
-                                   :headers {"referer" "http://localhost:8800/workstreams/brian/ws-before"}}
-                                  :workstreams "brian" {:needs-count 0})
-          html (str (hiccup2.core/html (:side-chat ctx)))]
-      (is (clojure.string/includes? html "/_chat/ws/brian/ws-drawn/stream"))
-      (is (not (clojure.string/includes? html "ws-before"))))))
+                nido.session.chat/transcript     (fn [_] {:items [] :busy? false})]
+    (doseq [req [{:uri "/" :headers {}}
+                 {:uri "/workstreams" :query-string "sel=brian:ws-drawn" :headers {}}
+                 {:uri "/workstreams/brian/ws-drawn" :headers {}}]]
+      (let [html (str (hiccup2.core/html (:side-chat (#'server/rail-ctx req :workstreams "brian" {:needs-count 0}))))]
+        (is (re-find #"[^a-z0-9]/_chat/stream" html) (:uri req))
+        (is (not (clojure.string/includes? html "/_chat/ws/")) (:uri req))))))
 
 (deftest workstream-page-is-the-pane-alone
   ;; A workstream's own path draws its pane with no board beside it, from the same screen
@@ -813,8 +811,7 @@
       (is (str/includes? body "id=\"ws-pane\""))
       (is (str/includes? body "class=\"ws-page\""))
       (is (not (str/includes? body "Other-row")) "no board on the workstream's page")
-      (is (str/includes? body "/_chat/ws/brian/ws-1/stream") "the side chat is the workstream's")
-      (is (not (re-find #"[^a-z0-9]/_chat/stream" body)) "not the operator's"))
+      (is (re-find #"[^a-z0-9]/_chat/stream" body) "the side chat is the operator's"))
     (let [body (:body (server/handle-request {:request-method :get :uri "/workstreams"
                                               :query-string "sel=brian:ws-1"}))]
       (is (str/includes? body "Other-row") "the board keeps its pane beside the list")

@@ -360,11 +360,6 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:words [:maybe :string]]
                        [:grants [:maybe [:sequential :keyword]]]
                        [:images [:? [:maybe [:sequential :string]]]]] :map]})
-  (Operation chat-dir
-    "The directory a workstream's side chat runs its agent in, so it reads the workstream's code: a
-     ready unit's working copy, else its newest work session's worktree, else the project's
-     checkout; nil when none exists. Brings nothing up."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :string]]})
   (Operation external-ref
     "The external ref an event payload names, or nil when it carries no usable id."
     {:signature [:=> [:catn [:payload :map]] [:maybe :map]]})

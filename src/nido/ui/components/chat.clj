@@ -142,14 +142,6 @@
       :error      [:div.chat-err a [:span.chat-st.chat-st-failed {:title "failed"} "⚠"]
                    [:span (:text item)]]
       :note       [:p.chat-note a (:text item)]
-      ;; A workstream's chat shows what reached its conductor and the conductor's replies.
-      :relay      [:div.chat-msg.chat-relay a
-                   [:p.chat-relay-h "Passed on to the conductor"]
-                   (sent-images (:images item) kit)
-                   (md/render (:text item))]
-      :conductor  [:div.chat-msg.chat-conductor a
-                   [:p.chat-relay-h "The conductor"]
-                   (md/render (:text item))]
       [:div a])))
 
 ;; ---------------------------------------------------------------------------

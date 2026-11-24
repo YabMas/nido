@@ -17,8 +17,7 @@
 
    IMAGES. A chat message names its images by digest. The side chat keeps what a person attached
    in a store of its own (`keep-chat-image!`); a relay copies the images it names into the core's
-   (`relay-image!`) before the message naming them is sent, and `image` reads back one a
-   workstream's chat names."
+   (`relay-image!`) before the message naming them is sent."
   (:require [nido.core.api :as api]
             [nido.core.client :as client]
             [nido.core.domain :as d]
@@ -252,12 +251,6 @@
              a (sort-by :id awaiting)]
          {:project project :ws-id ws-id :ask a})))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]} chat
-  "The chat of held workstream `w`, in the order posted: [{:id :from :text ...}], as core-domain's
-   state describes it."
-  [{:keys [state]}]
-  (vec (:chat state)))
-
 (defn- chat-images-root
   "Where the side chat keeps the images a person attached: outside the core, which holds only the
    images a relay passed on."
@@ -279,10 +272,3 @@
     (let [kept (images/put! (:images (release/paths)) img)]
       (when (string? kept) kept))))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :map] :string] [:maybe :map]]} image
-  "The image `digest` that held workstream `w`'s chat names — one a message passed to its
-   conductor carried — as {:mime :data :digest}, or nil when its chat names no such image or none
-   is kept."
-  [{:keys [state]} digest]
-  (when (some #{digest} (mapcat :images (:chat state)))
-    (images/fetch (:images (release/paths)) digest)))

@@ -14,7 +14,6 @@
             [nido.coordinator.control :as control]
             [nido.libraries.ui.wire :as wire]
             [nido.ui.catalog.chat :as catalog-chat]
-            [nido.ui.place :as place]
             [nido.ui.side-chat :as side-chat]
             [nido.ui.presentation :as presentation]
             [nido.ui.structure :as structure]
@@ -186,12 +185,9 @@
   "Chrome context: the slice or page that is `active`, the focused project, the
    Needs-you badge — the screen's needs-count, which counts every project's
    gates, so the badge and the Needs-you list always agree — and the chat's side
-   panel as the request's page last left it, for the place nido.ui.place reads
-   the page as showing: the workstream it has open, when it has one."
+   panel, open or closed as the request's page last left it."
   [req active focus screen]
-  {:side-chat   (side-chat/panel (side-chat/open? req)
-                                 (let [{:keys [kind] :as subject} (:subject (place/page-place req))]
-                                   (when (= :workstream kind) (select-keys subject [:project :ws-id]))))
+  {:side-chat   (side-chat/panel (side-chat/open? req))
    :active      active
    :scope       focus
    :needs-count (:needs-count screen)

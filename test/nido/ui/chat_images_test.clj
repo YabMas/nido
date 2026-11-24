@@ -14,7 +14,7 @@
 
 (defn- bytes-of [& xs] (byte-array (map unchecked-byte xs)))
 
-(def ^:private view (#'side-chat/view-under ["_chat"]))
+(def ^:private view @#'side-chat/view)
 
 (defn- fresh-host []
   (host/host {:project "nido" :session "test" :name (str (gensym "img"))} view

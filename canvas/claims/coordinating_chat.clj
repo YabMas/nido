@@ -26,6 +26,3 @@
   "A workstream's status passes over a session record marked the chat's when it reads whether the workstream is live, as it passes over the conductor's: a chat's session being up never makes its workstream live."
   {:about [status record-session] :evidence "round"})
 
-(Claim conversation-chosen-by-place
-  "Which conversation the dashboard's panel shows is chosen by the place its page shows. A page drawing a workstream the core holds gets that workstream's chat, served under a path naming its project and workstream; every other page, and a workstream the core does not hold, gets nido's operator, under /_chat. The server passes the place; side-chat alone maps a place to a conversation, asks the work plane whether the core holds the workstream and where its chat runs, creates no session record itself, and serves each conversation through a chat host made for that conversation and path. A request under a workstream's chat path that names no workstream the core holds is answered by no conversation."
-  {:about [ui-side-chat ui-chat-host ui-server coordinator-work] :evidence "round"})

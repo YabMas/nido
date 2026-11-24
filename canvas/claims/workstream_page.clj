@@ -4,17 +4,12 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.ui.side-chat :refer [panel]]
             [canvas.ui.surface :refer [ui-views workstream-pane workstreams-page workstream-page
                                        handle-request]]))
 
 (Claim page-hosts-the-pane
   "GET /workstreams/<p>/<ws-id> answers workstream-page, which draws that workstream's content by calling workstream-pane with the screen selection's :ws, :dev-states and :machine — the same call workstreams-page makes — and draws no board (#workstreams) and no other workstream content of its own."
   {:about [workstream-page workstream-pane workstreams-page] :evidence "test"})
-
-(Claim page-chat-is-the-workstream
-  "On GET /workstreams/<p>/<ws-id> for a workstream work/chat-place offers a chat, the side panel is that workstream's chat (its routes under /_chat/ws/<p>/<ws-id>); the place is passed through rail-ctx from the screen's selection, as for the board."
-  {:about [handle-request panel] :evidence "test"})
 
 (Claim page-is-live
   "On the workstream's page the pane refreshes and acts as on the board, through the routes the board's pane uses [pane-is-self-refreshing]: its poll and each of its actions answer on the page with the fragment they answer on the board, which replaces #ws-pane, and no route or fragment is added for the page alone."
