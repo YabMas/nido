@@ -63,6 +63,31 @@ environment — do NOT start a fresh JVM, Kaocha runner, or
   <session>` then `bb nido:session:up :project brian <session>`, and
   retry. Do not fall back to host-local Clojure.
 
+### The dev environment is this session's, not brian's lab
+
+brian's own CLAUDE.md describes a different dev environment: per-worktree
+docker containers (`brian-wt-*`) reached at `https://<branch>.lab.dev`,
+managed with `bb agent:env:ensure`, `bb agent:worktree:restart` and
+`bb worktree:*`, against a shared `brian-postgres-1` container. **None of
+that applies in a nido session**: nido does not run brian's docker compose
+stack, so there is no `brian-postgres-1` on a nido host. Its absence is
+never why the app is unavailable. Do not run those tasks: each one starts a
+container that dies on the missing database.
+
+This session's dev environment is the app URL and ports at the top of
+this file, on nido's shared Postgres. To see a change in a browser, open
+that app URL. When it errors or serves old code:
+
+1. `bb --config ~/Code/nido/bb.edn nido:session:sync` brings the runtime's
+   checkout up to date with your working copy. Run it after every rebase
+   too, or the JVM keeps serving the code it last synced.
+2. Reload what changed. If that fails on namespaces you did not touch, run
+   `bb nido:session:down :project brian <session>`, then `:up`.
+3. `bb nido:session:status :project brian <session>` says what is up.
+
+Report a visual check as not done only after these steps fail, and quote
+the error they give.
+
 ### References
 
 - `~/Code/brian/docs/reference/agent-delegation.md`
