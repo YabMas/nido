@@ -578,7 +578,11 @@
 (defn- core-overlay
   "Row `row` with its coordination — closure, needs-you, engagement, the pause and what is
    underway — as the core holds it. Work records place the row on its arc; nothing else on it
-   decides what awaits the person."
+   decides what awaits the person.
+
+   Nor what runs: status reads liveness off claims, Runs and a person's sessions, and a core
+   turn is none of them, so while the core has the move — a turn running, or an ask awaiting
+   the person — status's stall is overruled rather than shown beside it."
   [project row]
   (let [w (core-of project (:ws-id row))]
     (cond
@@ -590,11 +594,16 @@
             ;; The ledger reads :intake when it records none of the work — so does a workstream
             ;; nobody activated, whose units the core ran all the same. Its coordination says
             ;; where it stands, and a workstream under way is out of the triage pen.
-            core-at (when (= :intake (get-in row [:position :at])) (wcore/position w))]
+            core-at (when (= :intake (get-in row [:position :at])) (wcore/position w))
+            doing   (wcore/doing w)
+            asking? (boolean (seq (:awaiting w)))]
         (cond-> (assoc row
-                       :needs-you  (boolean (seq (:awaiting w)))
+                       :needs-you  asking?
                        :engagement eng
-                       :doing      (wcore/doing w))
+                       :doing      doing)
+          (or doing asking?)    (update :status #(-> (assoc % :stalled false) (dissoc :why)))
+          doing                 (assoc-in [:status :live] true)
+          asking?               (assoc-in [:status :owed-by] :person)
           core-at               (assoc :position core-at)
           (and core-at (#{:triage :ready} (:stage row))) (assoc :stage :in-progress)
           (wcore/held-units? w) (assoc-in [:status :paused] true)
