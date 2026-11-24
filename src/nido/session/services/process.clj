@@ -98,6 +98,50 @@
                                {:pid pid :pid-file pid-path}))))
   (fs/delete-if-exists pid-path))
 
+(defn- classpath-race?
+  "Whether the process logging to `log-path` died building its classpath. tools.deps expands
+   dependencies in parallel, and Maven's model validator shares a HashMap across those threads:
+   now and then the map corrupts and the JVM exits with `Error building classpath.` before any
+   project code runs. The same classpath builds on the next attempt — five brian starts failed
+   this way between 2026-10-17 and 2026-11-24, each restored by simply starting again. Any
+   classpath error is matched, not only the race's ClassCastException: a dependency that truly
+   does not resolve fails the second attempt too, so the retry costs one classpath build."
+  [log-path]
+  (boolean
+   ;; The line opens the log, above a stack trace a tail would keep instead.
+   (try (str/includes? (slurp log-path) "Error building classpath.")
+        (catch Exception _ false))))
+
+(defn- spawn!
+  "Detach `command` in `project-dir`, its output to `log-path`, and return its pid.
+
+   :shutdown nil disables the destroy-tree JVM shutdown hook babashka.process/shell registers
+   by default — that hook hangs the bb process at exit when the spawned bash leaves a
+   long-running detached descendant (the JVM here is intentionally supposed to outlive bb).
+
+   The shell records $! itself, in the same command that detaches it, so no check made here
+   afterwards — exit code, stdout a login profile may have written to — can stand between the
+   detach and the record. Until the engine writes session.edn, after every other service is
+   up, the pid file is the only thing on disk that names the process."
+  [{:keys [command project-dir git-dir log-path pid-path svc-name]}]
+  (let [cmd (str "nohup " command " > "
+                 (proc/quoted log-path)
+                 " 2>&1 & printf %s $! > " (proc/quoted pid-path))
+        ;; A runtime run out of its own checkout is told where git is (`checkout/git-dir`).
+        result (shell (cond-> {:continue true :out :string :err :string
+                               :dir project-dir :shutdown nil}
+                        git-dir (assoc :extra-env {"GIT_DIR" git-dir}))
+                      "bash" "-lc" cmd)
+        pid (recorded-pid pid-path)]
+    (when-not (zero? (:exit result))
+      (throw (ex-info (str "Failed to start " (name svc-name))
+                      {:error (:err result) :pid-file pid-path})))
+    (when-not (pos-int? pid)
+      (throw (ex-info (str "Failed to read the pid of " (name svc-name) " from " pid-path)
+                      {:output (:out result) :pid-file pid-path})))
+    (core/log-step (str "Started " (name svc-name) " process (pid " pid ")"))
+    pid))
+
 (defmethod service/start-service! :process
   [service-def ctx _opts]
   (let [{:keys [port-file port-timeout-ms]
@@ -108,7 +152,11 @@
         project-dir (get-in ctx [:session :project-dir])
         instance-id (or (get-in ctx [:session :instance-id]) project-name)
         git-dir (get-in ctx [:session :git-dir])
-        log-path (state/log-file instance-id svc-name)]
+        log-path (state/log-file instance-id svc-name)
+        pid-path (state/pid-file instance-id svc-name)
+        pf (when port-file (str (fs/path project-dir port-file)))
+        spawn #(spawn! {:command command :project-dir project-dir :git-dir git-dir
+                        :log-path log-path :pid-path pid-path :svc-name svc-name})]
 
     (when (str/blank? command)
       (throw (ex-info ":process service missing :command or :command-template"
@@ -119,63 +167,38 @@
     ;; One process per instance and service: whatever an earlier start left
     ;; running is stopped before this one spawns, since the spawn overwrites the
     ;; only record of it.
-    (retire-recorded! (state/pid-file instance-id svc-name))
+    (retire-recorded! pid-path)
 
-    ;; Delete existing port file
-    (when port-file
-      (fs/delete-if-exists (str (fs/path project-dir port-file))))
+    (when pf (fs/delete-if-exists pf))
 
-    ;; Start background process. :shutdown nil disables the destroy-tree
-    ;; JVM shutdown hook babashka.process/shell registers by default — that
-    ;; hook hangs the bb process at exit when the spawned bash leaves a
-    ;; long-running detached descendant (the JVM here is intentionally
-    ;; supposed to outlive bb).
-    ;;
-    ;; The shell records $! itself, in the same command that detaches it, so no
-    ;; check made here afterwards — exit code, stdout a login profile may have
-    ;; written to — can stand between the detach and the record. Until the
-    ;; engine writes session.edn, after every other service is up, this file is
-    ;; the only thing on disk that names the process.
-    (let [pid-path (state/pid-file instance-id svc-name)
-          cmd (str "nohup " command " > "
-                   (proc/quoted log-path)
-                   " 2>&1 & printf %s $! > " (proc/quoted pid-path))
-          ;; A runtime run out of its own checkout is told where git is (`checkout/git-dir`).
-          result (shell (cond-> {:continue true :out :string :err :string
-                                 :dir project-dir :shutdown nil}
-                          git-dir (assoc :extra-env {"GIT_DIR" git-dir}))
-                        "bash" "-lc" cmd)
-          pid (recorded-pid pid-path)]
-      (when-not (zero? (:exit result))
-        (throw (ex-info (str "Failed to start " (name svc-name))
-                        {:error (:err result) :pid-file pid-path})))
-      (when-not (pos-int? pid)
-        (throw (ex-info (str "Failed to read the pid of " (name svc-name) " from " pid-path)
-                        {:output (:out result) :pid-file pid-path})))
-      (core/log-step (str "Started " (name svc-name) " process (pid " pid ")"))
-
-      ;; Optionally wait for port file
-      (let [port (when port-file
-                   (let [pf (str (fs/path project-dir port-file))
-                         {p :port outcome :outcome} (wait-for-port-file! pf pid port-timeout-ms)]
-                     (when-not p
-                       ;; A process that will not stop keeps its record; the
-                       ;; cause reported is still the boot's, not the stop's.
-                       (try (retire-recorded! pid-path) (catch Exception _ nil))
-                       (throw (ex-info (if (= :process-died outcome)
-                                         (str (name svc-name) " process exited before writing "
-                                              port-file)
-                                         (str "Timed out waiting for " port-file))
-                                       {:timeout-ms port-timeout-ms
-                                        :outcome outcome
-                                        :pid pid
-                                        :log-path log-path
-                                        :log-tail (proc/log-tail log-path 20)})))
-                     (core/log-step (str (name svc-name) " available on port " p))
-                     p))]
+    (if-not pf
+      (let [pid (spawn)]
+        {:state {:pid pid :port nil :log-path log-path :pid-file pid-path}
+         :context {:pid pid}})
+      (let [{:keys [pid port outcome]}
+            (loop [attempt 1]
+              (let [pid (spawn)
+                    r   (assoc (wait-for-port-file! pf pid port-timeout-ms) :pid pid)]
+                (if (and (= 1 attempt) (= :process-died (:outcome r)) (classpath-race? log-path))
+                  (do (core/log-step (str (name svc-name) " died building its classpath;"
+                                          " starting it once more"))
+                      (recur 2))
+                  r)))]
+        (when-not port
+          ;; A process that will not stop keeps its record; the
+          ;; cause reported is still the boot's, not the stop's.
+          (try (retire-recorded! pid-path) (catch Exception _ nil))
+          (throw (ex-info (if (= :process-died outcome)
+                            (str (name svc-name) " process exited before writing " port-file)
+                            (str "Timed out waiting for " port-file))
+                          {:timeout-ms port-timeout-ms
+                           :outcome outcome
+                           :pid pid
+                           :log-path log-path
+                           :log-tail (proc/log-tail log-path 20)})))
+        (core/log-step (str (name svc-name) " available on port " port))
         {:state {:pid pid :port port :log-path log-path :pid-file pid-path}
-         :context (cond-> {:pid pid}
-                    port (assoc :port port))}))))
+         :context {:pid pid :port port}}))))
 
 (defmethod service/stop-service! :process
   ;; The saved :pid and the pid file can name different processes: a start that

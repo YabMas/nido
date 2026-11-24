@@ -269,3 +269,39 @@
             (is (= (str (:pid state)) (str/trim (slurp (state/pid-file "inst" :repl)))))
             (finally (proc/stop-process! (:pid state))))))
       (finally (fs/delete-tree tmp)))))
+
+;; tools.deps expands dependencies in parallel, and Maven's model validator races on a shared
+;; HashMap often enough to have failed five brian starts with `Error building classpath.`, each
+;; restored by starting again. One more spawn is made for that death, and for no other.
+
+(deftest start-service-starts-again-a-process-that-died-building-its-classpath
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [marker (str (fs/path tmp "tried"))
+              ctx {:session {:project-name "proj" :project-dir (str tmp) :instance-id "inst-cp"}}
+              ;; The first run dies the way the race does; the second writes its port file.
+              svc {:type :process :name :repl :port-file ".nrepl-port" :port-timeout-ms 15000
+                   :command (str "bash -c 'if [ -e " marker " ]; then echo 4242 > .nrepl-port;"
+                                 " sleep 30; else touch " marker ";"
+                                 " echo \"Error building classpath. boom\"; exit 1; fi'")}
+              {:keys [state]} (service/start-service! svc ctx {})]
+          (try
+            (is (= 4242 (:port state)) "the second spawn's port is the service's")
+            (is (proc/process-alive? (:pid state)))
+            (finally (proc/stop-process! (:pid state))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest start-service-does-not-start-again-a-process-that-died-otherwise
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [count-file (str (fs/path tmp "runs"))
+              ctx {:session {:project-name "proj" :project-dir (str tmp) :instance-id "inst-np"}}
+              svc {:type :process :name :repl :port-file ".nrepl-port" :port-timeout-ms 15000
+                   :command (str "bash -c 'echo x >> " count-file "; exit 3'")}]
+          (is (thrown? clojure.lang.ExceptionInfo (service/start-service! svc ctx {})))
+          (is (= 1 (count (str/split-lines (slurp count-file)))) "spawned exactly once")))
+      (finally (fs/delete-tree tmp)))))
