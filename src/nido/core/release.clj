@@ -115,7 +115,8 @@
   "Run the core daemon until the process is killed. Options:
      :home       the nido home (default `nido-home`)
      :rev        this release's name, written to release.edn
-     :nido-dir   the nido checkout whose bb.edn holds the session verb and the conductor tools
+     :nido-dir   the nido checkout whose bb.edn holds the session verb, and whose skills every
+                 turn is given; the conductor tools run from this release, not from it
      :bb-bin     bb's path
      :executors  {kw executor}; default {:claude (nido.executor.claude/executor {})}
      :probes     {what argv} the gate runs; default the claude CLI and the session verb
@@ -155,7 +156,10 @@
           buffer ((req 'nido.core.buffer/start)
                   {:submit submit :wake-cap (or wake-cap 4)
                    :spec-fn ((req 'nido.core.buffer/conductor-spec-fn)
-                             {:socket (:socket ps) :bb-bin bb-bin :src (some-> nido-dir (str "/src"))
+                             ;; No :src: the conductor's tools speak this daemon's wire, so they run
+                             ;; from the release it loaded, as the executor's hook and ask tool do —
+                             ;; not from the checkout, which moves ahead of it on every landing.
+                             {:socket (:socket ps) :bb-bin bb-bin
                               :ws-dir (fn [ws] (let [d (io/file (:workstreams ps) ws)] (.mkdirs d) (str d)))})})
           prov ((req 'nido.core.provision/start) {:submit submit :nido-dir nido-dir :bb-bin bb-bin})
           all-wss ((req 'nido.core.store/changed-since) s 0)

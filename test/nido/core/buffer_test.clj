@@ -135,6 +135,15 @@
           f (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :src "/src" :ws-dir (constantly "/ws")})]
       (is (not (contains? (f "ws" "c1" s (vals (:inbox s))) :images))))))
 
+(deftest the-conductor-tools-run-from-the-source-the-daemon-loaded
+  (let [s    (state-after [{:command :post-chat :message "m1" :text "hi"}])
+        spec ((b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws")})
+              "ws" "c1" s (vals (:inbox s)))
+        root (-> (clojure.java.io/resource "nido/core/buffer.clj") clojure.java.io/file
+                 .getParentFile .getParentFile .getParentFile str)]
+    (is (= ["--classpath" root "-m" "nido.core.buffer" "tools" "/s" "ws" "c1"]
+           (get-in spec [:mcp-servers "nido-conductor" :args])))))
+
 (deftest the-conductor-is-told-where-the-recipe-stands
   (let [s     (state-after [{:command :create-workstream :identity {:project :brian :external-refs [] :created-at "2026-11-24T00:00:00Z"}}])
         add   (fn [s kind] (first (d/step s {:command :append-entry :after (d/latest-seq s)
