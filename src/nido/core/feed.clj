@@ -10,7 +10,12 @@
    Each subscriber has a bounded buffer of its own. Publishing never blocks the writer: a
    subscriber whose buffer is full is cut off, and its next take answers {:cut-off true
    :resume-from pos}. It then subscribes again from the last position it rendered, and is sent
-   each workstream changed since then, at its latest commit, before anything live."
+   each workstream changed since then, at its latest commit, before anything live.
+
+   The catch-up ends with one {:caught-up true :pos pos}: from there on the subscriber holds
+   every workstream as committed, and what follows is live. A reader that renders needs to
+   know that, since a workstream the catch-up has not reached yet reads as one the core never
+   heard of."
   (:require [nido.core.domain :as d]
             [nido.core.store :as store])
   (:import [java.util.concurrent ArrayBlockingQueue TimeUnit]))
@@ -45,6 +50,7 @@
     (assoc sub
            :feed feed
            :catch-up (atom (mapv message (store/changed-since reader from)))
+           :caught-up? (atom false)
            :sent (atom {})
            :last-pos (atom from))))
 
@@ -55,11 +61,18 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :int] [:maybe :map]]} take!
   "The subscription's next message, waiting up to `timeout-ms`; nil when none arrived in time.
-   Once the subscriber has been cut off and has taken everything buffered before that, answers
+   The last of the catch-up is followed by {:caught-up true :pos pos}, once. Once the subscriber
+   has been cut off and has taken everything buffered before that, answers
    {:cut-off true :resume-from pos}, pos being the last position it was given."
-  [{:keys [^ArrayBlockingQueue queue cut? catch-up sent last-pos] :as sub} timeout-ms]
-  (if-let [m (first @catch-up)]
-    (do (swap! catch-up subvec 1) (deliver-message sub m))
+  [{:keys [^ArrayBlockingQueue queue cut? catch-up caught-up? sent last-pos] :as sub} timeout-ms]
+  (cond
+    (seq @catch-up)
+    (let [m (first @catch-up)] (swap! catch-up subvec 1) (deliver-message sub m))
+
+    (and caught-up? (compare-and-set! caught-up? false true))
+    {:caught-up true :pos @last-pos}
+
+    :else
     (loop []
       (if-let [m (if @cut? (.poll queue) (.poll queue timeout-ms TimeUnit/MILLISECONDS))]
         (if (<= (:pos m) (get @sent (:ws m) -1))

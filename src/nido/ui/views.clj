@@ -1852,7 +1852,7 @@
             ;; stream, so the standing records and the log of every superseded
             ;; revision of them read as the same kind of thing — which is exactly
             ;; the confusion the standing records were added to end.
-            [:h2 (state/status-heading position) " " (state/state-mark status doing)]
+            [:h2 (state/status-heading position doing) " " (state/state-mark status doing)]
             (when-not (= :done stage) (pause-line project ws-id pause))
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page

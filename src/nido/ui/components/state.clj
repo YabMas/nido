@@ -168,12 +168,16 @@
    detail the person does not scan a workstream for — the running mark already says something
    runs — so it stays in the state mark's title."
   [doing]
-  (when (= :claim (:source doing)) (wsv/doing-label doing)))
+  (when (#{:claim :core} (:source doing)) (wsv/doing-label doing)))
 
 ;; ---------------------------------------------------------------------------
 ;; The status section's heading
 
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
+(declare arc-name)
+
+(defn ^{:malli/schema [:function
+                       [:=> [:cat :map] :any]
+                       [:=> [:cat :map [:maybe :map]] :any]]}
   status-heading
   "The Status section's heading, carrying the position itself.
 
@@ -181,10 +185,16 @@
    a heading that said nothing. Two lines to say one thing, and the heading was
    the emptier of them — so the position moved into it and the body kept only
    what comes next."
-  [{:keys [at]}]
-  (if at
-    (str "Status — " (get position-label at (name at)))
-    "Status"))
+  ([position] (status-heading position nil))
+  ([{:keys [at stage]} doing]
+   (cond
+     ;; The core working a stage reads as that stage under way — the design being written, not
+     ;; the baseline that was last recorded — whichever of its turns or handovers is happening.
+     (and (= :core (:source doing)) (some #{stage} [:intent :baseline :design :implementation]))
+     (str "Status — " (arc-name stage) " in progress")
+
+     at  (str "Status — " (get position-label at (name at)))
+     :else "Status")))
 
 ;; ---------------------------------------------------------------------------
 ;; The arc

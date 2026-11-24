@@ -128,9 +128,10 @@
       (answer (writer/submit! w (open-unit "w2" "k2" "u2")))
       (let [r (store/open-reader db)
             sub (feed/subscribe! f r 1 {:buffer 2})]
-        (testing "catch-up: what changed after the position it resumes from"
+        (testing "catch-up: what changed after the position it resumes from, then where it ends"
           (is (= [["w2" 2]] [((juxt :ws :pos) (feed/take! sub 100))]))
-          (is (nil? (feed/take! sub 50))))
+          (is (= {:caught-up true :pos 2} (feed/take! sub 50)))
+          (is (nil? (feed/take! sub 50)) "the end of the catch-up is said once"))
         (testing "live, in commit order"
           (answer (writer/submit! w (open-unit "w1" "k3" "u3")))
           (is (= ["w1" 3] ((juxt :ws :pos) (feed/take! sub 1000)))))
@@ -145,12 +146,28 @@
               (is (= 5 (count (get-in m [:state :units])))))))
         (store/close r)))))
 
+(deftest a-catch-up-ends-before-anything-live
+  (let [f (feed/create)]
+    (with-writer [w s db {:publish #(feed/publish! f %)}]
+      (answer (writer/submit! w (open-unit "w1" "k1" "u1")))
+      (answer (writer/submit! w (open-unit "w2" "k2" "u2")))
+      (let [r (store/open-reader db)
+            sub (feed/subscribe! f r 0 {})]
+        ;; Committed after the subscription registered and before anything was taken: live, so it
+        ;; comes after the marker, which a reader takes to mean it holds every workstream.
+        (answer (writer/submit! w (open-unit "w3" "k3" "u3")))
+        (let [ms (vec (take-while some? (repeatedly #(feed/take! sub 200))))]
+          (is (= [:w1 :w2 :caught-up :w3]
+                 (mapv #(if (:caught-up %) :caught-up (keyword (:ws %))) ms))))
+        (store/close r)))))
+
 (deftest the-feed-shows-as-awaiting-exactly-the-open-operator-asks
   (let [f (feed/create)
         ready {:explored "x" :options ["a" "b"] :recommendation "a"}]
     (with-writer [w s db {:publish #(feed/publish! f %)}]
       (let [r (store/open-reader db)
             sub (feed/subscribe! f r 0 {})]
+        (is (:caught-up (feed/take! sub 100)) "nothing committed yet: caught up at once")
         (doseq [[k c] [["1" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}]
                        ["2" {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}]
                        ["3" {:command :record-outcome :turn "t" :outcome :asked :call {:id "c" :question "q"}}]]]
@@ -181,8 +198,12 @@
               (.flush ^java.io.BufferedWriter (:writer c))
               (is (= {:error :malformed} (api/next-message c)))
               (is (= {:workstreams ["ws"]} (api/request c {:op :workstreams}))))
-            (testing "the subscription streams each commit"
-              (is (= [#{"u"} #{"u" "v"}]
-                     (for [_ (range 2)] (set (keys (:units (:state (api/next-message sub)))))))))
+            (testing "the subscription says where its catch-up ends, then streams each commit"
+              ;; The first commit may land before the server reads the subscription, and is then
+              ;; its catch-up: the marker comes after it rather than first. Once, either way.
+              (let [ms (vec (repeatedly 3 #(api/next-message sub)))]
+                (is (= 1 (count (filter :caught-up ms))))
+                (is (= [#{"u"} #{"u" "v"}]
+                       (for [m ms :when (not (:caught-up m))] (set (keys (:units (:state m)))))))))
             (api/disconnect c) (api/disconnect sub))
           (finally (api/close! srv)))))))

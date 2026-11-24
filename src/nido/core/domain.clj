@@ -161,6 +161,47 @@
   [state]
   (filter #(= :open (:status %)) (vals (:operator-asks state))))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]} activity
+  "What the core is doing on a workstream whose state is `state`, as a surface reads it, or nil
+   when it does nothing and is owed nothing: {:kind k}, with the :turn and :unit it concerns when
+   there is one. Each kind outranks the ones after it:
+     :asking    an operator ask awaits the person (`awaiting-person`): the next move is theirs
+     :working   a unit's turn runs, or resumes with its call answered
+     :deciding  the conductor runs or resumes, a unit's turn waits on the conductor's answer to
+                its call, or the conductor is owed a wake: its inbox holds items
+     :starting  an open unit's session is being brought up, or its first turn is owed
+   Between a turn ending and the next starting, the core is owed a move it has not made yet;
+   these kinds name that move, so a surface never reads a handover as nothing happening. A
+   failed bring-up is not :starting: the conductor hears the failure, which is :deciding while
+   it is owed. A closed workstream does nothing."
+  [state]
+  (when-not (or (:closed? state) (:discarded? state))
+    (let [ts    (sort-by :id (vals (:turns state)))
+          turn  (fn [pred] (first (filter pred ts)))
+          of    (fn [k t] (cond-> {:kind k :turn (:id t)} (:unit t) (assoc :unit (:unit t))))
+          units (filter #(= :open (:status %)) (sort-by :id (vals (:units state))))]
+      (cond
+        (seq (awaiting-person state))
+        {:kind :asking}
+
+        (turn #(and (:unit %) (#{:running :resolved} (:status %))))
+        (of :working (turn #(and (:unit %) (#{:running :resolved} (:status %)))))
+
+        (turn #(and (conductor-turn? %) (#{:running :resolved} (:status %))))
+        (of :deciding (turn #(and (conductor-turn? %) (#{:running :resolved} (:status %)))))
+
+        (turn #(and (:unit %) (= :asked (:status %))))
+        (of :deciding (turn #(and (:unit %) (= :asked (:status %)))))
+
+        (seq (:inbox state))
+        {:kind :deciding}
+
+        (some #(not (#{:ready :failed} (get-in % [:session :status]))) units)
+        {:kind :starting :unit (:id (first (filter #(not (#{:ready :failed} (get-in % [:session :status]))) units)))}
+
+        (seq (first-turns-owed state))
+        {:kind :starting :unit (:unit (first (first-turns-owed state)))}))))
+
 (defn- binding-ask
   "The open operator ask that binds `turn-id`'s pending call, or nil."
   [state turn-id]

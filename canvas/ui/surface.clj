@@ -119,8 +119,11 @@
     {:signature [:=> [:catn [:doing [:maybe :map]]] [:maybe :string]]})
   (Operation phase-chip "Which landing of a phased plan a row is in, or nothing."
     {:signature [:=> [:catn [:phase [:maybe :map]]] :any]})
-  (Operation status-heading "The status section's heading."
-    {:signature [:=> [:catn [:ctx :map]] :any]})
+  (Operation status-heading "The status section's heading: the position, or — while the core works
+    a stage of the arc — that stage in progress."
+    {:signature [:function
+                 [:=> [:catn [:ctx :map]] :any]
+                 [:=> [:catn [:ctx :map] [:doing [:maybe :map]]] :any]]})
   (Operation arc-name "One arc stage's heading."
     {:signature [:=> [:catn [:stage :any]] :any]})
   (Operation needs-mark

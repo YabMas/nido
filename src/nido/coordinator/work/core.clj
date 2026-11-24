@@ -79,23 +79,59 @@
 ;; ── following the feed ───────────────────────────────────────────────────────
 
 (defonce ^{:doc "What the feed has delivered: {:pos n :ws {ws-key {:state :awaiting :pos}}
-  :following? bool :connected? bool}."}
+  :following? bool :connected? bool :caught-up promise}. :caught-up is delivered once the first
+  catch-up has been applied whole."}
   mirror
-  (atom {:pos 0 :ws {} :following? false :connected? false}))
+  (atom {:pos 0 :ws {} :following? false :connected? false :caught-up (promise)}))
 
 (defn- apply-message [m {:keys [ws pos state awaiting]}]
   (-> m
       (assoc-in [:ws ws] {:state state :awaiting (vec awaiting) :pos pos})
       (update :pos max pos)))
 
+(def ^:private caught-up-wait-ms
+  "How long after following starts a read may wait for the first catch-up before answering what
+   it has — a deadline, not a wait per read, so a core that is down costs a surface ten seconds
+   once rather than on every render. The catch-up of a few thousand workstreams applies in about
+   a second."
+  10000)
+
+(defn ^{:malli/schema [:=> [:cat :map :map :boolean] :boolean]} receive!
+  "Apply feed message `m` to `mirror`, given whether this connection's catch-up is over, and call
+   what it owes: during a catch-up nothing per workstream, and once it ends `:on-caught-up`,
+   once; after it `:on-change` with each workstream a live message changes. Answers whether the
+   connection is caught up after `m`.
+
+   A catch-up is applied whole before anything refreshes: refreshing each of a few thousand
+   workstreams as it arrived took the follower minutes behind a board rebuilding, and every row
+   built meanwhile read the core as holding nothing of a workstream it had not reached — the
+   newest last, which are the ones a person is looking at."
+  [m {:keys [on-change on-caught-up]} caught-up?]
+  (cond
+    (:caught-up m)
+    (do (deliver (:caught-up @mirror) true)
+        (when on-caught-up (try (on-caught-up) (catch Exception _ nil)))
+        true)
+
+    (not caught-up?)
+    (do (swap! mirror apply-message m) false)
+
+    :else
+    (do (swap! mirror apply-message m)
+        (when on-change (try (on-change (:ws m)) (catch Exception _ nil)))
+        true)))
+
 (defn ^{:malli/schema [:=> [:cat [:? :map]] :nil]} follow!
   "Follow the core's feed into `mirror` on a background thread, reconnecting from the last
    position held whenever the connection ends or is cut off. Idempotent. Options: :on-change,
-   (fn [ws-key]) called after each message is applied."
+   (fn [ws-key]) called after each live message is applied; :on-caught-up, (fn []) called once
+   each connection's catch-up has been applied whole (`receive!`)."
   ([] (follow! {}))
-  ([{:keys [on-change]}]
+  ([opts]
    (when-not (or (client/local?)
-                 (:following? (first (swap-vals! mirror assoc :following? true))))
+                 (:following? (first (swap-vals! mirror assoc :following? true
+                                                  :wait-until (+ (System/currentTimeMillis)
+                                                                 caught-up-wait-ms)))))
      (doto (Thread.
             (fn []
               (loop []
@@ -104,12 +140,10 @@
                     (swap! mirror assoc :connected? true)
                     (try
                       (api/subscribe c (:pos @mirror))
-                      (loop []
+                      (loop [caught-up? false]
                         (when-let [m (api/next-message c)]
                           (when-not (:cut-off m)
-                            (swap! mirror apply-message m)
-                            (when on-change (try (on-change (:ws m)) (catch Exception _ nil)))
-                            (recur))))
+                            (recur (receive! m opts caught-up?)))))
                       (finally (api/disconnect c))))
                   (catch Exception _ nil))
                 (swap! mirror assoc :connected? false)
@@ -132,18 +166,20 @@
                [k {:state st :awaiting (vec (d/awaiting-person st)) :pos 0}]))
 
     (:following? @mirror)
-    (:ws @mirror)
+    (let [{:keys [caught-up wait-until]} @mirror]
+      (deref caught-up (max 0 (- (or wait-until 0) (System/currentTimeMillis))) nil)
+      (:ws @mirror))
 
     :else
     (try
       (let [c (api/connect (socket))]
         (try
           (api/subscribe c 0)
-          ;; The catch-up arrives first and is everything committed; read until the stream goes
-          ;; quiet, which a one-shot render accepts.
+          ;; The catch-up arrives first and is everything committed, and says where it ends; a
+          ;; core that says nothing for a while is taken as having said all it has.
           (loop [acc {}]
-            (let [m (deref (future (api/next-message c)) 300 ::quiet)]
-              (if (or (= ::quiet m) (nil? m) (:cut-off m))
+            (let [m (deref (future (api/next-message c)) 2000 ::quiet)]
+              (if (or (= ::quiet m) (nil? m) (:cut-off m) (:caught-up m))
                 acc
                 (recur (assoc acc (:ws m) {:state (:state m) :awaiting (vec (:awaiting m)) :pos (:pos m)})))))
           (finally (api/disconnect c))))
@@ -156,15 +192,22 @@
 
 ;; ── what a surface shows ─────────────────────────────────────────────────────
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} activity
+  "What the core is doing on held workstream `w` (`nido.core.domain/activity`), or nil."
+  [{:keys [state]}]
+  (some-> state d/activity))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :keyword]} engagement
   "The engagement a held workstream `w` reads as: :settled once closed, :parked-at-gate while an
-   ask awaits the person, :active while a turn runs, :idle otherwise."
-  [{:keys [state awaiting]}]
-  (cond
-    (:closed? state)                                           :settled
-    (seq awaiting)                                             :parked-at-gate
-    (some #(#{:running :resolved} (:status %)) (vals (:turns state))) :active
-    :else                                                      :idle))
+   ask awaits the person, :active while the core is doing anything else (`activity`), :idle
+   otherwise."
+  [{:keys [state] :as w}]
+  (let [a (activity w)]
+    (cond
+      (:closed? state)          :settled
+      (= :asking (:kind a))     :parked-at-gate
+      a                         :active
+      :else                     :idle)))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]} held-units?
   "Whether a person holds every open unit of held workstream `w`, and it has one."
@@ -173,10 +216,13 @@
     (boolean (and (seq open) (every? :held? open)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} doing
-  "What is underway in held workstream `w`, as the board's :doing reads it, or nil."
-  [{:keys [state]}]
-  (when-let [t (first (filter #(= :running (:status %)) (vals (:turns state))))]
-    {:source :core :stage (if (:unit t) :unit-turn :conductor-turn) :turn (:id t) :unit (:unit t)}))
+  "What is underway in held workstream `w`, as the board's :doing reads it, or nil:
+   {:source :core :activity k} with the :turn and :unit it concerns, k any `activity` but
+   :asking, which waits on the person rather than being underway."
+  [w]
+  (when-let [{:keys [kind] :as a} (activity w)]
+    (when-not (= :asking kind)
+      (-> a (dissoc :kind) (assoc :source :core :activity kind)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} position
   "Where held workstream `w` stands by its coordination, for a workstream whose ledger records none
@@ -184,11 +230,12 @@
    {:at :core-under-way} once a unit's turn has run, else nil. A unit turn records its outcome in
    the core and writes no record of the arc, so the ledger alone reads such a workstream as never
    started."
-  [{:keys [state awaiting]}]
-  (cond
-    (:closed? state) nil
-    (seq awaiting)   {:at :core-asking :next {:stage :answer-ask :mode :human}}
-    (some :unit (vals (:turns state))) {:at :core-under-way}))
+  [{:keys [state] :as w}]
+  (let [a (activity w)]
+    (cond
+      (:closed? state)          nil
+      (= :asking (:kind a))     {:at :core-asking :next {:stage :answer-ask :mode :human}}
+      (or a (some :unit (vals (:turns state)))) {:at :core-under-way})))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]} open-asks
   "Every ask awaiting the person across held map `h`: [{:project :ws-id :ask}], oldest workstream

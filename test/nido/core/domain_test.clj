@@ -405,3 +405,30 @@
     (testing "a unit given a session of its own never waits on provisioning"
       (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}])]
         (is (empty? (:inbox s)))))))
+
+(deftest what-the-core-is-doing-is-named-between-turns-too
+  (let [after   (fn [cmds] (reduce (fn [s c] (let [[s2 _ r] (d/step s c)]
+                                                (when r (throw (ex-info "refused" {:c c :r r})))
+                                                s2))
+                                   d/empty-state cmds))
+        kind    #(:kind (d/activity (after %)))
+        open    {:command :open-unit :unit "u" :project "p" :goal "g"}
+        ready   {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
+        unit-t  {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}
+        cond-t  {:command :start-turn :turn "c" :unit nil :spec {:executor :fake :instructions "i"}}
+        asked   {:command :record-outcome :turn "t" :run 1 :outcome :asked
+                 :call {:id "k" :question "q?"}}
+        ask     {:command :raise-operator-ask :ask "a" :binds #{"c"}
+                 :content {:question "q?" :explored "x" :options ["y" "n"] :recommendation "y"}}]
+    (is (nil? (d/activity d/empty-state)) "nothing opened: nothing doing")
+    (is (= :starting (kind [open])) "a unit whose session is not up yet is starting")
+    (is (nil? (kind [ready])) "a ready unit with nothing to run is idle")
+    (is (= {:kind :working :turn "t" :unit "u"} (d/activity (after [ready unit-t]))))
+    (is (= :deciding (kind [ready unit-t asked])) "a unit's call waits on the conductor")
+    (is (= :deciding (kind [ready cond-t])) "the conductor running")
+    (is (= :deciding (kind [ready unit-t {:command :record-outcome :turn "t" :run 1 :outcome :completed}]))
+        "a turn ended: the conductor is owed a wake to hear it")
+    (is (= :asking (kind [ready cond-t {:command :record-outcome :turn "c" :run 1 :outcome :asked
+                                        :call {:id "k2" :question "q?"}}
+                          ask]))
+        "an ask awaiting the person outranks everything else")))

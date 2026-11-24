@@ -8,7 +8,8 @@
      {:op :states :prefix p}        -> {:states {ws state}}, every workstream whose key starts with p
      {:op :entries :ws ws :seqs [n]} -> {:entries {n content}}, the content of ledger entries
      {:op :workstreams}             -> {:workstreams [...]}
-     {:op :subscribe :from pos}     -> a stream of feed messages, one per line, ending in
+     {:op :subscribe :from pos}     -> a stream of feed messages, one per line: the catch-up,
+                                       then {:caught-up true :pos p}, then live, ending in
                                        {:cut-off true :resume-from pos} if the reader falls behind
    and anything else is answered {:error ...}. The text is only ever read as EDN data.
 

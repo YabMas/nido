@@ -8,6 +8,8 @@
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.work :as work]
+   [nido.coordinator.work.core :as wcore]
+   [nido.ui.components.state :as ui-state]
    [nido.platform.core :as core]
    [nido.platform.project :as project]
    [nido.test.fake-core :as fake-core]))
@@ -154,3 +156,46 @@
           (testing "an ask the core holds owes the person, and nothing is stalled"
             (is (= {:owed-by :person :live false :stalled false}
                    (select-keys (:status (row)) [:owed-by :live :stalled :why])))))))))
+
+(deftest a-catch-up-is-applied-whole-before-anything-refreshes
+  (with-redefs [wcore/mirror (atom {:pos 0 :ws {} :following? true :caught-up (promise)})]
+    (let [changed (atom []) caught (atom 0)
+          opts    {:on-change #(swap! changed conj %) :on-caught-up #(swap! caught inc)}
+          msg     (fn [ws pos] {:ws ws :pos pos :state {:units {}} :awaiting []})]
+      (is (false? (wcore/receive! (msg "p/a" 1) opts false)))
+      (is (false? (wcore/receive! (msg "p/b" 2) opts false)))
+      (is (= [] @changed) "nothing refreshes a workstream at a time during the catch-up")
+      (is (not (realized? (:caught-up @wcore/mirror))))
+      (is (true? (wcore/receive! {:caught-up true :pos 2} opts false)))
+      (is (= 1 @caught) "the end of the catch-up refreshes once")
+      (is (realized? (:caught-up @wcore/mirror)) "and releases a read waiting for it")
+      (is (= #{"p/a" "p/b"} (set (keys (:ws @wcore/mirror)))))
+      (is (true? (wcore/receive! (msg "p/a" 3) opts true)))
+      (is (= ["p/a"] @changed) "a live message refreshes the workstream it changed"))))
+
+(deftest the-core-working-a-stage-reads-as-that-stage-in-progress
+  (with-ws
+    (fn [c ws-id]
+      (workstream/append-entry! :brian ws-id {:kind :intent}
+                                (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+      (let [pane  #(work/workstream :brian ws-id)
+            stage (fn [p s] (first (filter #(= s (:stage %)) (get-in p [:arc :stages]))))]
+        (fake-core/seed! c :brian ws-id
+                         [{:command :open-unit :unit "u" :project "brian" :goal "g"}])
+        (let [p (pane)]
+          (is (= :baseline (get-in p [:position :stage])) "an intent stated owes the baseline")
+          (is (= {:source :core :activity :starting :unit "u"} (:doing p)))
+          (is (= :running (:now (stage p :baseline))) "a session starting for it: the baseline is under way")
+          (is (= "Status — Baseline in progress" (ui-state/status-heading (:position p) (:doing p)))))
+        (fake-core/seed! c :brian ws-id
+                         [{:command :record-provision-attempt :unit "u" :attempt "p1" :want :up}
+                          {:command :record-provision-outcome :unit "u" :attempt "p1" :outcome :done :cwd "/w"}])
+        (fake-core/seed! c :brian ws-id
+                         [{:command :start-turn :turn "c" :unit nil :spec {:executor :fake :instructions "i"}}
+                          {:command :record-outcome :turn "c" :run 1 :outcome :asked
+                           :call {:id "k" :question "q?"}}
+                          {:command :raise-operator-ask :ask "a" :binds #{"c"}
+                           :content {:question "q?" :explored "x" :options ["y" "n"] :recommendation "y"}}])
+        (let [p (pane)]
+          (is (= :awaiting (:now (stage p :baseline))) "an ask the core holds: the stage waits on you")
+          (is (nil? (:doing p))))))))

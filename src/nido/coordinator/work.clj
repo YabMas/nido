@@ -580,9 +580,10 @@
    underway — as the core holds it. Work records place the row on its arc; nothing else on it
    decides what awaits the person.
 
-   Nor what runs: status reads liveness off claims, Runs and a person's sessions, and a core
-   turn is none of them, so while the core has the move — a turn running, or an ask awaiting
-   the person — status's stall is overruled rather than shown beside it."
+   Nor what runs: status reads liveness off claims, Runs and a person's sessions, and the core's
+   work is none of them, so while the core has the move — any `wcore/activity`: a turn running,
+   a session starting, the conductor deciding, an ask awaiting the person — status's stall is
+   overruled rather than shown beside it."
   [project row]
   (let [w (core-of project (:ws-id row))]
     (cond
@@ -1398,12 +1399,13 @@
 
 (defn- arc-at
   "The arc of stages `entries` travelled, read at `position`: the stage a person owes marked
-   :awaiting, and otherwise the stage `doing` has something running in marked :running."
-  [entries position doing]
+   :awaiting — by the position, or by an ask the core holds for them (`needs-you?`) — and
+   otherwise the stage `doing` has something running in marked :running."
+  [entries position doing needs-you?]
   (pipeline/arc (current-phase-entries entries)
                 {:at       (:stage position)
                  :active   (pipeline/stage-active position doing)
-                 :awaiting (when (awaiting-human position) (:stage position))}))
+                 :awaiting (when (or (awaiting-human position) needs-you?) (:stage position))}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
   workstream
@@ -1490,7 +1492,7 @@
         ;; The stage the work is in comes off the position read above, so the
         ;; heading and the arc under it are one reading and cannot disagree.
         ;; What is running rides beside it, on the stage it is running in.
-        :arc          (arc-at entries position (:doing row))
+        :arc          (arc-at entries position (:doing row) (:needs-you row))
         ;; The gate `gates` lists for this workstream, when it is one: its question, the actions
         ;; that answer it and the session a reply reaches, which the pane renders through the
         ;; question card. The same value the needs-you list holds, so the two cannot ask different
@@ -1882,12 +1884,14 @@
    files half, taken before the row was read, so a write landing during the read moves it next
    time. The core's half is what puts an ask, a turn or a closure on the row: a commit there
    writes no file, so a stamp without it kept the row as it was when the feed delivered one."
-  [project ws-id files {:keys [driven sessions page-id]} facts live-names]
-  [files
-   (mapv #(file-mtime (cstate/session-events-path %)) driven)
-   (set (filter live-names sessions))
-   (get facts page-id)
-   (hash (:state (core-of project ws-id)))])
+  ([project ws-id files e facts live-names]
+   (entry-stamp project ws-id files e facts live-names (hash (:state (core-of project ws-id)))))
+  ([_project _ws-id files {:keys [driven sessions page-id]} facts live-names core-hash]
+   [files
+    (mapv #(file-mtime (cstate/session-events-path %)) driven)
+    (set (filter live-names sessions))
+    (get facts page-id)
+    core-hash]))
 
 (defn- liveness-probe
   "A row's liveness as status observes it, read without reading the workstream's records: a
@@ -1903,6 +1907,10 @@
   [project ws-id files facts live-names]
   (when-let [w (cws/read-ws project ws-id)]
     (let [t0        (System/currentTimeMillis)
+          ;; The core's half of the stamp, like the files', is taken BEFORE the row reads it: a
+          ;; commit the feed applies during the read then moves the stamp next time. Taken after,
+          ;; it recorded a state the row never saw, and the row kept its stale reading.
+          core-hash (hash (:state (core-of project ws-id)))
           sessions  (csession/list-sessions project ws-id)
           row       (with-status project live-names (wsv/workstream-row project w facts))
           settled?  (= :settled (:engagement row))
@@ -1946,7 +1954,7 @@
                                    :workers (mapv :name (remove :conductor sessions))})
                      :observed-at (- t0 listing-lifetime-ms)}]
       (assoc e
-             :stamp (entry-stamp project ws-id files e facts live-names)
+             :stamp (entry-stamp project ws-id files e facts live-names core-hash)
              :probe (liveness-probe project ws-id e)))))
 
 (defn- refresh-entry
@@ -2251,9 +2259,13 @@
      ;; Coordination arrives on the core's feed: each workstream a commit changed is refreshed as
      ;; it lands, so what is held never waits for the sweep to show an ask or a closure.
      (when (and (compare-and-set! model nil held) sweep?)
-       (wcore/follow! {:on-change (fn [k] (when-let [[p ws] (wcore/split-key k)]
-                                            (when (some #(= p (name (key %))) (project/list-projects))
-                                              (refresh-selected! p ws))))}))
+       (wcore/follow! {:on-change    (fn [k] (when-let [[p ws] (wcore/split-key k)]
+                                               (when (some #(= p (name (key %))) (project/list-projects))
+                                                 (refresh-selected! p ws))))
+                       ;; A catch-up is applied whole and then refreshes once, off the feed's
+                       ;; thread so live messages keep arriving: every row a build read before
+                       ;; the mirror held its workstream is recomputed by its stamp.
+                       :on-caught-up #(future (refresh-list!))}))
      (when (and (identical? @model held) sweep?)
        ;; The thread belongs to this hold: it ends once the model is no longer the one it
        ;; started with, so a release followed by a new hold never leaves two sweeps running.

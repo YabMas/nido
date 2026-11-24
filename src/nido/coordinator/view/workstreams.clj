@@ -639,6 +639,12 @@
                                     (when of (str " " judged "/" of))))
                    (str findings " finding" (when (not= 1 findings) "s"))])))
 
+(def ^:private core-activity-labels
+  "What the core doing each `activity` is called: as what is happening, not which part runs."
+  {:working  "agent working"
+   :deciding "conductor deciding"
+   :starting "starting session"})
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
   doing-label
   "One short phrase for what a workstream is doing, or nil when nothing is.
@@ -655,8 +661,9 @@
 
    An unrecognised kind prints its own name rather than vanishing — a claim
    written by a newer nido should degrade to something a person can act on."
-  [{:keys [source kind phase progress]}]
+  [{:keys [source kind phase progress activity]}]
   (case source
+    :core    (get core-activity-labels activity (some-> activity name))
     :claim   (if progress
                (progress-label kind progress)
                (or (claim-labels kind) (some-> kind name)))

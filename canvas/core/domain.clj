@@ -42,6 +42,11 @@
   (Operation awaiting-person
     "The asks awaiting the person: exactly the open operator asks."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation activity
+    "What the core is doing on a workstream, or nothing: an ask awaiting the person, a unit's turn
+     working, the conductor deciding, or a session starting — the move it owes between turns
+     named as well as the turn running."
+    {:signature [:=> [:catn [:state :map]] [:maybe :map]]})
   (Operation violations
     "Every invariant a state breaks, as data; empty when the state is legal."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
