@@ -148,6 +148,34 @@
     (when match
       (cond-> match (> (count match) 240) (subs 0 240)))))
 
+(defn- local-bin-dir [] (str (fs/path (fs/home) ".local" "bin")))
+
+(defn- running-bb-dir
+  "The directory of the babashka binary running nido, when the platform says."
+  []
+  (some-> (java.lang.ProcessHandle/current) .info .command (.orElse nil)
+          fs/parent str))
+
+(defn- nrepl-eval-command
+  "Where `clj-nrepl-eval` is, and the PATH to run it under. It is installed in
+   ~/.local/bin (bbin), which a login shell puts on PATH and a bare
+   `ssh host '<cmd>'` does not — a session started that way brought its JVM up
+   and then could not exec the boot eval. So the lookup falls back to
+   ~/.local/bin, and the child's PATH also carries the running bb's directory,
+   because the script's `#!/usr/bin/env bb` resolves bb from that PATH.
+   In neither place it answers the bare name, so the exec error names it."
+  []
+  (let [path   (or (System/getenv "PATH") "")
+        exe    (or (some-> (fs/which "clj-nrepl-eval") str)
+                   (let [f (fs/path (local-bin-dir) "clj-nrepl-eval")]
+                     (when (fs/executable? f) (str f)))
+                   "clj-nrepl-eval")
+        extras (remove (set (str/split path #":"))
+                       (distinct (remove nil? [(some-> exe fs/parent str)
+                                               (running-bb-dir)])))]
+    {:exe  exe
+     :path (str/join ":" (cons path extras))}))
+
 (defn- eval-on-repl!
   "Send `form` to the nREPL on `nrepl-port`, capturing both stdout and
    stderr. Persists the exchange to the session's eval.log (visible in
@@ -157,8 +185,10 @@
    meaningful error line attached as :error-msg so callers can surface
    it on the :failed state."
   [instance-id project-name nrepl-port timeout-ms form]
-  (let [result (shell {:continue true :out :string :err :string}
-                      "clj-nrepl-eval"
+  (let [{:keys [exe path]} (nrepl-eval-command)
+        result (shell {:continue true :out :string :err :string
+                       :extra-env {"PATH" path}}
+                      exe
                       "-p" (str nrepl-port)
                       "--timeout" (str timeout-ms)
                       form)

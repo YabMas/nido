@@ -215,9 +215,9 @@
   (let [jj-called? (atom false)]
     (with-redefs [babashka.process/shell
                   (fn [_opts cmd & _args]
-                    (case cmd
-                      "clj-nrepl-eval" {:exit 0 :out boot-log-out :err flyway-err}
-                      "jj" (do (reset! jj-called? true) jj-result)))
+                    (if (= "jj" cmd)
+                      (do (reset! jj-called? true) jj-result)
+                      {:exit 0 :out boot-log-out :err flyway-err}))
                   nido.platform.process/tcp-open? (fn [port] (= port 2))]
       [(try (eval/start-app! {:start-form "(start)" :health-check-timeout-ms 1}
                              {:app-port 1 :nrepl-port 2 :host "h"
@@ -259,3 +259,29 @@
         (is ex "the failure still throws")
         (is (not jj-called?) "a plain-git or non-repo worktree runs no jj command"))
       (finally (fs/delete-tree dir)))))
+
+;; A session started over a bare `ssh host '<cmd>'` runs without the login PATH,
+;; so ~/.local/bin — where bbin installs clj-nrepl-eval — is not on it. The boot
+;; eval must still find the script there, and hand the child a PATH that holds
+;; its directory so the script's own `#!/usr/bin/env bb` lookup has a chance.
+
+(deftest eval-on-repl!-finds-clj-nrepl-eval-in-local-bin-off-path
+  (let [home (str (fs/create-temp-dir))
+        exe  (str (fs/path home ".local" "bin" "clj-nrepl-eval"))
+        seen (atom nil)]
+    (try
+      (fs/create-dirs (fs/parent exe))
+      (spit exe "#!/usr/bin/env bb\n")
+      (fs/set-posix-file-permissions exe "rwxr-xr-x")
+      (with-redefs [fs/which (constantly nil)
+                    fs/home  (constantly (fs/path home))
+                    babashka.process/shell
+                    (fn [opts & args]
+                      (reset! seen {:opts opts :args args})
+                      {:exit 0 :out ":started" :err ""})]
+        (#'eval/eval-on-repl! nil "brian" 12345 1000 "(start)"))
+      (is (= exe (first (:args @seen))) "the script is run by its absolute path")
+      (is (some #{(str (fs/parent exe))}
+                (str/split (get-in @seen [:opts :extra-env "PATH"]) #":"))
+          "the child's PATH carries the script's directory")
+      (finally (fs/delete-tree home)))))
