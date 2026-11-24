@@ -67,7 +67,8 @@
         nil)
       (let [w (ws/create! project {:external-refs [(cond-> {:adapter :github-issue :id id}
                                                       url   (assoc :url url)
-                                                      title (assoc :title title))]})]
+                                                      title (assoc :title title))]
+                                   :activated? true})]
         ;; How it arrived, on the ledger: the position reads the arrival by kind, never off refs.
         (entry (:id w))
         (ws/read-ws project (:id w))))))

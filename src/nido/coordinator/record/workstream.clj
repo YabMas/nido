@@ -176,13 +176,19 @@
                                     ". Ticket statuses (:planning/:implementing/…) are a "
                                     "different vocabulary — :implementing is :in-progress here.")}))))
 
+(declare append-entry!)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :Workstream]}
   create!
   "Mint an id and persist a fresh workstream. `base` may carry :external-refs (default []),
    :intake {:trigger <kw> :payload <map>} (default absent) and :facets <map> (default absent).
-   It holds no status: where it is placed, chosen to be or settled is what its ledger comes to
-   record."
-  [project {:keys [external-refs intake facets]}]
+   Where it is placed, chosen to be or settled is what its ledger comes to record.
+
+   `:activated? true` births it with nido's recipe running — its first entry an :activated by
+   :nido. Every workstream nido starts runs the recipe, so every birth path passes it but the
+   one-off a person starts by hand (`scratch`), which is born plain; without it the ledger starts
+   empty."
+  [project {:keys [external-refs intake facets activated?]}]
   (let [w (validate (cond-> {:id            (mint-id)
                              :project       project
                              :external-refs (vec (or external-refs []))
@@ -195,7 +201,10 @@
     ;; The directory its sessions, Runs and locks are kept in. Which workstreams exist is the
     ;; core's to say (`list-ids`), not this directory's.
     (fs/create-dirs (cstate/workstream-dir project (:id w)))
-    w))
+    (if activated?
+      (do (append-entry! project (:id w) {:kind :activated} (pr-str {:format :activated :by :nido}))
+          (read-ws project (:id w)))
+      w)))
 
 (declare record-status! closure newest-choice)
 
@@ -2347,7 +2356,8 @@
       (create! project
                {:external-refs [{:adapter (if (str/starts-with? external-id "slack-")
                                             :slack-message :notion)
-                                 :id external-id}]})))
+                                 :id external-id}]
+                :activated?    true})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :map :string] [:maybe :int]]}
   append-to-ref!

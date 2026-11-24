@@ -294,7 +294,8 @@
       (let [w (ws/find-by-ref-id :brian "BR-9")]
         (is (some? w) "a workstream was minted for the ref")
         (is (= "BR-9" (:id (first (:external-refs w)))))
-        (is (= 1 (count (:entries w))))
+        (is (= [:activated :note] (mapv :kind (:entries w)))
+            "born running nido's recipe, then the entry appended")
         (is (= :notion (:adapter (first (:external-refs w))))
             "non-slack id infers a :notion adapter")))))
 

@@ -2580,7 +2580,7 @@
   (let [tid  (slack/ticket-id (:slack-id (slack-thread w)) key)
         ref  {:adapter :slack-message :id tid :title (:title ticket) :url (:source-url ticket)}
         tw   (or (cws/find-by-ref project :slack-message tid)
-                 (cws/create! project {:external-refs [ref]}))]
+                 (cws/create! project {:external-refs [ref] :activated? true}))]
     (when-not (tickets/read-meta project tid)
       (tickets/open! project tid {:url (:source-url ticket) :title (:title ticket)
                                   :opened-by :slack-thread}))
@@ -3029,8 +3029,8 @@
   (let [facets (facets/select-facets (views/facet-properties project) payload)]
     (if-let [ref (external-ref payload)]
       (or (cws/find-by-ref project (:adapter ref) (:id ref))
-          (cws/create! project {:external-refs [ref] :facets facets}))
-      (cws/create! project {:external-refs [] :facets facets}))))
+          (cws/create! project {:external-refs [ref] :facets facets :activated? true}))
+      (cws/create! project {:external-refs [] :facets facets :activated? true}))))
 
 (declare core-open?)
 
@@ -3074,7 +3074,8 @@
       (if (empty? (:entries existing))
         (do (pen! (:id existing)) (cws/read-ws project (:id existing)))
         existing)
-      (let [w (cws/create! project {:external-refs (if ref [ref] [])
+      (let [w (cws/create! project {:activated?    true
+                                    :external-refs (if ref [ref] [])
                                     :facets (facets/select-facets (views/facet-properties project) payload)
                                     :intake {:trigger (:name trigger) :payload payload}})]
         (pen! (:id w))

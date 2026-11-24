@@ -3303,6 +3303,21 @@
         (workstream/advance-stage! :brian (:id w) :triaging)
         (is (= :triage (:stage (row))) "once let in, status places it")))))
 
+(deftest every-arrival-is-born-running-the-recipe
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.notion.views/facet-properties (constantly nil)]
+        (let [penned (work/enqueue-inbox! {:project :brian :trigger {:name :t :skill :triage-bug}
+                                           :payload {:adapter :slack-message :id "slack-C-2.0"
+                                                     :title "hi" :text "hi" :url "u"}})
+              fired  (work/ensure-workstream! :brian {:id "BR-77" :title "t"})
+              bare   (work/ensure-workstream! :brian {:title "no ref"})
+              minted (workstream/find-or-mint-by-ref! :brian "BR-78")]
+          (doseq [w [penned fired bare minted]]
+            (is (standing/activated? (workstream/read-ws :brian (:id w))) (str (:id w))))
+          (is (= :intake (:at (pipeline/of :brian (:id fired))))
+              "activation is a status entry: the arc still starts at the intent"))))))
+
 (deftest a-stage-choice-takes-a-ticket-back-from-a-notion-settlement
   (with-tmp
     (fn [_]

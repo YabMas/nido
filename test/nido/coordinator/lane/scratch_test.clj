@@ -22,7 +22,8 @@
         (is (some? ws-id))
         (let [w (workstream/read-ws :brian ws-id)]
           (is (scratch/scratch? w) "no external refs")
-          (is (some #(= :scratch (:kind %)) (:entries w)) "born a one-off: its birth entry says so"))
+          (is (some #(= :scratch (:kind %)) (:entries w)) "born a one-off: its birth entry says so")
+          (is (nil? (workstream/activation w)) "the one workstream born plain: a person's own"))
         (let [ss (session/list-sessions :brian ws-id)]
           (is (= ["refshot"] (mapv :name ss)))
           (is (nil? (:autonomy (first ss))) "human session"))))))

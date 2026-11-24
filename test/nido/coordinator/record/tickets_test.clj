@@ -97,7 +97,7 @@
         (is (= :skip-untriaged (tickets/promote-decision :brian "BR-1"))))
 
       (testing "an accepted verdict is :triaged, the one promotable status"
-        (accept! "BR-1" 1)
+        (accept! "BR-1" (:seq (ws/latest-entry :brian (:id (ws-of "BR-1")) :triage)))
         (is (= :triaged (tickets/status :brian "BR-1")))
         (is (= :skip-completed (tickets/gate-decision :brian "BR-1")))
         (is (= :promote (tickets/promote-decision :brian "BR-1"))))

@@ -3982,13 +3982,14 @@
    [:note    {:optional true} string?]])
 
 (def Activated
-  "A person's grant that nido's recipe runs on this workstream: from here a conductor drives it
-   and its seats are instructed stage by stage. Written at most once, by the activate verb. A
+  "That nido's recipe runs on this workstream: from here a conductor drives it and its seats are
+   instructed stage by stage. Written by nido at the workstream's birth — every workstream but a
+   one-off a person starts by hand is born running it — or by a person's activate verb. A
    workstream whose ledger holds none is a plain one — nothing is owed and no conductor drives
    it; a Run's own session is driven by its Run either way."
   [:map {:closed true}
    [:format  [:= :activated]]
-   [:by      [:= :person]]
+   [:by      [:enum :person :nido]]
    [:session {:optional true} string?]
    [:note    {:optional true} string?]])
 
