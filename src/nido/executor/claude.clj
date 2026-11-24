@@ -52,7 +52,7 @@
 
 (defn- launch
   "What to start for `run`. See `nido.core.turn` for `run`."
-  [{:keys [claude-bin bb-bin src] :or {claude-bin "claude" bb-bin "bb"}}
+  [{:keys [claude-bin bb-bin src add-dirs] :or {claude-bin "claude" bb-bin "bb"}}
    {:keys [turn-dir run-dir run spec resolution resolved-call]}]
   (let [src (or src (src-dir))
         sid (if (= 1 run)
@@ -65,6 +65,8 @@
                     "--dangerously-skip-permissions"
                     "--mcp-config" mcp
                     "--settings" settings]
+             ;; Variadic too: the option after it ends its list.
+             (seq add-dirs) (into (cons "--add-dir" add-dirs))
              (:model spec) (into ["--model" (:model spec)])
              ;; Variadic: the next option ends its list.
              true          (into (cons "--disallowedTools" never-offered))
@@ -126,7 +128,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} executor
   "The Claude Code executor, for `nido.core.turn`. Options: :claude-bin, :bb-bin, :src (the source
-   root the hook and ask tool run from; default, the one this namespace loaded from)."
+   root the hook and ask tool run from; default, the one this namespace loaded from), :add-dirs
+   (directories every run can reach, whose `.claude/skills` it loads: a turn runs in a bare
+   worktree, so nido's own skills — the ones a trigger names — reach it only this way)."
   [opts]
   {:launch  (partial launch opts)
    :outcome outcome

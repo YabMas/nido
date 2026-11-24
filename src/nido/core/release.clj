@@ -146,7 +146,9 @@
                     ((req 'nido.core.provision/changed!) (:provision @parts) cs))
           w ((req 'nido.core.writer/start) s {:publish publish})
           submit #((req 'nido.core.writer/submit!) w %)
-          executors (or executors {:claude ((req 'nido.executor.claude/executor) {})})
+          ;; The nido checkout's skills reach every turn: a unit's turn runs in its bare worktree.
+          executors (or executors {:claude ((req 'nido.executor.claude/executor)
+                                            {:add-dirs (when nido-dir [nido-dir])})})
           runner ((req 'nido.core.turn/start) {:root (:turns ps) :executors executors :submit submit})
           buffer ((req 'nido.core.buffer/start)
                   {:submit submit :wake-cap (or wake-cap 4)

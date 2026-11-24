@@ -41,3 +41,20 @@
         (is (= {:call "call-1" :text "Withdrawn without an answer: taken-over"}
                (edn/read-string content))))
       (finally (fs/delete-tree dir)))))
+
+(deftest every-run-reaches-the-directories-it-was-given
+  ;; A unit's turn runs in its bare worktree; nido's skills, which a trigger's turn is told to run,
+  ;; reach it only through --add-dir.
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (let [argv (fn [opts run]
+                   (when (= 2 run) (spit (str (fs/path dir "claude-session-id")) "sid"))
+                   (:argv ((:launch (claude/executor (assoc opts :src "/src")))
+                           {:turn-dir dir :run-dir dir :run run :spec {:instructions "/triage-slack"}})))]
+        (doseq [run [1 2]]
+          (let [a (argv {:add-dirs ["/home/me/Code/nido"]} run)
+                i (.indexOf ^java.util.List a "--add-dir")]
+            (is (= "/home/me/Code/nido" (nth a (inc i))))
+            (is (.startsWith ^String (nth a (+ 2 i)) "--") "the next option ends the variadic list")))
+        (is (not-any? #{"--add-dir"} (argv {} 1))))
+      (finally (fs/delete-tree dir)))))
