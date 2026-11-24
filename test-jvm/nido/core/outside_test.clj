@@ -193,6 +193,34 @@
         (is (= {:call "toolu_1" :text "Answer: Postgres"}
                (edn/read-string (get (:files l2) (str tdir "/run-2/resolution.edn")))))))))
 
+(deftest a-prompt-with-images-goes-in-on-stdin
+  (let [png (apply str (repeat 64 "b"))
+        gone (apply str (repeat 64 "c"))
+        {:keys [launch]} (claude/executor {:src "/src" :image (fn [d] (when (= d png) {:mime "image/png" :data "AAAA"}))})
+        tdir (temp-dir)
+        in   (str tdir "/run-1/in.jsonl")
+        l (launch {:turn-dir tdir :run-dir (str tdir "/run-1") :run 1
+                   :spec {:instructions "what is this?" :images [png gone]}})
+        msg (json/read-str (get (:files l) in) :key-fn keyword)
+        [sh c script argv0 f claude-bin] (:argv l)]
+    (is (= ["/bin/sh" "-c" "sh" in "claude"] [sh c argv0 f claude-bin])
+        "its own command line redirects the prompt's file onto its stdin")
+    (is (= ["--input-format" "stream-json"] (take-last 2 (:argv l))) "no positional prompt")
+    (is (= [{:type "text" :text "what is this?"}
+            {:type "image" :source {:type "base64" :media_type "image/png" :data "AAAA"}}
+            {:type "text" :text (str "(image " gone " is no longer kept)")}]
+           (get-in msg [:message :content])))
+    (testing "the redirect gives the program the file as its stdin"
+      (spit (io/file tdir "probe") "hello\n")
+      (let [p (-> (ProcessBuilder. ^java.util.List [sh c script argv0 (str tdir "/probe") "cat"])
+                  (.redirectInput (java.lang.ProcessBuilder$Redirect/from (io/file "/dev/null")))
+                  .start)]
+        (is (= "hello\n" (slurp (.getInputStream p))))))
+    (testing "a prompt without images is the positional one it always was"
+      (let [l (launch {:turn-dir tdir :run-dir (str tdir "/run-1") :run 1 :spec {:instructions "x"}})]
+        (is (= "claude" (first (:argv l))))
+        (is (= ["--" "x"] (take-last 2 (:argv l))))))))
+
 (deftest the-hook-allows-only-the-resolved-call
   (let [rdir (temp-dir)]
     (is (= "defer" (get-in (claude/hook-decision rdir {:tool_use_id "toolu_1" :tool_input {}})

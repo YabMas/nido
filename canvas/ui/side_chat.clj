@@ -15,18 +15,21 @@
    draws through the shell with the dashboard's context, other than the catalog, which keeps its
    own chat — chosen by the place the page shows.
 
-   HIDES which conversation each place has (at an open workstream that workstream's own chat, in a
-   session on it that holds no seat; anywhere else nido's operator session, made on the first
-   send), what each agent is told — operate nido, or talk about one workstream and pass word to
-   its conductor, through nido's own verbs and changing no code — the paths each conversation is
-   served under, and that open or closed is kept in a cookie so the next page renders it the same."
+   HIDES the one side chat and the contexts it runs in. Every context shares the machinery — a
+   session-chat conversation served through a chat host, whose sends carry the page's place and
+   name each image to the agent by digest — and supplies only its own instructions, where its agent
+   runs, and the target it relays to: at a workstream the core holds, that workstream, run where
+   the work plane says, relaying to its conductor through nido's tell verb and showing what reached
+   it; anywhere else nido's operator session, relaying to nothing. Also the paths each conversation
+   is served under, and that open or closed is kept in a cookie so the next page renders it the
+   same."
   (Operation open? "Whether a request's page renders the chat open: what the person last left it as."
     {:signature [:=> [:catn [:req :map]] :boolean]})
   (Operation panel
     "The chat's side panel for a dashboard page showing a place — a workstream, or none — open or
      closed."
     {:signature [:=> [:catn [:open? :boolean] [:place [:maybe :map]]] :any]
-     :delegates [render signal host/router chat/transcript]})
+     :delegates [render signal host/router chat/transcript work/chat-dir]})
   (Operation handle!
     "One request under /_chat, of the conversation its path names, or nil for any other path and
      for a workstream's chat path that names no open workstream."

@@ -3220,28 +3220,40 @@
 
       :else nil)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:maybe [:sequential :keyword]]] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:maybe [:sequential :keyword]]
+                           [:? [:maybe [:sequential :string]]]]
+                     :map]}
   person-says!
-  "What a person said to workstream `ws-id` outside a gate — from a bb verb or a chat — as their
-   commands to the core: `words` answer the oldest ask awaiting them, or, when none does, are
-   posted to the conductor's chat; each of `grants` is given. Answers {:answered ask-id-or-nil
-   :posted bool :granted [kind] :refused [reason]}."
-  [project ws-id words grants]
-  (let [w    (wcore/state project ws-id)
-        ask  (first (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w)))))
-        said (when-not (str/blank? (str words))
-               (if ask
-                 [:answered (wcore/act! project ws-id {:command :answer-operator-ask :ask (:id ask)
-                                                       :answer (str words) :by :person})]
-                 [:posted (wcore/act! project ws-id {:command :post-chat :message (str "m-" (random-uuid))
-                                                     :text (str words)})]))
-        gs   (for [g grants] [g (wcore/act! project ws-id {:command :give-grant :grant g :by "person"})])
-        outs (cond-> (vec (map second gs)) said (conj (second said)))]
-    {:answered (when (and (= :answered (first said)) (wcore/admitted? (second said))) (:id ask))
-     :posted   (boolean (and (= :posted (first said)) (wcore/admitted? (second said))))
-     :granted  (vec (for [[g o] gs :when (wcore/admitted? o)] g))
-     :refused  (vec (for [o outs :when (not (wcore/admitted? o))]
-                      (or (some-> (get-in o [:refused :reason]) name) (str (:error o)))))}))
+  "What a person said to workstream `ws-id` outside a gate — from a bb verb, or passed on by the
+   workstream's chat — as their commands to the core: `words` answer the oldest ask awaiting them,
+   or, when none does, are posted to the conductor's chat; each of `grants` is given. `images`
+   (digests, kept in the core's image store) go with the words to the conductor's chat — with an
+   answer, on a chat message carrying the answer's words and saying which ask they answered. Answers
+   {:answered ask-id-or-nil :posted bool :granted [kind] :refused [reason]}."
+  ([project ws-id words grants] (person-says! project ws-id words grants nil))
+  ([project ws-id words grants images]
+   (let [w      (wcore/state project ws-id)
+         ask    (first (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w)))))
+         images (vec images)
+         post!  #(wcore/act! project ws-id (cond-> {:command :post-chat :message (str "m-" (random-uuid))
+                                                    :text %}
+                                             (seq images) (assoc :images images)))
+         said   (when-not (str/blank? (str words))
+                  (if ask
+                    [:answered (wcore/act! project ws-id {:command :answer-operator-ask :ask (:id ask)
+                                                          :answer (str words) :by :person})]
+                    [:posted (post! (str words))]))
+         ;; Images that went with an answer reach the conductor beside it, said to be its.
+         shown  (when (and (= :answered (first said)) (seq images))
+                  (post! (str words "\n\n(The person's answer to ask " (:id ask) ", with the images it carried.)")))
+         gs     (for [g grants] [g (wcore/act! project ws-id {:command :give-grant :grant g :by "person"})])
+         outs   (cond-> (vec (map second gs)) said (conj (second said)) shown (conj shown))]
+     {:answered (when (and (= :answered (first said)) (wcore/admitted? (second said))) (:id ask))
+      :posted   (boolean (or (and (= :posted (first said)) (wcore/admitted? (second said)))
+                             (and shown (wcore/admitted? shown))))
+      :granted  (vec (for [[g o] gs :when (wcore/admitted? o)] g))
+      :refused  (vec (for [o outs :when (not (wcore/admitted? o))]
+                       (or (some-> (get-in o [:refused :reason]) name) (str (:error o)))))})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] :map]}
   resolve-gate!
@@ -3412,6 +3424,22 @@
     (when pick {:project project :session (:name pick)})))
 
 
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :string]]}
+  chat-dir
+  "The directory workstream `ws-id`'s side chat runs its agent in, so it reads the workstream's
+   code: the working copy of a unit of it whose session is ready — an open unit's first — else the
+   worktree of the session `open-target` lands on, else the project's own checkout; nil when none
+   of them exists. Brings nothing up."
+  [project ws-id]
+  (let [dir?  #(when (and % (fs/directory? %)) (str %))
+        units (vals (:units (try (wcore/state project ws-id) (catch Exception _ nil))))
+        ready (filter #(= :ready (get-in % [:session :status])) units)]
+    (or (some (comp dir? :cwd :session) (concat (filter #(= :open (:status %)) ready) ready))
+        (when-let [{:keys [session]} (open-target project ws-id)]
+          (dir? (:wt-path (try (lifecycle/session-coords session {:project (name project)})
+                               (catch Exception _ nil)))))
+        (dir? (:directory (project-entry (config/read-projects) project))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :boolean]}
   reclaimed?

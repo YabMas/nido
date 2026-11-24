@@ -349,11 +349,19 @@
      retry is answered rather than repeated, and close it. Whether it is closed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:landing :string]] :boolean]})
   (Operation person-says!
-    "What a person said to a workstream outside a gate, as their commands to the core: words answer
-     the oldest ask awaiting them, or are posted to the conductor's chat when none does; each grant
-     is given. Answers {:answered :posted :granted :refused}."
+    "What a person said to a workstream outside a gate — from a bb verb, or passed on by the
+     workstream's side chat — as their commands to the core: words answer the oldest ask awaiting
+     them, or are posted to the conductor's chat when none does; images, named by digest, go with
+     the words to the conductor's chat; each grant is given. Answers {:answered :posted :granted
+     :refused}."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:words [:maybe :string]]
-                       [:grants [:maybe [:sequential :keyword]]]] :map]})
+                       [:grants [:maybe [:sequential :keyword]]]
+                       [:images [:? [:maybe [:sequential :string]]]]] :map]})
+  (Operation chat-dir
+    "The directory a workstream's side chat runs its agent in, so it reads the workstream's code: a
+     ready unit's working copy, else its newest work session's worktree, else the project's
+     checkout; nil when none exists. Brings nothing up."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :string]]})
   (Operation external-ref
     "The external ref an event payload names, or nil when it carries no usable id."
     {:signature [:=> [:catn [:payload :map]] [:maybe :map]]})

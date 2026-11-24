@@ -82,9 +82,11 @@
     "bb nido:workstream:layer:complete — the entry point for `layer-complete*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation tell*
-    "Pass word on to the conductor of the workstream whose chat this runs in, and print the id of
-     the hand-back it became."
-    {:signature [:=> [:catn [:opts :map]] :map]})
+    "Pass the person's word on to a workstream's conductor — the one named, or the one whose
+     session this runs in — with the images it names by digest, copied from the side chat's image
+     store into the core's, and the grants the person gave; print where it went."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [work/person-says!]})
   (Operation pr-land*
     "Land the change of the workstream of the session this runs in by its project's procedure,
      through lane-landing — where that landing names a PR (landing/names-pr?), the workstream's own

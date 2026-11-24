@@ -339,3 +339,23 @@
     (is (= :seqs-not-increasing
            (refusal d/empty-state {:command :import-ledger :identity id*
                                    :entries (reverse entries)})))))
+
+(def ^:private digest-a (apply str (repeat 64 "a")))
+
+(deftest a-chat-message-names-its-images-by-digest
+  (let [img digest-a
+        [s] (run [{:command :post-chat :message "m1" :text "see this" :images [img]}])]
+    (is (= [img] (:images (first (:chat s)))))
+    (is (= [img] (:images (first (vals (:inbox s))))) "the conductor hears the images with the words"))
+  (testing "a message without images folds as it always did"
+    (let [[s] (run [{:command :post-chat :message "m1" :text "hi"}])]
+      (is (= {:id "m1" :from :person :text "hi"} (first (:chat s))))
+      (is (not (contains? (first (vals (:inbox s))) :images)))))
+  (testing "an image is named, never carried, and a message carries at most four"
+    (is (= :image-malformed (refusal d/empty-state {:command :post-chat :message "m" :text "x"
+                                                    :images [{:digest digest-a :mime "image/png" :data "AAAA"}]}))
+        "not even its media type")
+    (is (= :image-malformed (refusal d/empty-state {:command :post-chat :message "m" :text "x"
+                                                    :images ["nope"]})))
+    (is (= :too-many-images (refusal d/empty-state {:command :post-chat :message "m" :text "x"
+                                                    :images (repeat 5 digest-a)})))))

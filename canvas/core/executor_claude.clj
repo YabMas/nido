@@ -10,7 +10,8 @@
    daemon, with nido's ask tool, a PreToolUse hook that defers the ask, and `--resume`
    to deliver a resolution and, interactively, to hand the session to a person. A
    turn whose run ended without an outcome is taken back as the outcome failed,
-   never resumed.
+   never resumed. A first run whose spec names images is prompted on stdin, as one stream-json
+   user message: the instructions, then one image block per image, read from the image store.
 
    HIDES everything Claude-specific: flags, the permission policy passed on every run, the stream format, session
    ids, and the hook protocol: its hooks report to it and to no other

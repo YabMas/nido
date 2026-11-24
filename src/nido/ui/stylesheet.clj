@@ -497,6 +497,9 @@
         .chat-you { align-self:flex-end; background:var(--accent-bg); border:1px solid var(--accent-border);
                     border-radius:var(--radius-6); padding:var(--space-6) var(--space-10); color:var(--text-strong); }
         .chat-agent { color:var(--text); }
+        /* What reached the workstream's conductor, and its reply: told apart from the chat agent. */
+        .chat-relay, .chat-conductor { border-left:2px solid var(--accent-border); padding:var(--space-2) 0 var(--space-2) var(--space-8); }
+        .chat-relay-h { color:var(--text-muted); font-size:var(--fs-xs); margin:0 0 var(--space-4); }
         /* The reply is still being written: a text cursor at its end, blinking like one. */
         .chat-caret { color:var(--working); margin-left:var(--space-2); animation:caret-blink var(--dur-1000) steps(1) infinite; }
         @keyframes caret-blink { 50% { opacity:0; } }

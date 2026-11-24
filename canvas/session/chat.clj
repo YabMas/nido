@@ -14,9 +14,12 @@
 
    HIDES the conversation's lifetime: which adapter command, the deny list and permission mode
    it starts under, where its ACP session id is kept, when its process is started, resumed or
-   stopped, when the conversation is ended, and how a change reaches whoever is watching. Its
-   session is brought up before each agent start — by the function the chat's caller names for
-   it, or on the project's defaults. The transcript is never stored: a
+   stopped, when the conversation is ended, and how a change reaches whoever is watching. Where
+   its agent runs has two exclusive sources: a chat carrying :dir — a directory, or a function of
+   the chat giving one at each agent start — runs there, and when that source gives none the
+   start fails as an error on the conversation with no session brought up; only a chat with no
+   :dir runs in its session's worktree, brought up before each agent start — by the function the
+   chat's caller names for it, or on the project's defaults. The transcript is never stored: a
    conversation whose process is gone is loaded again by id, and its history replays through
    the same fold."
   (Operation transcript "A chat's transcript as it stands."

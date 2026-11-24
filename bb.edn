@@ -694,7 +694,7 @@
 
   nido:workstream:tell
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "From a workstream's chat, pass word on to that workstream's conductor, which answers it with one decision: :text \"…\" [:grants merge|intent|[merge intent]] — :grants only when the person's word hands the seats that act. Runs only in the chat's session; the workstream must be activated."
+   :doc "From a workstream's chat, pass word on to that workstream's conductor: :text \"…\" [:images <digest>,<digest>] [:grants merge|intent|[merge intent]] [:project <p> :ws-id <id>] — :images only the digests the person's message carried, :grants only when the person's word hands the seats that act. Answers the ask awaiting the person when one does. Resolves the workstream from cwd unless named."
    :task (apply nido-workstream/tell-cmd *command-line-args*)}
 
   nido:workstream:pr:land

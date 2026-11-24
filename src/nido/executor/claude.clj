@@ -14,6 +14,12 @@
    skipped, nothing nobody could answer (AskUserQuestion, ScheduleWakeup), and only the user's and
    project's own settings beneath the run's.
 
+   A turn's first run is prompted with the spec's `:instructions`, followed, when the spec names
+   `:images` (digests), by one image block per image in order, read through the executor's `:image`
+   option. A prompt with images goes in as one stream-json user message, written among the run's
+   files and redirected to the run's stdin by its own command line — the runner gives every run
+   /dev/null.
+
    Loads under bb as well as the JVM, because the hook runs under bb."
   (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
@@ -37,6 +43,21 @@
 
 (defn- session-file [turn-dir] (io/file turn-dir "claude-session-id"))
 (defn- resolution-file [run-dir] (io/file run-dir "resolution.edn"))
+(defn- stdin-file [run-dir] (io/file run-dir "in.jsonl"))
+
+(defn- prompt-message
+  "The stream-json user message prompting with `text` and the images `images` names, each read by
+   `image`; an image no longer kept is said in words in its place."
+  [image text images]
+  (json/write-str
+   {:type "user"
+    :message {:role "user"
+              :content (into [{:type "text" :text text}]
+                             (for [digest images
+                                   :let [{:keys [mime data]} (when image (image digest))]]
+                               (if data
+                                 {:type "image" :source {:type "base64" :media_type mime :data data}}
+                                 {:type "text" :text (str "(image " digest " is no longer kept)")})))}}))
 
 (defn- resolution-text
   "What the agent reads as the ask's answer. A withdrawn ask resolves as :refused, with the
@@ -52,12 +73,13 @@
 
 (defn- launch
   "What to start for `run`. See `nido.core.turn` for `run`."
-  [{:keys [claude-bin bb-bin src add-dirs] :or {claude-bin "claude" bb-bin "bb"}}
+  [{:keys [claude-bin bb-bin src add-dirs image] :or {claude-bin "claude" bb-bin "bb"}}
    {:keys [turn-dir run-dir run spec resolution resolved-call]}]
   (let [src (or src (src-dir))
         sid (if (= 1 run)
               (str (UUID/randomUUID))
               (str/trim (slurp (session-file turn-dir))))
+        images (when (= 1 run) (seq (:images spec)))
         settings (str (io/file run-dir "settings.json"))
         mcp      (str (io/file run-dir "mcp.json"))]
     {:argv (cond-> [claude-bin "-p" "--verbose" "--output-format=stream-json"
@@ -70,9 +92,15 @@
              (:model spec) (into ["--model" (:model spec)])
              ;; Variadic: the next option ends its list.
              true          (into (cons "--disallowedTools" never-offered))
+             (= 1 run)     (into ["--session-id" sid])
+             (< 1 run)     (into ["--resume" sid])
+             images        (into ["--input-format" "stream-json"])
              ;; `--` keeps the prompt from being read as one more value of a variadic option.
-             (= 1 run)     (into ["--session-id" sid "--" (:instructions spec)])
-             (< 1 run)     (into ["--resume" sid]))
+             (and (= 1 run) (not images)) (into ["--" (:instructions spec)])
+             ;; The prompt with images is read from a file of the run's own: the shell redirects it
+             ;; onto stdin, then execs Claude in its place.
+             images        (->> (into ["/bin/sh" "-c" "f=$1; shift; exec \"$@\" < \"$f\"" "sh"
+                                       (str (stdin-file run-dir))])))
      :env {"CLAUDE_CODE_DISABLE_CRON" "1"}
      :files (cond-> {settings (json/write-str
                                {:hooks {:PreToolUse [{:matcher ask-tool-name
@@ -86,6 +114,7 @@
                                               {"nido" {:command bb-bin
                                                        :args ["--classpath" src "-m" "nido.core.ask-tool"]}})})}
               (= 1 run)  (assoc (str (session-file turn-dir)) sid)
+              images     (assoc (str (stdin-file run-dir)) (str (prompt-message image (:instructions spec) images) "\n"))
               resolution (assoc (str (resolution-file run-dir))
                                 (pr-str {:call resolved-call :text (resolution-text resolution)})))}))
 
@@ -130,7 +159,8 @@
   "The Claude Code executor, for `nido.core.turn`. Options: :claude-bin, :bb-bin, :src (the source
    root the hook and ask tool run from; default, the one this namespace loaded from), :add-dirs
    (directories every run can reach, whose `.claude/skills` it loads: a turn runs in a bare
-   worktree, so nido's own skills — the ones a trigger names — reach it only this way)."
+   worktree, so nido's own skills — the ones a trigger names — reach it only this way), :image
+   ((fn [digest] -> {:mime :data} or nil), which reads the images a spec names)."
   [opts]
   {:launch  (partial launch opts)
    :outcome outcome

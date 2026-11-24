@@ -423,14 +423,31 @@
         (binding [*out* *err*] (println "the core refused:" (str/join ", " (:refused said)))))
       (str (or path (str "answered " (:answered said)))))))
 
+(defn- images-opt
+  "The images an `:images` option names — digests, comma-separated — copied from the side chat's
+   image store into the core's, answered as the digests a chat message names them by; nil when
+   none is given. A digest the side chat does not keep is refused, naming it, before anything is
+   sent: a relay passes on only images the person attached."
+  [v]
+  (when-let [ds (seq (remove str/blank? (map str/trim (str/split (str v) #","))))]
+    (let [kept (map (juxt identity wcore/relay-image!) (distinct ds))]
+      (when-let [gone (seq (keep (fn [[d i]] (when-not i d)) kept))]
+        (throw (ex-info (str "No image is kept by digest " (str/join ", " gone)
+                             " — name only the digests the person's message carried")
+                        {:images (vec gone)})))
+      (mapv second kept))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   tell*
   "Pass :text on to the conductor of the workstream this runs in, as the person's chat message —
    or their answer, when an ask awaits them — and print where it went. :grants names the acts the
-   person's word hands the conductor (`grants-opt`), each given as the person's grant."
-  [{:keys [text grants] :as opts}]
+   person's word hands the conductor (`grants-opt`), each given as the person's grant; :images
+   the person's images that go with it, by digest (`images-opt`)."
+  [{:keys [text grants images] :as opts}]
+  (when (and images (str/blank? (str text)))
+    (throw (ex-info "Images go with the person's words — pass :text \"…\" with :images" {:images images})))
   (let [[p id] (here opts)
-        m      (work/person-says! p id (str text) (vec (grants-opt grants)))]
+        m      (work/person-says! p id (str text) (vec (grants-opt grants)) (images-opt images))]
     (println (cond (:posted m)   (str "posted to " id "'s conductor")
                    (:answered m) (str "answered " (:answered m) " on " id)
                    :else         (str "nothing reached " id "'s conductor: " (str/join ", " (:refused m)))))
@@ -495,7 +512,7 @@
         (System/exit 1)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  tell-cmd [& args] (run* tell* args #{:text}))
+  tell-cmd [& args] (run* tell* args #{:text :images}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   layer-complete-cmd [& args] (run* layer-complete* args #{:bookmark :commit :seat}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

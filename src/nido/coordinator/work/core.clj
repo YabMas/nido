@@ -13,10 +13,18 @@
 
    ACTS. `act!` sends one command for a person, marked as input so the writer takes it ahead of
    background commands, under a key of its own unless the caller names one (a retried click
-   naming the same key is answered with the first outcome)."
+   naming the same key is answered with the first outcome).
+
+   IMAGES. A chat message names its images by digest. The side chat keeps what a person attached
+   in a store of its own (`keep-chat-image!`); a relay copies the images it names into the core's
+   (`relay-image!`) before the message naming them is sent, and `image` reads back one a
+   workstream's chat names."
   (:require [nido.core.api :as api]
             [nido.core.client :as client]
-            [nido.core.domain :as d]))
+            [nido.core.domain :as d]
+            [nido.core.images :as images]
+            [nido.core.release :as release]
+            [nido.platform.core :as platform]))
 
 ;; ── addressing ───────────────────────────────────────────────────────────────
 ;; Which core answers — the daemon, or an in-process one — is core-client's to decide; this
@@ -193,6 +201,36 @@
          {:project project :ws-id ws-id :ask a})))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]} chat
-  "The chat of held workstream `w`, in the order posted: [{:id :from :text}]."
+  "The chat of held workstream `w`, in the order posted: [{:id :from :text ...}], as core-domain's
+   state describes it."
   [{:keys [state]}]
   (vec (:chat state)))
+
+(defn- chat-images-root
+  "Where the side chat keeps the images a person attached: outside the core, which holds only the
+   images a relay passed on."
+  []
+  (str (platform/nido-home) "/chats/images"))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:or :string :map]]} keep-chat-image!
+  "Keep `image` — {:mime :data :digest}, as the chat host's `parse-image` made it — in the side
+   chat's own image store, outside the core, so a relay can pass it on later; answer its digest, or
+   the store's refusal ({:refused :digest-mismatch :digest})."
+  [image]
+  (images/put! (chat-images-root) image))
+
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :string]]} relay-image!
+  "Copy the image the side chat keeps by `digest` into the core's image store, for a message to the
+   conductor to name; answer the digest, or nil when the side chat keeps no image by it."
+  [digest]
+  (when-let [img (images/fetch (chat-images-root) digest)]
+    (let [kept (images/put! (:images (release/paths)) img)]
+      (when (string? kept) kept))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] :string] [:maybe :map]]} image
+  "The image `digest` that held workstream `w`'s chat names — one a message passed to its
+   conductor carried — as {:mime :data :digest}, or nil when its chat names no such image or none
+   is kept."
+  [{:keys [state]} digest]
+  (when (some #{digest} (mapcat :images (:chat state)))
+    (images/fetch (:images (release/paths)) digest)))

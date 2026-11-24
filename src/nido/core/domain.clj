@@ -57,7 +57,9 @@
    :conductor-failures 0 ; conductor turns failed or cancelled since one last completed or asked
    :conductor-stopped? false ; a stop ask is open on the conductor; nothing wakes it until answered
    :grants        {}    ; grant kind -> {:by str}: what the person granted and has not yet spent
-   :chat          []    ; [{:id :from #{:person :conductor} :text :turn}] in the order posted
+   :chat          []    ; [{:id :from #{:person :conductor} :text :turn :images}] in the order posted;
+                        ; :images, on a person's message that carried any, are their digests: the
+                        ; bytes and media type are kept by digest outside the events (`nido.core.images`)
    :closed?       false
    :identity      nil   ; what the workstream is: {:project :external-refs :created-at :intake?
                         ; :facets? :title?}; nil until it is created or imported
@@ -68,6 +70,10 @@
 (def person-input-kinds
   "The inbox items that carry a person's input. A wake for an inbox holding one is never capped."
   #{:chat :ask-answered})
+
+(def max-message-images
+  "How many images one chat message may carry."
+  4)
 
 (def active-statuses
   "A turn in one of these statuses is active, so it counts against its unit. Only :running counts
@@ -304,10 +310,13 @@
 (defmethod evolve :grant-spent [state {:keys [grant]}]
   (update state :grants dissoc grant))
 
-(defmethod evolve :chat-posted [state {:keys [message text]}]
+(defmethod evolve :chat-posted [state {:keys [message text images]}]
+  ;; :images only when the message carried any, so a message recorded before images folds as it did.
   (-> state
-      (update :chat (fnil conj []) {:id message :from :person :text text})
-      (hear-later {:kind :chat :message message :text text})))
+      (update :chat (fnil conj []) (cond-> {:id message :from :person :text text}
+                                     (seq images) (assoc :images (vec images))))
+      (hear-later (cond-> {:kind :chat :message message :text text}
+                    (seq images) (assoc :images (vec images))))))
 
 (defmethod evolve :chat-replied [state {:keys [message text turn]}]
   (update state :chat (fnil conj []) {:id message :from :conductor :text text :turn turn}))
@@ -574,11 +583,22 @@
     (accept {:event :grant-spent :grant grant})
     (refuse :not-granted :grant grant)))
 
-(defmethod decide :post-chat [state {:keys [message text]}]
+(defn- images-malformed
+  "Why `images` cannot be a chat message's images, or nil: at most `max-message-images`, each a
+   hex SHA-256 digest — an image is named, never carried."
+  [images]
+  (cond
+    (not (sequential? images))                    :images-not-a-list
+    (> (count images) max-message-images)         :too-many-images
+    (not (every? #(and (string? %) (re-matches #"[0-9a-f]{64}" %)) images)) :image-malformed))
+
+(defmethod decide :post-chat [state {:keys [message text images] :or {images []}}]
   (cond
     (some #(= message (:id %)) (:chat state)) (refuse :message-exists :message message)
     (not (string? text))                      (refuse :chat-needs-text)
-    :else (accept {:event :chat-posted :message message :text text})))
+    (images-malformed images)                 (refuse (images-malformed images))
+    :else (accept (cond-> {:event :chat-posted :message message :text text}
+                    (seq images) (assoc :images (vec images))))))
 
 (defmethod decide :reply-chat [state {:keys [message text turn]}]
   (cond

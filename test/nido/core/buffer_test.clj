@@ -118,3 +118,17 @@
       (let [s (state-after-from s [(:command (first starts))])]
         (is (= "/w" (get-in s [:turns "u first" :spec :cwd])) "it runs in the unit's session")
         (is (empty? (d/first-turns-owed s)) "and is owed once")))))
+
+(deftest a-conductor-turn-is-given-the-images-the-messages-it-hears-carry
+  (let [img (apply str (repeat 64 "b"))
+        s   (state-after [{:command :post-chat :message "m1" :text "look" :images [img]}
+                          {:command :post-chat :message "m2" :text "and this, again" :images [img]}])
+        f   (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :src "/src" :ws-dir (constantly "/ws")})
+        items (sort-by :id (vals (:inbox s)))
+        spec (f "ws" "c1" s items)]
+    (is (= [img] (:images spec)) "each image once, in order")
+    (is (re-find #"with 1 image attached to this prompt, in order: b{64}" (:instructions spec))))
+  (testing "a turn hearing no images is given none"
+    (let [s (state-after [{:command :post-chat :message "m1" :text "hi"}])
+          f (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :src "/src" :ws-dir (constantly "/ws")})]
+      (is (not (contains? (f "ws" "c1" s (vals (:inbox s))) :images))))))

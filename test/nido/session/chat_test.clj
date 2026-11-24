@@ -512,3 +512,24 @@
         (await-idle c)
         (Thread/sleep 50)
         (is (nil? (chat/image c (:digest png))) "the hold ends with the load; the replay never held it")))))
+
+(deftest a-chat-that-names-its-directory-runs-there-and-brings-no-session-up
+  (let [{:keys [calls redefs]} (fake-acp "ok")
+        upped (atom 0)
+        redefs (assoc redefs
+                      #'lifecycle/runtime-of (fn [& _] (swap! upped inc) nil)
+                      #'lifecycle/up!        (fn [& _] (swap! upped inc) nil))]
+    (with-redefs-fn redefs
+      (fn []
+        (testing "a directory it names is where its agent runs"
+          (chat/send! (assoc c :dir (fn [_] "/the/dir")) "hi" [] [])
+          (await-idle c)
+          (is (some #(= [:connect "/the/dir"] %) @calls)))
+        (chat/reset! c)
+        (testing "a source that gives none fails the start as an error, starting no agent"
+          (reset! calls [])
+          (try (chat/send! (assoc c :dir (fn [_] nil)) "hi" [] []) (catch Throwable _ nil))
+          (await-idle c)
+          (is (not-any? #(= :connect (first %)) @calls))
+          (is (some #(= :error (:kind %)) (:items (chat/transcript c)))))
+        (is (zero? @upped) "no session is looked up or brought up")))))

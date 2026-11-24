@@ -28,7 +28,7 @@
   {:about [accepts-images? send!] :evidence "round"})
 
 (Claim transcript-holds-a-message-s-images
-  "A :user item carries :images, a vector of Images in order, empty when it has none. Folding the local :user event sets it to the images the message was sent with. Folding a replayed user_message_chunk whose content is of type image appends an Image of that chunk's data and media type to the user item a text chunk with the same messageId would join, starting a user item when there is none; that image does not pass through parse-image. nido writes no image to disk."
+  "A :user item carries :images, a vector of Images in order, empty when it has none. Folding the local :user event sets it to the images the message was sent with. Folding a replayed user_message_chunk whose content is of type image appends an Image of that chunk's data and media type to the user item a text chunk with the same messageId would join, starting a user item when there is none; that image does not pass through parse-image. The transcript writes no image to disk."
   {:about [acp-transcript Item] :evidence "round"})
 
 (Claim log-stays-text-sized

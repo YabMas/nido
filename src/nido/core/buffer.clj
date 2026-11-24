@@ -148,7 +148,11 @@
     :unknown       (str "unit " unit ": unknown recorded — " key)
     :session-failed (str "unit " unit ": its session could not be brought " (if (= :up (:want item)) "up" (name (:want item)))
                          " — " (:detail item) " (retry_session once the cause is fixed)")
-    :chat          (str "the person said (chat " (:message item) "): " (:text item) " — answer with reply_chat")
+    :chat          (str "the person said (chat " (:message item) "): " (:text item)
+                        (when-let [n (seq (:images item))]
+                          (str " — with " (count n) " image" (when (next n) "s")
+                               " attached to this prompt, in order: " (str/join ", " n)))
+                        " — answer with reply_chat")
     :ask-answered  (str "the person " (name (:how item)) " operator ask " (:ask item))
     :hand-over     (str "this workstream was handed over to you from the old coordinator: " (:summary item))
     :arrival       (str "work arrived and waits for the person to promote or dismiss it: " (:summary item))
@@ -170,7 +174,7 @@
      "- Every ask you raise states what was explored, the options with their consequences, and a recommendation."
      "- A unit with an unknown runs nothing until you settle it (settle_unknown) by observing what happened."
      "- Start a unit's next turn with start_unit_turn when its goal needs more work; it runs in the unit's own session. Stop when there is nothing left to decide."
-     "- Answer every chat message the person sent with reply_chat. What you settle in chat takes effect only through the same tools."
+     "- The person's chat messages reach you as they decided, often passed on by the workstream's chat agent, which answers their questions itself; each is the person's word. Answer every chat message the person sent with reply_chat. What you settle in chat takes effect only through the same tools."
      ""
      "Since you last heard:"]
     (map #(str "- " (describe-item %)) items)
@@ -288,14 +292,18 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] fn?]} conductor-spec-fn
   "The spec of a conductor turn as the daemon runs it: `executor` with the brief, in the
-   workstream's own directory (`(ws-dir ws)`), with the conductor tools speaking to `socket`."
+   workstream's own directory (`(ws-dir ws)`), with the conductor tools speaking to `socket`, and
+   the digests of the images the chat messages it hears carry as `:images`, each once in order,
+   which the executor puts in its prompt."
   [{:keys [executor model socket src bb-bin ws-dir] :or {executor :claude}}]
   (fn [ws turn state items]
-    (cond-> {:executor executor
-             :instructions (brief ws state items)
-             :cwd (ws-dir ws)
-             :mcp-servers {"nido-conductor" (mcp-server {:bb-bin bb-bin :src src :socket socket :ws ws :turn turn})}}
-      model (assoc :model model))))
+    (let [images (vec (distinct (mapcat :images (filter #(= :chat (:kind %)) items))))]
+      (cond-> {:executor executor
+               :instructions (brief ws state items)
+               :cwd (ws-dir ws)
+               :mcp-servers {"nido-conductor" (mcp-server {:bb-bin bb-bin :src src :socket socket :ws ws :turn turn})}}
+        (seq images) (assoc :images images)
+        model (assoc :model model)))))
 
 ;; ── running the rules ────────────────────────────────────────────────────────
 

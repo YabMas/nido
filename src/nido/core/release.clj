@@ -42,7 +42,7 @@
   ([home]
    (let [core (str home "/core")]
      {:home home :core core :db (str core "/core.db") :socket (str core "/core.sock")
-      :turns (str core "/turns") :workstreams (str core "/workstreams")
+      :turns (str core "/turns") :workstreams (str core "/workstreams") :images (str core "/images")
       :releases (str core "/releases") :current (str core "/current") :previous (str core "/previous")
       :release-file (str core "/release.edn")})))
 
@@ -147,8 +147,10 @@
           w ((req 'nido.core.writer/start) s {:publish publish})
           submit #((req 'nido.core.writer/submit!) w %)
           ;; The nido checkout's skills reach every turn: a unit's turn runs in its bare worktree.
+          ;; The images a relay names are read from the core's image store at launch.
           executors (or executors {:claude ((req 'nido.executor.claude/executor)
-                                            {:add-dirs (when nido-dir [nido-dir])})})
+                                            {:add-dirs (when nido-dir [nido-dir])
+                                             :image #((req 'nido.core.images/fetch) (:images ps) %)})})
           runner ((req 'nido.core.turn/start) {:root (:turns ps) :executors executors :submit submit})
           buffer ((req 'nido.core.buffer/start)
                   {:submit submit :wake-cap (or wake-cap 4)
