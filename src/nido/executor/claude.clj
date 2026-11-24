@@ -39,12 +39,15 @@
 (defn- resolution-file [run-dir] (io/file run-dir "resolution.edn"))
 
 (defn- resolution-text
-  "What the agent reads as the ask's answer."
-  [{:keys [answered returned]}]
+  "What the agent reads as the ask's answer. A withdrawn ask resolves as :refused, with the
+   reason it was withdrawn for: the person's words, or a keyword such as :taken-over."
+  [{:keys [answered returned refused]}]
   (cond
     answered (str "Answer: " answered)
     returned (str "Not answered yet. Explore further as follows, then ask again only if you still need to: "
                   returned)
+    refused  (str "Withdrawn without an answer: "
+                  (if (keyword? refused) (name refused) refused))
     :else    "No answer was given."))
 
 (defn- launch

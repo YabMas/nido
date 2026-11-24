@@ -1861,15 +1861,18 @@
 (defn- file-mtime [path] (.lastModified (java.io.File. (str path))))
 
 (defn- entry-stamp
-  "Everything a held row is derived from that a file records, as a value: the workstream's
-   own files, the event logs of the sessions nido drives under it, which of its sessions the
-   registry shows live, and the Notion facts of its own page. `files` is the files half,
-   taken before the row was read, so a write landing during the read moves it next time."
-  [files {:keys [driven sessions page-id]} facts live-names]
+  "Everything a held row is derived from, as a value: the workstream's own files, the event logs
+   of the sessions nido drives under it, which of its sessions the registry shows live, the
+   Notion facts of its own page, and its committed state in the core, by hash. `files` is the
+   files half, taken before the row was read, so a write landing during the read moves it next
+   time. The core's half is what puts an ask, a turn or a closure on the row: a commit there
+   writes no file, so a stamp without it kept the row as it was when the feed delivered one."
+  [project ws-id files {:keys [driven sessions page-id]} facts live-names]
   [files
    (mapv #(file-mtime (cstate/session-events-path %)) driven)
    (set (filter live-names sessions))
-   (get facts page-id)])
+   (get facts page-id)
+   (hash (:state (core-of project ws-id)))])
 
 (defn- liveness-probe
   "A row's liveness as status observes it, read without reading the workstream's records: a
@@ -1928,7 +1931,7 @@
                                    :workers (mapv :name (remove :conductor sessions))})
                      :observed-at (- t0 listing-lifetime-ms)}]
       (assoc e
-             :stamp (entry-stamp files e facts live-names)
+             :stamp (entry-stamp project ws-id files e facts live-names)
              :probe (liveness-probe project ws-id e)))))
 
 (defn- refresh-entry
@@ -1943,7 +1946,7 @@
     (cond
       (nil? (second files))                                    nil
       (or (nil? e)
-          (not= (:stamp e) (entry-stamp files e facts live-names))) (compute-entry project ws-id files facts live-names)
+          (not= (:stamp e) (entry-stamp project ws-id files e facts live-names))) (compute-entry project ws-id files facts live-names)
       (not (due? e now))                                       e
       (= (:probe e) (liveness-probe project ws-id e))
       (assoc e :observed-at (- now listing-lifetime-ms))

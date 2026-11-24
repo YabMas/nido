@@ -11,8 +11,10 @@
    [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.work :as work]
+   [nido.coordinator.work.core :as wcore]
    [nido.platform.core :as core]
-   [nido.platform.project :as project]))
+   [nido.platform.project :as project]
+   [nido.test.fake-core :as fake-core]))
 
 (defn- with-store
   "Run `f` against an empty store holding project :p, with `live` the session names the
@@ -363,3 +365,24 @@
             (work/refresh-list! :p)
             (is (= #{a b} (set (map :ws-id (work/list-workstreams :p))))
                 "the new workstream is on the board after one list refresh")))))))
+
+(deftest an-ask-the-core-commits-reaches-the-gates-at-the-feeds-refresh
+  ;; A commit in the core writes no file under the workstream, so a stamp of files alone kept
+  ;; the row the feed's refresh reached as it was: the ask was open in the core and the board
+  ;; said nobody owed a move.
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (let [a (open-one! "a")]
+          (work/hold! {:sweep? false})
+          (work/grouped :p)
+          (is (empty? (work/gates :p)) "nothing is asked yet")
+          (doseq [c fake-core/asking]
+            (is (wcore/admitted? (wcore/act! :p a c)) (str "the core admits " (:command c))))
+          ;; The feed delivers the commit before it calls the refresh; this process reads the
+          ;; in-process core instead, through a two-second cache the feed would have bypassed.
+          (reset! @#'work/core-held-cache {:at 0 :h {}})
+          (work/refresh-selected! :p a)
+          (is (= [a] (mapv :ws-id (work/gates :p)))
+              "the core's ask is a gate after the selection refresh the feed makes")
+          (is (= "Ship it?" (get-in (first (work/gates :p)) [:ask :question]))))))))
