@@ -116,11 +116,13 @@
   render-unit
   "The unit file for the coordinator, from the same inputs as the LaunchAgent plist:
    :bb-path, :nido-dir (WorkingDirectory), :log-path (stdout and stderr, appended) and
-   :path-env (the daemon's PATH), and optionally :nido-home, set as the daemon's NIDO_HOME.
+   :path-env (the daemon's PATH), and optionally :nido-home, set as the daemon's NIDO_HOME, and
+   :kill-mode, the unit's KillMode — systemd's default, control-group, kills every process the
+   service started when it stops, including those that left its session to outlive it.
 
    RestartSec=10 matches launchd's ThrottleInterval, so a daemon that dies at once on start is
    retried every ten seconds rather than spun."
-  [{:keys [bb-path nido-dir log-path path-env nido-home argv description]}]
+  [{:keys [bb-path nido-dir log-path path-env nido-home kill-mode argv description]}]
   (str "[Unit]\n"
        "Description=" (or description "nido coordinator") "\n"
        "After=network-online.target\n"
@@ -134,6 +136,7 @@
        (when nido-home (str "Environment=NIDO_HOME=" nido-home "\n"))
        "Restart=always\n"
        "RestartSec=10\n"
+       (when kill-mode (str "KillMode=" kill-mode "\n"))
        "StandardOutput=append:" log-path "\n"
        "StandardError=append:" log-path "\n"
        "\n"

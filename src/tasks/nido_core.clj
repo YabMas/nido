@@ -30,14 +30,17 @@
     (str stamp (when (seq commit) (str "-" commit)))))
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]} service-spec
-  "The core's supervised service, for the nido checkout `dir`."
+  "The core's supervised service, for the nido checkout `dir`. Stopping it stops the daemon only:
+   a turn runs in a session of its own so it outlives the daemon (`nido.core.turn`), which systemd
+   honours only under KillMode=process — under its default it kills the whole unit, and a turn
+   that upgrades the core kills itself, and the upgrade with it, half way."
   [dir]
   (let [ps (release/paths)
         clj (or (some-> (fs/which "clojure") str) "clojure")]
     {:bb-path (str (fs/which "bb")) :nido-dir (:current ps)
      :log-path (str (:core ps) "/core.log") :path-env (System/getenv "PATH")
      :nido-home (System/getenv "NIDO_HOME")
-     :description "nido core"
+     :description "nido core" :kill-mode "process"
      :argv [clj "-J--enable-native-access=ALL-UNNAMED" "-M" "-m" "nido.core.release" "run" dir]}))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :string] :map]} bb-service-spec

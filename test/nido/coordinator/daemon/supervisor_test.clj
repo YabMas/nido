@@ -30,6 +30,8 @@
        (is (str/includes? unit "WantedBy=default.target") "enabled at boot, which lingering makes login-free")
        (is (not (str/includes? unit "NIDO_HOME")) "no home named, the daemon's default"))
      (is (str/includes? (sd/render-unit (assoc spec :nido-home "/tmp/h")) "Environment=NIDO_HOME=/tmp/h\n"))
+     (is (not (str/includes? (slurp (sd/unit-path)) "KillMode")) "no kill mode named, systemd's default")
+     (is (str/includes? (sd/render-unit (assoc spec :kill-mode "process")) "KillMode=process\n"))
      (is (= [["daemon-reload"] ["enable" "nido-coordinator.service"] ["restart" "nido-coordinator.service"]] @calls))
      (testing "status reads the installed unit"
        (is (= {:manager :systemd :installed? true :running? true} (sup/status)))
