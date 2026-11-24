@@ -104,6 +104,13 @@
 
 (defn- log [& xs] (binding [*out* *err*] (apply println "nido.core.release:" xs) (flush)))
 
+(defn- with-running-turns
+  "The workstreams of `wss` ({:ws :state}) whose state records a turn running: the ones a start
+   takes back. Closed ones too — a workstream can close while its turn runs, as a landing turn's
+   own `land:record` closes it, and a run no start takes back reads running forever."
+  [wss]
+  (filter (fn [{:keys [state]}] (some #(= :running (:status %)) (vals (:turns state)))) wss))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]} run!
   "Run the core daemon until the process is killed. Options:
      :home       the nido home (default `nido-home`)
@@ -147,17 +154,18 @@
                              {:socket (:socket ps) :bb-bin bb-bin :src (some-> nido-dir (str "/src"))
                               :ws-dir (fn [ws] (let [d (io/file (:workstreams ps) ws)] (.mkdirs d) (str d)))})})
           prov ((req 'nido.core.provision/start) {:submit submit :nido-dir nido-dir :bb-bin bb-bin})
+          all-wss ((req 'nido.core.store/changed-since) s 0)
           ;; Each at its own last commit's position, so a rule's key comes out as it did then.
           ;; A closed one too while its sessions are still to be destroyed.
           open-wss (filter #(let [st (:state %)]
                               (or (not (:closed? st))
                                   (seq ((req 'nido.core.domain/sessions-owed) st))
                                   (seq ((req 'nido.core.domain/attempts-pending) st))))
-                           ((req 'nido.core.store/changed-since) s 0))]
+                           all-wss)]
       (reset! parts {:runner runner :buffer buffer :provision prov})
       ;; Take back every turn recorded running, then hand the rules and the provisioner each open
       ;; workstream as a commit would: what they owed at a kill is issued again, keyed.
-      (doseq [{:keys [ws state]} open-wss]
+      (doseq [{:keys [ws state]} (with-running-turns all-wss)]
         ((req 'nido.core.turn/take-back!) runner ws state))
       ((req 'nido.core.buffer/changed!) buffer open-wss)
       ((req 'nido.core.provision/changed!) prov open-wss)
