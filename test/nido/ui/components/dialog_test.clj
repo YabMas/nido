@@ -42,9 +42,12 @@
 
 (defn- browser? [] (some? (fs/which "agent-browser")))
 
-(defn- ab [session & args]
+(defn- ab
+  "Run one agent-browser command in `session`. The browser's launch args go with EVERY call: a call
+   without the ones the session was opened with relaunches its browser, on a blank page."
+  [session & args]
   (let [{:keys [out err exit]} (apply p/shell {:out :string :err :string :continue true}
-                                      "agent-browser" "--session" session args)]
+                                      "agent-browser" "--session" session "--args" "--no-sandbox" args)]
     (when-not (zero? exit)
       (throw (ex-info (str "agent-browser " (str/join " " args) " failed: " err out) {})))
     (str/trim out)))
@@ -59,7 +62,7 @@
           session (str "nido-dialog-test-" (System/nanoTime))]
       (spit (str page) (catalog/catalog-page "block=dialog"))
       (try
-        (ab session "--args" "--no-sandbox" "open" (str "file://" page))
+        (ab session "open" (str "file://" page))
         (doseq [[i scene] (map-indexed vector (:scenes dialog/dialog))
                 :let [title (get-in scene [:props :title])
                       id    (str "dialog:scene-" i ":root")]]
@@ -75,5 +78,5 @@
                                (str "dialog:scene-" i ":trigger"))
                 "and focus is back on the trigger")))
         (finally
-          (p/shell {:continue true :out :string :err :string} "agent-browser" "--session" session "close")
+          (p/shell {:continue true :out :string :err :string} "agent-browser" "--session" session "--args" "--no-sandbox" "close")
           (fs/delete-tree dir))))))
