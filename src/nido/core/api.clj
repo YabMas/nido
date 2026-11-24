@@ -70,12 +70,15 @@
     :workstreams {:workstreams ((:workstreams @session))}
     {:error :unknown-op :op (:op req)}))
 
-(defn- serve-connection! [{:keys [open-session] :as handlers} ^SocketChannel ch]
-  (with-open [ch ch
-              r (BufferedReader. (InputStreamReader. (Channels/newInputStream ch) StandardCharsets/UTF_8))
-              w (BufferedWriter. (OutputStreamWriter. (Channels/newOutputStream ch) StandardCharsets/UTF_8))]
-    (let [session (delay (open-session))]
-      (try
+(defn- serve-connection!
+  "Serve one connection until its client hangs up. A client that hangs up first is the ordinary end
+   of a connection, wherever it is noticed — reading, writing, or the writer's flush as it closes."
+  [{:keys [open-session] :as handlers} ^SocketChannel ch]
+  (let [session (delay (open-session))]
+    (try
+      (with-open [ch ch
+                  r (BufferedReader. (InputStreamReader. (Channels/newInputStream ch) StandardCharsets/UTF_8))
+                  w (BufferedWriter. (OutputStreamWriter. (Channels/newOutputStream ch) StandardCharsets/UTF_8))]
         (loop []
           (when-let [line (.readLine r)]
             (let [req (read-request line)]
@@ -84,9 +87,9 @@
                 (do (send! w (if (= ::malformed (:op req))
                                {:error :malformed}
                                (answer handlers session req)))
-                    (recur))))))
-        (catch java.io.IOException _ nil)
-        (finally (when (realized? session) ((:close @session))))))))
+                    (recur)))))))
+      (catch java.io.IOException _ nil)
+      (finally (when (realized? session) ((:close @session)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} serve!
   "Listen on the Unix socket at `:socket` (a stale file there is replaced) and serve each
