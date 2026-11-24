@@ -66,7 +66,9 @@
     (let [s2 (state-after-from s [(:command attempt)
                                   {:command :record-provision-outcome :unit "u" :attempt "u up 2" :outcome :done :cwd "/wt"}])
           [s3 [e]] (d/step s2 {:command :start-turn :turn "t" :unit "u" :spec (assoc spec :cwd "/elsewhere")})]
-      (is (empty? (b/decisions opts "ws" s2 3)) "nothing more is owed")
+      (is (= [{:command :start-turn :turn "conductor-3" :unit nil :hears ["#1 unit-ready"]}]
+             (map #(dissoc (:command %) :spec) (b/decisions opts "ws" s2 3)))
+          "only the conductor is owed, woken to direct a unit that has nothing to run")
       (is (= "/wt" (get-in e [:spec :cwd])) "a unit turn runs in its session, whatever it was told")
       (testing "a merge owes a stop, and a close a destroy"
         (let [s4 (state-after-from s3 [{:command :record-outcome :turn "t" :outcome :completed}

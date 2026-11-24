@@ -386,3 +386,18 @@
       (is (nil? (d/code-held (ledger :activated :design :design-approved))))
       (is (nil? (d/code-held (ledger :activated :deactivated))))
       (is (nil? (:read-only? (started (ledger :activated :design :design-cleared))))))))
+
+(deftest a-unit-the-core-brings-up-with-nothing-to-run-wakes-the-conductor
+  (let [up (fn [u] [{:command :record-provision-attempt :unit u :attempt (str "p-" u) :want :up}
+                    {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome :done :cwd "/w"}])
+        items (fn [s] (map (juxt :kind :unit) (vals (:inbox s))))]
+    (testing "a person's promote opens a unit with no first turn: once its session is up, the conductor hears it"
+      (let [[s] (run (into [{:command :open-unit :unit "u" :project "p" :goal "g"}] (up "u")))]
+        (is (= [[:unit-ready "u"]] (items s)))))
+    (testing "a trigger's unit starts on its own first turn, so the conductor is not woken for it"
+      (let [[s] (run (into [{:command :open-unit :unit "u" :project "p" :goal "g"
+                             :first-turn {:spec spec}}] (up "u")))]
+        (is (empty? (:inbox s)))))
+    (testing "a unit given a session of its own never waits on provisioning"
+      (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}])]
+        (is (empty? (:inbox s)))))))

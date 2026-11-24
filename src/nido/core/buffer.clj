@@ -145,6 +145,8 @@
     :turn-asked    (str "unit " unit ": turn " turn " ASKED — dispose of its call exactly once")
     :unit-merged   (str "unit " unit " merged")
     :unit-released (str "unit " unit " was released by the person after a hold")
+    :unit-ready    (str "unit " unit ": its session is up and nothing has been directed there yet — "
+                        "start its work with start_unit_turn, from what the workstream holds")
     :unknown       (str "unit " unit ": unknown recorded — " key)
     :session-failed (str "unit " unit ": its session could not be brought " (if (= :up (:want item)) "up" (name (:want item)))
                          " — " (:detail item) " (retry_session once the cause is fixed)")

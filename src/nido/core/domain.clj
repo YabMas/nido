@@ -237,7 +237,13 @@
                        #(cond-> (-> % (dissoc :attempt :detail) (assoc :status status))
                           cwd    (assoc :cwd cwd)
                           detail (assoc :detail detail)))
-      (= :failed outcome) (hear-later {:kind :session-failed :unit unit :want want :detail detail}))))
+      (= :failed outcome) (hear-later {:kind :session-failed :unit unit :want want :detail detail})
+      ;; A unit that comes up with no first turn and none run yet has nothing to start it but the
+      ;; conductor, which wakes only on its inbox: without this it waits on nothing, for good.
+      (and (= :done outcome) (= :up want)
+           (not (get-in state [:units unit :first-turn]))
+           (not-any? #(= unit (:unit %)) (vals (:turns state))))
+      (hear-later {:kind :unit-ready :unit unit}))))
 
 (defmethod evolve :provision-retried [state {:keys [unit]}]
   (update-in state [:units unit :session] #(-> % (assoc :status :none) (dissoc :detail))))
