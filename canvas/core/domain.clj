@@ -42,6 +42,10 @@
   (Operation awaiting-person
     "The asks awaiting the person: exactly the open operator asks."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation background-run?
+    "Whether a workstream is a background run: every unit a trigger opened as background work. A
+     background run closes when its turn completes; the board does not list it."
+    {:signature [:=> [:catn [:state :map]] :boolean]})
   (Operation activity
     "What the core is doing on a workstream, or nothing: an ask awaiting the person, a unit's turn
      working, the conductor deciding, or a session starting — the move it owes between turns

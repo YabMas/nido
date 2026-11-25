@@ -54,3 +54,33 @@
       (#'intake/route-fire! (fire (assoc triage :intake :queue :skill :fix) {:id "BR-9" :title "Crash"}))
       (is (some? (the-ws)) "penned for the person")
       (is (empty? @(:states c)) "the core is told nothing until the person promotes it"))))
+
+(deftest a-fire-of-a-skill-with-its-own-recipe-is-a-background-run
+  (with-home
+    (fn [c]
+      (is (= :opened (work/open-fire! (fire (assoc triage :own-recipe? true) {:id "BR-9" :title "Crash"}))))
+      (let [w  (the-ws)
+            st #(get @(:states c) (str "brian/" (:id w)))
+            [u] (vals (:units (st)))]
+        (is (:background? u) "a skill carrying its own procedure, on a workstream off the recipe")
+        (is (not-any? #(= (:id w) (:ws-id %))
+                      (mapcat val (dissoc (work/grouped :brian) :winding-down)))
+            "the board does not list it")
+        (fake-core/seed! c :brian (:id w)
+                         [{:command :record-provision-attempt :unit (:id u) :attempt "p" :want :up}
+                          {:command :record-provision-outcome :unit (:id u) :attempt "p" :outcome :done :cwd "/w"}
+                          {:command :start-turn :turn "t" :unit (:id u) :spec {:executor :fake :instructions "i"}}
+                          {:command :record-outcome :turn "t" :outcome :completed}])
+        (is (:closed? (st)) "its turn completing ends it")
+        (testing "a later fire on the same ref reopens it and runs again"
+          (is (= :opened (work/open-fire! (fire (assoc triage :own-recipe? true :name :again)
+                                                {:id "BR-9" :title "Crash"}))))
+          (is (not (:closed? (st))))
+          (is (= 2 (count (:units (st))))))))))
+
+(deftest a-fire-without-its-own-recipe-is-not-background
+  (with-home
+    (fn [c]
+      (work/open-fire! (fire triage {:id "BR-9" :title "Crash"}))
+      (let [[u] (vals (:units (get @(:states c) (str "brian/" (:id (the-ws))))))]
+        (is (not (:background? u)) "it runs nido's recipe, which a person follows")))))

@@ -197,6 +197,11 @@
   [{:keys [state]}]
   (some-> state d/activity))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]} background?
+  "Whether held workstream `w` is a background run (`nido.core.domain/background-run?`)."
+  [{:keys [state]}]
+  (boolean (some-> state d/background-run?)))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :keyword]} engagement
   "The engagement a held workstream `w` reads as: :settled once closed, :parked-at-gate while an
    ask awaits the person, :active while the core is doing anything else (`activity`), :idle

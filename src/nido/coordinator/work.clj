@@ -454,8 +454,9 @@
    is not work at all — a workstream holding a review-loop analysis has no arc
    to advance and belongs to the operations surface, whose unit is the proposal
    inside it rather than the workstream around it; :drained is every drain and slice, whose own
-   page is /drains."
-  #{:done :dismissed :analysed :drained})
+   page is /drains; :background is a background run (`wcore/background?`), a trigger's skill
+   working behind the scenes, which reaches the person only through an ask."
+  #{:done :dismissed :analysed :drained :background})
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   release-candidate?
@@ -618,6 +619,7 @@
             ;; nobody activated, whose units the core ran all the same. Its coordination says
             ;; where it stands, and a workstream under way is out of the triage pen.
             core-at (when (= :intake (get-in row [:position :at])) (wcore/position w))
+            bg?     (and (not closed?) (wcore/background? w))
             doing   (wcore/doing w)
             asking? (boolean (seq (:awaiting w)))
             ;; The person's Land is a grant the core holds until a merge spends it, never a ledger
@@ -635,6 +637,7 @@
           landing?              (update :position assoc :at :land-granted
                                         :next {:stage :land :mode :working-copy})
           (and core-at (#{:triage :ready} (:stage row))) (assoc :stage :in-progress)
+          bg?                   (assoc :stage :background)
           (wcore/held-units? w) (assoc-in [:status :paused] true)
           closed?               (assoc :stage (if (= :dismissed (:stage row)) :dismissed :done)
                                        :needs-you false :engagement :settled :doing nil))))))
@@ -3166,14 +3169,22 @@
       (and pre (true? (:once-per-ref? (:payload routed)))) :settled
       (and pre (some #(and (= :open (:status %)) (= tname (:trigger %))) (units (:id pre)))) :running
       :else
-      (let [w    (or pre (ensure-workstream! project (:payload routed)
-                                             (true? (-> routed :trigger :own-recipe?))))
+      (let [own? (true? (-> routed :trigger :own-recipe?))
+            w    (or pre (ensure-workstream! project (:payload routed) own?))
+            ;; A skill carrying its own procedure, on a workstream nobody put on the recipe, is
+            ;; background work: off the board, and over when its turn completes.
+            bg?  (and own? (not= :activated (cws/activation (cws/read-ws project (:id w)))))
             unit (str tname "-" (subs (str (random-uuid)) 0 8))
             goal (str/trim (str (name (-> routed :trigger :skill)) " "
                                 (or (-> routed :payload :title) (-> routed :payload :id) "")))
             k    (str "fire/" (wcore/ws-key project (:id w)) "/" tname "/"
                       (or (:id ref) (random-uuid)) "/" (count (units (:id w))))]
-        (if (wcore/admitted? (wcore/act! project (:id w) (fire-unit routed unit goal) {:key k}))
+        ;; A run that finished closed its workstream; a later fire on the same ref reopens it.
+        (when (:closed? (wcore/state project (:id w)))
+          (wcore/act! project (:id w) {:command :reopen-workstream} {:key (str k "/reopen")}))
+        (if (wcore/admitted? (wcore/act! project (:id w)
+                                         (cond-> (fire-unit routed unit goal) bg? (assoc :background? true))
+                                         {:key k}))
           :opened
           :refused)))))
 

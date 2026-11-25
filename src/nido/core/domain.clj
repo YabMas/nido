@@ -39,7 +39,7 @@
 
 (def empty-state
   "A workstream before its first event."
-  {:units         {}    ; unit-id -> {:id :project :goal :status #{:open :merged :retracted}
+  {:units         {}    ; unit-id -> {:id :project :goal :status #{:open :merged :retracted :finished}
                         ;             :held? bool :unknowns #{key} :landing? bool :session session}
                         ; session: {:status #{:none :ready :failed :stopped :destroyed}
                         ;           :cwd str|nil :attempt {:id :want}|nil :detail}
@@ -203,6 +203,26 @@
         (seq (first-turns-owed state))
         {:kind :starting :unit (:unit (first (first-turns-owed state)))}))))
 
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]} background-run?
+  "Whether the workstream is a background run: it has units, and a trigger opened every one of
+   them as background work — a skill that carries its own procedure, on a workstream nobody put
+   on nido's recipe. Its work is no one's to follow; it reaches the person only by asking."
+  [state]
+  (let [us (vals (:units state))]
+    (boolean (and (seq us) (every? :background? us)))))
+
+(defn- run-finishes?
+  "Whether turn `t` completing ends its background run: its unit is background and the last one
+   open, nothing awaits the person, and no conductor turn is under way."
+  [state t]
+  (let [u (get-in state [:units (:unit t)])]
+    (boolean (and (:background? u)
+                  (= :open (:status u))
+                  (every? #(or (= (:id %) (:id u)) (not= :open (:status %))) (vals (:units state)))
+                  (empty? (awaiting-person state))
+                  (not-any? #(and (conductor-turn? %) (#{:running :resolved :asked} (:status %)))
+                            (vals (:turns state)))))))
+
 (defn- binding-ask
   "The open operator ask that binds `turn-id`'s pending call, or nil."
   [state turn-id]
@@ -260,14 +280,22 @@
    would have refused is never in a ledger, so evolve does not re-check it."
   (fn [_state event] (:event event)))
 
-(defmethod evolve :unit-opened [state {:keys [unit project goal session-cwd trigger first-turn]}]
+(defmethod evolve :unit-opened [state {:keys [unit project goal session-cwd trigger first-turn background?]}]
   (assoc-in state [:units unit] (cond-> {:id unit :project project :goal goal :status :open
                                          :held? false :unknowns #{} :landing? false
                                          :session (if session-cwd
                                                     {:status :ready :cwd session-cwd}
                                                     {:status :none})}
-                                  trigger    (assoc :trigger trigger)
-                                  first-turn (assoc :first-turn first-turn))))
+                                  trigger     (assoc :trigger trigger)
+                                  first-turn  (assoc :first-turn first-turn)
+                                  background? (assoc :background? true))))
+
+(defmethod evolve :unit-finished [state {:keys [unit]}]
+  ;; Its turn's outcome is heard by no conductor: a finished run owes nobody a decision, and an
+  ;; item left in the inbox would wake one the moment the workstream reopened.
+  (-> state
+      (assoc-in [:units unit :status] :finished)
+      (update :inbox #(into {} (remove (fn [[_ item]] (= unit (:unit item)))) %))))
 
 (defmethod evolve :provision-attempted [state {:keys [unit attempt want]}]
   (assoc-in state [:units unit :session :attempt] {:id attempt :want want}))
@@ -491,7 +519,7 @@
 (defmethod decide :default [_ command]
   (refuse :unknown-command :command (:command command)))
 
-(defmethod decide :open-unit [state {:keys [unit project goal session-cwd trigger first-turn]}]
+(defmethod decide :open-unit [state {:keys [unit project goal session-cwd trigger first-turn background?]}]
   (cond
     (:closed? state)                       (refuse :workstream-closed)
     (contains? (:units state) unit)        (refuse :unit-exists :unit unit)
@@ -502,7 +530,8 @@
     :else (accept (cond-> {:event :unit-opened :unit unit :project project :goal goal}
                     session-cwd (assoc :session-cwd session-cwd)
                     trigger     (assoc :trigger trigger)
-                    first-turn  (assoc :first-turn first-turn)))))
+                    first-turn  (assoc :first-turn first-turn)
+                    background? (assoc :background? true)))))
 
 (defmethod decide :record-provision-attempt [state {:keys [unit attempt want]}]
   (cond
@@ -584,9 +613,14 @@
         (accept {:event :turn-asked :turn turn :call call})
         (refuse :ask-needs-a-call))
       (#{:completed :failed :cancelled} outcome)
-      (accept (cond-> {:event :turn-ended :turn turn :outcome outcome}
-                detail           (assoc :detail detail)
-                actions-unknown? (assoc :actions-unknown? true)))
+      (let [ended (cond-> {:event :turn-ended :turn turn :outcome outcome}
+                    detail           (assoc :detail detail)
+                    actions-unknown? (assoc :actions-unknown? true))]
+        ;; A background run that completes is over: its unit finishes and the workstream closes
+        ;; with it. One that fails is the conductor's to hear, as any unit's failure is.
+        (if (and (= :completed outcome) (run-finishes? state t))
+          (accept ended {:event :unit-finished :unit (:unit t)} {:event :workstream-closed})
+          (accept ended)))
       :else                                (refuse :unknown-outcome :outcome outcome))))
 
 (defmethod decide :resume-turn [state {:keys [turn]}]
