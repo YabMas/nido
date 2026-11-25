@@ -209,8 +209,12 @@
   (Operation unsettled-findings
     "A finding for each subject a judgement declared unchecked for the second reading running: the
      amender's to reword, move to the record's unknowns or drop, since no judge can rule on it and a
-     sufficient verdict would otherwise stand over it."
-    {:signature [:=> [:catn [:record :map] [:running [:map-of :string :map]]] [:vector :map]]})
+     sufficient verdict would otherwise stand over it. None for a claim a person accepted as
+     unchecked (a design's :accepted-unchecked): that it cannot be ruled on is what they accepted."
+    {:signature [:function
+                 [:=> [:catn [:record :map] [:running [:map-of :string :map]]] [:vector :map]]
+                 [:=> [:catn [:record :map] [:running [:map-of :string :map]] [:accepted [:set :string]]]
+                  [:vector :map]]]})
   (Operation parse-amend-answer "What an amender may hand back."
     {:signature [:=> [:catn [:raw :any] [:findings :any] [:base-key :any]] :map]})
   (Operation disputed-n

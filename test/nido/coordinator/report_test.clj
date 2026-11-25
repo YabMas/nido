@@ -224,6 +224,26 @@
   (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design invariants-design))
       "the invariants shape reads and is never written"))
 
+(deftest a-design-lists-the-claims-a-person-accepted-as-unchecked
+  ;; BR-7085: the person accepted four claims as unchecked until the landing gate, and the record
+  ;; said so only in :open prose, which no review machinery reads.
+  (let [accepted (assoc valid-design :accepted-unchecked
+                        [{:id "rounded-once" :until :landing
+                          :because "\"Proceed, with the test run owed before landing.\""}])]
+    (is (= accepted (report/validate-event :design accepted)))
+    (is (= #{"rounded-once"} (report/accepted-unchecked-ids accepted)))
+    (is (= #{} (report/accepted-unchecked-ids valid-design)))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :design (assoc-in accepted [:accepted-unchecked 0 :id] "never-made")))
+        "an acceptance names a claim the model makes")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :design (update accepted :accepted-unchecked
+                                                        #(conj % (first %)))))
+        "and names it once")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :design (assoc-in accepted [:accepted-unchecked 0 :until] :someday)))
+        "owed to the build or the landing, nothing vaguer")))
+
 (deftest a-design-may-be-written-in-the-shared-model
   (is (= valid-design (report/validate-event :design valid-design)))
   (is (= valid-design (report/parse-event :design valid-design)) "and it reads back as written"))

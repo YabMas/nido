@@ -2225,7 +2225,13 @@
    "RULE ON EVERY CLAIM YOU ARE ASKED TO CHECK — the claims above, and none listed\n"
    "as outside this round's checks. Each one ends up confirmed, named by a finding,\n"
    "or in unchecked with why it cannot be checked here. A claim left without a\n"
-   "ruling is left to the next round, and a proceed over it does not stand.\n\n"
+   "ruling is left to the next round, and a proceed over it does not stand.\n\n"   (when-let [accepted (seq (:accepted-unchecked design))]
+     (str "A PERSON ACCEPTED " (str/join ", " (map #(str "[" (:id %) "]") accepted))
+          " AS UNCHECKED (:accepted-unchecked):\n"
+          "the evidence for them is owed to the build or the landing, and the person has\n"
+          "said the design goes on without it. Where you cannot check one here, put it in\n"
+          "unchecked with why — that is not a defect, and no finding or ask is owed for it.\n"
+          "Where you can refute one, the counterexample is a finding like any other.\n\n"))
    "asks states what the human still has to answer, with everything you derived\n"
    "already taken off the table — and with it what the record's open notes state is\n"
    "decided and what a grant or a person's answer already covers.\n"
@@ -5124,24 +5130,31 @@
                      (when (= :unchecked ruling) [id (get counts id {:n 0 :reasons []})])))
           newest)))
 
-(defn ^{:malli/schema [:=> [:cat :map [:map-of :string :map]] [:vector :map]]}
+(defn ^{:malli/schema [:function
+                       [:=> [:cat :map [:map-of :string :map]] [:vector :map]]
+                       [:=> [:cat :map [:map-of :string :map] [:set :string]] [:vector :map]]]}
   unsettled-findings
   "A finding for each subject `record` declared unchecked that `running` (`unchecked-running`, this
    judgement included) counts at `unsettled-after` or more — handed to the amender to rule on,
    because the judge cannot and would be asked again every round while the record is called
    sufficient over it.
 
+   None for an id in `accepted`, the claims a person accepted as unchecked (the design's
+   :accepted-unchecked): that the code cannot settle it is what they accepted, and an amender
+   ruling on it — rewording it, moving it to :open, dropping it — would undo their decision.
+
    :unsettled is the run's length and :reasons each reading's; :cites is empty, since what the
    finding points at is the subject's absence of evidence, which no site holds."
-  [record running]
-  (vec (for [{:keys [id]} (:unchecked record)
-             :let [{:keys [n reasons]} (get running id)]
-             :when (and n (>= n unsettled-after))]
-         {:claim-id  id
-          :claim     (str "[" id "] has come back unchecked " n " readings running")
-          :unsettled n
-          :reasons   (vec reasons)
-          :cites     []})))
+  ([record running] (unsettled-findings record running #{}))
+  ([record running accepted]
+   (vec (for [{:keys [id]} (:unchecked record)
+              :let [{:keys [n reasons]} (get running id)]
+              :when (and n (>= n unsettled-after) (not (contains? accepted id)))]
+          {:claim-id  id
+           :claim     (str "[" id "] has come back unchecked " n " readings running")
+           :unsettled n
+           :reasons   (vec reasons)
+           :cites     []}))))
 
 (defn- unsettled-claims
   "The claims of `baseline` among `findings` that no reading could rule on (`unsettled-findings`),
@@ -6881,6 +6894,11 @@
    who reads next, does not share its tools — so one standing on a single confirmation (`single`
    of `standing`, or a carried reading marked :first-reading) is still owed its second.
 
+   An id in `accepted` — a claim a person accepted as unchecked, its evidence owed to the build or
+   the landing (the design's :accepted-unchecked) — that this reading declared unchecked is not
+   :read-once on that account: no further reading of the code can pair it, and the person has
+   already said the design goes on without one.
+
    `asked` is the ids the round owes a ruling on. :read-once holds no other, because the reading
    after it pairs them only by reading them again, and an id it was not asked about can go
    unread without being :unruled — so the second reading would clear it unread.
@@ -6914,7 +6932,7 @@
    :questions hold the ask's too (`with-questions-of`). And an id the ask filed
    :for-person is never :read-once: the person's answer settles it, and no further reading can
    change that the run stops for them."
-  [record holds? {:keys [standing single settled knock-ons carried prior asked unread-amendment? held ask]}]
+  [record holds? {:keys [standing single settled knock-ons carried prior asked unread-amendment? held ask accepted]}]
   (if-not (:format record)
     record
     (let [ruled     (rulings record)
@@ -6952,7 +6970,8 @@
                           (keep (fn [[id r]] (when (:first-reading r) id)))
                           carried)
           unchecked (into #{} (comp (remove #(and (:tool-failure %) (not (unpaired? (:id %)))))
-                                    (map :id))
+                                    (map :id)
+                                    (remove (set accepted)))
                           (:unchecked record))
           holds     (holds? record)
           firsts    (vec (sort (filter (set asked)
@@ -8548,6 +8567,16 @@
    "of a record a person wrote, or reaches past what the intent lists by name, is a\n"
    "decision for them, whoever ordered it: leave the claim as it stands and put the\n"
    "line under :out-of-reach. An amendment seen making one is refused.\n\n"
+   (when-let [accepted (seq (:accepted-unchecked design))]
+     (str "WHAT A PERSON ACCEPTED AS UNCHECKED. "
+          (str/join ", " (map #(str "[" (:id %) "]") accepted))
+          " — the person accepted\n"
+          "that reading the code cannot show these, with the evidence owed to the build or\n"
+          "the landing (:accepted-unchecked). That they come back unchecked is not a defect.\n"
+          "Copy :accepted-unchecked into your record unchanged, and leave each of these claims\n"
+          "word for word as it stands unless a numbered line below refutes it — then repair\n"
+          "it like any other. An amendment that rewords or drops one no line refutes, or\n"
+          "that changes the list, is refused.\n\n"))
    "THE CURRENT DESIGN:\n\n" (pr-str (ws/unstamp design))
    (when baseline
      (str "\n\nTHE BASELINE IT CITES:\n\n" (pr-str (ws/unstamp baseline))))
@@ -8739,6 +8768,7 @@
                                        :carried (carried-readings ctx design)
                                        :ask (carried-ask ctx design)
                                        :held (run-held-clauses project ws-id :design-decision run-id)
+                                       :accepted (report/accepted-unchecked-ids design)
                                        :asked asked
                                        :unread-amendment? (unread-amendment? ctx)})))
         ;; As the baseline round counts it, over the design's own lineage and this decision — which,
@@ -8758,7 +8788,8 @@
                           (concat (unsettled-findings record
                                                       (unchecked-running
                                                        (conj (in-span project ws-id (ws/entries-of project ws-id :design-decision))
-                                                             record)))
+                                                             record))
+                                                      (report/accepted-unchecked-ids design))
                                   (when listing (drifted-statements design listing))))
                     [])
         ;; Every append below writes `record`; a reused one is on the ledger already.
@@ -9293,6 +9324,36 @@
     (not-empty (vec (vals (reduce (fn [m mv] (cond-> m (not (m (:id mv))) (assoc (:id mv) mv)))
                                   (sorted-map) moves))))))
 
+(defn- accepted-moves
+  "What the amendment `record` changes against `prev` of what a person accepted as unchecked (the
+   design's :accepted-unchecked), as `person-moves` reports a move — nil when it changes none:
+
+     - the list itself, an entry added, removed or changed: which claims go on without evidence the
+       code holds is the person's decision, and an amender adding one would be granting itself a pass
+     - a claim the list names, reworded or dropped, when no finding in `findings` refutes it
+
+   A claim the round refuted is the amender's to repair like any other: the person accepted that
+   the code cannot show it, not that it may be false."
+  [prev record findings]
+  (let [was      (into {} (map (juxt :id identity)) (:accepted-unchecked prev))
+        now      (into {} (map (juxt :id identity)) (:accepted-unchecked record))
+        claim    (fn [d id] (some #(when (= id (:id %)) (select-keys % [:statement :about :falsified-by]))
+                                  (get-in d [:model :claims])))
+        refuted  (into #{} (comp (mapcat refuted-ids) (map str)) findings)
+        listed   (for [id (sort (into (set (keys was)) (keys now)))
+                       :when (not= (get was id) (get now id))]
+                   {:id id :held :accepted-unchecked
+                    :why (cond (nil? (get now id)) "its acceptance as unchecked, which the amendment removed"
+                               (nil? (get was id)) "the claims accepted as unchecked, which the amendment added it to"
+                               :else               "its acceptance as unchecked, which the amendment rewrote")})
+        claims   (for [id (sort (keys was))
+                       :when (and (not (refuted id)) (not= (claim prev id) (claim record id)))]
+                   {:id id :held :accepted-unchecked
+                    :why (if (claim record id)
+                           "a claim the person accepted as unchecked, reworded though no finding refutes it"
+                           "a claim the person accepted as unchecked, dropped though no finding refutes it")})]
+    (not-empty (vec (concat listed claims)))))
+
 (defn- person-refusal
   "What the ledger-style refusal of an amendment `person-moves` found moving `moves` says."
   [moves]
@@ -9454,6 +9515,11 @@
                                                                        (asked-refusal scope))
                                                                (some->> (person-moves answers granted intent prev record)
                                                                         hold!
+                                                                        person-refusal)
+                                                               ;; Refused, never held for the person: a
+                                                               ;; claim they accepted put back as it stood
+                                                               ;; is their decision kept, not a question.
+                                                               (some->> (accepted-moves prev record (:findings ctx))
                                                                         person-refusal))]
                                                 {:record record :err err}
                                                 (let [record (cite record)]

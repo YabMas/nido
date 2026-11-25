@@ -1550,15 +1550,49 @@
    [:ws-id  string?]
    [:design [:map {:closed true} [:seq int?]]]])
 
+(def AcceptedUnchecked
+  "One claim of a design that a person accepted as left unchecked by the design review — its
+   evidence is owed to the build or to the landing gate, which reading the code cannot supply.
+
+     :id       the claim, one the design's :model makes
+     :until    when the evidence is owed: :build (the implementation shows it) or :landing (a run
+               before the landing does)
+     :because  the person's words, or where they said it — what an amender reads as theirs
+
+   A judge still reads the claim, and a reading that refutes it is a finding like any other. What
+   the acceptance settles is the unchecked ruling: the review loop does not hand the claim to an
+   amender for coming back unchecked reading after reading, and does not hold the design back from
+   clearing on it. No amender writes this field or rewords a claim it lists that no finding refutes
+   (`nido.review.record/person-moves`)."
+  [:map {:closed true}
+   [:id      string?]
+   [:until   [:enum :build :landing]]
+   [:because string?]])
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:set :string]]}
+  accepted-unchecked-ids
+  "The claim ids `design` lists under :accepted-unchecked; empty when it lists none."
+  [design]
+  (into #{} (map :id) (:accepted-unchecked design)))
+
+(defn- accepted-unchecked-claims?
+  "Every claim a design accepts as unchecked is one its model makes, and is listed once."
+  [{:keys [accepted-unchecked model]}]
+  (let [ids (map :id accepted-unchecked)]
+    (and (= (count ids) (count (set ids)))
+         (every? (into #{} (map :id) (:claims model)) ids))))
+
 (def ^:private design-model-fields
   "The fields a design in the shared model carries in either phasing: the design's own decisions,
    and its :model in place of :invariants — each invariant is a claim, with an id and the elements
-   it is about. :merges is present on a design a merge appended, naming the child it combined."
+   it is about. :merges is present on a design a merge appended, naming the child it combined.
+   :accepted-unchecked lists the claims a person accepted as unchecked (`AcceptedUnchecked`)."
   (concat design-common
           [[:intent IntentRelation]
            [:model  Model]
            [:merges {:optional true} MergeRelation]
-           [:seams  {:optional true} [:vector Seam]]]))
+           [:seams  {:optional true} [:vector Seam]]
+           [:accepted-unchecked {:optional true} [:vector {:min 1} AcceptedUnchecked]]]))
 
 (def UnphasedDesignModel
   "A design in the shared model that lands once. Its claims hold at the one moment there is."
@@ -1658,7 +1692,9 @@
    on append; records written in them, and records from before :baseline existed,
    read through DesignVisionAny. A role it records names its players; reads do not
    ask."
-  [:and DesignStrata roles-state-players])
+  [:and DesignStrata roles-state-players
+   [:fn {:error/message "every claim under :accepted-unchecked is one the model makes, listed once"}
+    accepted-unchecked-claims?]])
 
 (def DesignVisionLegacy
   "LEGACY READ SHAPE — a :design record from before the baseline event existed:

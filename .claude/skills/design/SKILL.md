@@ -110,6 +110,8 @@ One `:design` event per workstream, appended to the ledger:
                 :closed-by :phase :phase "the phase that closes it"}]
               ;; …or :closed-by :spun-out :ref "FU-12", or :permanent :why "…"
  :open       ["design questions still unresolved"]
+ :accepted-unchecked [{:id "claim-id" :until :landing   ; :build | :landing
+                       :because "the person's words"}]  ; only when a person said so — §5
  :supersedes {:seq 4 :why "…"}       ; only when amending — §5
  :effort     :M}                     ; concrete; resolves a triage :squirrel
 ```
@@ -1082,6 +1084,16 @@ When you amend after the person already accepted a cost or a `:revisit` in chat,
 carry it in the amendment as `:supersedes {:seq <n> :why "…" :granted "…"}`, in
 their words. A round reads it as the person's reply — only on a record you
 wrote, never on the amender's.
+
+When the person accepts that a claim stays unchecked — its evidence is a run the
+build or the landing gate makes, and reading the code cannot show it — list it
+under `:accepted-unchecked` with when the evidence is owed (`:build` or
+`:landing`) and `:because` in their words. Prose in `:open` is not enough: the
+loop reads only the field. A listed claim that keeps coming back unchecked is
+then neither handed to the amender nor holds the design back from clearing, and
+no amender may reword, reopen or drop it, or edit the list; a reading that
+refutes it is still a finding, and the amender repairs it. List only what the
+person accepted — the list is theirs, and an amendment that grows it is refused.
 
 Add `:seq <n>` to the baseline loop when the workstream holds more than one
 survey and you mean a particular one; the default is the newest, which is the

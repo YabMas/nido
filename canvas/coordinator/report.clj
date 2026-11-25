@@ -79,6 +79,10 @@
     "The baseline ids a design declares it breaks, each `:breaks` entry read by `break-id`, in order."
     {:signature [:=> [:catn [:design [:maybe :map]]] [:vector :string]]
      :delegates [break-id]})
+  (Operation accepted-unchecked-ids
+    "The claim ids a design lists under :accepted-unchecked — those a person accepted as left
+     unchecked, their evidence owed to the build or the landing. Empty when it lists none."
+    {:signature [:=> [:catn [:design [:maybe :map]]] [:set :string]]})
   (Operation repair-before-asking
     "The repair a design decision's `:asks` waits on: its `:recommend` when that is `:amend`,
      `:recut` or `:resurvey` and the decision does not `proceeds?` anyway, else nil.

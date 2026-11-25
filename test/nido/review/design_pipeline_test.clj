@@ -2395,6 +2395,92 @@
          (is (empty? (:findings (run record/design-judge-stage (ctx))))
              "a reading a tool failed is not the claim's evidence being absent"))))))
 
+(def ^:private accepted-design
+  "`a-model-design` at seq 4 with [rounded-once] accepted as unchecked until the landing."
+  (assoc a-model-design :seq 4
+         :accepted-unchecked [{:id "rounded-once" :until :landing
+                               :because "\"Proceed, with the test run owed before landing.\""}]))
+
+;; Watched (BR-7085, design-loop-e2d40c9d): four claims the person accepted as unchecked until the
+;; landing gate came back unchecked reading after reading, and the round handed them to the amender
+;; as subjects no reading can rule on — which began rewording, reopening and dropping them, undoing
+;; the person's approval.
+(deftest a-subject-a-person-accepted-as-unchecked-is-not-handed-to-the-amender
+  (let [appended (atom [])
+        shrug    {:id "rounded-once" :reason "only the landing run shows it"}
+        earlier  (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :seq 5 :unchecked [shrug])
+        read     (assoc (decision :proceed :checks [(check :relation-honest :held)]) :unchecked [shrug])]
+    (judging-a-model-design
+     read appended
+     (fn []
+       (with-redefs [ws/entries-of  (fn [_ _ kind] (if (= :design-decision kind) [earlier] []))
+                     ws/latest-entry (fn [_ _ k] (when (= :design k) accepted-design))]
+         (let [out (run record/design-judge-stage (ctx))]
+           (is (empty? (:findings out)) "what the person accepted is no defect for an amender")
+           (is (= :cleared (:status out)) "and does not by itself hold the design back from clearing")
+           (is (nil? (:read-once (last @appended))))))))))
+
+(deftest an-accepted-subject-read-once-and-then-unchecked-does-not-hold-the-run
+  (let [appended  (atom [])
+        holds     (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                         :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})
+        unchecked (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                         :unchecked [{:id "rounded-once" :reason "needs the landing run"}])
+        answers   (atom [holds unchecked])]
+    (judging-a-model-design
+     holds appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [opts] (let [a (first @answers)] (swap! answers rest) (named-by a opts)))
+                     ws/latest-entry (fn [_ _ k] (when (= :design k) accepted-design))]
+         (let [r1 (run record/design-judge-stage (ctx))
+               r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
+           (is (= ["rounded-once"] (:read-once (first @appended))) "a first confirmation is still one reading")
+           (is (nil? (:read-once (second @appended)))
+               "but the unchecked reading after it is the acceptance, not a reading owed again")
+           (is (= :cleared (:status r2)))))))))
+
+(deftest an-accepted-subject-a-reading-refutes-still-reaches-the-amender
+  (let [appended (atom [])
+        refuted  (assoc (decision :amend :checks [(check :relation-honest :held)])
+                        :findings [{:claim-id "rounded-once" :cites ["src/a.clj:9 rounds the total twice"]
+                                    :claim "a total is rounded twice on the refund path"}])]
+    (judging-a-model-design
+     refuted appended
+     (fn []
+       (with-redefs [ws/latest-entry (fn [_ _ k] (when (= :design k) accepted-design))]
+         (let [out (run record/design-judge-stage (ctx))]
+           (is (= [["rounded-once"]] (map :claim-ids (:findings out)))
+               "accepted as unchecked is not accepted as false")))))))
+
+(deftest the-amender-keeps-what-a-person-accepted-as-unchecked
+  (let [moves    #'record/accepted-moves
+        reword   #(assoc-in accepted-design [:model :claims 0 :statement] %)
+        refuting [{:claim-id "rounded-once" :cites ["src/a.clj:9"] :claim "rounded twice"}]
+        shrug    [{:claim-id "rounded-once" :claim-ids ["rounded-once"] :unsettled 3 :cites []}]]
+    (is (nil? (moves accepted-design accepted-design [])) "carried unchanged, nothing moved")
+    (is (= [:accepted-unchecked] (map :held (moves accepted-design (reword "totals round at checkout") [])))
+        "reworded with nothing refuting it is the person's to decide")
+    (is (seq (moves accepted-design (reword "totals round at checkout") shrug))
+        "coming back unchecked is no refutation")
+    (is (seq (moves accepted-design (assoc-in accepted-design [:model :claims] []) []))
+        "nor may it be dropped")
+    (is (nil? (moves accepted-design (reword "a total is rounded once, on checkout") refuting))
+        "a claim a finding refutes is the amender's to repair")
+    (is (seq (moves accepted-design (dissoc accepted-design :accepted-unchecked) refuting))
+        "but the acceptance itself is never the amender's to remove")
+    (is (seq (moves a-model-design (assoc a-model-design :accepted-unchecked
+                                          (:accepted-unchecked accepted-design)) []))
+        "nor to grant")))
+
+(deftest the-design-prompts-say-what-a-person-accepted-as-unchecked
+  (let [judge (record/design-prompt {:design accepted-design})
+        amend (record/design-amend-prompt {:design accepted-design :recommend :amend
+                                           :reason "r" :out-path "/x" :raised []})]
+    (is (str/includes? judge "A PERSON ACCEPTED [rounded-once] AS UNCHECKED"))
+    (is (str/includes? amend "WHAT A PERSON ACCEPTED AS UNCHECKED. [rounded-once]"))
+    (is (not (str/includes? (record/design-prompt {:design a-model-design}) "ACCEPTED")))))
+
 (deftest the-design-amender-is-told-what-to-do-with-a-subject-no-reading-can-rule-on
   (let [p (record/design-amend-prompt {:design (assoc a-model-design :seq 4) :recommend :amend
                                        :reason "r" :out-path "/x"
