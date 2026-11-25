@@ -136,7 +136,8 @@
              (seq add-dirs) (into (cons "--add-dir" add-dirs))
              (:model spec) (into ["--model" (:model spec)])
              ;; Variadic: the next option ends its list.
-             true          (into (cons "--disallowedTools" never-offered))
+             true          (into (cons "--disallowedTools"
+                                       (cond-> never-offered (false? (:ask? spec)) (conj ask-tool-name))))
              (= 1 run)     (into ["--session-id" sid])
              (< 1 run)     (into ["--resume" sid])
              images        (into ["--input-format" "stream-json"])
@@ -159,12 +160,14 @@
                                                  :hooks [{:type "command"
                                                           :command (str bb-bin " --classpath " src
                                                                         " -m nido.executor.claude guard " (:cwd spec))}]}))}})
-                     ;; nido's ask tool, and any MCP servers the turn's spec brings (a conductor's
+                     ;; nido's ask tool, unless the spec says the turn has nobody to ask (`:ask?`
+                     ;; false: a run's), and any MCP servers the turn's spec brings (a conductor's
                      ;; tools): MCP is no provider's, so a spec may name servers and stay neutral.
                      mcp (json/write-str
-                          {:mcpServers (merge (:mcp-servers spec)
-                                              {"nido" {:command bb-bin
-                                                       :args ["--classpath" src "-m" "nido.core.ask-tool"]}})})}
+                          {:mcpServers (cond-> (or (:mcp-servers spec) {})
+                                         (not (false? (:ask? spec)))
+                                         (assoc "nido" {:command bb-bin
+                                                        :args ["--classpath" src "-m" "nido.core.ask-tool"]}))})}
               (= 1 run)  (assoc (str (session-file turn-dir)) sid)
               images     (assoc (str (stdin-file run-dir)) (str (prompt-message image (:instructions spec) images) "\n"))
               resolution (assoc (str (resolution-file run-dir))

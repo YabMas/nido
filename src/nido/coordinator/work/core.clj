@@ -83,10 +83,12 @@
   mirror
   (atom {:pos 0 :ws {} :following? false :connected? false :caught-up (promise)}))
 
-(defn- apply-message [m {:keys [ws pos state awaiting]}]
-  (-> m
-      (assoc-in [:ws ws] {:state state :awaiting (vec awaiting) :pos pos})
-      (update :pos max pos)))
+(defn- apply-message
+  "`m` with feed message's stream held — unless it is a run, which is no workstream: the mirror
+   holds workstreams only, and moves past a run's message without keeping it."
+  [m {:keys [ws pos state awaiting]}]
+  (cond-> (update m :pos max pos)
+    (not (client/run-key? ws)) (assoc-in [:ws ws] {:state state :awaiting (vec awaiting) :pos pos})))
 
 (def ^:private caught-up-wait-ms
   "How long after following starts a read may wait for the first catch-up before answering what
@@ -117,7 +119,8 @@
 
     :else
     (do (swap! mirror apply-message m)
-        (when on-change (try (on-change (:ws m)) (catch Exception _ nil)))
+        (when (and on-change (not (client/run-key? (:ws m))))
+          (try (on-change (:ws m)) (catch Exception _ nil)))
         true)))
 
 (defn ^{:malli/schema [:=> [:cat [:? :map]] :nil]} follow!
@@ -166,7 +169,8 @@
   []
   (cond
     (client/local?)
-    (into {} (for [[k st] (client/value! (client/states "") :states)]
+    (into {} (for [[k st] (client/value! (client/states "") :states)
+                   :when (not (client/run-key? k))]
                [k (of-state st)]))
 
     (:following? @mirror)
@@ -185,7 +189,9 @@
             (let [m (deref (future (api/next-message c)) 2000 ::quiet)]
               (if (or (= ::quiet m) (nil? m) (:cut-off m) (:caught-up m))
                 acc
-                (recur (assoc acc (:ws m) {:state (:state m) :awaiting (vec (:awaiting m)) :pos (:pos m)})))))
+                (recur (cond-> acc
+                         (not (client/run-key? (:ws m)))
+                         (assoc (:ws m) {:state (:state m) :awaiting (vec (:awaiting m)) :pos (:pos m)}))))))
           (finally (api/disconnect c))))
       (catch Exception _ {}))))
 

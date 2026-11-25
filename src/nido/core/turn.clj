@@ -192,9 +192,9 @@
   (get executors (get-in t [:spec :executor])))
 
 (defn- launch!
-  "Start run `run` of turn `t` of `ws`. The run's directory is made first, so a directory that is
-   absent proves the run was never started."
-  [{:keys [root default-deadline-ms] :as runner} ws t]
+  "Start run `run` of turn `t` of stream `ws`, a run's stream when `run-stream?`. The run's
+   directory is made first, so a directory that is absent proves the run was never started."
+  [{:keys [root default-deadline-ms] :as runner} ws t run-stream?]
   (let [{turn :id run :run spec :spec} t
         executor (executor-of runner t)
         tdir (turn-dir root ws turn)
@@ -216,8 +216,10 @@
                    (.redirectOutput (io/file rdir "out"))
                    (.redirectError (io/file rdir "err")))
               ;; Which turn this is, for what runs inside it — a commit gate judging a person's
-              ;; act — whatever the executor: no executor needs to know to say it.
-              _ (.putAll (.environment pb) (update-keys (merge env (cond-> {"NIDO_CORE_WS" ws "NIDO_CORE_TURN" (:id t)}
+              ;; act — whatever the executor: no executor needs to know to say it. A run's turn is
+              ;; told its run, never a workstream: it has none to write to.
+              _ (.putAll (.environment pb) (update-keys (merge env (cond-> {(if run-stream? "NIDO_CORE_RUN" "NIDO_CORE_WS") ws
+                                                                            "NIDO_CORE_TURN" (:id t)}
                                                                      (:unit t) (assoc "NIDO_CORE_UNIT" (:unit t))))
                                                         str))
               p (.start pb)]
@@ -230,7 +232,7 @@
           :let [rdir (run-dir (turn-dir root ws (:id t)) (or (:run t) 1))]]
     (cond
       (and (= :running (:status t)) (not (.exists (io/file rdir))))
-      (launch! runner ws t)
+      (launch! runner ws t (some? (:run state)))
 
       (and (= :cancelled (:status t)) (:ended-by t) (contains? @live [ws (:id t) (:run t)]))
       (do (swap! live assoc-in [[ws (:id t) (:run t)] :cancelled] (:ended-by t))

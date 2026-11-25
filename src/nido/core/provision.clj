@@ -28,11 +28,12 @@
   (or (some-> cwd io/file .getName not-empty) unit))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] [:sequential :string]]} verb-argv
-  "The argv of the session verb for attempt `a` ({:unit :want :project :cwd})."
-  [{:keys [bb-bin nido-dir]} {:keys [want project cwd] :as a}]
+  "The argv of the session verb for attempt `a` ({:unit :want :project :cwd :profile})."
+  [{:keys [bb-bin nido-dir]} {:keys [want project cwd profile] :as a}]
   (cond-> [(or bb-bin "bb") "--config" (str nido-dir "/bb.edn") "nido:session:provision"
            ":project" (str project) ":want" (name want) (session-name a)]
-    cwd (into [":path" cwd])))
+    cwd     (into [":path" cwd])
+    profile (into [":profile" (name profile)])))
 
 (defn ^{:malli/schema [:=> [:cat :string] [:maybe :map]]} parse-result
   "The verb's result: the last line of its output that reads as an EDN map, or nil."

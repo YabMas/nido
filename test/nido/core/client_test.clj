@@ -61,3 +61,11 @@
          (with-redefs [core/nido-root (constantly "/tmp/some-other-home")]
            (is (false? (answers?)) "a home the daemon does not serve: never the daemon")))))
     (is (true? (in-test?)) "a running deftest is seen")))
+
+(deftest a-run-key-is-no-workstream-key
+  (let [k (client/run-key :brian "review-queue-ab12")]
+    (is (= "run:brian/review-queue-ab12" k))
+    (is (client/run-key? k))
+    (is (nil? (client/split-key k)) "no reader of workstreams takes it for one")
+    (is (not (client/run-key? (client/ws-key :brian "ws-1"))))
+    (is (= ["brian" "ws-1"] (client/split-key (client/ws-key :brian "ws-1"))))))

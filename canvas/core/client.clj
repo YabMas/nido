@@ -66,8 +66,15 @@
   (Operation ws-key
     "The core's name for a workstream of a project."
     {:signature [:=> [:catn [:project :any] [:ws-id :string]] :string]})
+  (Operation run-key
+    "The core's name for a run of a project: `run:<project>/<run-id>`, filed under no project's
+     workstreams."
+    {:signature [:=> [:catn [:project :any] [:run-id :string]] :string]})
+  (Operation run-key?
+    "Whether a core key names a run rather than a workstream."
+    {:signature [:=> [:catn [:k :any]] :boolean]})
   (Operation split-key
-    "The project and workstream id of a core key, or nil."
+    "The project and workstream id of a core key, or nil — a run's key included."
     {:signature [:=> [:catn [:k :string]] [:maybe [:tuple :string :string]]]})
   (Operation socket
     "The daemon's command socket."
@@ -95,6 +102,10 @@
     "The summary of every workstream of a project, by key, as a ReadReply."
     {:signature [:=> [:catn [:project :any]] ReadReply]
      :delegates [request!]})
+  (Operation runs
+    "The summary of every run of a project, by run id, as a ReadReply."
+    {:signature [:=> [:catn [:project :any]] ReadReply]
+     :delegates [run-key request!]})
   (Operation asking
     "The committed state of every workstream of a project a person owes a move now — an open ask
      on a workstream not closed — by key, as a ReadReply."

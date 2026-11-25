@@ -100,7 +100,7 @@
 
   nido:session:provision
   {:requires ([tasks.nido-session-provision :as nido-session-provision])
-   :doc "The session verb the core calls for a unit's session: :project <p> :want up|stopped|destroyed <session> [:path <worktree>]. Works through session-lifecycle alone — no workstream, conductor, seat or agent. Its last line is an EDN result."
+   :doc "The session verb the core calls for a unit's session: :project <p> :want up|stopped|destroyed <session> [:path <worktree>] [:profile <session-profile>]. Works through session-lifecycle alone — no workstream, conductor, seat or agent. Its last line is an EDN result."
    :task (apply nido-session-provision/provision *command-line-args*)}
 
   nido:session:up

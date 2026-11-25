@@ -6,7 +6,10 @@
    agent is started. Idempotent, so an attempt made twice does the work once.
 
      bb nido:session:provision :project <p> :want up|stopped|destroyed <session> [:path <worktree>]
+                               [:profile <session-profile>]
      bb nido:session:provision :check true
+
+   `:profile` names the session profile to bring the session up with (default :full).
 
    Its last line of output is an EDN map: {:cwd <worktree>} for up, {:stopped true},
    {:destroyed true}, {:ok true} for :check — or {:error <message>} with exit 1."
@@ -25,7 +28,8 @@
   (let [[positionals opts] (task-args/split-args args)
         session (first positionals)
         lopts (cond-> {:project (some-> (:project opts) str)}
-                (:path opts) (assoc :path (str (:path opts))))]
+                (:path opts)    (assoc :path (str (:path opts)))
+                (:profile opts) (assoc :session-profile (keyword (name (:profile opts)))))]
     (try
       (cond
         (:check opts) (result! {:ok true} 0)

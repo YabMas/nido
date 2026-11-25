@@ -1,6 +1,6 @@
 (ns nido.core.domain
-  "The rules a workstream and its units of work change by: what each may be, which commands a state
-   admits, and what each yields.
+  "The rules a workstream and its units of work change by, and a run by: what each may be, which
+   commands a state admits, and what each yields.
 
    A workstream is the arc that composes units of work. A unit is one goal and its argument in one
    project. Agent work runs as turns, either for a unit or, with no unit, for the workstream's
@@ -31,6 +31,14 @@
    provisioning attempt and that attempt's recorded outcome, so a provisioner killed between the
    two leaves an attempt pending that a start finds and makes again.
 
+   A run is the other kind of stream: one fire of a trigger, with no ledger, conductor, inbox, chat
+   or operator ask. `:start-run` opens it with exactly one unit, named by the run's id, whose first
+   turn is the trigger's and whose session is provisioned with the trigger's profile. Only that
+   unit's mechanics are admitted on it — provisioning, its first turn, that turn's outcome. Its
+   turn ending, or its session failing to come up, finishes the unit, and the run is over: its
+   session is destroyed and nothing on it runs again. A run has nobody to ask, so an :asked
+   outcome reported for its turn is recorded as a failure.
+
    Pure: no clock, no ids minted, no I/O. Ids and times arrive in commands."
   (:require [clojure.set :as set]
             [clojure.string :as str]))
@@ -38,7 +46,7 @@
 ;; ── the state ────────────────────────────────────────────────────────────────
 
 (def empty-state
-  "A workstream before its first event."
+  "A stream before its first event: a workstream until `:start-run` makes it a run."
   {:units         {}    ; unit-id -> {:id :project :goal :status #{:open :merged :retracted :finished}
                         ;             :held? bool :unknowns #{key} :landing? bool :session session}
                         ; session: {:status #{:none :ready :failed :stopped :destroyed}
@@ -67,6 +75,9 @@
    :ledger        []})  ; the work records' index rows, in seq order: {:seq :kind :at :ext ...}.
                         ; An entry's content is in its :entry-appended event, never in the state,
                         ; so every feed message about a workstream stays the size of its index.
+                        ; A run's state also carries :run, its identity {:id :project :trigger :goal
+                        ; :profile :payload :fired-at}: absent on a workstream, so a workstream's
+                        ; state reads as it did before runs were a kind.
 
 (def person-input-kinds
   "The inbox items that carry a person's input. A wake for an inbox holding one is never capped."
@@ -89,6 +100,8 @@
   (cond
     (or (:closed? state) (:discarded? state)) :destroyed
     (= :open (:status unit))    :up
+    ;; A run is over once its unit is: nothing will run in its session again.
+    (:run state)                :destroyed
     :else                       :stopped))
 
 (def ^:private reached
@@ -116,13 +129,16 @@
     {:unit (:id u) :want want}))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} attempts-pending
-  "Every provisioning attempt recorded and not yet resolved: [{:unit :attempt :want :project}]."
+  "Every provisioning attempt recorded and not yet resolved: [{:unit :attempt :want :project}], with
+   :cwd once the session has one and :profile when the unit names the session profile to make it
+   with."
   [state]
   (for [u (sort-by :id (vals (:units state)))
         :let [a (get-in u [:session :attempt])]
         :when a]
-    {:unit (:id u) :attempt (:id a) :want (:want a) :project (:project u)
-     :cwd (get-in u [:session :cwd])}))
+    (cond-> {:unit (:id u) :attempt (:id a) :want (:want a) :project (:project u)
+             :cwd (get-in u [:session :cwd])}
+      (:profile u) (assoc :profile (:profile u)))))
 
 (defn- active-turns
   "The active turns of `unit-id`, or of the conductor when `unit-id` is nil."
@@ -228,6 +244,19 @@
   (let [us (vals (:units state))]
     (boolean (and (seq us) (every? :background? us)))))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :keyword]]} run-status
+  "Where run `state` stands: :starting until its turn starts, :running while it runs, then :done,
+   :failed or :cancelled as its turn ended — :failed too when its session never came up. Nil on a
+   workstream."
+  [state]
+  (when-let [{:keys [id]} (:run state)]
+    (let [u (get-in state [:units id])
+          t (first (vals (:turns state)))]
+      (cond
+        (= :open (:status u)) (if t :running :starting)
+        t                     (case (:status t) :completed :done :cancelled :cancelled :failed)
+        :else                 :failed))))
+
 (defn- run-finishes?
   "Whether turn `t` completing ends its background run: its unit is background and the last one
    open, nothing awaits the person, and no conductor turn is under way."
@@ -307,6 +336,13 @@
                                   first-turn  (assoc :first-turn first-turn)
                                   background? (assoc :background? true))))
 
+(defmethod evolve :run-started [state {:keys [run spec]}]
+  (-> state
+      (assoc :run run)
+      (evolve {:event :unit-opened :unit (:id run) :project (:project run) :goal (:goal run)
+               :trigger (:trigger run) :first-turn {:spec spec}})
+      (cond-> (:profile run) (assoc-in [:units (:id run) :profile] (:profile run)))))
+
 (defmethod evolve :unit-finished [state {:keys [unit]}]
   ;; Its turn's outcome is heard by no conductor: a finished run owes nobody a decision, and an
   ;; item left in the inbox would wake one the moment the workstream reopened.
@@ -324,8 +360,10 @@
                        #(cond-> (-> % (dissoc :attempt :detail) (assoc :status status))
                           cwd    (assoc :cwd cwd)
                           detail (assoc :detail detail)))
-      (= :failed outcome) (hear-later {:kind :session-failed :unit unit :want want :detail detail})
-      unit-ready?         (hear-later {:kind :unit-ready :unit unit}))))
+      ;; A run has no conductor to hear a failure; one whose session never came up is over.
+      (and (:run state) (= :failed outcome) (= :up want)) (assoc-in [:units unit :status] :finished)
+      (and (not (:run state)) (= :failed outcome)) (hear-later {:kind :session-failed :unit unit :want want :detail detail})
+      (and (not (:run state)) unit-ready?)         (hear-later {:kind :unit-ready :unit unit}))))
 
 (defmethod evolve :provision-retried [state {:keys [unit]}]
   (update-in state [:units unit :session] #(-> % (assoc :status :none) (dissoc :detail))))
@@ -362,7 +400,9 @@
       (and actions-unknown? unit)
       (update-in [:units unit :unknowns] conj (run-unknown-key turn run))
 
-      unit (hear-later (turn-ended-item t outcome actions-unknown?))
+      (and unit (:run state)) (assoc-in [:units unit :status] :finished)
+
+      (and unit (not (:run state))) (hear-later (turn-ended-item t outcome actions-unknown?))
 
       (and (nil? unit) disposed?)       (assoc :conductor-failures 0)
       (and (nil? unit) (not disposed?)) (-> (update :inbox merge hears)
@@ -550,6 +590,18 @@
                     first-turn  (assoc :first-turn first-turn)
                     background? (assoc :background? true)))))
 
+(defmethod decide :start-run [state {:keys [run spec]}]
+  (let [{:keys [id project goal]} run]
+    (cond
+      (not= empty-state state)                (refuse :stream-not-empty)
+      (not (and (string? id) (string? project) (string? goal)))
+      (refuse :run-needs-id-project-and-goal)
+      (not (and (keyword? (:executor spec)) (string? (:instructions spec))))
+      (refuse :turn-needs-executor-and-instructions)
+      :else (accept {:event :run-started
+                     :run (select-keys run [:id :project :trigger :goal :profile :payload :fired-at])
+                     :spec spec}))))
+
 (defmethod decide :record-provision-attempt [state {:keys [unit attempt want]}]
   (cond
     (nil? (get-in state [:units unit]))  (refuse :no-such-unit :unit unit)
@@ -625,6 +677,9 @@
       ;; So is one from an earlier run of a turn since resumed. A report that names no run is
       ;; taken as the current run's.
       (and run (not= run (:run t)))        (refuse :stale-run :turn turn :run run :current (:run t))
+      ;; A run has nobody to ask: its turn is offered no ask tool, and one that asks anyway failed.
+      (and (:run state) (= outcome :asked))
+      (accept {:event :turn-ended :turn turn :outcome :failed :detail {:reason :asked-in-a-run}})
       (= outcome :asked)
       (if (:id call)
         (accept {:event :turn-asked :turn turn :call call})
@@ -840,14 +895,7 @@
   "The ledger kinds that say what a workstream was born as: a drain, a slice, a one-off."
   #{:drain :slice :scratch})
 
-(defn ^{:malli/schema [:=> [:cat :map] :map]} summary
-  "What a reader of many workstreams needs of one, read off its state alone: its project, title,
-   refs, facets and birth, whether it is closed, where its ledger stands, whether a turn runs or a
-   person holds its units, and the ids of the asks awaiting the person. `:asking?` is whether a
-   person owes it a move now — an open ask on a workstream that is not closed.
-
-   A reading, never an event: core-store keeps it beside the state it is read from, in the same
-   transaction, and rebuilds it with the state."
+(defn- workstream-summary
   [state]
   (let [{:keys [project title external-refs facets intake created-at]} (:identity state)
         closed? (boolean (:closed? state))
@@ -869,6 +917,29 @@
      :asking?       (boolean (and (seq asks) (not closed?)))
      :running?      (boolean (some #(= :running (:status %)) (vals (:turns state))))
      :held?         (boolean (and (seq open-us) (every? :held? open-us)))}))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]} summary
+  "What a reader of many workstreams needs of one, read off its state alone: its project, title,
+   refs, facets and birth, whether it is closed, where its ledger stands, whether a turn runs or a
+   person holds its units, and the ids of the asks awaiting the person. `:asking?` is whether a
+   person owes it a move now — an open ask on a workstream that is not closed.
+
+   A run's summary is its identity under :run, its `run-status`, the detail its turn or session
+   ended with, and :closed? once it is over; it never asks.
+
+   A reading, never an event: core-store keeps it beside the state it is read from, in the same
+   transaction, and rebuilds it with the state."
+  [state]
+  (if-let [run (:run state)]
+    (let [u (get-in state [:units (:id run)])
+          t (first (vals (:turns state)))]
+      {:project (:project run)
+       :run     run
+       :status  (run-status state)
+       :detail  (or (:detail t) (get-in u [:session :detail]))
+       :closed? (not= :open (:status u))
+       :asking? false})
+    (workstream-summary state)))
 
 (def revisable-identity
   "The parts of a workstream's identity that change after it is created. Its project and
@@ -941,10 +1012,23 @@
                    (for [{:keys [row content]} entries]
                      {:event :entry-appended :row (dissoc row :file) :content content})))))
 
+(def run-commands
+  "The commands a run admits: its one unit's mechanics. Every other command is a workstream's."
+  #{:record-provision-attempt :record-provision-outcome :start-turn :record-outcome})
+
+(defn- not-on-a-run
+  "Why `command` is refused on run state `state`, or nil when a run admits it."
+  [state {:keys [command unit]}]
+  (cond
+    (not (run-commands command))                       {:reason :not-a-run-command :command command}
+    (and (= :start-turn command) (nil? unit))          {:reason :a-run-has-no-conductor}))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]} step
   "Decide `command` against `state`: [new-state events] when admitted, [state nil refusal] when not."
   [state command]
-  (let [{:keys [events refused]} (decide state command)]
+  (let [{:keys [events refused]} (if-let [why (when (:run state) (not-on-a-run state command))]
+                                   {:refused why}
+                                   (decide state command))]
     (if refused
       [state nil refused]
       [(reduce evolve state events) events nil])))

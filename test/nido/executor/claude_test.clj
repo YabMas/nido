@@ -151,3 +151,19 @@
         (Thread/sleep 200)
         (is (not (alive? bg)) "the background task it started is ended too"))
       (finally (fs/delete-tree dir)))))
+
+(deftest a-turn-with-nobody-to-ask-is-offered-no-ask-tool
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (let [launch (fn [spec] ((:launch (claude/executor {:src "/src"}))
+                               {:turn-dir dir :run-dir dir :run 1 :spec (assoc spec :instructions "/review-queue")}))
+            servers (fn [{:keys [files]}]
+                      (-> (get files (str (fs/path dir "mcp.json"))) (json/read-str :key-fn keyword) :mcpServers))
+            disallowed (fn [{:keys [argv]}]
+                         (let [i (.indexOf ^java.util.List argv "--disallowedTools")]
+                           (set (take-while #(not (str/starts-with? % "--")) (drop (inc i) argv)))))]
+        (is (contains? (servers (launch {})) :nido))
+        (is (not (contains? (disallowed (launch {})) "mcp__nido__ask")))
+        (is (not (contains? (servers (launch {:ask? false})) :nido)))
+        (is (contains? (disallowed (launch {:ask? false})) "mcp__nido__ask")))
+      (finally (fs/delete-tree dir)))))

@@ -25,11 +25,24 @@
   [project ws-id]
   (str (name project) "/" ws-id))
 
+(def ^:private run-prefix "run:")
+
+(defn ^{:malli/schema [:=> [:cat :any :string] :string]} run-key
+  "The core's name for run `run-id` of `project`. What precedes its slash is `run:<project>`, which
+   is no project: every read of a project's workstreams passes it by."
+  [project run-id]
+  (str run-prefix (name project) "/" run-id))
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]} run-key?
+  "Whether `k` names a run rather than a workstream."
+  [k]
+  (str/starts-with? (str k) run-prefix))
+
 (defn ^{:malli/schema [:=> [:cat :string] [:maybe [:tuple :string :string]]]} split-key
-  "[project ws-id] of a core workstream key, or nil when it is not one."
+  "[project ws-id] of a core workstream key, or nil when it is not one — a run's key is not."
   [k]
   (let [i (str/index-of (str k) "/")]
-    (when (and i (pos? i)) [(subs k 0 i) (subs k (inc i))])))
+    (when (and i (pos? i) (not (run-key? k))) [(subs k 0 i) (subs k (inc i))])))
 
 (defn ^{:malli/schema [:=> [:cat] :string]} socket
   "The core daemon's command socket."
@@ -169,6 +182,16 @@
   [project]
   (let [r (request! {:op :summaries :project (name project)})]
     (if (unavailable? r) r (update r :summaries #(or % {})))))
+
+(defn ^{:malli/schema [:=> [:cat :any] ReadReply]} runs
+  "{:runs {run-id summary}} for every run of `project`, each its `nido.core.domain/summary` —
+   identity under :run, :status, :detail — or `Unavailable`."
+  [project]
+  (let [prefix (run-key project "")
+        r (request! {:op :summaries :project (str run-prefix (name project))})]
+    (if (unavailable? r)
+      r
+      {:runs (into {} (map (fn [[k sm]] [(subs k (count prefix)) sm])) (:summaries r))})))
 
 (defn ^{:malli/schema [:=> [:cat :any] ReadReply]} asking
   "{:asking {key state}} for every workstream of `project` a person owes a move now — an open ask

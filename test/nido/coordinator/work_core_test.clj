@@ -378,6 +378,18 @@
       (is (true? (wcore/receive! (msg "p/a" 3) opts true)))
       (is (= ["p/a"] @changed) "a live message refreshes the workstream it changed"))))
 
+(deftest the-mirror-holds-no-run
+  (with-redefs [wcore/mirror (atom {:pos 0 :ws {} :following? true :caught-up (promise)})]
+    (let [changed (atom [])
+          opts    {:on-change #(swap! changed conj %)}
+          msg     (fn [ws pos] {:ws ws :pos pos :state {:units {}} :awaiting []})]
+      (wcore/receive! (msg "run:p/review-queue-1" 1) opts false)
+      (wcore/receive! {:caught-up true :pos 1} opts false)
+      (wcore/receive! (msg "run:p/review-queue-1" 2) opts true)
+      (is (= {} (:ws @wcore/mirror)) "a run is no workstream, caught up or live")
+      (is (= 2 (:pos @wcore/mirror)) "and the mirror moves past it all the same")
+      (is (= [] @changed)))))
+
 (deftest the-core-working-a-stage-reads-as-that-stage-in-progress
   (with-ws
     (fn [c ws-id]

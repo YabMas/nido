@@ -20,7 +20,11 @@
    active turns on one unit, a workstream landed before its units) has no command
    that produces it. A workstream's identity and its ledger of work records are part of its
    state: an entry is appended only after the seq its author read, so a ledger that moved
-   under an author refuses the append rather than numbering past it."
+   under an author refuses the append rather than numbering past it.
+
+   A run is the other kind of stream: one fire of a trigger, with exactly one unit, its first turn
+   and the session profile it names, and no ledger, conductor, inbox, chat or ask. A run admits
+   only that unit's mechanics, and is over once its turn ends or its session fails to come up."
   (Operation decide
     "Decide a command against the whole workstream: the events it yields, or a refusal naming
      why, which changes nothing."
@@ -47,6 +51,10 @@
      rather than a question: the person's move on it is a recovery, and no surface lists it as
      needing them."
     {:signature [:=> [:catn [:ask :map]] :boolean]})
+  (Operation run-status
+    "Where a run stands — :starting, :running, :done, :failed or :cancelled — or nil on a
+     workstream."
+    {:signature [:=> [:catn [:state :map]] [:maybe :keyword]]})
   (Operation background-run?
     "Whether a workstream is a background run: every unit a trigger opened as background work. A
      background run closes when its turn completes; the board does not list it."

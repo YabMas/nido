@@ -21,7 +21,9 @@
 
    Each workstream's summary (`nido.core.domain/summary`) is kept beside its state, written in the
    same transaction, so a reader of a whole project reads one small row per workstream, and finds
-   the workstreams a person owes a move without reading any other state.
+   the workstreams a person owes a move without reading any other state. A stream is filed under
+   the project that precedes the first slash of its key, so a run (keyed `run:<project>/<id>`) is
+   filed under `run:<project>`, and a read of a project's workstreams never returns one.
 
    A workstream's work records are entries on its ledger: each one's index row is part of the
    state, and its content is kept once more in the entries table, by workstream and seq, so an

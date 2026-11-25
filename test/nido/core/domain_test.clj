@@ -491,3 +491,77 @@
                        stop])]
         (is (= {:kind :asking :failed? true} (d/activity s2)))
         (is (= [false true] (map d/machine-ask? (sort-by :id (d/awaiting-person s2)))))))))
+
+;; ── runs ─────────────────────────────────────────────────────────────────────
+
+(def a-run
+  {:command :start-run
+   :run {:id "review-queue-ab12" :project "brian" :trigger "review-queue" :goal "groom"
+         :profile :lite :payload {:id "nightly-2026-11-25"}}
+   :spec (assoc spec :ask? false)})
+
+(defn- run-up
+  "A run whose session came up at /w, and whose first turn has started."
+  []
+  (first (run [a-run
+               {:command :record-provision-attempt :unit "review-queue-ab12" :want :up :attempt "a"}
+               {:command :record-provision-outcome :unit "review-queue-ab12" :attempt "a" :outcome :done :cwd "/w"}
+               {:command :start-turn :turn "review-queue-ab12 first" :unit "review-queue-ab12"
+                :spec (assoc spec :ask? false)}])))
+
+(deftest a-run-is-one-unit-provisioned-with-its-profile
+  (let [[s] (run [a-run])]
+    (is (= :starting (d/run-status s)))
+    (is (= [{:unit "review-queue-ab12" :want :up}] (d/sessions-owed s)))
+    (let [[s2] (run [a-run {:command :record-provision-attempt :unit "review-queue-ab12" :want :up :attempt "a"}])]
+      (is (= :lite (:profile (first (d/attempts-pending s2))))))
+    (testing "its first turn starts once its session is up"
+      (is (= :running (d/run-status (run-up)))))
+    (testing "only an empty stream starts a run"
+      (is (= :stream-not-empty (refusal (first (run two-units)) a-run))))))
+
+(deftest a-run-admits-no-workstream-command
+  (let [s (run-up)]
+    (doseq [c [{:command :post-chat :message "m" :text "hi"}
+               {:command :open-unit :unit "x" :project "brian" :goal "g"}
+               {:command :append-entry :row {:seq 1 :kind :note :at "t" :ext "md"} :content "x"}
+               {:command :close-workstream}
+               a-run]]
+      (is (= :not-a-run-command (refusal s c)) (pr-str (:command c))))
+    (is (= :a-run-has-no-conductor (refusal s {:command :start-turn :turn "c" :unit nil :spec spec})))))
+
+(deftest a-run-is-over-when-its-turn-ends
+  (doseq [[outcome status] [[:completed :done] [:failed :failed] [:cancelled :cancelled]]]
+    (let [[s] (d/step (run-up) {:command :record-outcome :turn "review-queue-ab12 first" :outcome outcome})]
+      (is (= status (d/run-status s)))
+      (is (empty? (:inbox s)) "nobody hears a run's outcome")
+      (is (= [{:unit "review-queue-ab12" :want :destroyed}] (d/sessions-owed s)))
+      (is (empty? (d/violations s)))
+      (is (= {:project "brian" :status status :closed? true :asking? false}
+             (select-keys (d/summary s) [:project :status :closed? :asking?]))))))
+
+(deftest a-run-that-asks-failed
+  (let [[s] (d/step (run-up) {:command :record-outcome :turn "review-queue-ab12 first" :outcome :asked
+                              :call {:id "c"}})]
+    (is (= :failed (d/run-status s)))
+    (is (= {:reason :asked-in-a-run} (get-in s [:turns "review-queue-ab12 first" :detail])))
+    (is (empty? (d/awaiting-person s)))))
+
+(deftest a-run-whose-session-never-came-up-failed
+  (let [[s] (run [a-run
+                  {:command :record-provision-attempt :unit "review-queue-ab12" :want :up :attempt "a"}
+                  {:command :record-provision-outcome :unit "review-queue-ab12" :attempt "a" :outcome :failed
+                   :detail "no disk"}])]
+    (is (= :failed (d/run-status s)))
+    (is (= "no disk" (:detail (d/summary s))))
+    (is (empty? (:inbox s)))
+    (is (empty? (d/first-turns-owed s)))))
+
+(deftest a-run-folds-from-its-events
+  (let [s (run-up)
+        [_ events] (run [a-run
+                         {:command :record-provision-attempt :unit "review-queue-ab12" :want :up :attempt "a"}
+                         {:command :record-provision-outcome :unit "review-queue-ab12" :attempt "a" :outcome :done :cwd "/w"}
+                         {:command :start-turn :turn "review-queue-ab12 first" :unit "review-queue-ab12"
+                          :spec (assoc spec :ask? false)}])]
+    (is (= s (d/fold events)))))
