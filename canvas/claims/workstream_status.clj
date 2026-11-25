@@ -15,12 +15,13 @@
             [canvas.coordinator.record.tickets :refer [status-of]]
             [canvas.coordinator.record.workstream :refer [record-workstream]]
             [canvas.coordinator.report :refer [coordinator-report]]
+            [canvas.coordinator.view.activity :as activity]
             [canvas.coordinator.view.workstreams :refer [workstream-row ws-source]]
             [canvas.coordinator.work :refer [adopt-orphans! list-workstreams]]))
 
 (Claim one-status
-  "Every surface's position, owed-by and live for a workstream come from status; no row, pane or TUI line decides any of the three from session phase, ticket status, a stored :stage or a cached Notion status."
-  {:about [status workstream-row] :evidence "round"})
+  "Every surface's position for a workstream comes from status, and its owed-by and live from the one activity `of` reads over status's facts and the live evidence; no row, pane or TUI line decides any of the three from session phase, ticket status, a stored :stage or a cached Notion status."
+  {:about [status activity/of workstream-row] :evidence "round"})
 
 (Claim owed-by-from-mode
   "Owed-by is read off the mode of the next move status names, the action of's answer carries as :next, and off nothing else: :person when that move runs in :human mode — :published among the positions owing one, whose next move is landing — :machine for :mechanical, :agent for :authoring or :working-copy, :nobody when the position is terminal and no move is owed. Stalled is owed-by :agent with nothing live."
@@ -63,5 +64,5 @@
   {:about [status-of] :evidence "round"})
 
 (Claim board-stage-from-records
-  "A non-bare board row's needs-you and engagement are read off its ledger closure and status. A row whose ledger closure settles it — any outcome but :between-phases — has needs-you off and engagement :settled; on any other non-bare row needs-you is whether status says a person owes the next move, and engagement is read off status."
-  {:about [workstream-row list-workstreams status] :evidence "round"})
+  "A non-bare board row's needs-you, engagement, live and what is underway are fields of one activity, `of` over the row's one observation. A row whose ledger closure settles it — any outcome but :between-phases — or that the core closed has needs-you off and engagement :settled; on any other non-bare row needs-you is whether the core asks the person something, and engagement is read off that same activity."
+  {:about [workstream-row list-workstreams activity/of] :evidence "round"})

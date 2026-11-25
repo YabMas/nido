@@ -29,16 +29,12 @@
    [clojure.string :as str]
    [nido.coordinator.lane.landing :as landing]
    [nido.coordinator.lane.reentry :as reentry]
-   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.entry :as entry]
    [nido.coordinator.record.generation :as generation]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
-   [nido.coordinator.record.workstream :as ws]
-   [nido.session.lifecycle :as lifecycle]
-   [nido.session.state :as sstate]))
+   [nido.coordinator.record.workstream :as ws]))
 
 ;; ── The vocabulary ──────────────────────────────────────────────────────────
 
@@ -1382,18 +1378,6 @@
 
 ;; ── What every surface shows ───────────────────────────────────────────────
 
-(defn- observed-live-names
-  "The names of `project`'s sessions that are up right now, as `sstate/session-live?` reads each
-   one's registry entry — a lite session included — for a caller of `status` that made no probe.
-   The probe `nido.coordinator.work/live-session-names` makes, through the same predicate."
-  [project]
-  (let [registry (sstate/read-registry)]
-    (->> (lifecycle/list-all-data {:project (name project)})
-         :sessions
-         (filter #(sstate/session-live? (get registry (:worktree %))))
-         (map :name)
-         set)))
-
 (def ^:private owed-by-mode
   "Who owes a move, by the mode it runs in."
   {:human :person :mechanical :machine :authoring :agent :working-copy :agent})
@@ -1419,55 +1403,36 @@
         (get-in latest [:stop :message]) (assoc :said (get-in latest [:stop :message])))
       {:turn-end :none :owes owes})))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:maybe [:set :string]]]] :WorkstreamStatus]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :WorkstreamStatus]}
   status
-  "A workstream's position, who owes its next move, whether anything is working on it now, and
-   whether it has stalled — the one answer every surface renders.
+  "What a workstream's records say about where it stands and who owes it: its position, who owes
+   the next move, whether a person's pause stands, whether its conversation is a person's own at
+   rest, and why it stopped if it has stalled. Whether anything runs is not here: that is
+   observed, and `nido.coordinator.view.activity/of` reads these facts and the observation as
+   one value.
 
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
-   nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
-   whose agent holds its lock, or a person's own session, one without a :claude facet, that is up
-   (`sstate/session-live?`); what turns the core runs is the core's to say, and the surfaces read
-   it from there
-   — `live-names` when the caller observed them, else observed here. :paused is a person's
-   standing pause — their choice not to push the workstream forward.
+   nobody when no move is owed. :paused is a person's standing pause — their choice not to push
+   the workstream forward.
 
-   :stalled is an agent owing the move with nothing live and no pause standing: the work stopped,
-   and no question was recorded to say why. That is a fault, never a resting state, and it comes
-   with :why (`stall-why`). One stop is not a stall: on a workstream not activated — a scratch
-   session a person started by hand, since a session nido starts on a brief is activated at birth
-   — a turn that ended answering only that person's own prompt leaves the conversation theirs,
-   resting."
-  ([project ws-id] (status project ws-id nil))
-  ([project ws-id live-names]
-   (let [position (of project ws-id)
-         owed-by  (if-let [mode (get-in position [:next :mode])]
-                    (owed-by-mode mode :nobody)
-                    :nobody)
-         ;; Past the conductor's record: it runs for as long as the workstream is open, so counting
-         ;; it would read every worked workstream live and none stalled. And past the chat's: a
-         ;; session a person talks in about the work is up without any of the work moving.
-         sessions (remove #(or (:conductor %) (:chat %)) (csession/list-sessions project ws-id))
-         ;; A person's own session is live while it is up — observed, never a stored phase. One nido
-         ;; drives through a facet is read off the listing instead, whatever its :autonomy: its
-         ;; services stay up between turns. Absent the caller's observation, make one, and only when
-         ;; there is a person's session to ask about: a board passes the set it read once for every
-         ;; row.
-         humans   (filter #(and (nil? (:autonomy %)) (nil? (:claude %))) sessions)
-         up       (when (seq humans) (or live-names (observed-live-names project)))
-         live     (boolean (or (activity/held? project ws-id)
-                               (seq (runs/live-runs project ws-id))
-                               (some #(contains? up (:name %)) humans)))
-         w        (ws/read-ws project ws-id)
-         paused   (boolean (some-> w standing/paused?))
-         latest   (latest-stop sessions)
-         persons? (and latest (false? (get-in latest [:stop :nido?]))
-                       (not (some-> w standing/activated?)))
-         stalled  (and (= :agent owed-by) (not live) (not paused) (not persons?))]
-     (cond-> {:position position
-              :owed-by  owed-by
-              :live     live
-              :paused   paused
-              :stalled  (boolean stalled)}
-       stalled (assoc :why (stall-why position latest))))))
+   :resting? is what keeps one stop from being a stall: on a workstream not activated — a scratch
+   session a person started by hand, since a session nido starts on a brief is activated at
+   birth — a turn that ended answering only that person's own prompt leaves the conversation
+   theirs. :stall-why says why the work stopped (`stall-why`), whether or not it has stalled:
+   only the activity knows whether it has."
+  [project ws-id]
+  (let [position (of project ws-id)
+        owed-by  (if-let [mode (get-in position [:next :mode])]
+                   (owed-by-mode mode :nobody)
+                   :nobody)
+        ;; Past the conductor's record and the chat's: neither is a turn of the work ending.
+        sessions (remove #(or (:conductor %) (:chat %)) (csession/list-sessions project ws-id))
+        w        (ws/read-ws project ws-id)
+        latest   (latest-stop sessions)]
+    {:position  position
+     :owed-by   owed-by
+     :paused    (boolean (some-> w standing/paused?))
+     :resting?  (boolean (and latest (false? (get-in latest [:stop :nido?]))
+                              (not (some-> w standing/activated?))))
+     :stall-why (stall-why position latest)}))

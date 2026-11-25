@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.view.activity :as act]
    [nido.coordinator.view.workstreams :as wsv]))
 
 (deftest nothing-underway-renders-nothing
@@ -60,15 +61,15 @@
                       {:phase "fix" :status "running" :layers []}]}]})
 
 (deftest a-running-round-reads-as-where-it-has-got
-  (is (= {:round 2 :phase :fix :findings 2} (wsv/round-progress a-diff-review-report))
+  (is (= {:round 2 :phase :fix :findings 2} (act/round-progress a-diff-review-report))
       "the current round, the phase running in it, and what its review raised —
        never the first round's findings, which that round already worked through")
   (is (= "review round 2 · fixing · 2 findings"
          (wsv/doing-label {:source :claim :kind :diff-review
-                           :progress (wsv/round-progress a-diff-review-report)}))))
+                           :progress (act/round-progress a-diff-review-report)}))))
 
 (deftest a-record-round-counts-its-judges-findings
-  (let [p (wsv/round-progress
+  (let [p (act/round-progress
            {:rounds [{:round 1 :status "running"
                       :phases [{:phase "judge" :status "ok" :findings [{:id 1}]}
                                {:phase "amend" :status "running" :findings []}]}]})]
@@ -81,12 +82,12 @@
          (wsv/doing-label {:source :claim :kind :diff-review
                            :progress {:round 1 :phase nil :findings 0}}))
       "no phase running is said by leaving it out, not by guessing one")
-  (is (nil? (wsv/round-progress {:rounds []})))
+  (is (nil? (act/round-progress {:rounds []})))
   (is (= "reviewing the diff" (wsv/doing-label {:source :claim :kind :diff-review}))
       "and a claim whose report could not be read keeps the kind's own phrase"))
 
 (deftest a-review-still-judging-says-how-far-it-has-read
-  (let [p (wsv/round-progress
+  (let [p (act/round-progress
            {:rounds [{:round 3 :status "running"
                       :phases [{:phase "review" :status "running"
                                 :layers [{:label "a" :status "running" :findings nil}
@@ -101,6 +102,14 @@
 ;; doing — what is underway, from exactly one source
 ;; ---------------------------------------------------------------------------
 
+(defn- doing
+  "What `act/of` says is underway for an observation given as the board knew it: a :closed
+   closure or a :stage band."
+  [{:keys [closed stage] :as m}]
+  (:doing (act/of (-> m
+                      (dissoc :closed :stage)
+                      (assoc :closed? (or (some? closed) (= :done stage)) :band stage)))))
+
 (def ^:private claim
   {:kind :diff-review :run-id "review-1" :report-path "/runs/review-1/report.json"
    :started-at "2026-09-03T10:00:00Z" :pid 4242})
@@ -113,22 +122,22 @@
 (defn- a-merge [state] {:id "m-1" :session-name "impl-1" :trigger :merge :mode :merge :state state})
 
 (deftest nothing-underway-reads-as-nil
-  (is (nil? (wsv/doing {:runs []})))
+  (is (nil? (doing {:runs []})))
   (testing "a run with no agent holding its lock is not activity, whatever its state"
-    (is (nil? (wsv/doing {:runs [(a-run :running)]})))))
+    (is (nil? (doing {:runs [(a-run :running)]})))))
 
 (deftest a-closed-workstream-is-doing-nothing
   (testing "closure outranks every source, including a claim some process still
             holds — it is over, whatever any record still says"
-    (is (nil? (wsv/doing {:closed {:outcome :done}
+    (is (nil? (doing {:closed {:outcome :done}
                           :runs [(a-run :running true)]
                           :stage :shipping
                           :claim claim})))
-    (is (nil? (wsv/doing {:stage :done :runs [(a-run :running true)]}))
+    (is (nil? (doing {:stage :done :runs [(a-run :running true)]}))
         "and so does a band of :done — a ticket settled in Notion under the work")))
 
 (deftest a-held-claim-answers-and-carries-its-payload
-  (let [d (wsv/doing {:runs [] :claim claim})]
+  (let [d (doing {:runs [] :claim claim})]
     (is (= :claim (:source d)))
     (is (= :diff-review (:kind d)))
     (is (= "review-1" (:run-id d)))
@@ -136,49 +145,51 @@
         "the report path is what makes a live run joinable, so it must survive")))
 
 (deftest the-claim-outranks-merge-and-session
-  (is (= :claim (:source (wsv/doing {:runs [(a-run :running true)] :stage :shipping :claim claim})))))
+  (is (= :claim (:source (doing {:runs [(a-run :running true)] :stage :shipping :claim claim})))))
 
 (deftest merge-reads-the-merge-runs-state
   (is (= {:source :merge :phase :driving}
-         (wsv/doing {:runs [(a-merge :running)] :stage :shipping})))
+         (doing {:runs [(a-merge :running)] :stage :shipping})))
   (is (= {:source :merge :phase :blocked}
-         (wsv/doing {:runs [(a-merge :awaiting-review)] :stage :shipping})))
+         (doing {:runs [(a-merge :awaiting-review)] :stage :shipping})))
   (is (= {:source :merge :phase :awaiting-merge}
-         (wsv/doing {:runs [(a-merge :done)] :stage :shipping})))
+         (doing {:runs [(a-merge :done)] :stage :shipping})))
   (testing "a :shipping workstream with no merge run reads :queued rather than nil — the
             lane takes one branch at a time, so waiting for it is a state the board keeps
             saying"
-    (is (= {:source :merge :phase :queued} (wsv/doing {:runs [] :stage :shipping})))
+    (is (= {:source :merge :phase :queued} (doing {:runs [] :stage :shipping})))
     (is (= {:source :merge :phase :queued}
-           (wsv/doing {:runs [(a-run :running true)] :stage :shipping}))
+           (doing {:runs [(a-run :running true)] :stage :shipping}))
         "and a run that is not the merge lane's says nothing about it")))
 
 (deftest an-agent-holding-its-runs-lock-answers-last
-  (let [d (wsv/doing {:runs [(a-run :running true)]})]
+  (let [d (doing {:runs [(a-run :running true)]})]
     (is (= {:source :session :phase :running :session "impl-1"} d))))
 
 (deftest a-run-parked-for-review-is-a-gate-not-an-activity
   (testing "calling it activity would say a workstream waiting on a person is busy"
-    (is (nil? (wsv/doing {:runs [(a-run :awaiting-review)]})))))
+    (is (nil? (doing {:runs [(a-run :awaiting-review)]})))))
 
 (deftest a-session-answering-a-reply-is-activity
   (testing "a reply leaves its run parked and lockless; the instruction nido gave the
             session is what says the agent is at work on it"
     (let [parked [(a-run :awaiting-review)]]
       (is (= {:source :session :phase :answering :session "impl-1"}
-             (wsv/doing {:runs parked
-                         :sessions [{:name "impl-1" :claude {:pending {:token "t" :seen? true}}}]})))
+             (doing {:runs parked
+                         :sessions [{:name "impl-1" :up? true :claude {:pending {:token "t" :seen? true}}}]})))
       (is (= {:source :session :phase :answering :session "impl-1"}
-             (wsv/doing {:runs parked :sessions [{:name "impl-1" :claude {:queued "go"}}]}))
+             (doing {:runs parked :sessions [{:name "impl-1" :up? true :claude {:queued "go"}}]}))
           "and so does one queued and not yet given")
-      (is (nil? (wsv/doing {:runs parked :sessions [{:name "impl-1" :claude {:pending nil}}]}))
+      (is (nil? (doing {:runs parked :sessions [{:name "impl-1" :claude {:queued "go"}}]}))
+          "a message queued for a session whose process is gone is waiting, not work")
+      (is (nil? (doing {:runs parked :sessions [{:name "impl-1" :up? true :claude {:pending nil}}]}))
           "a session with nothing outstanding is still only a gate")))
   (is (= "agent · answering" (wsv/doing-label {:source :session :phase :answering}))))
 
 (deftest a-live-run-outranks-a-session-answering
   (is (= :running
-         (:phase (wsv/doing {:runs     [(a-run :running true)]
-                             :sessions [{:name "other" :claude {:pending {:token "t"}}}]})))))
+         (:phase (doing {:runs     [(a-run :running true)]
+                             :sessions [{:name "other" :up? true :claude {:pending {:token "t"}}}]})))))
 
 (deftest a-seat-mid-turn-on-an-instruction-already-ended-is-activity
   (testing "a conductor-driven seat works on long after the instruction that started it
@@ -186,18 +197,18 @@
             queued — and the listing seeing its process mid-turn is what says it is at work"
     (let [seat {:name "impl-1" :claude {:pending nil :queued nil} :mid-turn? true}]
       (is (= {:source :session :phase :running :session "impl-1"}
-             (wsv/doing {:runs [] :sessions [seat]})))
-      (is (nil? (wsv/doing {:runs [] :sessions [(assoc seat :mid-turn? false)]}))
+             (doing {:runs [] :sessions [seat]})))
+      (is (nil? (doing {:runs [] :sessions [(assoc seat :mid-turn? false)]}))
           "a seat whose turn has stopped — at a person's gate, or idle between turns — is not")))
   (testing "neither the conductor's turn nor a chat's is the work moving"
-    (is (nil? (wsv/doing {:runs [] :sessions [{:name "cond" :conductor true :mid-turn? true}]})))
-    (is (nil? (wsv/doing {:runs [] :sessions [{:name "chat" :chat true :mid-turn? true}]}))))
+    (is (nil? (doing {:runs [] :sessions [{:name "cond" :conductor true :mid-turn? true}]})))
+    (is (nil? (doing {:runs [] :sessions [{:name "chat" :chat true :mid-turn? true}]}))))
   (testing "it answers last: an instruction outstanding or a run's lock says more"
     (is (= :answering
-           (:phase (wsv/doing {:runs []
+           (:phase (doing {:runs []
                                :sessions [{:name "a" :mid-turn? true}
-                                          {:name "b" :claude {:pending {:token "t"}}}]}))))
+                                          {:name "b" :up? true :claude {:pending {:token "t"}}}]}))))
     (is (= :running
-           (:phase (wsv/doing {:runs [(a-run :running true)]
+           (:phase (doing {:runs [(a-run :running true)]
                                :sessions [{:name "a" :mid-turn? true}]})))))
   (is (= "agent · running" (wsv/doing-label {:source :session :phase :running}))))

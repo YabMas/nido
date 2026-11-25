@@ -65,20 +65,6 @@
      status's answer, added above this."
     {:signature [:=> [:catn [:project ProjectName] [:ws Workstream] [:facts [:? :any]]] WorkstreamRow]
      :delegates [label tag last-activity ws-source session/list-sessions]})
-  (Operation doing
-    "Which single source says what this workstream is doing right now — a held activity claim,
-     the merge run, an agent holding its run's lock, a session working an instruction nido gave
-     it, or, last, a session of the work whose agent is mid-turn — under a TOTAL precedence, so
-     that exactly one ever answers. Pure; the claim, the runs' liveness and each session's turn
-     arrive as arguments."
-    {:signature [:=> [:catn [:opts :map]] [:maybe :map]]})
-  (Operation doing-at
-    "What is underway in a workstream right now, at a closure and band the caller settled on —
-     the board passes status's band, so what is underway and where the row sits are one answer."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:closed [:maybe :map]]
-                            [:stage [:maybe :keyword]] [:mid-turn [:maybe [:set :string]]]]
-                 [:maybe :map]]
-     :delegates [doing]})
   (Operation bare-row
     "A display row for a watched Notion page that has no workstream yet — what the board shows
      before anything local exists."
@@ -118,10 +104,6 @@
   (Operation format-session-row
     "One session row as a display line."
     {:signature [:=> [:catn [:row :map]] :string]})
-  (Operation round-progress
-    "How far a running round has got — its number, the phase running, what its judging
-     raised — read off the report it keeps as it goes."
-    {:signature [:=> [:catn [:report [:maybe :map]]] [:maybe :map]]})
   (Operation doing-label
     "One short phrase for what a workstream is doing, or nothing when nothing is. Display only
      and pure — the SAME string for every surface, which is what stops the board and the pane

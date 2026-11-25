@@ -7,7 +7,6 @@
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.record.runs :as runs :refer [Run]]
             [canvas.coordinator.record.session :as session :refer [Session]]
-            [canvas.coordinator.record.activity :as activity]
             [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :as cstate :refer [Path RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
@@ -17,25 +16,19 @@
             [fukan.common.typing.malli]))
 
 (Kind WorkstreamStatus
-  "What every surface shows of a workstream: where it is, who owes its next move, and whether
-   anything is working on it now.
+  "What a workstream's records say about where it stands and who owes it: its position, who owes
+   its next move, whether a person's pause stands, whether its conversation is a person's own at
+   rest, and why the work stopped if it has.
 
-   THREE FACETS, ONE DERIVATION. Position is the fold over the ledger; owed-by is read off the
-   mode the position's next stage runs in; live is observed from the locks a working process holds
-   and from the substrate showing a session mid-turn. None is stored, so no surface can show a
-   combination the records do not support. A stalled status also says why: which session stopped,
-   when, owing what, and what it last said."
+   RECORD FACTS ONLY. Position is the fold over the ledger; owed-by is read off the mode the
+   position's next stage runs in. Whether anything runs is observed, never a record fact, and
+   `view-activity/of` reads these facts with that observation as one answer."
   [:map {:closed true}
    [:position :map]
    [:owed-by [:enum :person :agent :machine :nobody]]
-   [:stalled :boolean]
    [:paused :boolean]
-   [:live :boolean]
-   ;; Present exactly when :stalled is true — held by the claim stall-carries-why, not by this
-   ;; schema. Tying the two here needs a boolean literal ([:= true], [:enum true]), and fukan's
-   ;; malli subset reads none: either one makes this namespace, and every canvas namespace that
-   ;; requires it, fail to load, so the whole declaration goes unreadable.
-   [:why {:optional true}
+   [:resting? :boolean]
+   [:stall-why
     [:or
      [:map {:closed true}
       [:turn-end [:enum :recorded]]
@@ -117,14 +110,12 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws intake-kind next-action baseline-verified? settled-in-notion]})
   (Operation status
-    "A workstream's position, who owes its next move, and whether anything is live — the one
-     answer every surface renders. Paused while a person's pause stands. Stalled — a fault —
-     when an agent owes the move, nothing is live, no question is open and no pause stands, and
-     then with the reason; neither its conductor's session nor its chat's is what makes it live. A turn that answered
-     only a person's own prompt, on a workstream not activated, is theirs and not a stall."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
-                      [:live-names [:? [:maybe [:set :string]]]]] WorkstreamStatus]
-     :delegates [of activity/read-live runs/live-runs]}))
+    "A workstream's position, who owes its next move, whether a person's pause stands, whether its
+     conversation is a person's own at rest — a turn that answered only a person's own prompt, on
+     a workstream not activated — and why the work stopped: the record facts every surface's
+     activity is read from."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] WorkstreamStatus]
+     :delegates [of]}))
 
 (Module lane-review
   "Settling runs whose verdict arrived through the ticket rather than through the run."

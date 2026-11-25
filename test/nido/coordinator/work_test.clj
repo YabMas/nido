@@ -292,7 +292,7 @@
         (is (= :ready (stage)))
         (notion! "Done")
         (is (= :done (stage)) "a settlement newer than the stage choice wins")
-        (let [st (pipeline/status :brian (:id w) #{})]
+        (let [st (pipeline/status :brian (:id w))]
           (is (= :nobody (:owed-by st)) "status owes nobody the move on a ticket Notion settled")
           (is (= "Done" (get-in st [:position :settled-in-notion]))))
         (workstream/advance-stage! :brian (:id w) :in-progress :person)
@@ -1114,8 +1114,7 @@
                 nido.coordinator.record.session/list-sessions (fn [_ _] [])
                 nido.coordinator.view.workstreams/workstream-row (fn [_ _ & _] {:ws-id "ws-1" :stage :triage :label "BR-7" :source :notion})
                 nido.coordinator.record.workstream/closure (constantly nil)
-                nido.coordinator.lane.pipeline/status (constantly {:position {:at :intake} :owed-by :agent
-                                                                   :live false :stalled true})
+                nido.coordinator.lane.pipeline/status (constantly {:position {:at :intake} :owed-by :agent})
                 nido.coordinator.record.standing/open-findings (constantly #{})
                 work/live-session-names (constantly #{})]
     (is (= "# V" (-> (work/workstream "brian" "ws-1") :report :markdown)))))
@@ -2275,9 +2274,34 @@
     (is (not (contains? (work/live-session-names "p") "down"))
         "a session the registry holds no entry for is down")))
 
-(deftest status-unprobed-reads-a-lite-session-as-up
-  ;; A board passes the live set it read; a caller of `status` that passes none is answered by the
-  ;; same predicate — so a lite session, which holds no port, is up there too while its entry stands.
+(deftest a-row-is-live-on-any-evidence-and-stalled-on-none
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:external-refs []})
+            id  (:id w)
+            row (fn [& [up]] (first (filter #(= id (:ws-id %)) (work/list-workstreams :brian (or up #{})))))]
+        (testing "an agent owes it and nothing is working on it"
+          (is (= {:owed-by :agent :live false :stalled true}
+                 (select-keys (:status (row)) [:owed-by :live :stalled])))
+          (is (= :stalled (:engagement (row)))))
+        (testing "a live run is live"
+          (with-redefs [runs/live-runs (constantly ["r1"])]
+            (is (true? (get-in (row) [:status :live])))
+            (is (= :active (:engagement (row))))))
+        (testing "a held claim is live before its payload is published"
+          (with-redefs [nido.coordinator.record.activity/held?     (constantly true)
+                        nido.coordinator.record.activity/read-live (constantly nil)]
+            (is (true? (get-in (row) [:status :live])))
+            (is (nil? (:doing (row))) "nothing yet says what is underway")))
+        (testing "a person's session is live when its ports answer"
+          (session/create! :brian id {:name "human-1" :weight :light :autonomy nil})
+          (is (false? (get-in (row) [:status :live])))
+          (is (true? (get-in (row #{"human-1"}) [:status :live])))
+          (is (= :active (:engagement (row #{"human-1"})))))))))
+
+(deftest a-lite-session-up-reads-live
+  ;; A lite session holds no port, so the board's probe reads it up while its entry stands, and a
+  ;; row read without a live set of its own is answered by that probe.
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :p {:external-refs []})]
@@ -2286,8 +2310,8 @@
                       (fn [_] {:sessions [{:name "lite" :worktree "/w/lite"}]})
                       nido.session.state/read-registry (constantly {"/w/lite" {:instance-id "i5"}})
                       nido.platform.process/tcp-open? (constantly false)]
-          (is (true? (:live (pipeline/status :p (:id w)))))
-          (is (= (work/live-session-names "p") #{"lite"}) "the board's probe agrees"))))))
+          (is (= (work/live-session-names "p") #{"lite"}))
+          (is (true? (get-in (first (work/list-workstreams :p)) [:status :live]))))))))
 
 (deftest entry-phase-reads-the-kind-of-entry
   (is (= :serving (nido.session.state/entry-phase {:instance-id "i" :app-port 4000})))
@@ -3596,15 +3620,6 @@
           (is (empty? (:created c)) "nothing is filed onto the thread")
           (is (nil? (workstream/find-by-ref-id :brian "BR-4900")))
           (is (empty? (workstream/entries-of :brian (:id ws) :triage-accepted))))))))
-
-(deftest a-queued-message-to-a-dead-session-is-not-work
-  (let [observed #'nido.coordinator.work/observed-doing
-        answering {:source :session :phase :answering :session "run-x"}]
-    (is (nil? (observed answering {:live false :stalled true}))
-        "nothing live: the workstream reads halted, not running")
-    (is (= answering (observed answering {:live true})))
-    (is (= {:source :claim :kind :design-round} (observed {:source :claim :kind :design-round} {:live false}))
-        "a claim is its own evidence")))
 
 ;; ── A blocker that asks several questions ───────────────────────────────────
 

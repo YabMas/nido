@@ -8,9 +8,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.history :as history]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.reentry :as reentry]
@@ -1472,34 +1470,20 @@
           (add! :blocker-answered {:format :blocker-answered :blocker-seq b :summary "go"})
           (is (= "Done" (:settled-in-notion (p/of :brian id))) "answered, the settlement places it"))))))
 
-(deftest status-says-who-owes-the-move-and-whether-anything-is-live
+(deftest status-says-who-owes-the-move
+  ;; Whether anything runs is observed, not a record fact: nido.coordinator.view.activity reads it.
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
         (let [s (p/status :brian id)]
           (is (= :intake (get-in s [:position :at])))
           (is (= :agent (:owed-by s)) "establishing intent is an agent's authoring turn")
-          (is (false? (:live s)))
-          (is (true? (:stalled s)) "an agent owes it and nothing is working on it"))
+          (is (false? (:paused s)))
+          (is (not (contains? s :live)))
+          (is (not (contains? s :stalled))))
         (testing "a blocker is a person's"
           (add! :blocker {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."})
-          (let [s (p/status :brian id)]
-            (is (= :person (:owed-by s)))
-            (is (false? (:stalled s)))))
-        (testing "a live run is live"
-          (with-redefs [runs/live-runs (constantly ["r1"])]
-            (is (true? (:live (p/status :brian id))))))
-        (testing "a held claim is live before its payload is published"
-          (with-redefs [activity/held?     (constantly true)
-                        activity/read-live (constantly nil)]
-            (is (true? (:live (p/status :brian id))))))
-        (testing "a person's session is live when its ports answer"
-          (sess/create! :brian id {:name "human-1" :weight :light :autonomy nil})
-          (is (false? (:live (p/status :brian id))))
-          (is (true? (:live (p/status :brian id #{"human-1"})))))
-        (testing "a background session's listing is no longer read: the core's turns are what run"
-          (sess/create! :brian id {:name "bg-1" :weight :light :autonomy nil})
-          (is (false? (:live (p/status :brian id)))))))))
+          (is (= :person (:owed-by (p/status :brian id)))))))))
 
 (defn- faceted!
   "A session on `id` driven through a facet, as a spawn leaves it: no :autonomy, a :claude facet."
@@ -1511,29 +1495,27 @@
                                                        :announced-blocked? false :recovered-boot nil}
                                                       facet))))
 
-(deftest a-stall-says-why
+(deftest status-says-why-the-work-stopped
   (with-tmp
     (fn [_]
       (let [[id _] (ledger)]
-        (do
-          (testing "with no turn end recorded, it says so"
-            (faceted! id "worker" {})
-            (let [s (p/status :brian id)]
-              (is (true? (:stalled s)))
-              (is (= {:turn-end :none :owes :establish-intent} (:why s)))))
-          (testing "a turn end that ended nido's instruction names the session, when, the move and the words"
-            (sess/update-claude! :brian id "worker"
-                                 #(assoc % :last-stop {:at "2026-11-13T14:43:20Z" :message "Intent recorded." :nido? true}))
-            (let [s (p/status :brian id)]
-              (is (true? (:stalled s)))
-              (is (= {:turn-end :recorded :session "worker" :ended-at "2026-11-13T14:43:20Z" :owes :establish-intent :said "Intent recorded."}
-                     (:why s)))))
-          (testing "on a workstream not activated, a turn that answered a person's own prompt is theirs, not a stall"
-            (sess/update-claude! :brian id "worker" #(assoc-in % [:last-stop :nido?] false))
-            (let [s (p/status :brian id)]
-              (is (= :agent (:owed-by s)) "who owes is read off the mode alone")
-              (is (false? (:stalled s)))
-              (is (nil? (:why s))))))))))
+        (testing "with no turn end recorded, it says so"
+          (faceted! id "worker" {})
+          (let [s (p/status :brian id)]
+            (is (false? (:resting? s)))
+            (is (= {:turn-end :none :owes :establish-intent} (:stall-why s)))))
+        (testing "a turn end that ended nido's instruction names the session, when, the move and the words"
+          (sess/update-claude! :brian id "worker"
+                               #(assoc % :last-stop {:at "2026-11-13T14:43:20Z" :message "Intent recorded." :nido? true}))
+          (let [s (p/status :brian id)]
+            (is (false? (:resting? s)))
+            (is (= {:turn-end :recorded :session "worker" :ended-at "2026-11-13T14:43:20Z" :owes :establish-intent :said "Intent recorded."}
+                   (:stall-why s)))))
+        (testing "on a workstream not activated, a turn that answered a person's own prompt leaves it theirs, at rest"
+          (sess/update-claude! :brian id "worker" #(assoc-in % [:last-stop :nido?] false))
+          (let [s (p/status :brian id)]
+            (is (= :agent (:owed-by s)) "who owes is read off the mode alone")
+            (is (true? (:resting? s)))))))))
 
 (deftest an-unanswered-blocker-outranks-open-findings
   (is (= :blocked (#'p/place {:ks #{:intent} :findings-open? true :blocker-seq 7})))

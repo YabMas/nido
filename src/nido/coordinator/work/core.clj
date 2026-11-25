@@ -222,32 +222,11 @@
   [{:keys [state]}]
   (boolean (some-> state d/background-run?)))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :keyword]} engagement
-  "The engagement a held workstream `w` reads as: :settled once closed, :parked-at-gate while an
-   ask awaits the person, :active while the core is doing anything else (`activity`), :idle
-   otherwise."
-  [{:keys [state] :as w}]
-  (let [a (activity w)]
-    (cond
-      (:closed? state)          :settled
-      (= :asking (:kind a))     :parked-at-gate
-      a                         :active
-      :else                     :idle)))
-
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]} held-units?
   "Whether a person holds every open unit of held workstream `w`, and it has one."
   [{:keys [state]}]
   (let [open (filter #(= :open (:status %)) (vals (:units state)))]
     (boolean (and (seq open) (every? :held? open)))))
-
-(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} doing
-  "What is underway in held workstream `w`, as the board's :doing reads it, or nil:
-   {:source :core :activity k} with the :turn and :unit it concerns, k any `activity` but
-   :asking, which waits on the person rather than being underway."
-  [w]
-  (when-let [{:keys [kind] :as a} (activity w)]
-    (when-not (= :asking kind)
-      (-> a (dissoc :kind) (assoc :source :core :activity kind)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} position
   "Where held workstream `w` stands by its coordination, for a workstream whose ledger records none

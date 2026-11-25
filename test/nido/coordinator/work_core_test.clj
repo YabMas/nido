@@ -7,6 +7,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.workstream :as workstream]
+   [nido.coordinator.view.activity :as act]
    [nido.coordinator.work :as work]
    [nido.coordinator.work.core :as wcore]
    [nido.ui.components.state :as ui-state]
@@ -186,17 +187,16 @@
         (is (= :core-under-way (get-in (row) [:position :at])) "a unit's turn ran: under way")))))
 
 (deftest a-workstream-the-core-moves-is-never-read-as-stalled
-  ;; Status reads liveness from claims, Runs and a person's sessions, and a core turn is none of
-  ;; them; while the core has the move, the row must not carry status's stall.
+  ;; An agent owes the move and no claim, run or person's session runs: a stall — until the core
+  ;; has the move, which is activity too.
   (with-ws
     (fn [c ws-id]
       (let [status pipeline/status
             row    #(first (work/list-workstreams :brian #{}))]
         (with-redefs [pipeline/status (fn [& args]
                                         (assoc (apply status args)
-                                               :owed-by :agent :live false :stalled true
-                                               :why "nothing runs"))]
-          (is (get-in (row) [:status :stalled]) "the core holds nothing: status's stall stands")
+                                               :owed-by :agent :resting? false))]
+          (is (get-in (row) [:status :stalled]) "the core holds nothing: the stall stands")
           (fake-core/seed! c :brian ws-id
                            [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}
                             {:command :start-turn :turn "u1" :unit "u" :spec {:executor :fake :instructions "i"}}])
@@ -215,6 +215,36 @@
           (testing "an ask the core holds owes the person, and nothing is stalled"
             (is (= {:owed-by :person :live false :stalled false}
                    (select-keys (:status (row)) [:owed-by :live :stalled :why])))))))))
+
+(deftest what-status-sees-running-still-runs-while-the-core-does-nothing
+  ;; A person's session or a review claim is no core turn: with the core idle, the row's
+  ;; engagement and :doing must say what its live mark says, on the list and the pane alike.
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
+      (let [status pipeline/status
+            claim  {:kind :design-round :run-id "r1"}
+            row    #(first (work/list-workstreams :brian #{}))]
+        (is (nil? (wcore/activity (wcore/held-ws (wcore/held) :brian ws-id))) "the core does nothing")
+        (testing "nothing runs anywhere: the engagement is status's, stall and all"
+          (is (get-in (row) [:status :stalled]))
+          (is (= :stalled (:engagement (row))))
+          (is (nil? (:doing (row)))))
+        (with-redefs [pipeline/status (fn [& args] (assoc (apply status args) :owed-by :agent))
+                      act/observe     (fn [& _] {:claim claim :runs [] :sessions []})]
+          (testing "a claim status sees is underway, and the row is active beside its live mark"
+            (is (= (assoc claim :source :claim) (:doing (row))))
+            (is (= :active (:engagement (row))))
+            (is (get-in (row) [:status :live])))
+          (testing "the pane says what the row says"
+            (let [p (work/workstream :brian ws-id)]
+              (is (= (assoc claim :source :claim) (:doing p)))
+              (is (get-in p [:status :live])))))
+        (with-redefs [pipeline/status (fn [& args] (assoc (apply status args) :owed-by :person))]
+          (testing "a ledger owing the person parks nothing the core does not ask"
+            (is (false? (:needs-you (row))))
+            (is (not= :parked-at-gate (:engagement (row))))))))))
 
 (deftest a-catch-up-is-applied-whole-before-anything-refreshes
   (with-redefs [wcore/mirror (atom {:pos 0 :ws {} :following? true :caught-up (promise)})]

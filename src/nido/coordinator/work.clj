@@ -45,6 +45,7 @@
    [nido.coordinator.view.drains :as drains-view]
    [nido.coordinator.view.recoveries :as recoveries-view]
    [nido.coordinator.view.review-queue :as review-queue-view]
+   [nido.coordinator.view.activity :as act]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.work.core :as wcore]
    [nido.notion.client :as notion]
@@ -558,25 +559,6 @@
                                                        :triage)
       :else                                          :in-progress)))
 
-(defn- engagement-of
-  "The engagement vocabulary the board's bands and holds are written in, from status."
-  [{:keys [owed-by live stalled]}]
-  (cond
-    (= :person owed-by)  :parked-at-gate
-    live                 :active
-    stalled              :stalled
-    (= :machine owed-by) :queued
-    :else                :idle))
-
-(defn- observed-doing
-  "`doing` as status observed it. A session's activity counts only while status finds something
-   live: a message queued for a session whose process is gone — a gate reply to a run that ended
-   days ago — is waiting, not work, and reading it as work drew a running stage beside the halted
-   mark. A claim or a merge is its own evidence and passes as it is."
-  [doing status]
-  (when-not (and (= :session (:source doing)) (not (:live status)))
-    doing))
-
 (def ^:private core-held-cache (atom {:at 0 :h {}}))
 
 (defn- core-held
@@ -601,117 +583,90 @@
     (wcore/of-state st)
     (wcore/held-ws (core-held) project ws-id)))
 
-(defn- core-overlay
-  "Row `row` with its coordination — closure, needs-you, engagement, the pause and what is
-   underway — as the core holds it. Work records place the row on its arc; nothing else on it
-   decides what awaits the person.
+;; What a row says about its coordination — its band, who owes it, whether anything runs, whether
+;; it needs the person — is one reading: `act/of` over the row's observation, built here because
+;; this is the band that reaches every source it takes (records, the session substrate, the core).
 
-   Nor what runs: status reads liveness off claims, Runs and a person's sessions, and the core's
-   work is none of them, so while the core has the move — any `wcore/activity`: a turn running,
-   a session starting, the conductor deciding, an ask awaiting the person — status's stall is
-   overruled rather than shown beside it."
-  [project row]
-  (let [w (core-of project (:ws-id row))]
-    (cond
-      (:bare? row) row
-      (nil? w)     (assoc row :needs-you false)
-      :else
-      (let [closed? (get-in w [:state :closed?])
-            eng     (wcore/engagement w)
-            ;; The ledger reads :intake when it records none of the work — so does a workstream
-            ;; nobody activated, whose units the core ran all the same. Its coordination says
-            ;; where it stands, and a workstream under way is out of the triage pen.
-            core-at (when (= :intake (get-in row [:position :at])) (wcore/position w))
-            bg?     (and (not closed?) (wcore/background? w))
-            doing   (wcore/doing w)
-            asking? (boolean (seq (:awaiting w)))
-            ;; The person's Land is a grant the core holds until a merge spends it, never a ledger
-            ;; record: until then the candidate is landing, the seat's move on nido's instruction.
-            landing? (and (contains? (get-in w [:state :grants]) :merge)
-                          (#{:release-candidate :published} (get-in row [:position :at])))]
-        (cond-> (assoc row
-                       :needs-you  asking?
-                       :engagement eng
-                       :doing      doing)
-          (or doing asking?)    (update :status #(-> (assoc % :stalled false) (dissoc :why)))
-          doing                 (assoc-in [:status :live] true)
-          asking?               (assoc-in [:status :owed-by] :person)
-          core-at               (assoc :position core-at)
-          landing?              (update :position assoc :at :land-granted
-                                        :next {:stage :land :mode :working-copy})
-          (and core-at (#{:triage :ready} (:stage row))) (assoc :stage :in-progress)
-          bg?                   (assoc :stage :background)
-          (wcore/held-units? w) (assoc-in [:status :paused] true)
-          closed?               (assoc :stage (if (= :dismissed (:stage row)) :dismissed :done)
-                                       :needs-you false :engagement :settled :doing nil))))))
+(defn- observation
+  "Workstream `ws-id`'s `act/Observation`: the record facts `facts` (`pipeline/status`, or nil for
+   a settled row nobody reads it for), its closure and band, the evidence `act/observe` reads now,
+   and the core's activity on held entry `cw` (nil when the core holds none)."
+  [project ws-id live-names cw closed? band facts]
+  (merge (act/observe project ws-id live-names #{})
+         {:closed?   (boolean closed?)
+          :band      band
+          :owed-by   (:owed-by facts)
+          :paused?   (boolean (or (:paused facts) (wcore/held-units? cw)))
+          :resting?  (boolean (:resting? facts))
+          :stall-why (:stall-why facts)
+          :core      (wcore/activity cw)}))
 
-(declare with-status*)
+(defn- coordination
+  "The row fields `act/of`'s answer `a` sets: :status as the marks read it, :needs-you,
+   :engagement and :doing — one answer, so no two of them can disagree."
+  [a]
+  {:status     (select-keys a [:owed-by :live :stalled :paused :why])
+   :needs-you  (:needs-you a)
+   :engagement (:engagement a)
+   :doing      (:doing a)})
 
 (defn- with-status
-  "A spine row with its band from its work records, and its coordination from the core
-   (`core-overlay`)."
+  "A spine row with its band, position and coordination.
+
+   The band and position are the work records'. The core moves them too: the ledger reads
+   :intake when it records none of the work — so does a workstream nobody activated, whose units
+   the core ran all the same — and then the core's coordination says where it stands, and a
+   workstream under way is out of the triage pen; a background run sits in :background; a
+   workstream the core closed is :done.
+
+   A row the ledger settled takes its band from its closure and reads no status — ~1000
+   workstreams sit on a board and nearly all are settled and drawn nowhere, so skipping it is
+   what keeps a refresh to the rows a person can see. It is still SHOWN, with status's position,
+   when it is dismissed, when something still runs under it (`act/of`'s :live), or when a pane
+   is open on it (`whole?`), so a process still running under it is not hidden."
   ([project live-names row] (with-status project live-names row false))
   ([project live-names row whole?]
-   (core-overlay project (with-status* project live-names row whole?))))
-
-(defn- with-status*
-  "A spine row with its band, needs-you, engagement and what is underway — status's answers, and
-   nothing stored beneath them.
-
-   A row the ledger says is settled takes its band from its closure; every other row reads the
-   whole of status. A settled row still SHOWN — dismissed, still live as status means it (a held
-   activity claim, a run's lock, a person's answering session), or the one a pane is open on
-   (`whole?`) — carries status's position and owed-by/live as well, so a
-   process still running under it is not hidden. ~1000 workstreams sit on a board and nearly all
-   are settled and drawn nowhere, so skipping status for those is what keeps a refresh to the
-   rows a person can see."
-  ([project live-names row whole?]
-  (if (:bare? row)
-    (to-spine row)
-    (let [ws-id   (:ws-id row)
-          w       (cws/read-ws project ws-id)
-          closed  (cws/closure w)
-          outcome (:outcome closed)
-          spine   (to-spine row)
-          origin  (:origin spine)]
-      (if (and closed (not= :between-phases outcome))
-        (let [;; Live as status means it — a held activity claim, a run whose agent holds its
-              ;; lock, or a person's session whose ports answer — so an agent still running
-              ;; under a closed workstream is shown, not only a person's session.
-              shown? (or whole? (= :dismissed outcome)
-                         (activity/held? project ws-id)
-                         (resuming? project ws-id)
-                         (and (seq live-names)
-                              (some #(contains? live-names (:name %))
-                                    (remove :conductor (csession/list-sessions project ws-id)))))
-              st     (when shown? (pipeline/status project ws-id live-names))]
-          (cond-> (assoc spine :stage (if (= :dismissed outcome) :dismissed :done)
-                               :dismissed? (= :dismissed outcome)
-                               :needs-you false :engagement :settled
-                               ;; Settled is over: nothing is underway in it.
-                               :doing nil)
-            st (assoc :position (:position st)
-                      :status   (select-keys st [:owed-by :live :stalled :paused :why]))))
-        (let [st   (pipeline/status project ws-id live-names)
-              pos  (:position st)
-              band (if closed :awaiting-gate (band-of project ws-id origin pos))]
-          (cond-> (assoc spine
-                         :stage      band
-                         :dismissed? false
-                         :position   pos
-                         :status     (select-keys st [:owed-by :live :stalled :paused :why])
-                         ;; A person's pause is their choice not to be asked: a paused workstream
-                         ;; owes them nothing until they lift it, whatever its position owes.
-                         :needs-you  (and (= :person (:owed-by st)) (not (:paused st)))
-                         :engagement (engagement-of st)
-                         ;; What is underway, at status's band, so a row cannot say :done and
-                         ;; running at once — and at status's liveness, so it cannot say halted
-                         ;; and running at once either.
-                         :doing      (observed-doing (wsv/doing-at project ws-id closed band
-                                                                   #{})
-                                                     st))
-            (not (contains? unrendered-bands band))
-            (assoc :phase (wsv/phase-progress project ws-id)))))))))
+   (if (:bare? row)
+     (to-spine row)
+     (let [ws-id   (:ws-id row)
+           w       (cws/read-ws project ws-id)
+           closed  (cws/closure w)
+           outcome (:outcome closed)
+           spine   (to-spine row)
+           cw      (core-of project ws-id)
+           obs     #(act/of (observation project ws-id live-names cw %1 %2 %3))]
+       (if (and closed (not= :between-phases outcome))
+         (let [stage  (if (= :dismissed outcome) :dismissed :done)
+               shown? (or whole? (= :dismissed outcome) (:live (obs true stage nil)))
+               st     (when shown? (pipeline/status project ws-id))]
+           (cond-> (merge (assoc spine :stage stage :dismissed? (= :dismissed outcome))
+                          (coordination (obs true stage st)))
+             (not st) (dissoc :status)
+             st       (assoc :position (:position st))))
+         (let [st       (pipeline/status project ws-id)
+               pos      (:position st)
+               core-at  (when (= :intake (:at pos)) (wcore/position cw))
+               core-closed? (get-in cw [:state :closed?])
+               ;; The person's Land is a grant the core holds until a merge spends it, never a
+               ;; ledger record: until then the candidate is landing, the seat's move on nido's
+               ;; instruction.
+               landing? (and (contains? (get-in cw [:state :grants]) :merge)
+                             (#{:release-candidate :published} (:at pos)))
+               band     (cond
+                          core-closed?                           :done
+                          (wcore/background? cw)                 :background
+                          closed                                 :awaiting-gate
+                          :else (let [b (band-of project ws-id (:origin spine) pos)]
+                                  (if (and core-at (#{:triage :ready} b)) :in-progress b)))]
+           (cond-> (merge (assoc spine
+                                 :stage      band
+                                 :dismissed? false
+                                 :position   (cond-> (or core-at pos)
+                                               landing? (assoc :at :land-granted
+                                                               :next {:stage :land :mode :working-copy})))
+                          (coordination (obs (= :done band) band st)))
+             (not (contains? unrendered-bands band))
+             (assoc :phase (wsv/phase-progress project ws-id)))))))))
 
 (defn- par-mapv
   "`(mapv f xs)`, folded in chunks across the processors. Each row's status is its own ledger's
@@ -1062,16 +1017,21 @@
                                      (review-queue/apply-key run-id))))
 
 (defn- hold-state
-  "What a hold's engagement (`engagement-of` its status) means for the sweep it holds.
+  "What a hold's row — its engagement and who owes it, so the sweep and the board read one
+   activity — means for the sweep it holds.
    `:idle` and `:stalled` are the ones that matter: an open workstream nothing is
    working on is one nothing will ever close, and a close is the only thing that
    releases the sweep."
-  [engagement]
+  [{:keys [engagement status]}]
   (case engagement
-    :idle           :stuck
+    ;; Owed to a person by its position — a halt only their answer clears — is waiting on them
+    ;; whether or not the core has raised it as an ask yet.
+    :idle           (if (= :person (:owed-by status)) :waiting-on-you :stuck)
     :parked-at-gate :waiting-on-you
     (:active :queued) :working
-    :stalled        :stuck))
+    :stalled        :stuck
+    ;; Closed under the attempt, which the next read of the attempts lets go of.
+    :settled        :working))
 
 (defn- last-session-change
   "The latest transition any of the workstream's runs recorded, or substrate change any of
@@ -1109,7 +1069,8 @@
              :when open?
              :let  [w        (cws/read-ws pk ws-id)
                     sessions (filter csession/work-session? (csession/list-sessions pk ws-id))
-                    state    (hold-state (engagement-of (pipeline/status pk ws-id)))]]
+                    state    (hold-state (with-status pk (live-session-names pk)
+                                                      (wsv/workstream-row pk w) true))]]
          (cond-> {:project    pname
                   :ws-id      ws-id
                   :address    address
@@ -1835,7 +1796,8 @@
                   :label  (if w (wsv/label w sessions) ws-id)
                   :tag    (if w (wsv/tag w sessions) ws-id)
                   :links  (if w (wsv/ref-links w) [])
-                  :doing  (wcore/doing held)}]
+                  ;; What still runs beside the ask, as every row reads it.
+                  :doing  (:doing (act/of (observation project ws-id #{} held false :awaiting-gate nil)))}]
     {:row      row
      :slice-of (when (= :slice origin) (rdrain/drain-of w))
      :gate     (when-not dismissed? (gate-of-asks project row (:awaiting held)))}))

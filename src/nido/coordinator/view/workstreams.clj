@@ -5,11 +5,8 @@
    functions consume this. Replaces runs-view + tickets-view as the
    coordination overview."
   (:require
-   [babashka.fs :as fs]
-   [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.source.notion-cache :as notion-cache]
-   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
@@ -208,138 +205,6 @@
    ticket's severity-calc, so it drives the same ordering the executor picks by."
   [sessions]
   (->> sessions (keep #(get-in % [:autonomy :priority])) (reduce max 0)))
-
-(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]}
-  round-progress
-  "How far a running round has got, read off the report it keeps as it goes:
-   {:round n :phase <keyword or nil> :findings n}, or nil for a report with no
-   round yet.
-
-   Both loops that take a claim persist this report on every event, and share
-   its outline — rounds, each a sequence of phases — so one reading serves both.
-   `:findings` counts what the CURRENT round's judging phase raised (`review`
-   for a diff review, per layer; `judge` for a record round), which is what the
-   rest of that round is working through. `:phase` is the one still running, nil
-   between phases. While a diff review's judging is still running, `:judged` of
-   `:of` layers have been read, so a count of nothing so far is not mistaken for
-   a clean round."
-  [report]
-  (when-let [r (last (:rounds report))]
-    (let [phases (:phases r)
-          judged (filter #(#{"review" "judge"} (:phase %)) phases)
-          open   (first (filter #(and (= "running" (:status %)) (seq (:layers %))) judged))]
-      (cond->
-       {:round    (:round r)
-       :phase    (some #(when (= "running" (:status %)) (keyword (:phase %))) phases)
-       :findings (+ (reduce + (for [p judged
-                                    l (:layers p)
-                                    :let [n (:findings l)]
-                                    :when (number? n)]
-                                n))
-                    (reduce + (for [p judged
-                                    :let [f (:findings p)]
-                                    :when (sequential? f)]
-                                (count f))))}
-        open (assoc :judged (count (filter #(number? (:findings %)) (:layers open)))
-                    :of     (count (:layers open)))))))
-
-(defn- with-progress
-  "`doing` with the running round's progress beside it, when it is a claim
-   whose report can be read. A report that is missing or mid-write leaves the
-   activity as it was: the progress decorates the label and is never why a row
-   says something is running."
-  [doing]
-  (let [path (:report-path doing)]
-    (if-let [p (when (and (= :claim (:source doing)) path (fs/exists? path))
-                 (try (round-progress (json/parse-string (slurp path) true))
-                      (catch Exception _ nil)))]
-      (assoc doing :progress p)
-      doing)))
-
-(defn- merge-substate
-  "How far the merge lane has got with the workstream, from its newest merge run's state, or nil
-   when no merge run says."
-  [runs]
-  (when-let [r (last (filter #(or (= :merge (:mode %)) (= :merge (:trigger %))) runs))]
-    (case (:state r)
-      :queued                   :queued
-      (:running :preprocessing) :driving
-      :awaiting-review          :blocked
-      :done                     :awaiting-merge
-      nil)))
-
-(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
-  doing
-  "What this workstream is DOING right now — one source, or nil — as
-   `{:source :claim|:merge|:session, …}`.
-
-   THREE SOURCES, and the precedence is total so that exactly one ever answers: a merge run and
-   an agent's burst read by different callers that never met once described one workstream two
-   ways at once.
-
-     over      — nothing. A settled close, or a band of :done, which is how a Notion-driven
-                 workstream ends: its ticket goes terminal under it.
-     :claim    — a named process holds the workstream's activity lock right now.
-     :merge    — the workstream's band is :shipping; the merge run's own state says how far
-                 along, or :queued when no merge run says — the lane takes one branch at a time,
-                 so waiting for it is a state the board keeps saying.
-     :session  — an agent holds its run's lock: `runs` carries each of the workstream's runs
-                 with :live? beside it. Failing that, a session of `sessions` is working
-                 through an instruction nido gave it or holds queued for it (its :claude
-                 facet's :pending or :queued), which reads :phase :answering — a reply sent
-                 from the gate leaves its run parked and holding no lock, so without this the
-                 agent answering it is invisible on every surface. Last, a session of the work —
-                 neither the conductor's nor a chat's — stamped :mid-turn? by the caller, which
-                 reads :phase :running: a seat goes on working long after the instruction that
-                 started it ended, woken by its own subagents, holding no lock and owed nothing.
-
-   The claim outranks the others because it is evidence of a process alive at the instant of
-   the read. A run parked for review is deliberately not `doing`: it is a gate, and calling it
-   activity would report a workstream waiting on a person as one that is busy, and a seat stopped
-   at a person's gate is not mid-turn. `claim`, the runs' liveness, the sessions and each
-   session's :mid-turn? arrive as ARGUMENTS, so this stays pure."
-  [{:keys [closed stage claim runs sessions]}]
-  (cond
-    (or (some? closed) (= :done stage)) nil
-
-    (some? claim)
-    (into {:source :claim}
-          (select-keys claim [:kind :run-id :report-path :started-at :pid]))
-
-    (= :shipping stage)
-    {:source :merge :phase (or (merge-substate runs) :queued)}
-
-    :else
-    (if-let [r (last (filter :live? runs))]
-      {:source :session :phase (:state r) :session (:session-name r)}
-      (if-let [s (first (filter #(or (get-in % [:claude :pending]) (get-in % [:claude :queued]))
-                                sessions))]
-        {:source :session :phase :answering :session (:name s)}
-        (when-let [s (first (filter #(and (:mid-turn? %) (not (:conductor %)) (not (:chat %)))
-                                    sessions))]
-          {:source :session :phase :running :session (:name s)})))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map] [:maybe :keyword]
-                               [:maybe [:set :string]]]
-                         [:maybe :map]]}
-  doing-at
-  "What is underway in workstream `ws-id` right now, given the closure and band the caller
-   settled on — `doing` with the claim, the runs' liveness and the sessions read here and the
-   running round's progress beside it. The board passes status's band, so what is underway and
-   where the row sits are one answer.
-
-   `mid-turn` is the set of claude session ids the caller observed mid-turn (nil: none); a
-   session is stamped :mid-turn? only when its :claude facet's :session-id is in it. It is
-   passed because this namespace may not read the agent listing that observes it."
-  [project ws-id closed stage mid-turn]
-  (with-progress
-    (doing {:closed   closed
-            :stage    stage
-            :claim    (activity/read-live project ws-id)
-            :runs     (mapv #(assoc % :live? (runs/live? (:id %))) (runs/runs-of project ws-id))
-            :sessions (mapv #(assoc % :mid-turn? (contains? (or mid-turn #{})
-                                                            (get-in % [:claude :session-id])))
-                            (session/list-sessions project ws-id))})))
 
 (defn- standing-design
   "The design whose plan governs the workstream (`standing/governing-design` — the one
@@ -661,7 +526,7 @@
    as `none of the things that can say so are running` rather than as `nothing is
    running`, which is the honest reading while only the review loops take a claim.
 
-   A claim carrying `:progress` (`round-progress`) reads as where its round has
+   A claim carrying `:progress` (`nido.coordinator.view.activity/round-progress`) reads as where its round has
    got — `review round 2 · fixing · 3 findings` — and one without falls back to
    the kind's name.
 
