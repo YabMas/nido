@@ -745,12 +745,15 @@
   "The :seq of the record `place` read to put the workstream at `pos` when a person owes the move
    it names, or nil: the blocker it halts on, the invalidating verdict re-entry names, the
    verdict nobody accepted, the newest
-   publication among the trail records that placed :published. :awaiting-gate is placed by a close,
-   a status entry; the question it owes is the phase's exit criterion, not a record's.
+   publication among the trail records that placed :published, the recipe proposal pending
+   approval, the census that read the drain exhausted. :awaiting-gate is placed by a close,
+   a status entry; the question it owes is the phase's exit criterion, not a record's. A cleared
+   slice is placed by its drain's :slice-cleared, a record on another ledger, so none of its own
+   names it.
 
    Read from the same facts `place` read, so the record a gate asks from is the one that put
    the workstream there — never a second, per-kind reading of the ledger."
-  [pos {:keys [blocker-seq re-entry trail-records verdict-seq]}]
+  [pos {:keys [blocker-seq re-entry trail-records verdict-seq drain-records]}]
   (case pos
     :blocked            blocker-seq
     :design-invalidated (get-in re-entry [:because :seq])
@@ -758,6 +761,8 @@
     :published          (:seq (last (filter #(= :pr-opened (:kind %)) trail-records)))
     ;; The converged review that made it a candidate: what a Land is checked against.
     :release-candidate  (:seq (last (filter #(= :review (:kind %)) trail-records)))
+    :recipe-proposed    (:proposal drain-records)
+    :drain-exhausted    (:census drain-records)
     nil))
 
 (def ^:private next-by-position
@@ -1259,6 +1264,11 @@
           verdict (standing/verdict project ws-id whole)
           decision (when design (standing/proceeding-decision project ws-id (:seq design)))
           facts  {:class-position (class-position project whole ks)
+                  ;; The drain records its own positions read: the proposal pending approval and
+                  ;; the newest census under the current recipe.
+                  :drain-records  (when (drain/drain? whole)
+                                    {:proposal (:seq (last (drain/pending-proposals whole)))
+                                     :census   (:seq (drain/newest-census whole))})
                   :closed?        (some? (or closed settled))
                          :closed-outcome (:outcome closed)
                          :trail-records  (trail-records w design re)

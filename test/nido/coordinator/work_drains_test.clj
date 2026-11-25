@@ -1,9 +1,10 @@
 (ns nido.coordinator.work-drains-test
-  "A drain reaches the gate inbox as one row: a slice that owes a person a move is never a card of
-   its own, and a drain that owes one is."
+  "A drain's acts from the drains page and the gate inbox, and the positions its records place it
+   at."
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.source.drain :as source-drain]
@@ -47,3 +48,16 @@
         (is (= :refused (:decision (work/set-stage! :brian d :done)))
             "a drain whose exit is not observed is not closed done")))))
 
+
+(deftest a-pending-proposal-places-the-drain-whatever-lands-above-it
+  (with-tmp
+    (fn []
+      (let [d  (drain/start-drain! :brian {:established-by {:commit "abcdef1"} :exit "x"})
+            v  (drain/approve-recipe! :brian d (drain/propose-recipe! :brian d {:reason "r" :recipe a-recipe}))
+            p2 (drain/propose-recipe! :brian d {:reason "again" :recipe a-recipe})
+            _  (drain/record-census! :brian d {:recipe v :remaining 3 :groups []})
+            pos (pipeline/of :brian d)]
+        (is (= :recipe-proposed (:at pos)))
+        (is (= p2 (:placed-by pos)) "the proposal pending approval placed it, not the census above it")
+        (is (= {:decision :done} (work/resolve-gate! :brian d :approve-recipe (:placed-by pos)))
+            "and approving the record it names is accepted")))))
