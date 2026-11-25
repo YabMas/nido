@@ -3595,22 +3595,41 @@
   [{:keys [refused]}]
   (if refused {:decision :core-refused :because refused} {:decision :done}))
 
+(defn- chosen-options
+  "The branches of blocker `report` an answer chooses: the one `action-id` letters, or for
+   :answer-questions each question's option its pick in `payload` letters. What an answer's words
+   and its grants are both read from, so no path records the one without the other."
+  [report action-id payload]
+  (let [letter-at (fn [opts letter]
+                    (when letter
+                      (some (fn [[j l]] (when (= letter l) (get (vec opts) j)))
+                            (map-indexed vector report/option-letters))))]
+    (cond
+      (option-action? action-id)
+      (keep identity [(get (vec (:options report)) (option-index action-id))])
+
+      (= :answer-questions action-id)
+      (keep identity (map (fn [q pick] (letter-at (:options q) (:letter pick)))
+                          (report/blocker-questions report)
+                          (concat (:answers payload) (repeat nil)))))))
+
 (defn- answer-blocker!
   "Record the person's answer to the blocker the ledger owes (`pipeline/owed-blocker`) as their
    :blocker-answered work record: the branch `action-id` letters, the answer to each of its
    several questions (`:answer-questions`, `payload` {:seq :answers}), or their words (:reply).
-   A lettered or several-question click must name that blocker's :seq, else it is stale. A branch
-   carrying :grants hands them to the core as the person's. Answers {:decision :answered-unresumed}."
+   A lettered or several-question click must name that blocker's :seq, else it is stale. Every
+   branch the answer chooses (`chosen-options`) hands the core the :grants it carries, as the
+   person's. Answers {:decision :answered-unresumed}."
   [project ws-id action-id payload]
   (let [p      (keyword (name project))
         n      (pipeline/owed-blocker p ws-id)
         {:keys [ledger entries]} (active-ledger p ws-id)
         report (report-at ledger entries n)
         at     (if (map? payload) (:seq payload) payload)
-        opt    (when (option-action? action-id) (get (vec (:options report)) (option-index action-id)))
+        chosen (chosen-options report action-id payload)
         answer (cond
                  (= :reply action-id)            (some-> payload str str/trim not-empty)
-                 opt                             (some-> (:label opt) str str/trim not-empty)
+                 (option-action? action-id)      (some-> (first chosen) :label str str/trim not-empty)
                  (= :answer-questions action-id) (questions-answer {:questions (report/blocker-questions report)}
                                                                    (:answers payload)))]
     (cond
@@ -3619,7 +3638,7 @@
       :else
       (do (cws/append-entry! p ws-id {:kind :blocker-answered}
                              (pr-str {:format :blocker-answered :blocker-seq n :summary answer}))
-          (doseq [g (:grants opt)]
+          (doseq [g (distinct (mapcat :grants chosen))]
             (wcore/act! p ws-id {:command :give-grant :grant g :by "person"}))
           {:decision :answered-unresumed}))))
 

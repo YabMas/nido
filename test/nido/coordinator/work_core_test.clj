@@ -479,6 +479,21 @@
                (map #(select-keys % [:blocker-seq :summary]) (workstream/entries-of :brian ws-id :blocker-answered))))
         (is (nil? (pipeline/owed-blocker :brian ws-id)) "and the blocker is owed no longer")))))
 
+(deftest a-several-question-answer-hands-on-the-grants-it-chose
+  (with-ws
+    (fn [c ws-id]
+      (workstream/append-entry! :brian ws-id {:kind :blocker}
+                                (pr-str {:format :blocker :summary "stuck" :after "it resumes"
+                                         :questions [{:id "q1" :question "Land it?"
+                                                      :options [{:label "Land" :summary "now" :grants [:merge]}
+                                                                {:label "Hold" :summary "later"}]}
+                                                     {:id "q2" :question "Anything else?"}]}))
+      (let [n (pipeline/owed-blocker :brian ws-id)]
+        (is (= {:decision :answered-unresumed}
+               (work/resolve-gate! :brian ws-id :answer-questions
+                                   {:seq n :answers [{:letter (first nido.coordinator.report/option-letters)} {}]})))
+        (is (contains? (:grants (core-state c ws-id)) :merge) "the option chosen on the card grants what it offered")))))
+
 (deftest a-drain-s-owed-moves-are-carded-with-their-acts
   (with-ws
     (fn [c ws-id]
