@@ -103,6 +103,17 @@
     (let [{:keys [fail error]} (apply t/run-tests nses)]
       (System/exit (if (zero? (+ (or fail 0) (or error 0))) 0 1)))))
 
+(def ^:private turn-env
+  "What the core sets in the environment of a turn it runs, naming the turn's workstream, turn and
+   unit. Code reads the workstream it serves from it, so a suite run inside a turn would find a real
+   one where a test expects none."
+  ["NIDO_CORE_WS" "NIDO_CORE_TURN" "NIDO_CORE_UNIT"])
+
+(defn- suite-env
+  "The whole environment a suite runs in: this process's, without the turn's, with `env` over it."
+  [env]
+  (merge (apply dissoc (into {} (System/getenv)) turn-env) env))
+
 (defn- run-jvm-tests!
   "Run the JVM suite (test-jvm/, through deps.edn's :core-test alias) in the same fresh home, and
    answer its exit code. These are the coordination core's tests, which need a classpath bb cannot
@@ -111,7 +122,7 @@
   [root env tmp only]
   (if-not (fs/exists? (fs/path root "test-jvm"))
     0
-    (:exit (apply p/shell {:continue true :dir root :extra-env env}
+    (:exit (apply p/shell {:continue true :dir root :env (suite-env env)}
                   "clojure" (str "-J-Djava.io.tmpdir=" tmp) "-M:core-test"
                   (when only ["-r" (str "^" (java.util.regex.Pattern/quote only) ".*")])))))
 
@@ -121,7 +132,8 @@
 
    Two more roots move into the home with NIDO_HOME. CODEX_HOME, because the
    session registry merges legacy files under it (nido.session.state), so a
-   real one there would hand tests real session ports. The temp dir, so the
+   real one there would hand tests real session ports. The turn's own variables are dropped
+   (`turn-env`), so a suite run inside a core turn reads no real workstream. The temp dir, so the
    private homes tests make for themselves are inside this one and go with it.
 
    The home is made under /tmp, not the system temp dir: a Unix socket path is
@@ -139,7 +151,7 @@
         exit (try
                (seed-home! home)
                (fs/create-dirs tmp)
-               (let [bb-exit (:exit (apply p/shell {:continue true :dir root :extra-env env}
+               (let [bb-exit (:exit (apply p/shell {:continue true :dir root :env (suite-env env)}
                                            "bb" (str "-Djava.io.tmpdir=" tmp)
                                            "--config" (str (fs/path root "bb.edn")) "nido:test"
                                            (map str args)))]
