@@ -248,7 +248,8 @@
            which one your eye lands on: compare the ordinary row against the ones that need
            something."
     :blocks [(registered "board-row" row/board-row) (registered "gate-row" row/gate-row)
-             (registered "winddown-row" row/winddown-row) (registered "arc-row" row/arc-row)]}
+             (registered "winddown-row" row/winddown-row) (registered "arc-row" row/arc-row)
+             (registered "candidate-row" row/candidate-row)]}
    {:id "ask" :title "The Ask"
     :note "One decision, offered for answer. Datastar is live on this page, so the stepper, the
            choices and the answered-markers work exactly as they do on a real gate; the buttons

@@ -534,20 +534,17 @@
   [:li [:span.meta at] " · " session " · " [:code (or tool-name "?")]
    (when tool-input [:span.meta " " tool-input])])
 
-(defn- candidate-row
-  "One release candidate: the workstream, linking to its pane, where Land is."
-  [{:keys [project ws-id label position]} selection href]
-  [:a {:class (str "gate-card" (when (and (= project (:project selection)) (= ws-id (:ws-id selection))) " sel"))
-       :href href}
-   [:div.gate-top [:span.candidate-mark {:title "release candidate"} candidates-icon] [:span.lbl (or label ws-id)]]
-   [:div.gate-sub [:span project] (state/position-chip position)]])
-
 (defn- candidates-list
   "The release candidates, each opening its workstream's pane beside the list."
-  [{:keys [candidates selection] :as screen}]
+  [{:keys [candidates selection chats-unseen] :as screen}]
   (if (seq candidates)
     (for [r candidates]
-      (candidate-row r selection (str "/" (screen-query screen {:sel (str (:project r) ":" (:ws-id r))}))))
+      (block/render row/candidate-row (str (:project r) ":" (:ws-id r))
+                    {:row       (assoc r :project (name (:project r)) :ws-id (str (:ws-id r)))
+                     :href      (str "/" (screen-query screen {:sel (str (:project r) ":" (:ws-id r))}))
+                     :selected? (and (= (:project r) (:project selection)) (= (:ws-id r) (:ws-id selection)))
+                     :chat?     (contains? chats-unseen {:project (name (:project r)) :ws-id (str (:ws-id r))})}
+                    {} no-router))
     [:p.empty "No release candidates."]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
@@ -575,7 +572,8 @@
           (block/render row/gate-row sel
                         {:gate (assoc g :selected? (and (= (:project g) (:project selection))
                                                         (= (:ws-id g) (:ws-id selection))))
-                         :href (str "/" (screen-query screen {:sel sel}))}
+                         :href (str "/" (screen-query screen {:sel sel}))
+                         :chat? (contains? (:chats-unseen screen) {:project (name (:project g)) :ws-id (str (:ws-id g))})}
                         {} no-router)
           ;; A drain its slices raised escalations through: their questions are answered on
           ;; the drains page, which lists them beside the drain's own.
@@ -1508,14 +1506,16 @@
              (for [r rows]
                (case stage
                  :winding-down (block/render row/winddown-row (str project ":" (:ws-id r))
-                                             {:row (assoc r :project project)}
+                                             {:row (assoc r :project project)
+                                              :chat? (contains? (:chats-unseen screen) {:project (name project) :ws-id (str (:ws-id r))})}
                                              {} (fn [_ {:keys [project ws-id]}]
                                                   (str "/workstreams/" project "/" ws-id "/winddown" wd-q)))
                  (block/render row/board-row (str project ":" (:ws-id r))
                                {:project project :row r
                                 :href (str "/workstreams"
                                            (screen-query screen {:sel (str project ":" (:ws-id r))}))
-                                :selected? (= sel-id (:ws-id r))}
+                                :selected? (= sel-id (:ws-id r))
+                                :chat? (contains? (:chats-unseen screen) {:project (name project) :ws-id (str (:ws-id r))})}
                                {} no-router)))]]))]))))
 
 (defn- session-dev-cell

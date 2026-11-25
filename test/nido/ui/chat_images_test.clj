@@ -5,7 +5,6 @@
             [nido.session.chat :as chat]
             [nido.ui.chat-host :as host]
             [nido.ui.components.chat :as panel]
-            [nido.ui.side-chat :as side-chat]
             [org.httpkit.server :as http])
   (:import (java.io ByteArrayInputStream)))
 
@@ -14,7 +13,7 @@
 
 (defn- bytes-of [& xs] (byte-array (map unchecked-byte xs)))
 
-(def ^:private view @#'side-chat/view)
+(def ^:private view {:id "nido-chat" :router (host/router "/_chat") :attach? true})
 
 (defn- fresh-host []
   (host/host {:project "nido" :session "test" :name (str (gensym "img"))} view

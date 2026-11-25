@@ -58,10 +58,12 @@
   "The Datastar expression performing `action` for one instance. `router` is a function of the
    action's name and `(:params opts)` returning its URL; `opts` carries the instance — `:scope`
    and `:id` — and may carry `:params` for the router and `:query`, a map appended to the URL as
-   its query string. Event fields are copied into the instance's namespace first, so the request
+   its query string, and `:cleanup?`, true for a request that ends when the element issuing it
+   leaves the page — a stream whose panel is replaced, which would otherwise hold its connection
+   open for good. Event fields are copied into the instance's namespace first, so the request
    sends the instance's signals and nothing else."
   ([action router] (expression action router {}))
-  ([[method action-name fields] router {:keys [scope id params query]}]
+  ([[method action-name fields] router {:keys [scope id params query cleanup?]}]
    (let [url     (url-with-query (router action-name params) query)
          prefix  (if scope (names/signal-root scope id) [])
          copies  (for [[_ [source k :as field]] fields
@@ -69,9 +71,11 @@
                    (str "$" (str/join "." (concat prefix (map name (field-path field))))
                         " = evt." (name k)))
          root    (str/join "\\." prefix)
+         options (cond-> []
+                   (and scope id) (conj (str "filterSignals: {include: /^" root "(\\.|$)/}"))
+                   cleanup?       (conj "requestCancellation: 'cleanup'"))
          request (str "@" (name method) "(" (js-string url)
-                      (when (and scope id)
-                        (str ", {filterSignals: {include: /^" root "(\\.|$)/}}"))
+                      (when (seq options) (str ", {" (str/join ", " options) "}"))
                       ")")]
      (str/join "; " (concat copies [request])))))
 

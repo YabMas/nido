@@ -793,16 +793,17 @@
       (Thread/sleep 50)
       (is (= [["brian" "ws-old" :apply 3]] @calls)))))
 
-(deftest every-page-shows-the-operator-whatever-it-has-open
-  ;; One conversation on every page: a workstream selected, or its own page, changes nothing.
+(deftest every-page-carries-the-side-chats-of-its-place
+  ;; A page draws the side panel for its own location — the chats visible there — and the panel
+  ;; follows the location from then on.
   (with-redefs [nido.coordinator.work/workstream (fn [p w _] {:project p :ws-id w :label w :stage :design})
                 nido.session.chat/transcript     (fn [_] {:items [] :busy? false})]
     (doseq [req [{:uri "/" :headers {}}
                  {:uri "/workstreams" :query-string "sel=brian:ws-drawn" :headers {}}
                  {:uri "/workstreams/brian/ws-drawn" :headers {}}]]
       (let [html (str (hiccup2.core/html (:side-chat (#'server/rail-ctx req :workstreams "brian" {:needs-count 0}))))]
-        (is (re-find #"[^a-z0-9]/_chat/stream" html) (:uri req))
-        (is (not (clojure.string/includes? html "/_chat/ws/")) (:uri req))))))
+        (is (str/includes? html "id=\"chat:nido-chat:toggle\"") (:uri req))
+        (is (str/includes? html "/_chat/here") (:uri req))))))
 
 (deftest workstream-page-is-the-pane-alone
   ;; A workstream's own path draws its pane with no board beside it, from the same screen
@@ -824,7 +825,7 @@
       (is (str/includes? body "id=\"ws-pane\""))
       (is (str/includes? body "class=\"ws-page\""))
       (is (not (str/includes? body "Other-row")) "no board on the workstream's page")
-      (is (re-find #"[^a-z0-9]/_chat/stream" body) "the side chat is the operator's"))
+      (is (str/includes? body "id=\"chat:nido-chat:toggle\"") "the page carries the side chat"))
     (let [body (:body (server/handle-request {:request-method :get :uri "/workstreams"
                                               :query-string "sel=brian:ws-1"}))]
       (is (str/includes? body "Other-row") "the board keeps its pane beside the list")

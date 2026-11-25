@@ -29,6 +29,16 @@
   [mark]
   [:span.row-st mark])
 
+(def ^:private chat-mark
+  "The mark a row listing a workstream carries when a side chat pinned to it finished a turn, or
+   waits on a permission, since the person last had it open: a speech bubble in the side panel's
+   icon form — 24 units, stroked, no fill — in the colour of a person's move."
+  [:span.chat-mark {:title "A chat here finished, or waits on you, since you last looked"
+                    :aria-label "A chat here has something new"}
+   [:svg {:viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"
+          :stroke-linecap "round" :stroke-linejoin "round" :aria-hidden "true"}
+    [:path {:d "M7.9 20A9 9 0 1 0 4 16.1L2 22Z"}]]])
+
 (defn- tag-line
   "The workstream's stable identifier (wsv/tag — ticket id, else worktree name) on
    its own line under the generated title, which is what a person cannot search
@@ -44,7 +54,7 @@
    is the open one. The row builds neither — a link that carries the view-state is the page's
    business, and a row that reached for the screen to build its own could only ever be listed
    by that page."
-  [{:keys [part] {:keys [project href selected?]
+  [{:keys [part] {:keys [project href selected? chat?]
                   {:keys [label tag needs-you open-findings position phase stage] :as row} :row} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
    [:div.gate-top
@@ -52,6 +62,7 @@
                        (= :merge (:source (:doing row))) nil
                        :else                          (state/state-mark (:status row) (:doing row))))
     [:span.lbl label]
+    (when chat? chat-mark)
     (when (pos? (or open-findings 0))
       [:span.badge-findings (str "⚑ " open-findings " open findings")])]
    (tag-line tag)
@@ -78,11 +89,11 @@
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [part] {:keys [href]
+  [{:keys [part] {:keys [href chat?]
                   {:keys [project stage label tag report ask session resume-error pending? error-msg
                           doing denials selected?]} :gate} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
-   [:div.gate-top (status-slot (state/needs-mark)) [:span.lbl label]]
+   [:div.gate-top (status-slot (state/needs-mark)) [:span.lbl label] (when chat? chat-mark)]
    (tag-line tag)
    [:div.gate-sub [:span project] (state/stage-chip stage)
     [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]
@@ -104,6 +115,15 @@
      [:div.gate-err "⚠ " (count denials) " permission denial" (when (< 1 (count denials)) "s")
       " — latest: " (or (:tool-name (peek denials)) "?")])])
 
+(defn- render-candidate-row
+  "One release candidate on Needs you: the workstream, linking to `:href` — its pane, where Land
+   is — and marked as the open one when `:selected?`."
+  [{:keys [part] {:keys [href selected? chat?] {:keys [project ws-id label position]} :row} :props}]
+  [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
+   [:div.gate-top [:span.candidate-mark {:title "release candidate"} "🚀"] [:span.lbl (or label ws-id)]
+    (when chat? chat-mark)]
+   [:div.gate-sub [:span project] (state/position-chip position)]])
+
 (defn- render-winddown-row
   "One winding-down row: a closed workstream still holding live sessions. Muted;
    one action, :bring-down, routed by the page — so the scope the reader is on rides
@@ -113,9 +133,9 @@
    :error-msg (from a failed bring-down!) renders inline AND keeps the button —
    clicking retry sets :stopping, which overwrites the :failed entry, so retry
    self-clears the error."
-  [{:keys [part action] {{:keys [project ws-id label outcome sessions rss-str pending? error-msg]} :row} :props}]
+  [{:keys [part action] {:keys [chat?] {:keys [project ws-id label outcome sessions rss-str pending? error-msg]} :row} :props}]
   [:div.gate-card.winddown (part :root)
-   [:div.gate-top (status-slot nil) [:span.lbl label]]
+   [:div.gate-top (status-slot nil) [:span.lbl label] (when chat? chat-mark)]
    [:div.gate-sub
     [:span project]
     [:span.meta (str "closed:" (name (or outcome :done)) " · "
@@ -213,7 +233,8 @@
               row's value."
     :render  render-board-row
     :props   [:map [:project :string] [:row :map] [:href :string]
-              [:selected? {:optional true} [:maybe :boolean]]]
+              [:selected? {:optional true} [:maybe :boolean]]
+              [:chat? {:optional true} :boolean]]
     :css     ""
     :actions {}
     :morph   {}
@@ -249,6 +270,10 @@
                            :position {:at :shipped :next {:stage :land :mode :human}}
                            :phase {:current 3 :of 3}
                            :doing {:source :merge :phase :blocked}))}
+     {:title "a chat here has news"
+      :note  "A chat pinned to this workstream finished a turn, or waits on a permission, since the
+              person last had it open: the bubble after the title, until they open it."
+      :props (board a-board-row :chat? true)}
      {:title "a long title"
       :note  "The row has to survive a generated label that does not fit. If it wraps to three
               lines or pushes the marks off the end, the row is wrong, not the ticket."
@@ -262,7 +287,7 @@
     :doc     "One needs-you row. It previews the question, so a reader scanning the list sees what
               each one wants of them."
     :render  render-gate-row
-    :props   [:map [:gate :map] [:href :string]]
+    :props   [:map [:gate :map] [:href :string] [:chat? {:optional true} :boolean]]
     :css     ""
     :actions {}
     :morph   {}
@@ -301,7 +326,7 @@
    {:id      :winddown-row
     :doc     "A closed workstream still holding live sessions. Muted, one action."
     :render  render-winddown-row
-    :props   [:map [:row [:map [:project :string] [:ws-id :string]]]]
+    :props   [:map [:row [:map [:project :string] [:ws-id :string]]] [:chat? {:optional true} :boolean]]
     :css     ""
     :actions {:bring-down [:post :winddown {}]}
     :morph   {}
@@ -358,3 +383,31 @@
       :note  "An empty stage offers no click at all: offering one would promise a section that
               opens empty."
       :props (arc {:stage :implementation :state :ahead :visits 0 :entries 0})}]}))
+
+(def ^{:malli/schema :map}
+  candidate-row
+  "One release-candidate row."
+  (block/block
+   {:id      :candidate-row
+    :doc     "One release candidate on Needs you: a workstream ready to land when the person
+              chooses, asking nothing. It links to the workstream's pane, where Land is."
+    :render  render-candidate-row
+    :props   [:map [:row [:map [:project :string] [:ws-id :string]]] [:href :string]
+              [:selected? {:optional true} [:maybe :boolean]]
+              [:chat? {:optional true} :boolean]]
+    :css     ""
+    :actions {}
+    :morph   {}
+    :scenes
+    [{:title "a release candidate"
+      :note  "Ready to land and asking nothing: where it stands, and the rocket that sets it apart
+              from a question."
+      :props {:row {:project "nido" :ws-id "ws-1" :label "Anchor each side chat to its place"
+                    :position {:at :shipped :next {:stage :land :mode :human}}}
+              :href "#"}}
+     {:title "a chat here has news"
+      :note  "A chat pinned to this workstream finished a turn, or waits on a permission, since the
+              person last had it open: the bubble after the title, until they open it."
+      :props {:row {:project "nido" :ws-id "ws-1" :label "Anchor each side chat to its place"
+                    :position {:at :shipped :next {:stage :land :mode :human}}}
+              :href "#" :chat? true}}]}))

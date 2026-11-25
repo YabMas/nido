@@ -136,13 +136,16 @@
     {:signature [:=> [:catn [:state :any] [:now :any]] :any]}))
 
 (Module ui-components-row
-  "The scannable list rows, registered with the UI library as four blocks: `board-row`, one
+  "The scannable list rows, registered with the UI library as five blocks: `board-row`, one
    selectable Workstreams row; `gate-row`, one needs-you row previewing the question it asks;
-   `winddown-row`, a closed workstream still holding live sessions, with one action; and
-   `arc-row`, one stage of a workstream's arc, whose click is an action the pane routes.
+   `candidate-row`, one release candidate on Needs you; `winddown-row`, a closed workstream still
+   holding live sessions, with one action; and `arc-row`, one stage of a workstream's arc, whose
+   click is an action the pane routes.
 
    HIDES what a row puts where and how dense it is. Each renders over the row's value as props
-   and the page's router, so a row names no page's URL scheme and any surface can list one.
+   and the page's router, so a row names no page's URL scheme and any surface can list one. A row
+   listing a workstream the page says has news in a side chat pinned to it draws that chat's
+   mark, whose look is the rows' own.
    Written in `ui-components-state`'s marks; its rules are nido's, because the classes it is
    drawn with are shared with the pages around it.")
 
@@ -162,8 +165,10 @@
 (Module ui-components-chat
   "A conversation with an agent, registered with the UI library as two blocks: `panel`, the side
    panel — a bar with its toggle and New conversation, the transcript, the turn's status row and
-   the composer with its picks and staged images — and `change-bar`, the conversation's unlanded
-   change with Publish and Cancel, each confirmed in place.
+   the composer with its picks and staged images, and, given several conversations, each as a
+   full-width row stacked under the last with its mark and pin control, one open beneath its
+   row — and `change-bar`, the conversation's unlanded change with Publish and Cancel, each
+   confirmed in place.
 
    HIDES how a transcript reads: item order, folding, the status row, the composer and its picks.
    Each renders over a transcript value as props, the explicit context and a caller's router;
@@ -196,7 +201,8 @@
    their own, and a page is written in them. The record cards are the one vocabulary still
    sharing this boundary with the pages, and the reason is in the design that moved the others
    out — a card is read from a ledger record's shape, and reading twenty of those apart is a
-   different job from the blocks a person iterates on."
+   different job from the blocks a person iterates on. Its rows listing workstreams, on the board
+   and on Needs you, say which workstreams have a side chat with news."
   (Operation rail-status-fragment "The top bar's live bits: what needs you, and how the daemon is."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation fire-signal "The signal name for one field of a fire form."

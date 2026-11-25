@@ -117,6 +117,8 @@
         sel (:selection view-state)
         ws-errors (dev/failed-ws-errors)]
     (-> (cond-> screen (not board?) (assoc :candidates (work/held-candidates)))
+        ;; The workstreams whose rows carry the side chat's mark: a chat pinned there has news.
+        (assoc :chats-unseen (side-chat/unseen))
         (assoc :selection
                (when sel
                  ;; The two pages that draw a pane beside their list; every other render with a
@@ -191,7 +193,7 @@
    gates, so the badge and the Needs-you list always agree — and the chat's side
    panel, open or closed as the request's page last left it."
   [req active focus screen]
-  {:side-chat   (side-chat/panel (side-chat/open? req))
+  {:side-chat   (side-chat/panel req (side-chat/open? req))
    :active      active
    :scope       focus
    :needs-count (:needs-count screen)

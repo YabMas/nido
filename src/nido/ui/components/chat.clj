@@ -54,7 +54,13 @@
    :answer     [:post :permission {}]
    :unpick     [:post :unpick {:picks [:signal :picks :string]}]
    :unattach   [:post :unattach {}]
-   :sync-picks [:post :picks {:picks [:signal :picks :string]}]})
+   :sync-picks [:post :picks {:picks [:signal :picks :string]}]
+   ;; A panel listing several conversations: each by its `:chat` param.
+   :open-chat  [:post :open {}]
+   :pin        [:post :pin {}]
+   :unlink     [:post :unlink {}]
+   :close      [:post :close {}]
+   :new-chat   [:post :new {}]})
 
 ;; ---------------------------------------------------------------------------
 ;; Items
@@ -343,12 +349,72 @@
    [:path {:d "M15 3v18"}]
    [:path {:d chevron}]])
 
+(defn- glyph
+  "A glyph in the panel's icon form — 24 units, stroked, no fill — drawn by the SVG paths `ds`."
+  [cls & ds]
+  (into [:svg {:class cls :viewBox "0 0 24 24" :fill "none" :stroke "currentColor"
+               :stroke-width "2" :stroke-linecap "round" :stroke-linejoin "round" :aria-hidden "true"}]
+        (map (fn [d] [:path {:d d}]) ds)))
+
+(def ^:private pin-glyph
+  (glyph "chat-i-pin" "M12 17v5"
+         "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"))
+
+(def ^:private pin-off-glyph
+  (glyph "chat-i-pin-off" "M12 17v5" "M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.89" "m2 2 20 20"
+         "M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11"))
+
+(def ^:private close-glyph (glyph "chat-i-x" "M18 6 6 18" "m6 6 12 12"))
+
+(def ^:private row-status
+  "What a conversation's row says of it, when anything: its mark, and the mark's words."
+  {:busy   ["chat-spin" "Working"]
+   :asking ["chat-spin chat-spin-asking" "Waits on your answer"]
+   :unseen ["chat-dot" "Finished since you last looked"]})
+
+(defn- render-row
+  "One conversation of several: a full-width row naming it, its mark, and its pin control — a pin
+   on one pinned here, which unlinks it, a struck pin on one that follows the person, which pins
+   it here — then, when it is the open one, its conversation beneath."
+  [{:keys [action]} {:keys [id label where pinned? status open? body]}]
+  (let [[mark words] (row-status status)]
+    [:div.chat-row {:class (when open? "open") :data-chat id}
+     [:div.chat-row-head
+      [:button.chat-row-title {:type "button" :aria-expanded (str (boolean open?))
+                               "data-on:click" (action :open-chat {:params {:chat id}})}
+       (when mark [:span {:class mark :title words :aria-label words}])
+       [:span.chat-row-label label]
+       (when where [:span.chat-row-where where])]
+      [:button.chat-row-btn.chat-pin
+       {:type "button"
+        :class (if pinned? "pinned" "following")
+        :title (if pinned? "Pinned to this place — unlink it to take it with you"
+                   "Follows you — pin it to this place")
+        :aria-label (if pinned? "Unlink this chat" "Pin this chat here")
+        "data-on:click" (action (if pinned? :unlink :pin) {:params {:chat id}})}
+       (if pinned? pin-glyph pin-off-glyph)]
+      [:button.chat-row-btn.chat-close {:type "button" :title "Close this chat" :aria-label "Close this chat"
+                                        "data-on:click" (action :close {:params {:chat id}})}
+       close-glyph]]
+     (when open? body)]))
+
+(defn- render-section
+  "The conversation alone — its log, the turn's status and the composer — as the instance's root,
+   for a panel listing several to set beneath a row."
+  [{:keys [props part action] :as kit}]
+  (let [{:keys [transcript extra]} props]
+    (into [:section.chat (cond-> (part :root)
+                           (:live? props) (assoc "data-init" (action :stream {:cleanup? true})))
+           (render-log kit (:items transcript))
+           (render-status kit transcript)
+           (render-composer kit)]
+          extra)))
 
 (defn- render-side
   [{:keys [props part signal action] :as kit}]
-  (let [{:keys [transcript open? heading reset? bar top extra]} props
+  (let [{:keys [transcript open? heading reset? bar top extra chats busy-of]} props
         open    (signal :open)
-        busy    (signal :busy)
+        busy    (if busy-of (names/signal scope busy-of :busy) (signal :busy))
         confirm (signal :reset)
         asking  (str "$" confirm " && !$" busy)]
     (-> [:aside.chat-side (merge (part :root)
@@ -378,18 +444,27 @@
                    [:button.btn {:type "button" "data-on:click" (str "$" confirm " = false")} "Back"]
                    [:button.btn.btn-danger {:type "button"
                                             "data-on:click" (str "$" confirm " = false; " (action :reset))}
-                    "Start over"]])]
+                    "Start over"]])
+                (when chats
+                  [:button.btn.chat-new {:type "button" :title "Start another chat, pinned to this place"
+                                         "data-on:click" (action :new-chat)}
+                   "New chat"])]
                bar)]
         (into top)
-        (conj (into [:section.chat (cond-> (part :panel)
-                                     (:live? props) (assoc "data-init" (action :stream)))
-                     (render-log kit (:items transcript))
-                     (render-status kit transcript)
-                     (render-composer kit)]
-                    extra)))))
+        (conj (if chats
+                (into [:div.chat-stack (part :stack)]
+                      (if (seq chats) (map #(render-row kit %) chats) [(:empty props)]))
+                (into [:section.chat (cond-> (part :panel)
+                                       (:live? props) (assoc "data-init" (action :stream {:cleanup? true})))
+                       (render-log kit (:items transcript))
+                       (render-status kit transcript)
+                       (render-composer kit)]
+                      extra)))
+        (cond-> chats (into extra)))))
 
 (defn- render-panel
-  "The side panel, or the one part of it `:part` names — what a stream patches in place."
+  "The side panel, the conversation alone (`:bare?`), or the one part of it `:part` names — what a
+   stream patches in place."
   [{:keys [props] :as kit}]
   (let [{:keys [transcript picks staged item]} props]
     (case (:part props)
@@ -398,7 +473,7 @@
       :status      (render-status kit transcript)
       :picks       (render-picks kit (or picks []))
       :attachments (render-attachments kit (or staged []))
-      (render-side kit))))
+      (if (:bare? props) (render-section kit) (render-side kit)))))
 
 ;; ---------------------------------------------------------------------------
 ;; The change bar
@@ -571,7 +646,11 @@ for the text and keep the tint, so it still reads as **yours** without competing
               leading a bar over its transcript, the turn's status and the composer. Closed, the
               toggle is all that shows; the page gives it the width, or `:boxed?` sets it in a box
               of its own, as a scene shows it. Reads a transcript value only, so a workstream pane
-              or the catalog can host one."
+              or the catalog can host one. Given `:chats`, it lists several conversations instead,
+              each a full-width row stacked under the last — its mark, its label, and a pin control
+              that unlinks one pinned here or pins one that follows — the open one with its
+              conversation beneath its row; `:bare?` renders one conversation alone, as that row's
+              body."
     :render  render-panel
     :props   [:map
               [:transcript [:map [:items [:sequential :map]]]]
@@ -587,7 +666,18 @@ for the text and keep the tint, so it still reads as **yours** without competing
               [:top {:optional true} :any]
               [:extra {:optional true} :any]
               [:part {:optional true} [:enum :log :item :status :picks :attachments]]
-              [:item {:optional true} :map]]
+              [:item {:optional true} :map]
+              [:bare? {:optional true} :boolean]
+              [:chats {:optional true} [:sequential [:map
+                                                     [:id :string]
+                                                     [:label :string]
+                                                     [:where {:optional true} [:maybe :string]]
+                                                     [:pinned? :boolean]
+                                                     [:status [:maybe [:enum :busy :asking :unseen]]]
+                                                     [:open? :boolean]
+                                                     [:body {:optional true} :any]]]]
+              [:busy-of {:optional true} [:maybe :string]]
+              [:empty {:optional true} :any]]
     :css     ""
     :actions panel-actions
     :morph   {:signals (fn [{:keys [transcript open?]}]
@@ -647,6 +737,23 @@ for the text and keep the tint, so it still reads as **yours** without competing
       :note  "Two elements picked: their chips above the text box, numbered as the page marks them,
               each removable."
       :props (open-panel (transcript false) :picks (:refs you-two))}
+     {:title "several chats at one place"
+      :note  "Rows stacked full width, one open beneath its row. The first follows the person
+              (struck pin: click pins it here) and is working; the others are pinned here (pin:
+              click unlinks it), one finished since it was last looked at."
+      :props (open-panel (transcript false)
+                         :chats [{:id "c1" :label "Why did the review round stall?" :where "follows you"
+                                  :pinned? false :status :busy :open? false}
+                                 {:id "c2" :label "Land this once the tests pass" :pinned? true
+                                  :status nil :open? true
+                                  :body [:section.chat [:div.chat-log [:p.meta "The open chat's conversation."]]]}
+                                 {:id "c3" :label "What does the design round still ask?" :pinned? true
+                                  :status :unseen :open? false}])}
+     {:title "no chat here yet"
+      :note  "Nothing pinned here and nothing following: the composer a first message starts a chat
+              pinned here from."
+      :props (open-panel (transcript false) :chats []
+                         :empty [:section.chat [:p.meta "Message the agent to start a chat here."]])}
      {:title "images attached"
       :note  "A panel that offers attaching: a sent image as a thumbnail that opens it, two staged
               for the next message above the text box, and the Image control beside Send. The box

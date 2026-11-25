@@ -608,6 +608,28 @@
            at its width open or closed, against the right edge as it sits against the page's. */
         .chat-side.boxed { position:static; height:420px; width:420px; margin-left:auto; }
         .chat-side.boxed:not(.open) { width:58px; }
+        /* Several conversations at one place: full-width rows stacked one under another, the open
+           one taking the height left beneath its row. */
+        .chat-stack { flex:1; display:flex; flex-direction:column; gap:var(--space-6); min-height:0; }
+        .chat-stack > .chat { flex:1; }
+        .chat-row { display:flex; flex-direction:column; min-height:0; border-top:1px solid var(--border); padding-top:var(--space-6); }
+        .chat-row.open { flex:1; }
+        .chat-row.open > .chat { flex:1; margin-top:var(--space-8); }
+        .chat-row-head { display:flex; align-items:center; gap:var(--space-4); }
+        .chat-row-title { flex:1; min-width:0; display:flex; align-items:center; gap:var(--space-6); padding:var(--space-4) var(--space-2);
+                          background:none; border:none; cursor:pointer; text-align:left; color:var(--text); font:inherit; font-size:var(--fs-sm); }
+        .chat-row.open .chat-row-title { color:var(--text-strong); font-weight:600; }
+        .chat-row-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chat-row-where { flex:none; color:var(--text-faint); font-size:var(--fs-xs); }
+        .chat-row-btn { flex:none; width:26px; height:26px; padding:0; display:grid; place-items:center; cursor:pointer;
+                        background:none; border:1px solid transparent; border-radius:var(--radius-6); color:var(--text-muted); }
+        .chat-row-btn:hover { color:var(--text-strong); border-color:var(--border); }
+        .chat-row-btn svg { width:15px; height:15px; }
+        .chat-pin.pinned { color:var(--text-strong); }
+        .chat-dot { width:8px; height:8px; border-radius:50%; background:var(--accent, var(--working)); flex:none; }
+        /* A board row's mark: a chat pinned to its workstream has something the person has not seen. */
+        .chat-mark { display:inline-flex; color:var(--needs); flex:none; }
+        .chat-mark svg { width:13px; height:13px; }
         /* The catalog scenes' own layout, for a scene that sets several calls of one function
            side by side or pairs an input with what it renders as. */
         .scene-rail { display:flex; flex-wrap:wrap; gap:var(--space-18); align-items:flex-start; }
