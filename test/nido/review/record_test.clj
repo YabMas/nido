@@ -3112,6 +3112,33 @@
           "a call the judge made and saw fail is what the cause is for")
       (finally (fs/delete-tree dir)))))
 
+(deftest a-judgement-keeps-the-reads-its-judge-was-refused-whatever-it-ruled
+  ;; BR-7085 (brian ws-20261116-325d89, entry 225): claude was refused every read of the second
+  ;; repo's worktree, said so only in prose, and the decision was titled a plain proceed.
+  (let [dir   (fs/create-temp-dir)
+        log   (str (fs/path dir "claude.log"))
+        clean (str (fs/path dir "clean.log"))
+        path  "/home/me/Code/document-service-br-7085/src/document_service/html_math.clj"
+        json  (baseline-json {:verdict "sufficient" :reason "r" :confirmed [] :findings []})
+        parse #(record/parse-baseline-review % 3)
+        claude {:reviewer :claude}]
+    (try
+      (spit log (str (json/generate-string
+                      {:type "result" :is_error false
+                       :permission_denials [{:tool_name "Read" :tool_input {:file_path path}}
+                                            {:tool_name "Bash" :tool_input {:command "ls"}}]})
+                     "\n"))
+      (spit clean (str (json/generate-string {:type "result" :is_error false}) "\n"))
+      (is (= [path] (:refused-reads (#'record/judged {:ok json :log-path log :judged-by claude} parse)))
+          "kept from the stream although the judge ruled sufficient and named no unchecked")
+      (is (not (contains? (#'record/judged {:ok json :log-path clean :judged-by claude} parse)
+                          :refused-reads))
+          "absent when nothing was refused, so the closed schema sees no empty vector")
+      (is (not (contains? (#'record/judged {:ok json :log-path log :judged-by codex} parse)
+                          :refused-reads))
+          "codex reads the whole disk; a claude-shaped log under its name refuses nothing")
+      (finally (fs/delete-tree dir)))))
+
 (deftest a-tool-failure-does-not-clear-a-confirmation-read-once
   ;; Watched: claude confirmed pdfbox-render once; codex, whose sandbox refused clj-nrepl-eval, left
   ;; it unchecked for a tool failure, which cleared the second reading it was owed. Only another

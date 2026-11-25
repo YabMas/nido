@@ -3288,7 +3288,8 @@
    ruling is appended and reported as the stand-in's. Its :unchecked keeps :tool-failure only where
    that judge's stream (`result`'s :log-path) shows a call of its denied or errored
    (`codex/tool-failed?`): the cause exempts a subject from its second reading and its amender, and
-   a judge has claimed it for a refusal it only predicted.
+   a judge has claimed it for a refusal it only predicted. Every path that stream shows a file tool
+   refused is kept as :refused-reads (`codex/refused-paths`), whatever the judge ruled.
 
    A parse that refused the answer by name (`parse-design-decision`'s :refused) is still
    :unusable-answer, carrying the rule as :refused and in :detail, and the refused judgement as
@@ -3314,7 +3315,13 @@
 
           (and (:format parsed) (some :tool-failure (:unchecked parsed))
                (not (codex/tool-failed? reviewer (:log-path result))))
-          (update :unchecked #(mapv (fn [u] (dissoc u :tool-failure)) %)))))
+          (update :unchecked #(mapv (fn [u] (dissoc u :tool-failure)) %))
+
+          ;; Whatever it ruled: a read the judge was refused is a hole in the grant, not in the
+          ;; claim, and a judge that worked around it may say nothing of it.
+          (:format parsed)
+          (as-> p (let [refused (codex/refused-paths reviewer (:log-path result))]
+                    (cond-> p (seq refused) (assoc :refused-reads refused)))))))
       {:outcome :unusable-answer
        :detail "the answer did not satisfy what a round must return"})
     result))

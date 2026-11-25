@@ -15,10 +15,21 @@
    Read-only comes from the CLI — restricted mode, a shell allowlist of the two jj reads and grep
    beside what the CLI itself runs as read-only, and everything else denied — never from the
    prompt, and never from the user's settings, which it ignores."
+  (Operation home-dir
+    "The home directory, which no cited repository may be at or above."
+    {:signature [:=> [:catn] :string]})
+  (Operation cited-repos
+    "The repository of every path a prompt names that has one — how a record reaches a second repo
+     however it was checked out, a worktree added by hand beside its checkout included."
+    {:signature [:=> [:catn [:text [:maybe :string]]] [:vector :string]]
+     :delegates [home-dir]})
   (Operation read-roots
     "The directories a claude reviewer may read beyond its cwd: every registered project's
-     checkout, and the run's own directory — only those that exist."
-    {:signature [:=> [:catn [:log-path [:maybe :string]]] [:vector :string]]})
+     checkout, session worktrees directory and git worktrees; the repository of every path the
+     prompt names; nido's ledgers and runs, the run's own directory among them — only those that
+     exist."
+    {:signature [:=> [:catn [:log-path [:maybe :string]] [:prompt [:? [:maybe :string]]]] [:vector :string]]
+     :delegates [cited-repos]})
   (Operation claude-argv "The argument vector for one claude review."
     {:signature [:=> [:catn [:opts :map]] :any]})
   (Operation run-claude! "Run claude as a reviewer and keep its answer."
@@ -26,7 +37,12 @@
   (Operation failed-call?
     "Whether a claude review's stream shows a tool call that was refused or errored — false when
      the log cannot be read."
-    {:signature [:=> [:catn [:log-path [:maybe :string]]] :boolean]}))
+    {:signature [:=> [:catn [:log-path [:maybe :string]]] :boolean]})
+  (Operation refused-reads
+    "The paths a claude review's stream shows a file tool was denied — each a read nido did not
+     grant, so what the judge needed there went unread however it ruled. A refused shell command
+     is not one: the shell is narrowed on purpose."
+    {:signature [:=> [:catn [:log-path [:maybe :string]]] [:vector :string]]}))
 
 (Module review-codex
   "Launching a reviewer: codex unless a run or its project names claude, and claude in codex's
@@ -65,6 +81,11 @@
      judge's tool-failure cause stands on, since a refusal it predicted and never met is none."
     {:signature [:=> [:catn [:reviewer :any] [:log-path [:maybe :string]]] :boolean]
      :delegates [failed-call?]})
+  (Operation refused-paths
+    "The paths the log a reviewer streamed shows it was refused reading — none for codex, whose
+     read-only sandbox reads the whole disk."
+    {:signature [:=> [:catn [:reviewer :any] [:log-path [:maybe :string]]] [:vector :string]]
+     :delegates [refused-reads]})
   (Operation log-of
     "Where the reading a judgement names streamed: the round's log, or a stand-in's beside it."
     {:signature [:=> [:catn [:log-path :string] [:judged-by :map]] :string]})

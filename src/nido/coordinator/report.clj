@@ -2973,6 +2973,9 @@
    :tool-failure on one marks a tool the judge needed failing (a sandbox denial, say), kept only
    when the judge's own stream shows a call of its denied or errored — a refusal it predicted and
    never met is a plain unchecked.
+   :refused-reads is every path the judge's own stream shows a file tool was refused — a read nido
+   did not grant, so what the judge needed there went unread however it ruled. Kept by the round
+   from the stream, never the judge's word, and named in the entry's title.
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
    found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
    by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
@@ -3040,6 +3043,7 @@
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]
                                            [:tool-failure {:optional true} [:= true]]]]]
    [:unruled    {:optional true} [:vector string?]]
+   [:refused-reads {:optional true} [:vector {:min 1} string?]]
    [:unchecked-over-held {:optional true} [:vector string?]]
    [:read-once  {:optional true} [:vector string?]]
    [:first-reading {:optional true} [:vector string?]]
@@ -5703,6 +5707,23 @@
   "The heading over a design verdict's `:unraised`, wherever it is rendered."
   "What no reviewer raised")
 
+(defn- refused-words
+  "What a judgement's title adds when its judge was refused reads: the bare verdict reads as a
+   judgement over everything it was handed, and this one was not."
+  [{:keys [refused-reads]}]
+  (when (seq refused-reads)
+    (str " — " (count refused-reads) (if (= 1 (count refused-reads)) " read" " reads") " refused")))
+
+(defn- refused->markdown
+  "A judgement's :refused-reads, at the top of its report: each path its judge was refused, so a
+   reader weighs every ruling under it knowing what the judge could not open."
+  [{:keys [refused-reads]}]
+  (when (seq refused-reads)
+    (concat ["\n## ⚠ Refused reads — nido did not grant these, so what rests on them went unread"
+             (str "A claim left unchecked for it stands only on two earlier independent readings;"
+                  " one read once is still owed its second.")]
+            (for [path refused-reads] (str "- " path)))))
+
 (defn- ruling->markdown
   "What a judgement left without a confirmation, as lines under their own headings: the checks
    nobody ruled on, the baseline ids no relation ruling covers, and those the judge said it could
@@ -5727,11 +5748,13 @@
    "\n"
    (remove nil?
      (concat
-      [(str "# Baseline review: " (name verdict) (when (held-once? review) held-once-words))
+      [(str "# Baseline review: " (name verdict) (when (held-once? review) held-once-words)
+            (refused-words review))
        (str "of entry " baseline-seq)
        (when-let [n (:carried-from review)]
-         (str "carried from the review at entry " n " — no judge ran"))
-       "" reason]
+         (str "carried from the review at entry " n " — no judge ran"))]
+      (refused->markdown review)
+      ["" reason]
       (when (seq confirmed)
         (cons "\n## Confirmed against the code"
               (for [c confirmed] (str "- " c))))
@@ -5777,9 +5800,11 @@
    "\n"
    (remove nil?
      (concat
-      [(str "# Design decision: " (name recommend) (when (proceeds-once? decision) held-once-words))
-       (str "of entry " design-seq)
-       "" reason
+      [(str "# Design decision: " (name recommend) (when (proceeds-once? decision) held-once-words)
+            (refused-words decision))
+       (str "of entry " design-seq)]
+      (refused->markdown decision)
+      ["" reason
        "\n## Derived — already ruled on, so you do not have to"]
       (for [{:keys [check status held? note]} checks]
         (str "- " (case (or status (if held? :held :broken))
@@ -6162,11 +6187,13 @@
                                                              (count answers) " questions answered")))
     :review-report            (str "Review: " (name (:status report)))
     :baseline-review          (str "Baseline review: " (name (:verdict report))
-                                   (when (held-once? report) held-once-words))
+                                   (when (held-once? report) held-once-words)
+                                   (refused-words report))
     :design-decision          (str "Design decision: " (name (:recommend report))
                                    (when (or (proceeds-once? report) (asks-once? report)) held-once-words)
                                    (when-let [n (:reasks report)]
-                                     (str " — as asked at entry " n (when (seq (:widens report)) ", widened"))))
+                                     (str " — as asked at entry " n (when (seq (:widens report)) ", widened")))
+                                   (refused-words report))
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")

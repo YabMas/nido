@@ -210,6 +210,13 @@
        :claude (claude/failed-call? log-path)
        false))))
 
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :string]] [:vector :string]]}
+  refused-paths
+  "The paths the log `reviewer` streamed to `log-path` shows it was refused reading
+   (`claude/refused-reads`). None for codex, whose read-only sandbox reads the whole disk."
+  [reviewer log-path]
+  (if (and log-path (= :claude reviewer)) (claude/refused-reads log-path) []))
+
 (declare stand-in-log)
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :string]}

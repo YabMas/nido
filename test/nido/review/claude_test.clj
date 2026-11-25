@@ -1,9 +1,11 @@
 (ns nido.review.claude-test
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.platform.core]
    [nido.platform.project]
    [nido.review.claude :as claude]))
 
@@ -46,13 +48,97 @@
   (let [tmp (str (fs/create-temp-dir))
         a (str (fs/create-dirs (fs/path tmp "a")))
         run (str (fs/create-dirs (fs/path tmp "run")))]
-    (with-redefs [nido.platform.project/list-projects
-                  (constantly {"a" {:directory a} "gone" {:directory (str tmp "/missing")}})]
+    (with-redefs [nido.platform.core/nido-root (constantly (str tmp "/no-nido"))
+                  nido.platform.project/list-projects
+                  (constantly {"read-roots-a" {:directory a} "gone" {:directory (str tmp "/missing")}})]
       (is (= [a run] (claude/read-roots (str run "/round-1.log")))
           "a project whose checkout is gone adds nothing"))
-    (with-redefs [nido.platform.project/list-projects (fn [] (throw (ex-info "unreadable" {})))]
+    (with-redefs [nido.platform.core/nido-root (constantly (str tmp "/no-nido"))
+                  nido.platform.project/list-projects (fn [] (throw (ex-info "unreadable" {})))]
       (is (= [run] (claude/read-roots (str run "/round-1.log")))
           "an unreadable registry never fails the review"))))
+
+(defn- git! [dir & args]
+  (apply p/shell {:dir (str dir) :out :string :err :string}
+         "git" "-c" "user.email=t@t" "-c" "user.name=t" args))
+
+(defn- argv-echoing-claude
+  "A `claude` that prints each argument it was launched with on its own line — into the log, which
+   is where run-claude! sends stdout."
+  [dir]
+  (let [bin (str (fs/path dir "fake-claude"))]
+    (spit bin "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+    (p/shell "chmod" "+x" bin)
+    bin))
+
+(deftest a-reviewer-launched-over-a-second-repos-worktree-may-read-it-and-the-ledgers
+  ;; BR-7085 (brian ws-20261116-325d89, entry 225): the design changes brian and document-service,
+  ;; and names the latter's files in ~/Code/document-service-br-7085 — a git worktree added by hand
+  ;; BESIDE the registered checkout ~/Code/document-service. read-roots granted the checkout only,
+  ;; so every Read and Glob of the worktree, and of the workstream's ledger entries under
+  ;; ~/.nido/projects, was refused, and six claims went out unchecked.
+  (let [home (str (fs/create-temp-dir))
+        svc  (str (fs/create-dirs (fs/path home "Code" "document-service")))
+        wt   (str (fs/path home "Code" "document-service-br-7085"))
+        loose (str (fs/create-dirs (fs/path home "Code" "unregistered" "src")))
+        nido (str (fs/create-dirs (fs/path home ".nido")))
+        projects (str (fs/create-dirs (fs/path nido "projects")))
+        runs (str (fs/create-dirs (fs/path nido "runs")))
+        run  (str (fs/create-dirs (fs/path runs "design-loop-1")))
+        brian (str (fs/create-dirs (fs/path home "Code" "brian")))
+        _ (do (git! svc "init" "-q" "-b" "main")
+              (git! svc "commit" "-q" "--allow-empty" "-m" "root")
+              (git! svc "worktree" "add" "-q" "-b" "fix/BR-7085" wt)
+              (git! (fs/parent loose) "init" "-q"))
+        prompt (str "Claims rest on ~/Code/document-service-br-7085/src/document_service/html_math.clj:41"
+                    " and on " loose "/a.clj:3; entry 145 is under ~/.nido/projects.")]
+    (with-redefs [claude/home-dir (constantly home)
+                  nido.platform.core/nido-root (constantly nido)
+                  nido.platform.project/list-projects
+                  (constantly {"read-roots-brian" {:directory brian}
+                               "read-roots-conversion" {:directory svc}})]
+      (let [roots (set (map (comp str fs/canonicalize) (claude/read-roots (str run "/round-1.log") prompt)))
+            canon (comp str fs/canonicalize)]
+        (testing "the worktree beside the registered checkout, which git names"
+          (is (contains? roots (canon wt))))
+        (testing "a repo nido does not drive, because the prompt names a file in it"
+          (is (contains? roots (canon (fs/parent loose))))
+          (is (= [(str (fs/parent loose))] (claude/cited-repos (str loose "/a.clj:3")))))
+        (testing "the ledgers and runs it is asked to cite"
+          (is (contains? roots (canon projects)))
+          (is (contains? roots (canon runs))))
+        (is (contains? roots (canon brian))))
+      (testing "the launched reviewer is given every one of them"
+        (let [log (str run "/round-1.log")
+              _   (claude/run-claude! {:cwd brian :schema-path (doto (str run "/s.json") (spit "{}"))
+                                       :out-path (str run "/out.json") :log-path log
+                                       :prompt prompt :claude-bin (argv-echoing-claude home)
+                                       :budget-ms 30000})
+              args (str/split-lines (slurp log))
+              dirs (set (map second (filter #(= "--add-dir" (first %)) (partition 2 1 args))))]
+          (is (contains? dirs wt) "the second repo's worktree")
+          (is (contains? dirs projects) "the workstream's ledger entries"))))))
+
+(deftest refused-reads-are-the-file-tool-denials-in-the-stream
+  (let [dir (str (fs/create-temp-dir))
+        log (str (fs/path dir "r.log"))
+        den (fn [tool input] {:tool_name tool :tool_use_id "x" :tool_input input})]
+    ;; The denials design-loop-b1f5a000's round 2 ended on, as the CLI listed them.
+    (spit log (str "{\"type\":\"system\"}\n"
+                   (json/generate-string
+                    {:type "result" :is_error false
+                     :permission_denials
+                     [(den "Bash" {:command "ls /home/yabmas/Code/"})
+                      (den "Glob" {:pattern "src/document_service/*.clj"
+                                   :path "/home/yabmas/Code/document-service-br-7085"})
+                      (den "Read" {:file_path "/home/yabmas/Code/document-service-br-7085/src/document_service/html_math.clj"})
+                      (den "Read" {:file_path "/home/yabmas/Code/document-service-br-7085/src/document_service/html_math.clj"})]})
+                   "\n"))
+    (is (= ["/home/yabmas/Code/document-service-br-7085"
+            "/home/yabmas/Code/document-service-br-7085/src/document_service/html_math.clj"]
+           (claude/refused-reads log))
+        "a refused shell command is the narrowed shell, not a missing grant")
+    (is (= [] (claude/refused-reads (str (fs/path dir "absent.log")))))))
 
 (deftest a-claude-reviewer-runs-on-opus-unless-told-otherwise
   (is (= "opus" (flag-value (argv {}) "--model")))
@@ -76,7 +162,7 @@
                    (apply str (for [e events]
                                 (str "printf '%s\\n' '" (json/generate-string e) "'\n")))
                    "exit " exit "\n"))
-    (fs/set-posix-file-permissions bin "rwxr-xr-x")
+    (p/shell "chmod" "+x" bin)
     bin))
 
 (defn- run [dir events exit]

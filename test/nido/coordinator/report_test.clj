@@ -2278,6 +2278,26 @@
          called it 'entry 38 remains unanswered'")
     (is (= "Design decision: ask" (report/report-title (-> once (assoc :recommend :ask) (dissoc :read-once)))))))
 
+(deftest a-judgement-whose-reads-were-refused-says-so-in-its-title-and-at-its-top
+  ;; Entry 225 on brian's ws-20261116-325d89 was titled 'Design decision: proceed on one reading'
+  ;; while its judge had been refused every read of the second repo the design changes; the six
+  ;; claims resting on it were mentioned only in the reason and under 'Not checkable here'.
+  (let [refused ["/home/me/Code/document-service-br-7085/src/document_service/html_math.clj"
+                 "/home/me/Code/document-service-br-7085"]
+        d {:format :design-decision :recommend :proceed :design-seq 224 :reason "ok"
+           :checks [] :asks "nothing" :refused-reads refused}
+        b {:format :baseline-review :verdict :sufficient :baseline-seq 33 :reason "ok"
+           :refused-reads (subvec refused 0 1)}]
+    (is (= "Design decision: proceed — 2 reads refused" (report/report-title d)))
+    (is (= "Baseline review: sufficient — 1 read refused" (report/report-title b)))
+    (let [md (report/report->markdown d)]
+      (is (str/starts-with? md "# Design decision: proceed — 2 reads refused"))
+      (is (< (str/index-of md "Refused reads") (str/index-of md "ok"))
+          "named before the reason, so nothing under it reads as a judgement over everything")
+      (is (every? #(str/includes? md (str "- " %)) refused)))
+    (is (str/includes? (report/report->markdown b) (str "- " (first refused))))
+    (is (= "Design decision: proceed" (report/report-title (dissoc d :refused-reads))))))
+
 (deftest a-decisions-asks-waits-on-the-repair-it-recommends
   ;; A capped run's :amend decision asked "after the corrections, do you grant…", and every surface
   ;; showed it as a gate open now over corrections the cap had stopped anyone making.
