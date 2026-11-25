@@ -182,7 +182,7 @@
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams"})]
       (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "Scratch")))))
+      (is (str/includes? (:body resp) "<title>Legacy — nido</title>")))))
 
 (deftest workstreams-route-renders-the-driven-bands-end-to-end
   ;; parse → derive-screen → views. A legacy ?tab=intake bookmark opens the same

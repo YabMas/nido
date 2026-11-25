@@ -71,14 +71,14 @@
 (def ^:private slices
   "The sidebar: the focused project seen as a system, one slice per perspective.
 
-   Scratch is the workstream board, standing in until the other three have
+   Legacy is the workstream board, standing in until the other three have
    content — Domain and Functionality render a placeholder (see
    `slice-page`); Structure frames fukan's explorer (`structure-page`); Presentation frames the
    project's component catalog as its own app serves it (`presentation-page`). It comes first and stands apart from them, because it is not
    a perspective on the system but the work as it was listed before there were
    any. It keeps the /workstreams path because every workstream link in the
    dashboard already points there."
-  [[:workstreams   "/workstreams"   "Scratch"]
+  [[:workstreams   "/workstreams"   "Legacy"]
    [:domain        "/domain"        "Domain"]
    [:functionality "/functionality" "Functionality"]
    [:structure     "/structure"     "Structure"]
@@ -86,9 +86,14 @@
 
 (def ^:private slice-path (into {} (map (juxt first second)) slices))
 
+(def ^:private slice-label
+  "A slice's name, as the sidebar shows it — the one place a page reads its own name or another
+   slice's from, so renaming a slice is one edit to `slices`."
+  (into {} (map (juxt first #(nth % 2))) slices))
+
 (defn- project-switcher
   "Which project the sidebar is about. Picking one stays on the slice you are
-   reading; from a page that is not a slice it opens Scratch, since Needs you and
+   reading; from a page that is not a slice it opens the board, since Needs you and
    the menu's pages are the same whatever is focused. A selection is dropped: it
    names a workstream of the project being left."
   [{:keys [active scope projects]}]
@@ -316,12 +321,12 @@
   "A slice with nothing populating it yet: its name, and where the focused
    project's workstreams are meanwhile."
   [{:keys [scope] :as ctx} slice]
-  (let [label (some (fn [[id _ l]] (when (= id slice) l)) slices)]
+  (let [label (slice-label slice)]
     (shell
      (assoc ctx :active slice :title label)
      [:h1 label]
      [:p.meta "Nothing populates this slice yet. "
-      [:a {:href (str "/workstreams?scope=" scope)} "Scratch"]
+      [:a {:href (str (slice-path :workstreams) "?scope=" scope)} (slice-label :workstreams)]
       " holds " scope "'s workstreams meanwhile."])))
 
 (defn- structure-tabs
@@ -1458,7 +1463,7 @@
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   needs-page
   "Home: the list of what waits on you, inside the shell, rendered from the screen, beside the
-   pane of the workstream a row selects — the same workstream-pane the Scratch page draws, so the
+   pane of the workstream a row selects — the same workstream-pane the board page draws, so the
    context a reader re-orients by is the workstream's and is drawn once. The poll query carries
    the selection so the 3s refresh keeps the open row marked; the pane polls itself."
   [ctx {:keys [selection] :as screen}]
@@ -2091,7 +2096,7 @@
         q       (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))
         project (:scope screen)]
     (shell
-     (assoc ctx :active :workstreams :title "Scratch")
+     (assoc ctx :active :workstreams :title (slice-label :workstreams))
      ;; Section-fold signals are declared here, on the stable page chrome that the
      ;; 5s poll never replaces (the poll only patches #workstreams inside .inbox).
      ;; __ifmissing seeds them from localStorage on load without clobbering live

@@ -560,7 +560,7 @@
     (is (str/includes? html "exec failed"))))
 
 (deftest shell-renders-chrome-with-active-and-badge
-  (let [html (views/shell {:active :workstreams :title "Scratch"
+  (let [html (views/shell {:active :workstreams :title "Legacy"
                            :needs-count 3 :daemon {:state :up} :scope "brian" :projects ["brian" "nido"]}
                           [:p "body-here"])]
     ;; the top bar: Needs you, the menu with Operations and Development
@@ -568,7 +568,7 @@
     (is (str/includes? html "href=\"/operations\""))
     (is (str/includes? html "href=\"/development\""))
     ;; the sidebar: every slice, the active one highlighted
-    (doseq [label ["Domain" "Functionality" "Structure" "Presentation" "Scratch"]]
+    (doseq [label ["Domain" "Functionality" "Structure" "Presentation" "Legacy"]]
       (is (str/includes? html label)))
     (is (str/includes? html "side-link active"))
     (is (not (str/includes? html "All projects")) "there is no all-project view")
@@ -599,20 +599,26 @@
     (is (re-find #"href=\"/structure\?scope=brian\"" html))
     (is (re-find #"href=\"/workstreams\?scope=brian\"" html))
     (is (not (str/includes? html "side-link active")) "no slice is active off a slice")
-    (is (re-find #"Scratch</a><hr class=\"side-divider\" /><a[^>]*>Domain" html)
-        "Scratch comes first, divided from the slices")))
+    (is (re-find #"Legacy</a><hr class=\"side-divider\" /><a[^>]*>Domain" html)
+        "the board comes first, divided from the slices")))
 
 (deftest switcher-stays-on-the-slice
   (let [on-slice (str (h/html (#'views/project-switcher {:active :structure :scope "brian" :projects ["brian" "nido"]})))
         off      (str (h/html (#'views/project-switcher {:active :operations :scope "brian" :projects ["brian" "nido"]})))]
     (is (re-find #"href=\"/structure\?scope=nido\"" on-slice) "picking a project keeps the slice")
-    (is (re-find #"href=\"/workstreams\?scope=nido\"" off) "off a slice it opens Scratch")))
+    (is (re-find #"href=\"/workstreams\?scope=nido\"" off) "off a slice it opens the board")))
 
-(deftest slice-page-points-at-scratch
+(deftest slice-page-points-at-the-board
   (let [html (views/slice-page {:needs-count 0 :daemon {:state :up} :scope "brian" :projects ["brian"]}
                                :domain)]
     (is (str/includes? html "<h1>Domain</h1>"))
-    (is (str/includes? html "href=\"/workstreams?scope=brian\""))))
+    (is (re-find #"href=\"/workstreams\?scope=brian\">Legacy</a> holds" html))))
+
+(deftest the-board-is-named-legacy-in-one-place
+  ;; The slices table names the board; every page that shows the name reads it from there.
+  (let [src (slurp "src/nido/ui/views.clj")]
+    (is (= 1 (count (re-seq #"\"Legacy\"" src))) "Legacy is written once, in the slices table")
+    (is (not (re-find #"\"Scratch\"" src)) "no page still names the board Scratch")))
 
 (deftest development-page-has-the-catalog-tile
   (let [html (views/development-page {:needs-count 0 :daemon {:state :up} :scope "brian" :projects []})]

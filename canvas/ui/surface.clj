@@ -240,7 +240,7 @@
     {:signature [:=> [:catn [:project ProjectName]] :any]})
   (Operation pickup-result-fragment "What a pickup attempt swaps in."
     {:signature [:=> [:catn [:result :map] [:opts :map]] :string]})
-  (Operation workstreams-page "The Scratch slice: the focused project's board and its ledger pane."
+  (Operation workstreams-page "The Legacy slice: the focused project's board and its ledger pane."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
      :delegates [shell workstreams-fragment workstream-pane pickup-bar]})
   (Operation workstream-page
@@ -302,7 +302,7 @@
      :delegates [shell recovery-fragment]})
   (Operation proposal-result-fragment "What deciding a proposal swaps in."
     {:signature [:=> [:catn [:result :map] [:proposals :any]] :any] :delegates [operations-fragment]})
-  (Operation slice-page "A slice nothing populates yet, pointing at Scratch."
+  (Operation slice-page "A slice nothing populates yet, pointing at the Legacy board."
     {:signature [:=> [:catn [:ctx :map] [:slice :keyword]] :any] :delegates [shell]})
   (Operation structure-page
     "The Structure slice: fukan's explorer framed edge to edge, or why there is nothing to draw."

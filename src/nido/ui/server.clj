@@ -907,7 +907,7 @@
                                     (presentation/target (:scope vs)))))
 
       ;; GET /domain, /functionality — the focused project's other slices.
-      ;; Nothing populates them yet; Scratch (/workstreams) holds the board meanwhile.
+      ;; Nothing populates them yet; the board (/workstreams) holds the work meanwhile.
       (["domain"] ["functionality"])
       (let [vs (view-state req)]
         (page-response (:scope vs) (views/slice-page
