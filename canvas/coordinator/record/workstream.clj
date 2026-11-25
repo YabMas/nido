@@ -39,6 +39,11 @@
   [:map [:name :string] [:unit :string] [:open? :boolean]
    [:status [:enum :none :ready :failed :stopped :destroyed]] [:cwd [:maybe :string]]])
 
+(Kind WorkstreamUnit
+  "One unit of a workstream, as the core holds it: the trigger whose fire opened it, if a fire
+   did, whether it is open, and whether a landing is granted on it."
+  [:map [:id :string] [:trigger {:optional true} :string] [:open? :boolean] [:landing? :boolean]])
+
 (Module record-workstream
   "The workstream: its record, its stage, and the append-only ledger everything else cites.
 
@@ -54,7 +59,7 @@
    writable when it was written stays readable after the schema moves on, and a reader that
    cannot parse one gets nil rather than a throw."
 
-  {:child [Workstream LedgerEntry UnitSession]}
+  {:child [Workstream LedgerEntry UnitSession WorkstreamUnit]}
   (Operation validate
     "The record, or a throw carrying malli's explanation."
     {:signature [:=> [:catn [:w Workstream]] Workstream]})
@@ -71,6 +76,10 @@
     "The sessions of a workstream: one per unit the core holds for it, whatever became of the
      unit; none for a workstream the core holds none of."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:vector UnitSession]]})
+  (Operation units
+    "The units of a workstream: the trigger that opened each, whether it is open, and whether a
+     landing is granted on it; none for a workstream the core holds none of."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:vector WorkstreamUnit]]})
   (Operation of-session
     "The open workstream one of whose units has the named session, or nil — a person's own session
      is no workstream's."

@@ -1,7 +1,7 @@
 (ns nido.coordinator.record.tickets
   "Per-ticket triage in nido. One directory per ticket, keyed by its id (BR-#### for Notion), whose
    meta.edn holds what the ticket IS — its page, url, title, who opened it. Where its triage stands
-   is derived (`status-of`) from the ledger and runs of the workstream carrying it, where every
+   is derived (`status-of`) from the ledger and units of the workstream carrying it, where every
    decision about it is an entry: a verdict, a person's acceptance, a dismissal, a stage choice.
    Entry writes and reads live on that workstream's ledger
    (nido.coordinator.record.workstream/append-to-ref!), never here."
@@ -9,7 +9,7 @@
    [babashka.fs :as fs]
    [clojure.edn :as edn]
    [clojure.string :as str]
-   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as cws]
@@ -93,12 +93,8 @@
             (io/write-edn! path m')
             m'))))))
 
-(def ^:private open-run-states
-  "Run states in which a run still owns its ticket: working, or parked for a person's review."
-  #{:queued :preprocessing :running :awaiting-review})
-
 (def ^:private investigating-skills
-  "The skills whose run investigates a ticket and leaves a verdict on it."
+  "The skills whose turn investigates a ticket and leaves a verdict on it."
   #{:triage-bug :triage-slack :investigate-bug})
 
 (def ^:private triage-kinds
@@ -110,17 +106,17 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any] [:maybe :keyword]]}
   status-of
   "Where triage of the ticket whose workstream is `w` stands, read off that workstream's ledger
-   and its runs — nothing stored says it. The first that holds:
+   and the units the core holds for it — nothing stored says it. The first that holds:
      :dismissed      — its standing close is a dismissal
      :planning       — a person's choice to put it in progress still holds
                        (`standing/chosen-stage`)
      :implementing   — it is closed otherwise, or records work past its triage
      :triaged        — a person accepted its newest verdict
-     :investigating  — a run investigating it is open
+     :investigating  — a unit a fire of an investigating skill opened is still open
      :awaiting-input — a verdict waits for a person
      nil             — none of these: never triaged, or a triage that ended without a verdict,
                        which is what makes a ticket re-triable.
-   A run is open from its minting until it ends, parked for review included.
+   A unit is open from its fire until it finishes, its turn asking a person included.
 
    Nothing recorded before a dismissal that was later restored counts, verdict or work
    (`standing/restored-at`): restoring a dismissed ticket returns it to triage as it was before
@@ -128,8 +124,11 @@
   [project w]
   (when w
     (let [ws-id  (:id w)
-          open   (into #{} (comp (filter #(open-run-states (:state %))) (map :skill))
-                       (runs/runs-of project ws-id))
+          opened (keep #(when (:open? %) (:trigger %)) (cws/units project ws-id))
+          ;; The triggers file is read only for a workstream a fire's unit is still open on.
+          skill  (when (seq opened)
+                   (into {} (map (juxt (comp name :name) :skill)) (triggers/load-for-project project)))
+          open   (into #{} (keep skill) opened)
           closed (cws/closure w)
           v      (standing/verdict project ws-id w)]
       (cond

@@ -3,14 +3,12 @@
    its newest census and the trend of its readings, its plans and slices by state, and its open
    misfits and escalations. Pure read model over the drain's records — NO WRITES.
 
-   A slice's state here is read off the drain's records and its landing Runs, not the pipeline's
-   position (which this stratum cannot reach): :started, :cleared once the coordinator cleared it,
-   :landing while a landing Run of it is in flight, :landing-failed when its newest one parked or
-   failed, and :landed once it landed."
+   A slice's state here is read off the drain's records and the slice's units in the core:
+   :started, :cleared once the coordinator cleared it, :landing once a landing is granted on one of
+   its units — until it merges, a landing that failed included, which its conductor raises to the
+   person — and :landed once it landed."
   (:require
-   [clojure.string :as str]
    [nido.coordinator.record.drain :as drain]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
    [nido.coordinator.source.drain :as source-drain]))
@@ -27,24 +25,12 @@
       (zero? (:remaining c))             :exhausted
       :else                              :draining)))
 
-(defn- landing-runs
-  "The drain's slices' landing Runs, by slice, oldest first."
-  [project drain-id]
-  (->> (runs/list-run-ids)
-       (filter #(str/includes? % (str "-" (name project) "-drain-land-")))
-       (keep runs/read-run)
-       (filter #(= drain-id (get-in % [:event-payload :drain])))
-       (sort-by #(-> % :state-history first :at))
-       (group-by :workstream-id)))
-
-(defn- slice-state [project w landings {:keys [ws-id]}]
-  (let [newest (last (get landings ws-id))]
-    (cond
-      (source-drain/landed? project ws-id)                              :landed
-      (#{:queued :preprocessing :running} (:state newest))             :landing
-      (#{:failed :awaiting-review} (:state newest))                    :landing-failed
-      (drain/cleared? w ws-id)                                          :cleared
-      :else                                                              :started)))
+(defn- slice-state [project w {:keys [ws-id]}]
+  (cond
+    (source-drain/landed? project ws-id)        :landed
+    (some :landing? (ws/units project ws-id))   :landing
+    (drain/cleared? w ws-id)                    :cleared
+    :else                                       :started))
 
 (defn- open-blockers [project ws-id]
   (let [answered (set (map :blocker-seq (ws/entries-of project ws-id :blocker-answered)))]
@@ -70,10 +56,9 @@
   [project drain-id]
   (let [w (ws/read-ws project drain-id)]
     (when (and w (drain/drain? w))
-      (let [landings (landing-runs project drain-id)
-            misfits  (drain/open-misfits w)
+      (let [misfits  (drain/open-misfits w)
             slices   (mapv (fn [s] (assoc s
-                                          :state (slice-state project w landings s)
+                                          :state (slice-state project w s)
                                           :sites (:sites (first (filter #(= (:plan s) (:seq %)) (drain/plans w))))
                                           :misfits (count (filter #(= (:ws-id s) (:slice %)) misfits))))
                            (drain/slices w))

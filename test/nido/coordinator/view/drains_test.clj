@@ -9,6 +9,8 @@
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.view.drains :as view]
+   [nido.core.client :as client]
+   [nido.test.units :as units]
    [nido.platform.core :as core]
    [nido.review.stages :as stages]
    [nido.ui.views :as views]
@@ -46,6 +48,12 @@
                    (map #(select-keys % [:ws-id :state :sites]) (:slices r))))
             (drain/clear-slice! p d s [])
             (is (= {:cleared 1} (:by-state (view/drain p d))))
+            (testing "a slice is landing once a landing is granted on its unit, until it merges"
+              (units/open-unit! p s "land-me")
+              (is (= {:cleared 1} (:by-state (view/drain p d))))
+              (client/command! (client/ws-key p s) (str "land-" s) {:command :begin-landing :unit "land-me"})
+              (#'ws/forget! p s)
+              (is (= {:landing 1} (:by-state (view/drain p d)))))
             ;; The record refuses a slice's landing before its review under its version passed.
             (with-redefs [stages/project+ws-from-cwd (fn [_] [p s])]
               (review/append-review-entry! "/wt" {:status :converged :findings []

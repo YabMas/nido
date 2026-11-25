@@ -193,6 +193,22 @@
     (if (:discarded? st) [] (unit-sessions st))
     []))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:vector :WorkstreamUnit]]}
+  units
+  "The units the core holds for workstream `ws-id`, in unit order, whatever became of each: the
+   trigger whose fire opened it (absent for one a person or the conductor opened), whether it is
+   open, and whether a landing is granted on it — granted stays true until it merges, a landing
+   that failed included. Empty for a workstream the core holds none of."
+  [project ws-id]
+  (let [st (core-state project ws-id)]
+    (if (or (nil? st) (:discarded? st))
+      []
+      (->> (vals (:units st))
+           (sort-by :id)
+           (mapv (fn [{:keys [id trigger status landing?]}]
+                   (cond-> {:id id :open? (= :open status) :landing? (boolean landing?)}
+                     trigger (assoc :trigger trigger))))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :WorkstreamId]]}
   of-session
   "The open workstream of `project` one of whose units has the session named `session-name`, or

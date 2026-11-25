@@ -22,7 +22,7 @@
    [nido.coordinator.source.state]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
-   [nido.coordinator.record.triggers]
+   [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.view.workstreams :as wsv]
@@ -3516,22 +3516,15 @@
   (with-tmp
     (fn [_]
       ;; A thread triage that wrote the single-ticket kind under the thread id.
-      (let [ws (slack-proposal-ws! product-proposal)
-            id "run-thread-1"]
-        (fs/create-dirs (cstate/run-dir id))
-        (runs/write-run! {:id id :project :brian :trigger :triage-slack-threads
-                          :source {:type :slack-events :emoji "owl"}
-                          :event-payload {:id "slack-C1-100.0"} :skill :triage-slack
-                          :first-message "/triage-slack" :agent :claude :session-name "t"
-                          :workstream-id (:id ws) :claude-session-id "sid"
-                          :limits {:budget "30m"} :priority 0 :session-profile :full
-                          :uncapped? false :state :awaiting-review
-                          :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
-                          :artifacts [] :error nil})
-        (runs/register! id)
-        (let [c (with-slack-stubs {}
+      (let [ws (slack-proposal-ws! product-proposal)]
+        ;; It came to exist for a thread: a fire of a :slack-events trigger opened its unit.
+        (units/fire! :brian (:id ws) :triage-slack-threads)
+        (let [c (with-redefs [triggers/load-for-project
+                              (constantly [{:name :triage-slack-threads :skill :triage-slack
+                                            :source {:type :slack-events :emoji "owl"}}])]
+                  (with-slack-stubs {}
                   #(do (is (= {:decision :error :error :wrong-kind} (work/conclude! :brian (:id ws))))
-                       (is (= {:decision :error :error :wrong-kind} (work/apply! :brian (:id ws))))))]
+                       (is (= {:decision :error :error :wrong-kind} (work/apply! :brian (:id ws)))))))]
           (is (empty? (:created c)) "nothing is filed onto the thread")
           (is (nil? (workstream/find-by-ref-id :brian "BR-4900")))
           (is (empty? (workstream/entries-of :brian (:id ws) :triage-accepted))))))))

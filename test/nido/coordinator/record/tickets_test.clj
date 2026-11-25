@@ -3,15 +3,20 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
-   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
-   [nido.coordinator.record.workstream :as ws]))
+   [nido.coordinator.record.workstream :as ws]
+   [nido.test.units :as units]))
+
+(def ^:private brian-triggers
+  [{:name :triage-new :skill :triage-bug} {:name :plan :skill :plan-work}])
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))
+                    triggers/load-for-project (constantly brian-triggers)]
         (cstate/ensure-dirs!)
         (f tmp))
       (finally (fs/delete-tree tmp)))))
@@ -31,19 +36,10 @@
   (ws/append-entry! :brian (:id (ws-of br)) {:kind :triage-accepted}
                     (pr-str {:format :triage-accepted :triage-seq n})))
 
-(defn- a-run!
-  "A run of `skill` in `state` against the workstream carrying `br`, registered as create-run! does."
-  [id br skill state]
-  (fs/create-dirs (cstate/run-dir id))
-  (runs/write-run! {:id id :project :brian :trigger :t
-                    :source {:type :notion-view} :event-payload {:id br}
-                    :skill skill :first-message "x" :agent :claude
-                    :session-name (str "run-" id) :workstream-id (:id (ws-of br))
-                    :claude-session-id nil
-                    :limits {} :priority 0 :session-profile :lite :uncapped? false
-                    :state state :state-history [{:at "t" :state state}]
-                    :artifacts [] :error nil})
-  (runs/register! id))
+(defn- a-fire!
+  "A unit opened by a fire of `trigger` on the workstream carrying `br`; answers its id."
+  [br trigger]
+  (units/fire! :brian (:id (ws-of br)) trigger))
 
 (deftest read-meta-is-nil-safe-for-nil-or-blank-br-id
   ;; A nil/blank br-id (e.g. a triage run whose event-payload predates :id)
@@ -79,19 +75,24 @@
         (is (= "pg1" (:notion-page-id m)))
         (is (= :triage-new (:opened-by m)))))))
 
-(deftest status-is-read-off-the-ledger-and-runs
+(deftest status-is-read-off-the-ledger-and-units
   (with-tmp
     (fn [_]
       (testing "a ticket no workstream carries has no status, and is triaged by the gate"
         (is (nil? (tickets/status :brian "BR-0")))
         (is (= :spawn (tickets/gate-decision :brian "BR-0"))))
 
-      (testing "an open investigating run is :investigating; its verdict, once the run ends, waits for a person"
+      (testing "a unit of a trigger whose skill does not investigate is not :investigating"
+        (verdict! "BR-3")
+        (a-fire! "BR-3" :plan)
+        (is (= :awaiting-input (tickets/status :brian "BR-3"))))
+
+      (testing "an open unit of an investigating skill is :investigating; its verdict, once the unit is over, waits for a person"
         (verdict! "BR-1")
-        (a-run! "r1" "BR-1" :triage-bug :running)
-        (is (= :investigating (tickets/status :brian "BR-1")))
-        (is (= :skip-active (tickets/gate-decision :brian "BR-1")))
-        (a-run! "r1" "BR-1" :triage-bug :done)
+        (let [u (a-fire! "BR-1" :triage-new)]
+          (is (= :investigating (tickets/status :brian "BR-1")))
+          (is (= :skip-active (tickets/gate-decision :brian "BR-1")))
+          (units/retract! :brian (:id (ws-of "BR-1")) u))
         (is (= :awaiting-input (tickets/status :brian "BR-1")))
         (is (= :skip-active (tickets/gate-decision :brian "BR-1")))
         (is (= :skip-untriaged (tickets/promote-decision :brian "BR-1"))))
@@ -109,9 +110,9 @@
         (is (= :implementing (tickets/status :brian "BR-1")))
         (is (= :skip-active (tickets/gate-decision :brian "BR-1"))))
 
-      (testing "a triage run that ended without a verdict leaves the ticket re-triable"
+      (testing "a triage unit over without a verdict leaves the ticket re-triable"
         (ws/find-or-mint-by-ref! :brian "BR-2")
-        (a-run! "r3" "BR-2" :triage-bug :failed)
+        (units/retract! :brian (:id (ws-of "BR-2")) (a-fire! "BR-2" :triage-new))
         (is (nil? (tickets/status :brian "BR-2")))
         (is (= :spawn (tickets/gate-decision :brian "BR-2")))))))
 

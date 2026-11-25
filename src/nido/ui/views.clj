@@ -3019,7 +3019,7 @@
    [:td.mono ws-id]
    [:td (str/join ", " sites)]
    [:td (name state) (when (pos? misfits) [:span.meta (str " · " misfits " open misfit" (when (> misfits 1) "s"))])]
-   [:td (when (#{:started :cleared :landing-failed} state)
+   [:td (when (#{:started :cleared} state)
           (drain-button (if (= :cleared state) "Land" "Land (override)")
                         (str (drain-base d) "/land/" ws-id) scope))]])
 

@@ -2639,11 +2639,14 @@
           {:decision :created :br (:br page)}))))
 
 (defn- thread-workstream?
-  "Whether `ws-id` came to exist for a Slack thread: it holds a run a :slack-events fire started.
-   Read off how the workstream came to be, never its ref's text or its newest verdict — a
-   once-per-ref fire lands a run only on a workstream its own fire minted (spawn)."
+  "Whether `ws-id` came to exist for a Slack thread: it holds a unit a fire of a :slack-events
+   trigger opened. Read off how the workstream came to be, never its ref's text or its newest
+   verdict — a once-per-ref fire opens a unit only on a workstream its own fire made."
   [project ws-id]
-  (boolean (some #(= :slack-events (-> % :source :type)) (runs/runs-of project ws-id))))
+  (let [opened (set (keep :trigger (cws/units project ws-id)))]
+    (boolean (and (seq opened)
+                  (some #(and (opened (name (:name %))) (= :slack-events (-> % :source :type)))
+                        (triggers/load-for-project project))))))
 
 (defn- apply-proposed!
   "Accept a Slack proposal: make sure its product page is filed, add the technical analysis
