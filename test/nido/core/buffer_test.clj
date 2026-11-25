@@ -1,5 +1,7 @@
 (ns nido.core.buffer-test
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
+            [nido.core.ask-tool :as ask-tool]
             [nido.core.buffer :as b]
             [nido.core.domain :as d]))
 
@@ -210,3 +212,34 @@
     (let [spec (f "brian/ws-1" "c2" (reduce add s [:activated :intent :baseline :design :design-cleared]) [])]
       (is (= ["brian/ws-1"] @asked))
       (is (re-find #"the implementation review" (:instructions spec))))))
+
+(deftest the-conductor-hears-what-the-person-answered
+  (let [s  (state-after [{:command :start-turn :turn "k" :unit nil :spec spec}
+                         {:command :record-outcome :turn "k" :outcome :asked
+                          :call {:id "c" :question "open unit b?" :explored "x" :options ["yes" "no"] :recommendation "yes"}}])
+        [raise] (b/decisions opts "ws" s 3)
+        answer "1. open unit b? — yes\n   The person's comment on question 1: only after a's tests pass"
+        s2 (state-after-from s [(:command raise)
+                                {:command :answer-operator-ask :ask "ask k c" :answer answer :by :person}])
+        item (some #(when (= :ask-answered (:kind %)) %) (vals (:inbox s2)))]
+    (testing "the inbox item carries the answer value as given"
+      (is (= answer (:answer item))))
+    (testing "the brief prints it beside the ask's id, every line under the item"
+      (let [t (b/brief "ws" s2 [item])]
+        (is (str/includes? t "the person answered operator ask ask k c, answering:\n    1. open unit b? — yes\n       The person's comment on question 1: only after a's tests pass"))))
+    (testing "a withdrawal carries no answer"
+      (let [s3 (state-after-from s [(:command raise)
+                                    {:command :withdraw-operator-ask :ask "ask k c" :reason "no" :by :person}])
+            w  (some #(when (= :ask-answered (:kind %)) %) (vals (:inbox s3)))]
+        (is (= :withdrawn (:how w)))
+        (is (not (contains? w :answer)))
+        (is (re-find #"(?m)the person withdrawn operator ask ask k c$" (b/brief "ws" s3 [w])))))))
+
+(deftest askers-are-told-a-comment-may-push-back
+  (doseq [[where text] [["ask guidance" ask-tool/guidance]
+                        ["conductor brief" (b/brief "ws" d/empty-state [])]]]
+    (testing where
+      (is (str/includes? text "comment on a question") "an answer may carry a per-question comment")
+      (is (str/includes? text "with or without an option chosen"))
+      (is (str/includes? text "re-asking or reframing") "a disputing comment is answered by a re-ask or reframe")
+      (is (str/includes? text "never by proceeding on an option nobody chose")))))

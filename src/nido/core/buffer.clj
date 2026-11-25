@@ -140,6 +140,12 @@
 
 ;; ── the conductor's brief ────────────────────────────────────────────────────
 
+(defn- indent-answer
+  "The person's answer, every line of it indented under the brief line it belongs to, so a
+   several-line answer still reads as that one item."
+  [answer]
+  (str/join "\n" (map #(str "    " %) (str/split-lines answer))))
+
 (defn- describe-item [{:keys [kind unit turn outcome actions-unknown? key] :as item}]
   (case kind
     :turn-ended    (str "unit " unit ": turn " turn " ended " (name outcome)
@@ -161,7 +167,9 @@
                           (str " — with " (count n) " image" (when (next n) "s")
                                " attached to this prompt, in order: " (str/join ", " n)))
                         " — answer with reply_chat")
-    :ask-answered  (str "the person " (name (:how item)) " operator ask " (:ask item))
+    :ask-answered  (str "the person " (name (:how item)) " operator ask " (:ask item)
+                        (when (contains? item :answer)
+                          (str ", answering:\n" (indent-answer (str (:answer item))))))
     :hand-over     (str "this workstream was handed over to you from the old coordinator: " (:summary item))
     :arrival       (str "work arrived and waits for the person to promote or dismiss it: " (:summary item))
     (pr-str kind)))

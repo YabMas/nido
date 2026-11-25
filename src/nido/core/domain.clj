@@ -434,19 +434,22 @@
 
 (defn- person-closed-ask
   "After the person closed operator ask `ask-id`: a stop ask lifts the conductor's stop; any other
-   is heard by the conductor as the person's input."
-  [state ask-id how]
+   is heard by the conductor as the person's input — with `answer`, the value they answered it
+   with, when they answered it. The value is carried for the conductor to read; nothing here reads
+   its content."
+  [state ask-id how answer]
   (if (= :conductor-stopped (get-in state [:operator-asks ask-id :kind]))
     (assoc state :conductor-stopped? false :conductor-failures 0)
-    (hear-later state {:kind :ask-answered :ask ask-id :how how})))
+    (hear-later state (cond-> {:kind :ask-answered :ask ask-id :how how}
+                        (some? answer) (assoc :answer answer)))))
 
 (defmethod evolve :operator-ask-answered [state {:keys [ask answer by]}]
   (cond-> (close-ask state ask :answered {:answered answer})
-    (= :person by) (person-closed-ask ask :answered)))
+    (= :person by) (person-closed-ask ask :answered answer)))
 
 (defmethod evolve :operator-ask-withdrawn [state {:keys [ask reason by]}]
   (cond-> (close-ask state ask :withdrawn {:refused reason})
-    (= :person by) (person-closed-ask ask :withdrawn)))
+    (= :person by) (person-closed-ask ask :withdrawn nil)))
 
 (defmethod evolve :conductor-stop-raised [state {:keys [ask content]}]
   (-> state
