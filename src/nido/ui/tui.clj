@@ -35,7 +35,8 @@
    [nido.ui.dev :as dev]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.links :as links]
-   [nido.session.state :as state]))
+   [nido.session.state :as state]
+   [nido.ui.components.state :as ui-state]))
 
 ;; ---------------------------------------------------------------------------
 ;; Action channel: update-fn writes here before returning quit-cmd; the bb
@@ -166,12 +167,14 @@
   (when current (str "  [phase " current "/" of "]")))
 
 (defn- status-str
-  "`  ‹owed: agent · stalled›` — who owes the row's next move and whether anything is live, the
-   facets of status the position does not carry. nil for a row status was not read for."
+  "`  ‹owed: agent · stalled›` — who owes the row's next move, the category the person is needed
+   in when it is theirs, and whether anything is live: the facets of status the position does not
+   carry. nil for a row status was not read for."
   [{:keys [status position]}]
   (when status
-    (let [{:keys [owed-by live stalled]} status]
+    (let [{:keys [owed-by needs live stalled]} status]
       (str "  ‹" (some-> position :at name) " · owed: " (name owed-by)
+           (when needs (str " · " (ui-state/needs-words needs)))
            (cond live " · live" stalled " · stalled" :else "") "›"))))
 
 (defn- badged-item-row
@@ -234,7 +237,7 @@
    :description "d brings its sessions down"
    :data r})
 
-(defn- board-rows
+(defn- ^{:malli/schema [:=> [:cat :any :any [:? :any] [:? :any]] :any]} board-rows
   "Rows for the spine board: work/grouped, filtered by `origin` and `facet-filter`,
    as foldable bands with origin badges. A list refresh first (`work/refresh-list!`): the
    board is one of the renders that make one."
@@ -1467,7 +1470,7 @@
                (when link-rows
                  (cons (info-row "links" "") link-rows))))))
 
-(defn- environment-block
+(defn- ^{:malli/schema [:=> [:cat :any :any] :any]} environment-block
   "The workstream's environment panel body: a live status line (from the probed
    dev-state) plus the resolved session's machine facts (dev URL, ports, home,
    worktree, links). The empty-state string when the workstream has no runnable

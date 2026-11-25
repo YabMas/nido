@@ -338,7 +338,7 @@
             "a dismissal is the close's outcome, and its band is :dismissed, not :done")
         (let [row (first (work/list-workstreams :brian))]
           (is (= :shipped (get-in row [:position :at])) "a dismissed row is drawn, so it reads status")
-          (is (= {:owed-by :nobody :live false :stalled false :paused false} (:status row))))))))
+          (is (= {:owed-by :nobody :live false :stalled false :paused false :needs-you false :needs nil} (:status row))))))))
 
 (deftest undismissed-rows-are-unaffected
   (with-tmp
@@ -600,9 +600,10 @@
 ;; A gate read only from that latest report then said "needs you" and offered nothing.
 
 (defn- bury-a-blocker!
-  "A workstream whose blocker (entry 1) sits under a later design verdict (entry 2), with nobody parked."
+  "An activated workstream whose blocker (entry 1) sits under a later design verdict (entry 2),
+   with nobody parked."
   []
-  (let [w (workstream/create! :brian {:external-refs []})]
+  (let [w (workstream/create! :brian {:external-refs [] :activated? true})]
     (workstream/append-entry! :brian (:id w) {:kind :blocker}
       (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
     (workstream/append-entry! :brian (:id w) {:kind :design-verdict}
@@ -872,7 +873,7 @@
     (is (:events (client/command! k (str ws-id "/stop") {:command :raise-conductor-stop :ask "conductor stopped 7"
                                                         :content stop-content})))))
 
-(deftest a-stopped-conductor-is-an-error-not-a-gate
+(deftest a-stopped-conductor-is-a-system-error-on-needs-you
   (with-tmp
     (fn [_]
       (with-redefs [nido.platform.project/list-projects
@@ -881,10 +882,13 @@
               b (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-10" :title "Ask me"}]})]
           (stop-conductor! (:id a))
           (raise-person-ask! (:id b) "ask-b" "Ship it?")
-          (let [{:keys [gates errors]} (work/read-gates)
-                [e] errors]
-            (is (= [(:id b)] (map :ws-id gates)) "a person's question is under Needs you; the failure is not")
-            (is (= [(:id a)] (map :ws-id errors)) "the stopped conductor is an error")
+          (let [{:keys [gates] :as reading} (work/read-gates)
+                by (into {} (map (juxt :ws-id identity)) gates)
+                e  (by (:id a))]
+            (is (= #{(:id a) (:id b)} (set (map :ws-id gates))) "both need the person: one Needs you list")
+            (is (not (contains? reading :errors)) "and no list of its own for failures")
+            (is (= :system-error (:needs e)) "the stopped conductor is a system error")
+            (is (= :ask (:needs (by (:id b)))) "the question an ask")
             (is (= ["brian" "Fix the thing" "Its conductor stopped" "conductor stopped 7"]
                    ((juxt :project :label :what :core-ask) e)))
             (is (re-find #"last 3 conductor turns failed — its agent exited without reporting an outcome \(conductor-12\)"
@@ -893,28 +897,25 @@
             (is (= "oh no: Bun has crashed." (:stderr (last (:failures e))))
                 "and what the run said on its way down")
             (is (= [:wake] (map :id (:actions e))) "its one action is the recovery")
-            (is (= e (work/error :brian (:id a))) "the pane's error is the list's")
-            (is (nil? (work/gate :brian (:id a))) "and the pane holds no question for it"))
-          (testing "waking it answers the stop and takes it off the errors"
+            (is (nil? (:ask e)) "and it asks no question")
+            (is (= e (work/gate :brian (:id a))) "the pane's card is the list's"))
+          (testing "waking it answers the stop and takes it off Needs you"
             (is (= {:decision :woken} (work/resolve-gate! :brian (:id a) :wake)))
-            (is (empty? (:errors (work/read-gates))))
+            (is (= [(:id b)] (map :ws-id (work/all-gates))))
             (is (= {:decision :core-refused :because "its conductor is not stopped"}
                    (work/resolve-gate! :brian (:id a) :wake))))
-          (testing "a workstream holding a question and a stop is on both lists"
+          (testing "a workstream holding a question and a stop needs the person as a system error first"
             (stop-conductor! (:id b))
-            (let [{:keys [gates errors]} (work/read-gates)]
-              (is (= [(:id b)] (map :ws-id gates)))
-              (is (= "Ship it?" (:question (:ask (first gates)))) "Needs you shows the question, never the stop")
-              (is (= [(:id b)] (map :ws-id errors))))
+            (let [g (work/gate :brian (:id b))]
+              (is (= :system-error (:needs g)))
+              (is (= [:wake] (map :id (:actions g)))))
             (testing "and an option answers the question, never the stop"
               (is (= {:decision :answered} (work/resolve-gate! :brian (:id b) :option-a)))
-              (is (= [(:id b)] (map :ws-id (:errors (work/read-gates))))))
-            (testing "a workstream its ledger settled is on neither list, whatever the core holds open"
+              (is (= :system-error (:needs (work/gate :brian (:id b))))))
+            (testing "a workstream its ledger settled needs nobody, whatever the core holds open"
               (raise-person-ask! (:id b) "ask-b2" "And this?")
               (workstream/close! :brian (:id b) :done)
-              (let [{:keys [gates errors]} (work/read-gates)]
-                (is (empty? gates))
-                (is (empty? errors))))))))))
+              (is (nil? (work/gate :brian (:id b)))))))))))
 
 (deftest all-gates-are-the-core-s-open-asks
   (with-tmp
@@ -924,10 +925,11 @@
         (let [a (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "Fix the thing"}]})
               b (workstream/create! :brian {:external-refs []})]
           (is (empty? (work/all-gates)) "no open ask, no gate")
-          (is (= {:gates [] :errors [] :unavailable {}} (work/read-gates)))
+          (is (= {:gates [] :unavailable {}} (work/read-gates)))
           (raise-person-ask! (:id a) "ask-1" "Carry on with the rebase?")
           (let [[g :as gs] (work/all-gates)]
             (is (= 1 (count gs)) "only the workstream with an open ask is a gate")
+            (is (= :ask (:needs g)) "a question the core asks is an ask")
             (is (= [(:id a) "brian" "Fix the thing" "BR-9" "Carry on with the rebase?" "ask-1"]
                    ((juxt :ws-id :project :label :tag (comp :question :ask) :core-ask) g))))
           (testing "a closed workstream is no gate, whatever ask is open on it"
@@ -2226,7 +2228,7 @@
       (let [w   (workstream/create! :brian {:external-refs []})
             id  (:id w)
             row #(first (filter (fn [r] (= id (:ws-id r))) (work/list-workstreams :brian)))
-            quiet {:owed-by :agent :live false :stalled false :paused false}]
+            quiet {:owed-by :agent :live false :stalled false :paused false :needs-you false :needs nil}]
         (testing "an agent owes it and the core holds no unit of it: nothing is the core's to move"
           (is (= quiet (:status (row))))
           (is (= :idle (:engagement (row)))))
@@ -2238,6 +2240,76 @@
                         work/live-session-names                    (constantly #{"human-1"})]
             (is (= quiet (:status (row))))
             (is (nil? (:doing (row))))))))))
+
+(deftest a-blocker-at-an-idle-workstream-reads-one-way-on-every-surface
+  ;; brian ws-20261124-35a103 and ws-20261119-1c9605: a unit's agent wrote a blocker to the ledger
+  ;; instead of asking through the core, and the core does nothing on it. They read Blocked with a
+  ;; working dot, owed by the person, and were missing from Needs you.
+  (with-tmp
+    (fn [_]
+      (let [w  (workstream/create! :brian {:external-refs [] :activated? true})
+            id (:id w)
+            _  (session/create! :brian id {:name "unit-1" :weight :heavy :autonomy nil})
+            _  (workstream/append-entry! :brian id {:kind :blocker}
+                 (pr-str {:format :blocker :summary "s" :needs "Leave the template change out?"
+                          :options sample-options :after "The work resumes once you answer."}))
+            row (first (filter #(= id (:ws-id %)) (work/list-workstreams :brian)))
+            ws  (work/workstream :brian id)
+            g   (first (filter #(= id (:ws-id %)) (work/gates :brian)))]
+        (is (= :blocked (get-in row [:position :at])))
+        (is (= {:owed-by :person :live false :stalled false :paused false :needs-you true :needs :ask}
+               (:status row)))
+        (is (nil? (:doing row)))
+        (is (:needs-you row) "the board row needs the person")
+        (is (= :parked-at-gate (:engagement row)))
+        (is (= (:status row) (:status ws)) "the pane reads the row's activity")
+        (is (= [[(get-in ws [:position :stage]) :awaiting]]
+               (keep #(when (:now %) [(:stage %) (:now %)]) (get-in ws [:arc :stages])))
+            "the arc waits on the person at the stage the blocker holds")
+        (is (some? g) "it is on Needs you")
+        (is (= :answer-blocker (:owes g)))
+        (is (= :ask (:needs g)) "carded as an ask")
+        (is (= :blocker (get-in g [:report :format])) "the card carries the blocker it answers")))))
+
+(deftest a-blocker-past-the-implementation-is-awaited-past-the-spine
+  ;; A position past the implementation names no spine stage, so no stage can be the one the
+  ;; person is awaited at — and the arc still says they are, past the spine, in the category the
+  ;; activity names: a blocker there as an ask, a release candidate as a landing.
+  (with-tmp
+    (fn [_]
+      (let [w  (workstream/create! :brian {:external-refs [] :activated? true})
+            id (:id w)]
+        (doseq [[pos needs] [[{:at :blocked :next {:stage :answer-blocker :mode :human}} :ask]
+                             [{:at :release-candidate :next {:stage :land :mode :release}} :landing]]]
+          (with-redefs [pipeline/of (constantly pos)]
+            (let [ws (work/workstream :brian id)]
+              (is (nil? (get-in ws [:position :stage])) "the position names no spine stage")
+              (is (= needs (get-in ws [:status :needs])))
+              (is (empty? (filter :now (get-in ws [:arc :stages]))) "no stage is marked")
+              (is (= {:needs needs} (get-in ws [:arc :past]))
+                  "the arc says the person is awaited past the spine, in the activity's category"))))
+        (with-redefs [pipeline/of (constantly {:at :implementing :next {:stage :implement :mode :authoring}
+                                               :stage :implementation})]
+          (is (nil? (get-in (work/workstream :brian id) [:arc :past]))
+              "nothing is awaited past the spine while the person is not needed"))))))
+
+(deftest a-merge-waiting-its-turn-reads-merging-queued-and-runs-nothing
+  (with-tmp
+    (fn [_]
+      (let [w  (workstream/create! :brian {:external-refs [] :activated? true})
+            id (:id w)]
+        (with-redefs-fn {#'work/band-of (fn [& _] :shipping)}
+          (fn []
+            (let [row (first (filter #(= id (:ws-id %)) (work/list-workstreams :brian)))
+                  ws  (work/workstream :brian id)]
+              (is (= :shipping (:stage row)))
+              (is (= {:source :merge :phase :queued} (:doing row)))
+              (is (false? (get-in row [:status :live])) "no working dot")
+              (is (= (:doing row) (:doing ws)))
+              (is (empty? (filter #(= :running (:now %)) (get-in ws [:arc :stages])))
+                  "no arc stage reads running")
+              (is (= (:doing row) (get-in ws [:arc :past :doing]))
+                  "the arc carries the queued merge past the spine, as the row's mark reads it"))))))))
 
 (deftest entry-phase-reads-the-kind-of-entry
   (is (= :serving (nido.session.state/entry-phase {:instance-id "i" :app-port 4000})))

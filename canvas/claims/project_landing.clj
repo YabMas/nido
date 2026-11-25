@@ -7,7 +7,7 @@
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.lane.landing :refer [land! names-pr?]]
-            [canvas.coordinator.work :refer [coordinator-work]]
+            [canvas.coordinator.work :refer [coordinator-work core-resolve!]]
             [canvas.core.api :refer [core-api]]
             [canvas.core.domain :refer [core-domain]]
             [canvas.platform.project :refer [landing]]
@@ -22,8 +22,8 @@
   {:about [land! names-pr? pr-land*] :evidence "test"})
 
 (Claim land-gate-grants-never-ships
-  "The gate's own Land control — the one a workstream's position offers, apart from any ask — is offered at position :published only on a workstream whose core state holds an open unit, and never at :slice-cleared, whose slice lands by its drain. It does one thing: it sends the person's grant of :merge as one keyed core command through core-api [person-acts-by-command]. It appends no ledger entry, lands nothing itself and enqueues no :ship envelope, so a click on it writes no :ship-submitted and creates no merge run. An open ask's Land is that ask's option, not this control [land-answers-the-escalation]."
-  {:about [coordinator-work core-api] :evidence "round"})
+  "The gate's own Land control — the one a :landing card offers, apart from any ask — is offered only while the workstream's activity names :landing [landing-is-a-card-not-a-question], at position :release-candidate or :published, and never at :slice-cleared, whose slice lands by its drain. It does one thing: it sends the person's grant of :merge as one keyed core command through core-api [person-acts-by-command]. It appends no ledger entry, lands nothing itself and enqueues no :ship envelope, so a click on it writes no :ship-submitted and creates no merge run. An open ask's Land is that ask's option, not this control [land-answers-the-escalation]."
+  {:about [coordinator-work core-resolve!] :evidence "round"})
 
 (Claim land-answers-the-escalation
   "On a workstream whose core state holds an open unit, an open operator ask that asks one question offers its option carrying :grants [:merge] as a Land action of the ask's own, labelled Land whatever the project and apart from the gate's own Land control [land-gate-grants-never-ships], and choosing it answers that ask by that option in one core command, so the one click grants the landing and answers the ask. An ask that asks several questions offers no Land: it is answered whole by one core command carrying the grants of the options picked."

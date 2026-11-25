@@ -25,7 +25,7 @@
   (let [mark (str (h/html (state/needs-mark)))]
     (testing "a board row whose next move is the person's"
       (is (str/includes? (str (h/html (block/render row/board-row "w"
-                                                     {:project "nido" :row {:ws-id "w" :label "L" :needs-you true}
+                                                     {:project "nido" :row {:ws-id "w" :label "L" :needs-you true :status {:needs-you true}}
                                                       :href "#"}
                                                      {} (fn [& _] "#"))))
                          mark)))

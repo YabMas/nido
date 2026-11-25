@@ -384,11 +384,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :WorkstreamRow] :string]}
   format-row
-  "Display string for a stage-grouped row: `⏸ <label>   <substatus>` — `✖ ` instead when its
-   machine stopped on a failure, and two spaces when the row neither needs you nor failed."
-  [{:keys [label needs-you failed engagement]}]
+  "Display string for a stage-grouped row: `⏸ <label>   <substatus>` (the marker is two spaces
+   when the row does not need you, whatever the category it is needed in)."
+  [{:keys [label needs-you engagement]}]
   (format "%s%s   %s"
-          (cond needs-you "⏸ " failed "✖ " :else "  ")
+          (if needs-you "⏸ " "  ")
           (truncate (str label) title-max)
           (engagement-substatus engagement)))
 
@@ -449,12 +449,14 @@
 
    An unrecognised kind prints its own name rather than vanishing — a claim
    written by a newer nido should degrade to something a person can act on."
-  [{:keys [source kind progress activity]}]
+  [{:keys [source kind phase progress activity]}]
   (case source
     :core    (get core-activity-labels activity (some-> activity name))
     :claim   (if progress
                (progress-label kind progress)
                (or (claim-labels kind) (some-> kind name)))
+    ;; A merge waiting its turn (`nido.coordinator.view.activity/merge-queued`): underway, not live.
+    :merge   (str "merging" (when phase (str " · " (name phase))))
     nil))
 
 (defn ^{:malli/schema [:=> [:cat :any :map] :string]}

@@ -20,7 +20,7 @@
   {:about [list-workstreams] :evidence "test"})
 
 (Claim passes-read-held-rows
-  "grouped, all-grouped, winding-down and gates answer from selections coordinator-work updates whenever a held row is recomputed: each band's members, the gates, the finished workstreams holding a live session. None of them visits a held row it does not return, or reads a record other than through a refresh of [refresh-paths]. facet-values keeps no selection: it computes its values on each call from every non-done held row. all-gates reads no held row: the core answers it [gates-from-the-core]."
+  "grouped, all-grouped, winding-down and gates answer from selections coordinator-work updates whenever a held row is recomputed: each band's members, the gates, the finished workstreams holding a live session. None of them visits a held row it does not return, or reads a record other than through a refresh of [refresh-paths]. facet-values keeps no selection: it computes its values on each call from every non-done held row. all-gates reads the core's asks and, of the held rows, the gates alone [gates-from-the-core]."
   {:about [grouped all-grouped winding-down gates facet-values] :evidence "round"})
 
 (Claim detail-derives-one

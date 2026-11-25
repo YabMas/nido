@@ -29,7 +29,7 @@
   []
   {:title    "nido dashboard"
    :surfaces surfaces
-   :blocks   [ask/card ask/bar row/board-row row/gate-row row/winddown-row row/arc-row row/candidate-row
+   :blocks   [ask/card ask/bar row/board-row row/gate-row row/winddown-row row/arc-row
              chat/panel chat/change-bar dialog/dialog]
    :groups   (scenes/groups)})
 

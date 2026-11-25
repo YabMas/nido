@@ -321,12 +321,16 @@
   #{:done :dismissed :analysed})
 
 (defn- list-line
-  "One row as a line: id, band, who owes the next move, what is underway, title."
+  "One row as a line: id, band, who owes the next move — the person with the category they are
+   needed in (`person:landing`) — what is underway, title."
   [row]
   (str/join "  "
             [(:ws-id row)
              (format "%-13s" (name (:stage row)))
-             (format "%-7s" (if-let [by (get-in row [:status :owed-by])] (name by) "-"))
+             (format "%-19s" (let [{:keys [owed-by needs]} (:status row)]
+                               (cond needs   (str "person:" (name needs))
+                                     owed-by (name owed-by)
+                                     :else   "-")))
              (format "%-28s" (or (wsv/doing-label (:doing row)) "-"))
              (:label row)]))
 

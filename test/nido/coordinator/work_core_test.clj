@@ -377,21 +377,79 @@
       (is (= {:live false :stalled false :paused true}
              (select-keys (:status (first (work/list-workstreams :brian))) [:live :stalled :paused]))))))
 
-(deftest a-release-candidate-is-the-persons-turn-not-stalled
+(deftest a-release-candidate-needs-you-as-a-landing
   (with-ws
     (fn [c ws-id]
       (fake-core/seed! c :brian ws-id
                        [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
-      (with-redefs [pipeline/of (constantly {:at :release-candidate :next {:stage :land :mode :release}})]
+      (with-redefs [pipeline/of (constantly {:at :release-candidate :next {:stage :land :mode :release}})
+                    nido.coordinator.record.standing/activated? (constantly true)]
         (let [row  (first (work/list-workstreams :brian))
-              chip (str (ui-state/position-chip (:position row)))
-              mark (ui-state/state-mark (:status row) (:doing row))]
-          (testing "only the person's landing grant moves it: the person owes it, and nothing has stalled"
-            (is (= {:owed-by :person :live false :stalled false :paused false} (:status row)))
-            (is (not= :stalled (:engagement row))))
-          (testing "the board lights its chip as the person's turn and draws no ⚠"
+              g    (first (work/gates :brian))
+              chip (str (ui-state/position-chip (:position row) nil (get-in row [:status :needs])))
+              mark (str (ui-state/state-mark (:status row) (:doing row)))]
+          (testing "only the person's Land moves it: the person owes it, so it needs them — as a
+                    landing — and nothing has stalled"
+            (is (= {:owed-by :person :live false :stalled false :paused false :needs-you true
+                    :needs :landing}
+                   (:status row)))
+            (is (= :parked-at-gate (:engagement row))))
+          (testing "carded on Needs you as a landing that offers Land and asks nothing"
+            (is (= [ws-id] (map :ws-id (work/gates :brian))))
+            (is (= :landing (:needs g)))
+            (is (= :land (:owes g)))
+            (is (nil? (:ask g)) "no question is invented")
+            (is (nil? (:core-ask g)) "and no gate is raised in the core")
+            (is (= [:land] (map :id (:actions g)))))
+          (testing "the board lights its chip as the person's, marks it needing them as a landing,
+                    and draws neither ⚠ nor a working dot"
             (is (re-find #"pos-you" chip))
-            (is (not (re-find #"⚠" (str mark))))))))))
+            (is (re-find #"needs you · landing" mark))
+            (is (not (re-find #"⚠" mark)))
+            (is (not (re-find #"st-mark live" mark)))))))))
+
+(deftest a-land-the-core-already-holds-is-no-landing
+  ;; Placed :land-granted, the seat lands it by its project's procedure: an agent's move, not the
+  ;; person's, so it is no landing and nobody's Needs you card.
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
+      (with-redefs [pipeline/of (constantly {:at :land-granted :next {:stage :land :mode :working-copy}})
+                    nido.coordinator.record.standing/activated? (constantly true)]
+        (let [row (first (work/list-workstreams :brian))]
+          (is (= :agent (get-in row [:status :owed-by])))
+          (is (not (get-in row [:status :needs-you])))
+          (is (nil? (get-in row [:status :needs])))
+          (is (empty? (work/gates :brian))))))))
+
+(deftest a-session-that-failed-to-start-needs-you-as-a-system-error
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g"}
+                        {:command :record-provision-attempt :unit "u" :attempt "p1" :want :up}
+                        {:command :record-provision-outcome :unit "u" :attempt "p1" :outcome :failed
+                         :detail {:message "pg would not start"}}])
+      (testing "while the conductor is owed its failure, the core decides: nobody needs the person"
+        (is (not (:needs-you (first (work/list-workstreams :brian))))))
+      (let [heard (vec (keys (:inbox (core-state c ws-id))))]
+        (fake-core/seed! c :brian ws-id
+                         [{:command :start-turn :turn "c1" :unit nil :hears heard
+                           :spec {:executor :fake :instructions "i"}}
+                          {:command :record-outcome :turn "c1" :run 1 :outcome :completed}]))
+      (let [row (first (work/list-workstreams :brian))
+            g   (first (work/gates :brian))]
+        (testing "the conductor left it: a failure only the person clears, not a stall"
+          (is (= :system-error (get-in row [:status :needs])))
+          (is (= :person (get-in row [:status :owed-by])))
+          (is (not (get-in row [:status :stalled]))))
+        (testing "carded as a system error offering Retry, which hands the start back to the core"
+          (is (= :system-error (:needs g)))
+          (is (= [:retry-start] (map :id (:actions g))))
+          (is (re-find #"pg would not start" (:note g)))
+          (is (= :retried (:decision (work/core-resolve! :brian ws-id :retry-start nil))))
+          (is (= :none (get-in (core-state c ws-id) [:units "u" :session :status]))))))))
 
 (deftest a-claim-with-the-core-idle-runs-nothing
   (with-ws
@@ -442,7 +500,7 @@
       (is (= 2 (:pos @wcore/mirror)) "and the mirror moves past it all the same")
       (is (= [] @changed)))))
 
-(deftest the-core-working-a-stage-reads-as-that-stage-in-progress
+(deftest the-core-working-a-stage-runs-on-its-stage-row
   (with-ws
     (fn [c ws-id]
       (workstream/append-entry! :brian ws-id {:kind :intent}
@@ -455,7 +513,8 @@
           (is (= :baseline (get-in p [:position :stage])) "an intent stated owes the baseline")
           (is (= {:source :core :activity :starting :unit "u"} (:doing p)))
           (is (= :running (:now (stage p :baseline))) "a session starting for it: the baseline is under way")
-          (is (= "Status — Baseline in progress" (ui-state/status-heading (:position p) (:doing p)))))
+          (is (= "Status — Intent stated" (ui-state/status-heading (:position p) (:doing p)))
+              "the heading keeps the position; the running stage row says what runs"))
         (fake-core/seed! c :brian ws-id
                          [{:command :record-provision-attempt :unit "u" :attempt "p1" :want :up}
                           {:command :record-provision-outcome :unit "u" :attempt "p1" :outcome :done :cwd "/w"}])

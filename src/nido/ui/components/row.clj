@@ -23,9 +23,8 @@
 
 (defn- status-slot
   "The row's leading mark: where the workstream stands, as an icon with its words in the title —
-   the needs-you dot when the next move is the person's, the error mark when the machine stopped on
-   a failure, else the state mark (working, paused,
-   stalled), else an empty slot of the same width so every title starts in one column. Where a
+   the state mark (needs you, working, paused, stalled), else an empty slot of the same width so
+   every title starts in one column. Where a
    workstream came from is not overview information; its links are on the workstream."
   [mark]
   [:span.row-st mark])
@@ -56,12 +55,11 @@
    business, and a row that reached for the screen to build its own could only ever be listed
    by that page."
   [{:keys [part] {:keys [project href selected? chat?]
-                  {:keys [label tag needs-you failed open-findings position phase stage] :as row} :row} :props}]
+                  {:keys [label tag open-findings position phase stage] :as row} :row} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
    [:div.gate-top
-    (status-slot (cond needs-you (state/needs-mark)
-                       failed    (state/error-mark)
-                       :else     (state/state-mark (:status row) (:doing row))))
+    (status-slot (when-not (= :merge (:source (:doing row)))
+                   (state/state-mark (:status row) (:doing row))))
     [:span.lbl label]
     (when chat? chat-mark)
     (when (pos? (or open-findings 0))
@@ -69,7 +67,11 @@
    (tag-line tag)
    ;; Where the workstream stands, and one mark for whether anything is happening in it. The
    ;; next move, who owes it and what is running are the marks' titles, not words on the row.
-   [:div.gate-sub [:span project] (state/position-chip position)
+   ;; A :shipping row's merge phase comes through state-mark, which the projection folds
+   ;; ship-substate into, so it is never said twice.
+   [:div.gate-sub [:span project] (state/position-chip position nil (get-in row [:status :needs]))
+    ;; A merge keeps its words (state-mark's doing badge) here: a blocked merge reads red.
+    (when (= :merge (:source (:doing row))) (state/state-mark (:status row) (:doing row)))
     (state/phase-chip phase)]
    ;; What the gate waits on, where the person owing it will look. The exit
    ;; criterion is the current phase's: its exit is the gate that opens the next.
@@ -87,19 +89,21 @@
    a person and having something underway are separate facts, and a gate can hold
    both at once."
   [{:keys [part] {:keys [href chat?]
-                  {:keys [project stage label tag report ask session resume-error pending? error-msg
-                          doing selected?]} :gate} :props}]
+                  {:keys [project stage label tag report ask note session resume-error pending? error-msg
+                          doing status needs denials selected?]} :gate} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
-   [:div.gate-top (status-slot (state/needs-mark)) [:span.lbl label] (when chat? chat-mark)]
+   [:div.gate-top (status-slot (state/needs-mark (state/needs-words needs))) [:span.lbl label] (when chat? chat-mark)]
    (tag-line tag)
    [:div.gate-sub [:span project] (state/stage-chip stage)
-    [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]
+    [:span (state/gate-standing {:pending? pending? :session session :needs needs})]
     ;; What a gate is PARKED on is the line above; this is what is running in it
     ;; right now. A claim outranks session state, so the two coexist — and the
     ;; queue would otherwise be the one surface silent about the round underway.
-    (state/state-mark nil doing)]
-   ;; The question the card asks, so a reader scanning the list sees what each one wants of them.
+    (state/state-mark (select-keys status [:live :owed-by]) doing)]
+   ;; The question the card asks, so a reader scanning the list sees what each one wants of them —
+   ;; or, for a card that asks nothing (a landing, a failed start), what it says instead.
    [:div.gate-prev (or (:question ask)
+                       note
                        (some-> report :markdown
                                (str/replace #"^#.*\n+" "")
                                str/split-lines first)
@@ -108,15 +112,6 @@
      [:div.gate-err "⚠ resume failed: " (or (:message resume-error)
                                             (name (:reason resume-error)))])
    (when error-msg [:div.gate-err "⚠ " error-msg])])
-
-(defn- render-candidate-row
-  "One release candidate on Needs you: the workstream, linking to `:href` — its pane, where Land
-   is — and marked as the open one when `:selected?`."
-  [{:keys [part] {:keys [href selected? chat?] {:keys [project ws-id label position]} :row} :props}]
-  [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
-   [:div.gate-top [:span.candidate-mark {:title "release candidate"} "🚀"] [:span.lbl (or label ws-id)]
-    (when chat? chat-mark)]
-   [:div.gate-sub [:span project] (state/position-chip position)]])
 
 (defn- render-winddown-row
   "One winding-down row: a closed workstream still holding live sessions. Muted;
@@ -132,11 +127,9 @@
    [:div.gate-top (status-slot nil) [:span.lbl label] (when chat? chat-mark)]
    [:div.gate-sub
     [:span project]
-    [:span.meta (str "closed:" (name (or outcome :done)) " · "
-                     (count sessions) " live session(s)"
-                     (when rss-str (str " · " rss-str)))]
+    [:span.meta (state/winddown-words {:outcome outcome :session-count (count sessions) :rss-str rss-str})]
     (if pending?
-      [:span.meta "stopping…"]
+      [:span.meta (state/winddown-words {:pending? true})]
       (list
        (when error-msg [:div.error-msg error-msg])
        [:button.btn.btn-danger
@@ -173,14 +166,14 @@
    on every row would bury the case that matters: `2 visits` on a baseline means a
    later stage sent the work back to it, which is the fact the ledger index cannot
    show and a forward-only track cannot show either."
-  [{:keys [part action] {:keys [round-label open?] {:keys [stage state visits now] :as facet} :facet} :props}]
+  [{:keys [part action] {:keys [round-label open?] {:keys [stage state visits now needs] :as facet} :facet} :props}]
   (let [live? (pos? (:entries facet))]
     [:div (cond-> (merge (part :root)
                          {:class (str "arc-row " (name state)
                                       (when (= :awaiting now) " awaiting")
                                       (when live? " live") (when open? " open"))})
             live? (assoc "data-on:click" (action :open {:params {:stage stage}})))
-     [:span.arc-g (state/arc-mark state now)]
+     [:span.arc-g (state/arc-mark state now needs)]
      [:span.arc-n (state/arc-name stage)]
      (when-let [m (arc-meta facet)] [:span.arc-m m])
      (when (and (= :running now) round-label) [:span.arc-d (str "· " round-label)])
@@ -244,7 +237,7 @@
      {:title "it needs you"
       :note  "A lit position chip and the needs dot. Compare against the ordinary row above: this
               is the comparison a board is scanned for."
-      :props (board (assoc a-board-row :needs-you true
+      :props (board (assoc a-board-row :needs-you true :status (assoc (:status a-board-row) :needs-you true :owed-by :person :needs :ask)
                            :position {:at :blocked :next {:stage :answer-blocker :mode :human}}))}
      {:title "open findings"
       :note  "A shipped workstream a staging round reopened."
@@ -254,6 +247,7 @@
       :note  "The only row that gets a second line: what the gate waits on, where the person owing
               it will look."
       :props (board (assoc a-board-row :stage :awaiting-gate :needs-you true
+                           :status (assoc (:status a-board-row) :needs-you true :owed-by :person :needs :ask)
                            :position {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}
                            :phase {:current 2 :of 3
                                    :exit {:criterion "the dashboard serves /_catalog on a daemon that has been up for an hour"}}))}
@@ -367,30 +361,3 @@
               opens empty."
       :props (arc {:stage :implementation :state :ahead :visits 0 :entries 0})}]}))
 
-(def ^{:malli/schema :map}
-  candidate-row
-  "One release-candidate row."
-  (block/block
-   {:id      :candidate-row
-    :doc     "One release candidate on Needs you: a workstream ready to land when the person
-              chooses, asking nothing. It links to the workstream's pane, where Land is."
-    :render  render-candidate-row
-    :props   [:map [:row [:map [:project :string] [:ws-id :string]]] [:href :string]
-              [:selected? {:optional true} [:maybe :boolean]]
-              [:chat? {:optional true} :boolean]]
-    :css     ""
-    :actions {}
-    :morph   {}
-    :scenes
-    [{:title "a release candidate"
-      :note  "Ready to land and asking nothing: where it stands, and the rocket that sets it apart
-              from a question."
-      :props {:row {:project "nido" :ws-id "ws-1" :label "Anchor each side chat to its place"
-                    :position {:at :shipped :next {:stage :land :mode :human}}}
-              :href "#"}}
-     {:title "a chat here has news"
-      :note  "A chat pinned to this workstream finished a turn, or waits on a permission, since the
-              person last had it open: the bubble after the title, until they open it."
-      :props {:row {:project "nido" :ws-id "ws-1" :label "Anchor each side chat to its place"
-                    :position {:at :shipped :next {:stage :land :mode :human}}}
-              :href "#" :chat? true}}]}))

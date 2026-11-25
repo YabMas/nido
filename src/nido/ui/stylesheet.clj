@@ -249,6 +249,9 @@
                                    background:var(--working); animation:pulse var(--dur-1400) ease-in-out infinite; }
         @media (prefers-reduced-motion: reduce) { .arc-live, .st-mark.live { animation:none; } }
         .arc-row.awaiting .arc-n { color:var(--needs); }
+        /* The person awaited past the spine: a landing, or a blocker after the implementation. */
+        .arc-past { display:flex; gap:var(--space-4); align-items:center; padding:var(--space-3) 0;
+                    font-size:var(--fs-sm); color:var(--needs); }
         .arc-sub { padding:var(--space-2) 0 var(--space-8); background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); }
         .hist-head { display:inline-flex; gap:var(--space-7); align-items:baseline; cursor:pointer;
                      font-size:var(--fs-sm); color:var(--text-muted); padding:var(--space-3) 0; }
@@ -367,14 +370,13 @@
      .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:var(--radius-9);
                    padding:0 var(--space-7); font-size:var(--fs-xs); min-width:18px; text-align:center; }
      .rail-badge.zero { background:var(--neutral-bg); color:var(--text-faint); }
-     .rail-badge-rc { background:var(--neutral-bg); color:var(--text-strong); }
      .topbar-icon { font-size:var(--fs-md); line-height:1; }
      .inbox-head { margin:var(--space-12) var(--space-16) var(--space-4); font-size:var(--fs-sm); color:var(--text-muted); }
-     .candidate-mark { margin-right:var(--space-6); }
-     .rail-badge-err { background:var(--failed-bg); color:var(--failed); }
-     .rail-badge-err.zero { background:var(--neutral-bg); color:var(--text-faint); }
+     /* A merge's words: muted, a stuck one red. No dot — a merge waiting its turn runs nothing. */
+     .doing-badge { color:var(--working-dim); }
+     .doing-badge.ship-blocked { color:var(--failed); font-weight:600; }
+     .doing-badge.ship-queued { color:var(--text-faint); }
      .error-mark { margin-right:var(--space-6); }
-     .error-card .error-what { color:var(--failed); margin-left:var(--space-6); }
      .error-block { border-color:var(--failed-border); }
      .error-failures { font-size:var(--fs-sm); padding-left:var(--space-16); }
      .error-stderr { font-size:var(--fs-xs); white-space:pre; max-height:12em; overflow:auto;

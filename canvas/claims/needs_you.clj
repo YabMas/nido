@@ -12,7 +12,7 @@
             [canvas.ui.surface :refer [needs-fragment ui-server operations-home-cards workstream-pane]]))
 
 (Claim every-gate-carries-an-ask
-  "Every gate the work plane lists carries an :ask that report.ask/ask built for the move its position owes, from the record that move's question was written in — the owed blocker for answer-blocker, and for every other move the record the position read when it placed the workstream there, whatever was appended after it — together with the workstream's live intent, the actions the gate offers and any conductor note."
+  "Every gate the work plane lists in the :ask category carries an :ask — the core's open ask where the core holds one, else the Ask report.ask/ask built for the move its position owes, from the record that move's question was written in: the owed blocker for answer-blocker, and for every other move the record the position read when it placed the workstream there, whatever was appended after it — together with the workstream's live intent, the actions the gate offers and any conductor note. A gate in the :landing or :system-error category carries no question."
   {:about [gates Gate ask] :evidence "round"})
 
 (Claim a-kind-is-one-entry

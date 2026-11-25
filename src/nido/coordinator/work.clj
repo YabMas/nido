@@ -247,7 +247,8 @@
    `{:awaiting <stage>}` is the stage the pipeline says a PERSON owes this
    workstream, or nil — `(:stage (:next position))` when that position's mode is
    :human. It is what offers a person's move on a workstream nobody is parked on:
-   a blocker a mechanical round raised, a triage verdict, a phase gate, a landing.
+   a blocker a mechanical round raised, a triage verdict, a phase gate, a landing —
+   or :retry-start, a unit's session that failed to start, offered as Retry.
 
    `{:several? true}` says the gate's report is a blocker asking several questions: they are
    answered together by :answer-questions, and no :reply is offered beside it.
@@ -305,6 +306,11 @@
            (= :assert-gate awaiting)
            [(cond-> {:id :assert-gate :label "Assert gate" :kind :evidence :style :primary}
               gate-criterion (assoc :criterion gate-criterion))]
+
+           ;; A session that failed to start is a failure only the person clears: Retry hands its
+           ;; bring-up back to the core.
+           (= :retry-start awaiting)
+           [{:id :retry-start :label "Retry" :kind :mutation :style :primary}]
 
            ;; Landing is a person's gesture, given as one button: it grants the landing, and the
            ;; seat lands by the procedure its project declares. Offered only where a grant has
@@ -460,24 +466,10 @@
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   release-candidate?
   "Whether `position` is a release candidate: its implementation review converged and it is
-   landable as it stands. Land is offered on it, and the move is the person's — but it waits as a
-   candidate, never as a question, so it is no gate and never in Needs you."
+   landable as it stands. Land is offered on it, and the move is the person's: on an activated
+   workstream it needs them as a :landing — carded on Needs you with Land, never as a question."
   [position]
   (= :release-candidate (:at position)))
-
-(defn- release-candidates
-  "Every workstream row of `groups` (all-grouped's) that is a release candidate, each with its
-   :project, oldest activity first — the order they became ready in, near enough."
-  [groups]
-  (->> (for [{:keys [project grouped]} groups
-             rows (vals grouped)
-             row  rows
-             :when (release-candidate? (:position row))]
-         (assoc row :project project))
-       (reduce (fn [acc r] (assoc acc [(:project r) (:ws-id r)] r)) {})
-       vals
-       (sort-by #(or (:last-activity %) ""))
-       vec))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :keyword]]}
   awaiting-human
@@ -587,14 +579,21 @@
 
 (defn- observation
   "Workstream `ws-id`'s `act/Observation`: the record facts `facts` (`pipeline/status`, or nil for
-   a settled row nobody reads it for), whether it is settled, and the core's state of it in held
-   entry `cw` (nil when the core holds none) — its activity, whether it holds an open unit nobody
-   holds, and the claim its turn holds while that turn is :working."
-  [project ws-id cw closed? facts]
+   a settled row nobody reads it for), whether it is settled, its band, and the core's state of it
+   in held entry `cw` (nil when the core holds none) — its activity, whether it holds an open unit
+   nobody holds, and the claim its turn holds while that turn is :working."
+  [project ws-id cw closed? band facts]
   (let [core (wcore/activity cw)]
-    {:closed?  (boolean closed?)
-     :owed-by  (:owed-by facts)
-     :paused?  (boolean (or (:paused facts) (wcore/held-units? cw)))
+    {:closed?    (boolean closed?)
+     :band       band
+     :owed-by    (:owed-by facts)
+     :activated? (boolean (:activated? facts))
+     ;; A Land the person makes — a candidate's or a published draft's. A Land the core already
+     ;; holds as a grant (placed :land-granted) is the seat's move, owed by an agent: no landing.
+     :landing?   (and (= :land (get-in facts [:position :next :stage]))
+                      (contains? #{:release :human} (get-in facts [:position :next :mode])))
+     :failure    (wcore/failure cw)
+     :paused?    (boolean (or (:paused facts) (wcore/held-units? cw)))
      :core     core
      :movable? (boolean (some #(and (= :open (:status %)) (not (:held? %)))
                               (vals (get-in cw [:state :units]))))
@@ -604,9 +603,9 @@
   "The row fields `act/of`'s answer `a` sets: :status as the marks read it, :needs-you, :failed,
    :engagement and :doing — one answer, so no two of them can disagree."
   [a]
-  {:status     (select-keys a [:owed-by :live :stalled :paused])
+  {:status     (select-keys a [:owed-by :live :stalled :paused :needs-you :needs])
    :needs-you  (:needs-you a)
-   :failed     (:failed a)
+   :needs      (:needs a)
    :engagement (:engagement a)
    :doing      (:doing a)})
 
@@ -632,13 +631,13 @@
            outcome (:outcome closed)
            spine   (to-spine row)
            cw      (core-of project ws-id)
-           obs     #(act/of (observation project ws-id cw %1 %2))]
+           obs     #(act/of (observation project ws-id cw %1 %2 %3))]
        (if (and closed (not= :between-phases outcome))
          (let [stage  (if (= :dismissed outcome) :dismissed :done)
                shown? (or whole? (= :dismissed outcome))
                st     (when shown? (pipeline/status project ws-id))]
            (cond-> (merge (assoc spine :stage stage :dismissed? (= :dismissed outcome))
-                          (coordination (obs true st)))
+                          (coordination (obs true stage st)))
              (not st) (dissoc :status)
              st       (assoc :position (:position st))))
          (let [st       (pipeline/status project ws-id)
@@ -661,7 +660,7 @@
                                  :position   (cond-> (or core-at pos)
                                                landing? (assoc :at :land-granted
                                                                :next {:stage :land :mode :working-copy})))
-                          (coordination (obs (= :done band) st)))
+                          (coordination (obs (= :done band) band st)))
              (not (contains? unrendered-bands band))
              (assoc :phase (wsv/phase-progress project ws-id)))))))))
 
@@ -1000,16 +999,18 @@
                                      (review-queue/apply-key run-id))))
 
 (defn- hold-state
-  "What a hold's row — its engagement and who owes it, so the sweep and the board read one
-   activity — means for the sweep it holds.
+  "What a hold's row — its engagement, so the sweep and the board read one activity, and the move
+   its position owes — means for the sweep it holds.
    `:idle` and `:stalled` are the ones that matter: an open workstream nothing is
    working on is one nothing will ever close, and a close is the only thing that
    releases the sweep."
-  [{:keys [engagement status]}]
+  [{:keys [engagement position]}]
   (case engagement
     ;; Owed to a person by its position — a halt only their answer clears — is waiting on them
-    ;; whether or not the core has raised it as an ask yet.
-    :idle           (if (= :person (:owed-by status)) :waiting-on-you :stuck)
+    ;; even where nothing puts it on Needs you (a workstream the recipe does not run on, whose
+    ;; activity therefore says nobody owes it): the sweep's question is whether anything may still
+    ;; close it, and their answer may.
+    :idle           (if (awaiting-human position) :waiting-on-you :stuck)
     :parked-at-gate :waiting-on-you
     (:active :queued) :working
     :stalled        :stuck
@@ -1244,8 +1245,8 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   environment
   "The workstream's single current environment: the session of its last open unit the core has
-   ready (`cws/sessions`), or nil when no open unit's session is up yet. The gate's Land ships
-   whatever this answers. Callers use (:name env) to resolve dev-state/facts."
+   ready (`cws/sessions`), or nil when no open unit's session is up yet. Callers use (:name env)
+   to resolve dev-state/facts."
   [project ws-id]
   (->> (cws/sessions project ws-id)
        (filter #(and (:open? %) (= :ready (:status %))))
@@ -1387,14 +1388,29 @@
 (declare gate error pause-of)
 
 (defn- arc-at
-  "The arc of stages `entries` travelled, read at `position`: the stage a person owes marked
-   :awaiting — by the position, or by an ask the core holds for them (`needs-you?`) — and
-   otherwise the stage `doing` has something running in marked :running."
-  [entries position doing needs-you?]
-  (pipeline/arc (current-phase-entries entries)
-                {:at       (:stage position)
-                 :active   (pipeline/stage-active position doing)
-                 :awaiting (when (or (awaiting-human position) needs-you?) (:stage position))}))
+  "The arc of stages `entries` travelled, read at `position`: the stage the work is in marked
+   :awaiting while the activity says the person is needed — `needs`, its category, the answer the
+   Needs you list and the row's mark read, which the awaiting stage carries as its :needs — and
+   otherwise the stage `doing` has something running in marked :running, only while the activity
+   says it is `live?`: a merge waiting its turn and a paused turn run nothing, so no stage reads
+   running for them.
+
+   Where the position names no spine stage — a move past the implementation, a landing or a
+   blocker there among them — the person is still awaited, past the spine: the arc carries
+   `:past {:needs needs}`, so it says so for every workstream the activity says needs them.
+
+   A merge lies past the spine too — :shipping is no stage of the unit's arc — so while one is
+   underway the arc carries it as `:past {:doing doing}`, the same `doing` the row's mark and the
+   status heading's mark read: the arc says `merging · queued` where they do, and marks no stage
+   running for it."
+  [entries position doing live? needs]
+  (cond-> (-> (pipeline/arc (current-phase-entries entries)
+                            {:at       (:stage position)
+                             :active   (when live? (pipeline/stage-active position doing))
+                             :awaiting (when needs (:stage position))})
+              (update :stages (fn [ss] (mapv #(cond-> % (= :awaiting (:now %)) (assoc :needs needs)) ss))))
+    (and needs (nil? (:stage position))) (assoc-in [:past :needs] needs)
+    (= :merge (:source doing))           (assoc-in [:past :doing] doing)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
   workstream
@@ -1481,7 +1497,7 @@
         ;; The stage the work is in comes off the position read above, so the
         ;; heading and the arc under it are one reading and cannot disagree.
         ;; What is running rides beside it, on the stage it is running in.
-        :arc          (arc-at entries position (:doing row) (:needs-you row))
+        :arc          (arc-at entries position (:doing row) (get-in row [:status :live]) (get-in row [:status :needs]))
         ;; This workstream's card on the needs-you list, when it holds one: its question, the
         ;; actions that answer it and the session a reply reaches, which the pane renders through
         ;; the question card. Read from the core as the list's is, so the two cannot ask different
@@ -1661,11 +1677,19 @@
                    {:action :reply :label "Answer" :does "Sends your words as the answer; the conductor hears them."}
                    {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]}))
 
+(defn- next-ask
+  "The ask a card offers, and its answer answers, of the open asks `asks`: a stopped conductor's
+   first — the failure that makes the workstream a :system-error — else the oldest. nil when
+   there are none."
+  [asks]
+  (first (sort-by (juxt #(not= :conductor-stopped (:kind %)) :id) asks)))
+
 (defn- gate-of-asks
-  "The gate of spine row `row` whose asks awaiting the person are `awaiting`: the oldest of them,
-   offered for answer. nil when there are none."
+  "The gate of spine row `row` whose asks awaiting the person are `awaiting`: the one `next-ask`
+   names, offered for answer, in the category the row's activity needs the person in. nil when
+   there are none."
   [project row awaiting]
-  (when-let [a (first (sort-by :id awaiting))]
+  (when-let [a (next-ask awaiting)]
     ;; :notes? — the resolver records a comment per question, so the card offers every question
     ;; a note field beside its options.
     (let [actions [{:id :answer-questions :label "Send answers" :kind :mutation :style :primary :notes? true}
@@ -1679,6 +1703,8 @@
        :tag          (:tag row)
        :links        (:links row)
        :doing        (:doing row)
+       :status       (:status row)
+       :needs        (get-in row [:status :needs] :ask)
        :report       nil
        :actions      actions
        :ask          (core-ask-card a)
@@ -1732,11 +1758,14 @@
                              :else "(left open)")
                        (when note (str "\n" (comment-lines n note)))))))))
 
+(declare asks-gate)
+
 (defn- core-gate
-  "The gate of spine row `row`: its oldest ask awaiting the person in the core, offered for answer.
-   nil when the core holds none for it."
+  "The gate of spine row `row` from the asks the core holds awaiting the person (`asks-gate`). nil
+   when the core holds none for it."
   [project row]
-  (gate-of-asks project row (remove domain/machine-ask? (:awaiting (core-of project (:ws-id row))))))
+  (let [held (core-of project (:ws-id row))]
+    (asks-gate project row (:state held) (:awaiting held))))
 
 (def ^:private failure-words
   "What each reason the core records on a failed or cancelled turn means, in a person's words."
@@ -1778,8 +1807,8 @@
 (defn- error-of-asks
   "The error card of spine row `row`, whose core state is `state`, when `failures` — its open
    machine-side asks (`domain/machine-ask?`) — hold one: what failed, saying why from the turns
-   that failed, and the one recovery, :wake. nil when there are none. An error asks the person
-   nothing; it is on no needs-you list."
+   that failed, and the one recovery, :wake. nil when there are none. It asks the person nothing:
+   `asks-gate` cards it on Needs you as a :system-error."
   [project row state failures]
   (when-let [a (first (sort-by :id failures))]
     (let [fs (conductor-failures state)
@@ -1800,6 +1829,96 @@
        :actions  [{:id :wake :label "Wake it again" :kind :mutation :style :primary
                    :title "Its next turn hears everything it has yet to hear."}]})))
 
+(declare card)
+
+(defn- asks-gate
+  "The one card the core's asks `awaiting` put on Needs you for spine row `row`, whose core state
+   is `state`: while a machine-side failure stands among them (`domain/machine-ask?` — its
+   conductor stopped) the :system-error card that says what failed and offers its recovery, Wake
+   (`error-of-asks`), which comes before any question; else the oldest question, offered for
+   answer (`gate-of-asks`). nil when the core holds no ask for it."
+  [project row state awaiting]
+  (if-let [e (error-of-asks project row state (filter domain/machine-ask? awaiting))]
+    (merge (card project row :wake nil (:because e) (:actions e))
+           (select-keys e [:what :because :failures :core-ask])
+           {:needs :system-error})
+    (gate-of-asks project row (remove domain/machine-ask? awaiting))))
+
+(defn- card
+  "A Needs you card for spine row `row` that no core ask makes: the move `owes`, with `report`
+   and the `actions` that make it, and `note` — what the card says in place of a question, since
+   only an ask asks one."
+  [project row owes report note actions]
+  {:ws-id        (:ws-id row)
+   :project      (name project)
+   :origin       (:origin row)
+   :stage        (:stage row)
+   :label        (:label row)
+   :tag          (:tag row)
+   :links        (:links row)
+   :doing        (:doing row)
+   :status       (:status row)
+   :owes         owes
+   :note         note
+   :report       report
+   :actions      actions
+   :ask          nil
+   :core-ask     nil
+   :session      nil
+   :denials      []
+   :resume-error nil
+   :working?     false})
+
+(defn- ledger-gate
+  "The :ask card of spine row `row` whose position owes the person a move rather than the core
+   asking: a blocker's answer, a verdict to accept, a phase gate — with the record that move was
+   placed on as its report. The card names the move; the workstream's pane, which the list
+   opens, offers the actions that make it. nil when the position owes the person nothing."
+  [project row]
+  (when-let [owed (awaiting-human (:position row))]
+    (let [ws-id  (:ws-id row)
+          report (try (answered-report project ws-id (latest-report project ws-id) (:position row))
+                      (catch Exception _ nil))]
+      (card project row owed report nil []))))
+
+(defn- landing-gate
+  "The :landing card of spine row `row`, landable as it stands — a release candidate, or a draft
+   published before candidates were read: Land, and nothing asked. It is no question and raises
+   none — the person lands when they choose — so it offers the one gesture the pane does, which
+   `core-resolve!` grants over exactly these positions, and records nothing until it is given."
+  [project row]
+  (when (#{:release-candidate :published} (get-in row [:position :at]))
+    (card project row :land nil "Ready to land."
+          (gate-actions (:stage row) false nil {:awaiting :land :landable? true}))))
+
+(defn- failure-gate
+  "The :system-error card of spine row `row` whose failure is not an ask: a unit's session that
+   failed to start, which nothing in the core will retry — offered as Retry, which hands the
+   bring-up back to the core. nil when no unit's start failed."
+  [project row]
+  (when-let [u (first (filter #(and (= :open (:status %)) (not (:held? %))
+                                    (= :failed (get-in % [:session :status])))
+                              (sort-by :id (vals (:units (wcore/state project (:ws-id row)))))))]
+    (card project row :retry-start nil
+          (str "A session failed to start"
+               (when-let [d (some-> (get-in u [:session :detail]) (as-> d (or (:message d) d)) str not-empty)]
+                 (str ": " d)))
+          (gate-actions (:stage row) false nil {:awaiting :retry-start}))))
+
+(defn- row-gate
+  "The card `row`'s activity puts on Needs you, in the category it needs the person in (its
+   :needs): the core's ask when it holds one — a stopped conductor's among them — else the
+   landing a candidate waits on, the failed start, or the move its position owes them. nil for a
+   row whose activity does not need the person."
+  [project row]
+  (when-let [needs (get-in row [:status :needs])]
+    (some-> (or (core-gate project row)
+                (case needs
+                  :landing      (landing-gate project row)
+                  :system-error (failure-gate project row)
+                  :ask          (ledger-gate project row)))
+            (assoc :needs needs))))
+
 (defn- asking-gate
   "What Needs you shows of workstream `ws-id`, which the core answered as asking with `held`
    ({:state :awaiting}): its gate, built from no row but what the record and its sessions say of
@@ -1809,7 +1928,8 @@
    row reads it settled — whatever the core still holds open: a settled workstream asks nothing
    and has nothing to wake."
   [project ws-id held]
-  (let [w        (cws/record-of-state ws-id (:state held))
+  (let [a        (act/of (observation project ws-id held false nil nil))
+        w        (cws/record-of-state ws-id (:state held))
         closed   (when w (cws/closure w))
         settled? (boolean (and closed (not= :between-phases (:outcome closed))))
         sessions (when w (cws/sessions project ws-id))
@@ -1821,20 +1941,18 @@
                   :tag    (if w (wsv/tag w sessions) ws-id)
                   :links  (if w (wsv/ref-links w) [])
                   ;; What still runs beside the ask, as every row reads it.
-                  :doing  (:doing (act/of (observation project ws-id held false nil)))}]
+                  :doing  (:doing a)
+                  :status (:status (coordination a))}]
     {:row      row
      :slice-of (when (= :slice origin) (rdrain/drain-of w))
      :gate     (when-not settled?
-                 (gate-of-asks project row (remove domain/machine-ask? (:awaiting held))))
-     :error    (when-not settled?
-                 (error-of-asks project row (:state held) (filter domain/machine-ask? (:awaiting held))))}))
+                 (asks-gate project row (:state held) (:awaiting held)))}))
 
 (defn- asking-reading
-  "`project`'s gates and errors as the core answers them in one request (`wcore/asking`), each in
-   key order: a gate per workstream whose asks put a question to the person, an error per
-   workstream the machine stopped on a failure (`error-of-asks`) — so a workstream can hold one of
-   each. A slice is never a card of its own: its drain's gate, when the drain is asking too, names
-   it in :raised-by. Throws when the core does not answer."
+  "`project`'s gates as the core answers them in one request (`wcore/asking`), in key order: one
+   per workstream whose asks need the person — a question, or its stopped conductor as a
+   :system-error (`asks-gate`). A slice is never a card of its own: its drain's gate, when the
+   drain is asking too, names it in :raised-by. Throws when the core does not answer."
   [project]
   (let [built  (for [[ws-id held] (sort-by key (wcore/asking project))]
                  (asking-gate project ws-id held))
@@ -1846,13 +1964,11 @@
                            (when (and gate (not= :slice (:origin row)))
                              (cond-> gate
                                (get raised (:ws-id row)) (assoc :raised-by (get raised (:ws-id row)))))))
-                   built)
-     :errors (into [] (keep :error) built)}))
+                   built)}))
 
 (defn- asking-gates
   "`project`'s gates as the core answers them in one request (`asking-reading`): one per
-   workstream whose asks put a question to the person, in key order. Throws when the core does not
-   answer."
+   workstream whose asks need the person, in key order. Throws when the core does not answer."
   [project]
   (:gates (asking-reading project)))
 
@@ -1898,7 +2014,7 @@
                       ;; A drain a person paused is not put back on the list by its slices.
                       (when (and (not (get-in r [:status :paused]))
                                  (or g (not= :settled (:engagement r))))
-                        (some-> (or g (core-gate project r)) (assoc :raised-by by)))
+                        (some-> (or g (row-gate project r)) (assoc :raised-by by)))
                       g))))
           pairs)))
 
@@ -1911,17 +2027,7 @@
                                      (not= :awaiting-gate (:stage r))))))]
     (inbox-gates project
                  (for [r (remove #(= :dismissed (:stage %)) (list-workstreams project))]
-                   [r (when (owes? r) (core-gate project r))]))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
-  error
-  "The error card the Errors list holds for workstream `ws-id` (`error-of-asks`), or nil when its
-   machine has not stopped on a failure. Read from the core as `gate` is; throws when it does not
-   answer."
-  [project ws-id]
-  (->> (:errors (asking-reading project))
-       (filter #(= ws-id (:ws-id %)))
-       first))
+                   [r (when (owes? r) (row-gate project r))]))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
   gate
@@ -1938,28 +2044,34 @@
 (declare live-session-names)
 
 (def GateReading
-  "What reading every project's gates came to: the gates and errors of the projects the core
-   answered for, and, by project name, why each other project could not be read. A project is in
-   exactly one of them, so an unread project is never mistaken for one with nothing to ask."
+  "What reading every project's gates came to: the gates of the projects the core answered for,
+   and, by project name, why each other project could not be read. A project is in exactly one of
+   them, so an unread project is never mistaken for one with nothing to ask."
   [:map
    [:gates [:vector :map]]
-   [:errors [:vector :map]]
    [:unavailable [:map-of :string :string]]])
+
+(declare held-ledger-gates)
 
 (defn ^{:malli/schema [:=> [:cat] GateReading]}
   read-gates
-  "Every registered project's gates and errors, in list-projects order, each project's in key
-   order — read from the core, one request per project (`asking-reading`), never from held rows
-   or a ledger fold, so they answer as soon as the core does, whatever this process holds. The
-   boundary where each project's core reply becomes its outcome: its gates and errors, or its key
-   in :unavailable with the reason it could not be read."
+  "Every registered project's gates, in list-projects order: first the core's asks, in key order
+   — read from the core, one request per project (`asking-gates`), so they answer as soon as the
+   core does — then the cards the rows this process already holds need the person for with no
+   core ask beside them — a landing, a failed start, a move their position owes
+   (`held-ledger-gates`) — building and refreshing no row. A stopped conductor is among the
+   core's: a :system-error card offering Wake (`asks-gate`).
+   A process that holds no rows has only the core's asks. The boundary where each project's core
+   reply becomes its outcome: its gates, or its key in :unavailable with the reason it could not
+   be read."
   []
   (reduce (fn [acc [pname _entry]]
-            (try (let [{:keys [gates errors]} (asking-reading pname)]
-                   (-> acc (update :gates into gates) (update :errors into errors)))
+            (try (let [asked (asking-gates pname)]
+                   (update acc :gates into
+                           (concat asked (held-ledger-gates pname (into #{} (map :ws-id) asked)))))
                  (catch Throwable t
                    (assoc-in acc [:unavailable (name pname)] (or (ex-message t) (str t))))))
-          {:gates [] :errors [] :unavailable {}}
+          {:gates [] :unavailable {}}
           (project/list-projects)))
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :Gate]]}
@@ -2043,7 +2155,7 @@
                      ;; gives it, whatever its band or gate. Decides nothing else; the gate above
                      ;; reads `settled?`.
                      :at-rest?  (or settled? finished? (= :analysed (get-in row [:position :at])))
-                     :gate      (when gate? (core-gate project row))
+                     :gate      (when gate? (row-gate project row))
                      ;; The winding-down band's row, less its live sessions, which are the
                      ;; registry's and change without this row being recomputed.
                      :wind      (when finished?
@@ -2249,17 +2361,6 @@
   (when-let [m @model]
     (or (get-in m [:projects (name project)])
         (swap-project! project (fn [pr p] (or p (read-snapshot pr) (refresh-project pr nil :list)))))))
-
-(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
-  held-candidates
-  "`release-candidates` over only the rows this process already holds, building and refreshing
-   none: what a screen with no board (Needs you, the rail) shows of them. Empty before the first
-   build, and as fresh as the last refresh — a candidate asks nothing, so a late one costs a wait,
-   never a missed question."
-  []
-  (release-candidates
-   (vec (for [[pname p] (:projects @model) :when p]
-          {:project (name pname) :grouped (held-grouped p)}))))
 
 (defn ^{:malli/schema [:=> [:cat] :boolean]}
   holding?
@@ -3397,6 +3498,14 @@
         (core-decision (act! {:command :give-grant :grant :merge :by "person"}) :granted)
         {:decision :nothing-to-land})
 
+      ;; A session that failed to start, which nothing in the core retries, is the person's to hand
+      ;; back to the core: its bring-up starts again.
+      (= :retry-start action-id)
+      (if-let [u (first (filter #(and (= :open (:status %)) (= :failed (get-in % [:session :status])))
+                                (sort-by :id (vals (:units w)))))]
+        (core-decision (act! {:command :retry-provision :unit (:id u)}) :retried)
+        {:decision :core-refused :because "no session failed to start"})
+
       ;; A workstream the pen held back starts as its fire would have.
       ;; The workstream's first unit is named for it; a later arc's, after its own count.
       (= :promote action-id)
@@ -3478,6 +3587,7 @@
      :assert-gate -> advance-phase! with `payload` as the gate's evidence
      :land    -> queue the published PR on the merge lane, iff `payload` still names
                  the record the landing is owed over
+     :retry-start -> hand a unit's failed session start back to the core (`core-resolve!`)
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
 
@@ -3501,7 +3611,7 @@
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
 
      ;; Coordination is the core's: every action it answers is the person's command to it.
-     (contains? #{:reply :withdraw :wake :land :promote :done :drop :answer-questions} action-id)
+     (contains? #{:reply :withdraw :wake :land :retry-start :promote :done :drop :answer-questions} action-id)
      (or (core-resolve! project ws-id action-id payload) {:decision :core-refused :because "nothing to do"})
 
      ;; Not a `case` branch: the id set is derived from report/option-letters, and case needs
@@ -4056,7 +4166,7 @@
   "The single pure derivation from view-state to the screen-model. Every render
    site (full page + SSE poll, overview + detail) renders a slice of THIS value,
    so they cannot disagree. `data` injects what only IO can produce:
-     :groups  (all-grouped)  :gates / :errors / :unavailable (read-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys)
+     :groups  (all-grouped)  :gates / :unavailable (read-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys)
      :winddown-pending (#{\"project/ws-id\"} optimistic bridge keys for pending bring-down!s).
    Selection detail is attached by the caller (needs work/workstream + dev-states).
 
@@ -4064,8 +4174,8 @@
    filtering here is what hid every :in-progress row behind the source chip's
    `source=notion` default."
   [{:keys [scope] :or {scope "all"}}
-   {:keys [groups gates errors unavailable pending winddown-pending]
-    :or {groups [] gates [] errors [] pending #{} winddown-pending #{}}}]
+   {:keys [groups gates unavailable pending winddown-pending]
+    :or {groups [] gates [] pending #{} winddown-pending #{}}}]
   (let [scoped     (->> (scope-keep scope groups)
                         (mapv (fn [{:keys [project] :as g}]
                                 (update-in g [:grouped :winding-down]
@@ -4086,16 +4196,7 @@
      :unavailable (or unavailable {})
      ;; Every project's, not the scope's: Needs you spans all projects whatever
      ;; a view is focused on, and this is the count its badge shows.
-     :needs-count (count gates)
-     ;; Every project's machine-side failures, apart from Needs you: an error asks the person
-     ;; nothing, it says what failed and offers its recovery. Each marked :pending? while its
-     ;; recovery is in flight, as a gate is.
-     :errors      (mapv (fn [e] (assoc e :pending? (contains? pending (str (:project e) "/" (:ws-id e)))))
-                        errors)
-     :error-count (count errors)
-     ;; Every project's release candidates, for the same reason: their own list and badge,
-     ;; apart from Needs you, since a candidate asks nobody anything.
-     :candidates  (release-candidates groups)}))
+     :needs-count (count gates)}))
 
 ;; ── the acts a surface performs on the work plane ────────────────────────────
 ;;
@@ -4379,3 +4480,13 @@
              :close   (drain-lane/close! project ws-id))}
       (catch clojure.lang.ExceptionInfo e
         {:refused (ex-message e)}))))
+
+(defn- held-ledger-gates
+  "The gates of `project`'s held rows that no core ask makes — a landing, a failed start, or a
+   move the row's position owes the person (`row-gate`) — leaving out the workstreams in `asked`,
+   which the core's asks already card. Over only the rows this process already holds, building none: empty before the first
+   build, or in a process that holds nothing."
+  [project asked]
+  (when-let [p (get-in @model [:projects (name project)])]
+    (into [] (filter #(and (nil? (:core-ask %)) (not (contains? asked (:ws-id %)))))
+          (:gates p))))

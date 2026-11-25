@@ -14,8 +14,8 @@
             [canvas.tasks.nido-land :as nido-land]
             [canvas.tasks.nido-test :as nido-test]
             [canvas.coordinator.report :refer [coordinator-report]]
-            [canvas.coordinator.report.ask :refer [report-ask]]
-            [canvas.coordinator.work :refer [coordinator-work gates]]
+            [canvas.coordinator.report.ask :refer [ask]]
+            [canvas.coordinator.work :refer [coordinator-work]]
             [canvas.review.record :refer [review-record answered clear!]]))
 
 (Claim convergence-is-the-gate
@@ -39,8 +39,8 @@
   {:about [of-design lane-pipeline lane-reentry] :evidence "round"})
 
 (Claim a-person-owes-four-moves
-  "On a workstream's arc from intent to landing, the position level names the moves only a person can make as :human stages of next-action — accept-triage, assert-gate, answer-blocker and land — each with one ask kind, and such a workstream is a needs-you gate only when its position owes one of them. A drain keeps the moves it owes a person, approve-recipe and close-drain, and its listing on needs-you for its slices' questions, as they were."
-  {:about [next-action gates report-ask] :evidence "round"})
+  "On a workstream's arc from intent to landing, the position level names the moves only a person can make as :human stages of next-action — accept-triage, assert-gate, answer-blocker and land — each with one ask kind. A drain keeps the moves it owes a person, approve-recipe and close-drain."
+  {:about [next-action ask] :evidence "round"})
 
 (Claim decisions-come-from-the-round
   "A :design-decision joins a ledger only as the judgement a decision round reached: the ledger takes the kind through one writer, which review-record's round alone calls, and every other append — the one bb nido:workstream:entry:add makes among them — refuses it."

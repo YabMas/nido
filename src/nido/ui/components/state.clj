@@ -85,7 +85,9 @@
    :land                  "your landing"
    :accept-triage         "your triage call"})
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:? :any]] :any]}
+(declare needs-words)
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:? :any] [:? [:maybe :keyword]]] :any]}
   position-chip
   "Where the pipeline says this row is, and what would move it — the one thing a
    board row could not say before.
@@ -93,20 +95,24 @@
    The band alone could not say it. Everything between authoring an intent and
    opening a draft PR is :in-progress, so forty rows read identically while one
    waited on a baseline, one on a decision and one on a person. The chip is muted
-   by default and lit only when the next move is a PERSON's — a :human move, or a
-   release candidate's landing — because that is the distinction a board is
-   scanned for.
+   by default and lit while `needs` — the activity's :needs, the category the person
+   is needed in — names one, because that is the distinction a board is scanned for.
+   It is the activity's answer, never the position's mode read here: a position whose
+   next move is a person's on a workstream nido's recipe does not run on, or that a
+   pause holds, needs nobody. The category, in needs-words, leads the title, before
+   what would move it and the caller's `tip`.
 
    Renders nothing for a row with no position — a bare watched page, or a band
    the projection is not computed for."
-  ([position] (position-chip position nil))
-  ([{:keys [at next] :as position} tip]
+  ([position] (position-chip position nil nil))
+  ([position tip] (position-chip position tip nil))
+  ([{:keys [at next] :as position} tip needs]
    (when position
-     (let [yours? (#{:human :release} (:mode next))]
-       [:span (cond-> {:class (str "pos" (when yours? " pos-you"))}
-                (or next tip)
-                (assoc :title (str/join " · " (remove nil? [(when next (str "next: " (get stage-label (:stage next) (name (:stage next)))))
-                                                            tip]))))
+     (let [title (remove nil? [(when needs (needs-words needs))
+                               (when next (str "next: " (get stage-label (:stage next) (name (:stage next)))))
+                               tip])]
+       [:span (cond-> {:class (str "pos" (when needs " pos-you"))}
+                (seq title) (assoc :title (str/join " · " title)))
         [:span.pos-at (get position-label at (name at))
          (when-let [{:keys [done of]} (:layers position)] (str " " done "/" of))]]))))
 
@@ -122,25 +128,85 @@
 ;; ---------------------------------------------------------------------------
 ;; Whether anything is happening in it
 
+(declare needs-mark)
+
+(def ^:private needs-label
+  "The words for each category the person is needed in (`nido.coordinator.view.activity/needs-categories`),
+   one set every surface says them in."
+  {:ask "ask" :landing "landing" :system-error "system error"})
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :keyword]] :string]}
+  needs-words
+  "How a surface says the person is needed in category `needs`: \"needs you · landing\", or
+   \"needs you\" for an unnamed one."
+  [needs]
+  (if-let [w (get needs-label needs)] (str "needs you · " w) "needs you"))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  gate-standing
+  "How a needs-you card says where its request stands: \"working…\" while its resolve runs, parked
+   on the session it waits in, else the word for the category the person is needed in."
+  [{:keys [pending? session needs]}]
+  (cond pending? "working…"
+        session  (str "parked · " session)
+        :else    (get needs-label needs "decide")))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  winddown-words
+  "How a closed workstream still holding live sessions says where it stands: \"stopping…\" while
+   its bring-down runs, else how it closed, how many sessions it still holds and what they hold."
+  [{:keys [pending? outcome session-count rss-str]}]
+  (if pending?
+    "stopping…"
+    (str "closed:" (name (or outcome :done)) " · " session-count " live session(s)"
+         (when rss-str (str " · " rss-str)))))
+
 (def ^:private owed-label
   {:person "you" :agent "agent" :machine "nido" :nobody "nobody"})
 
+(defn- doing-badge
+  "A merge's words — `merging · queued` — as the mark says them: muted text, in its phase's
+   severity class so a stuck merge still reads red on a board that is scanned rather than read.
+   It is often the last span of a `.gate-sub`, which flexes to fill the line, so it carries no
+   background."
+  [doing]
+  (when-let [d (wsv/doing-label doing)]
+    [:span {:class (str "doing-badge"
+                        (when-let [phase (and (= :merge (:source doing)) (:phase doing))]
+                          (str " ship-" (name phase))))}
+     d]))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] :any]}
   state-mark
-  "Whether anything is happening in a workstream, as one mark and no words: the breathing dot in
-   the working colour while something is live — the one the arc's running stage carries; ‖ in the dormant colour while a person's pause stands; ⚠ in
-   the failed colour when it is stalled — an agent owes the move, nothing runs, no question was
-   recorded and nobody paused it, which is a fault and never a resting state; nothing otherwise
-   (a workstream waiting on a person says so by its lit position chip). What runs, and who owes
-   the next move, are the mark's title."
-  [{:keys [owed-by live stalled paused]} doing]
+  "Whether anything is happening in a workstream, as one mark and no words — the one mark every
+   surface puts beside a workstream, read off its activity (`status`: the activity's :needs-you,
+   :paused, :stalled, :live and :owed-by) and what is underway (`doing`):
+     the needs-you dot while the person owes the next move, titled with the category they are
+       needed in (`needs-words`), and a merge's words (`doing-badge`) while a merge is underway —
+       a blocked merge has to read red on a board that is scanned rather than read — both side by
+       side when both hold;
+   and where neither holds, in precedence:
+     ‖ in the dormant colour while a person's pause stands;
+     ⚠ in the failed colour when it is stalled — an agent owes the move, nothing runs and nobody
+       paused it, which is a fault and never a resting state;
+     the breathing dot in the working colour while something is live — the one the arc's running
+       stage carries;
+     nothing otherwise.
+   What runs, and who owes the next move, are the mark's title. Only :live lights the working dot:
+   the activity already makes everything underway live, so a second test here could only
+   disagree with it."
+  [{:keys [owed-by live stalled paused needs-you needs]} doing]
   (let [what (wsv/doing-label doing)
         tip  (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))]
     (cond
+      (or needs-you (= :merge (:source doing)))
+      (let [dot   (when needs-you (needs-mark (str (needs-words needs) (when what (str " · " what)))))
+            badge (when (= :merge (:source doing)) (doing-badge doing))]
+        (if (and dot badge) (list dot " " badge) (or dot badge)))
       paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
       stalled                    [:span.st-mark.stalled {:title (str "stalled — nothing runs and nothing asks you"
                                                                      (when (seq tip) (str " · " tip)))} "⚠"]
-      (or live what)             [:span.st-mark.live {:title (if (seq tip) tip "running")}])))
+      live                       [:span.st-mark.live {:title (if (seq tip) tip "running")}])))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
   round-label
@@ -154,28 +220,25 @@
 ;; ---------------------------------------------------------------------------
 ;; The status section's heading
 
-(declare arc-name)
-
-(defn ^{:malli/schema [:function
-                       [:=> [:cat :map] :any]
-                       [:=> [:cat :map [:maybe :map]] :any]]}
+(defn ^{:malli/schema [:=> [:cat :map [:? [:maybe :map]] [:? [:maybe :map]]] :any]}
   status-heading
-  "The Status section's heading, carrying the position itself.
+  "The Status section's heading, carrying the position label, which nothing replaces — what
+   runs, a merge's words included, is said by the state mark beside it (`state-mark`, which is
+   what reads `doing`; the heading ignores it) — and, while the workstream's
+   activity (`status`) says the person owes the next move, saying so in the category they are
+   needed in (`needs-words`), so the heading cannot read as a position alone while Needs you
+   lists it.
 
    The position was a bold word at the top of the section body, immediately under
    a heading that said nothing. Two lines to say one thing, and the heading was
    the emptier of them — so the position moved into it and the body kept only
    what comes next."
-  ([position] (status-heading position nil))
-  ([{:keys [at stage]} doing]
-   (cond
-     ;; The core working a stage reads as that stage under way — the design being written, not
-     ;; the baseline that was last recorded — whichever of its turns or handovers is happening.
-     (and (= :core (:source doing)) (some #{stage} [:intent :baseline :design :implementation]))
-     (str "Status — " (arc-name stage) " in progress")
-
-     at  (str "Status — " (get position-label at (name at)))
-     :else "Status")))
+  ([position] (status-heading position nil nil))
+  ([position doing] (status-heading position doing nil))
+  ([{:keys [at]} _doing status]
+   (let [head (if at (str "Status — " (get position-label at (name at))) "Status")]
+     (cond-> head
+       (and (:needs-you status) (not= :core-asking at)) (str " · " (needs-words (:needs status)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; The arc
@@ -213,20 +276,22 @@
 
 (defn ^{:malli/schema [:=> [:cat [:? :string]] :any]}
   error-mark
-  "The error mark: the machine stopped on a failure, and the person's move is its recovery — not
-   an answer, so never the needs-you dot. `title` is what hovering it reads."
+  "The error mark: the machine stopped on a failure, and the person's move is its recovery. It
+   heads a system error's account of what failed. `title` is what hovering it reads."
   ([] (error-mark "failed — needs recovering"))
   ([title] [:span.error-mark {:title title} "⛔"]))
 
-(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+(defn ^{:malli/schema [:=> [:cat :any :any [:? [:maybe :keyword]]] :any]}
   arc-mark
   "The mark for one arc stage: what is happening there right now if anything is — a person being
    waited on, or an agent working — and otherwise what the stage's records amount to. `now`
    outranks `state` because a stage waiting on a person is the one fact a reader scans an arc
    for. Both are dots, in the two hues that tell a person's move from an agent's: the needs-you
-   dot the board rows carry, and a breathing dot in the working colour."
-  [state now]
-  (case now
-    :awaiting (needs-mark "waiting on you")
-    :running  [:span.arc-live {:title "an agent is working"}]
-    (get arc-glyph state "·")))
+   dot the board rows carry, titled with the category the person is needed in (`needs`), and a
+   breathing dot in the working colour."
+  ([state now] (arc-mark state now nil))
+  ([state now needs]
+   (case now
+     :awaiting (needs-mark (needs-words needs))
+     :running  [:span.arc-live {:title "an agent is working"}]
+     (get arc-glyph state "·"))))

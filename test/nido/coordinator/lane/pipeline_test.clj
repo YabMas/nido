@@ -1474,7 +1474,7 @@
           (is (= :intake (get-in s [:position :at])))
           (is (= :agent (:owed-by s)) "establishing intent is an agent's authoring turn")
           (is (false? (:paused s)))
-          (is (= #{:position :owed-by :paused} (set (keys s)))
+          (is (= #{:position :owed-by :activated? :paused} (set (keys s)))
               "record facts alone: what runs and what stalls are the core's"))
         (testing "a blocker is a person's"
           (add! :blocker {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."})

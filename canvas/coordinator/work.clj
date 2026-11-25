@@ -21,21 +21,21 @@
             [fukan.common.typing.malli]))
 
 (Kind Gate
-  "A workstream that wants a person now: what it is waiting on, and the follow-actions available.
+  "A workstream that wants a person now: the category it needs them in (:needs — an ask, a
+   landing, a system error), what it is waiting on, and the follow-actions available. Only an
+   ask asks a question; a landing offers Land and a failed start Retry.
 
-   The gate is DERIVED from the workstream's own position and its parked halt, never stored — so
-   a gate cannot outlive the thing it was gating.")
+   The gate is DERIVED, never stored: a workstream has one exactly while its activity answers
+   :needs-you, in the category that activity names — the core's ask where it holds one, a stopped
+   conductor's first, else a landing's Land, a failed start's Retry, or the move its position owes
+   — so a gate cannot outlive the thing it was gating.")
 
 (Kind GateReading
-  "What reading every project's gates came to: the gates and errors of the projects the core
-   answered for, and, by project name, why each other project could not be read. A project is in
-   exactly one of them, so an unread project is never mistaken for one with nothing to ask.
-
-   A gate puts a question to the person; an error says what failed on the machine's side and
-   offers its recovery. They are apart because a machine that stopped asks nobody anything."
+  "What reading every project's gates came to: the gates of the projects the core answered for,
+   and, by project name, why each other project could not be read. A project is in exactly one of
+   them, so an unread project is never mistaken for one with nothing to ask."
   [:map
    [:gates [:vector :map]]
-   [:errors [:vector :map]]
    [:unavailable [:map-of :string :string]]])
 
 (Kind Screen
@@ -63,7 +63,7 @@
      optimistic lock that stops two people deciding the same thing twice."
     {:signature [:=> [:catn [:action-id :any]] :boolean]})
   (Operation release-candidate?
-    "Whether a position is a release candidate: Land offered, owed by nobody — so never a gate."
+    "Whether a position is a release candidate: Land offered, the person's move — on Needs you as a landing."
     {:signature [:=> [:catn [:position [:maybe :map]]] :boolean]})
   (Operation awaiting-human
     "The stage a PERSON owes a position, or nil when the next move is nido's own. What makes a
@@ -151,20 +151,17 @@
   (Operation gate "Full gate detail for one workstream, or nil when it is not gating."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Gate]]
      :delegates [gates]})
-  (Operation error
-    "The error card for one workstream — what failed on the machine's side, why, and its recovery
-     — or nil when its machine has not stopped on a failure. Read from the core as `gate` is."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
   (Operation conductor-failures
     "The conductor turns that failed since one last did not, oldest first, each with its reason
      in words and the last its run wrote to stderr when the core kept it."
     {:signature [:=> [:catn [:state [:maybe :map]]] [:vector :map]]})
   (Operation read-gates
-    "Every registered project's gates and errors, read from the core — one request per project for
-     the workstreams a person owes a move — and never from held rows or a ledger fold: the boundary
-     where each project's core reply becomes its outcome, its gates and errors or its reason in
-     :unavailable. A workstream its ledger settled is on neither list, as its board row reads it
-     settled, whatever the core still holds open."
+    "Every registered project's gates: the core's asks — a stopped conductor among them, as a
+     :system-error — one request per project, then the cards of the rows this process already
+     holds whose activity answers :needs-you with no core ask beside them — a landing, a failed
+     start, a move their position owes — building no row — the boundary where each project's core
+     reply becomes its outcome, its gates or its reason in :unavailable. A workstream its ledger
+     settled is on no list, as its board row reads it settled, whatever the core still holds open."
     {:signature [:=> [:catn] GateReading] :delegates [classify-origin workstream/record-of-state]})
   (Operation all-gates
     "The gates read-gates reads: every project's the core answered for."
@@ -200,8 +197,8 @@
   (Operation resolve-gate!
     "Apply a gate follow-action. Position-carrying actions check the ledger has not moved, which
      is what makes two people clicking the same button safe. An action the core answers — an
-     option, a reply or a withdrawal of a question, Wake on a stopped conductor, Land, Promote,
-     Done, Drop — is sent to it as the person's keyed command (`core-resolve!`). An option, a reply
+     option, a reply or a withdrawal of a question, Wake on a stopped conductor, Land, Retry,
+     Promote, Done, Drop — is sent to it as the person's keyed command (`core-resolve!`). An option, a reply
      or a withdrawal never reaches a machine failure, and Wake reaches nothing else."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
@@ -322,10 +319,6 @@
      :delegates [proposals record-landing!]})
   (Operation all-grouped "Grouped boards across every registered project."
     {:signature [:=> [:catn] [:vector :map]] :delegates [grouped]})
-  (Operation held-candidates
-    "The release candidates among the rows this process already holds, building and refreshing
-     none: what a screen with no board shows of them."
-    {:signature [:=> [:catn] [:vector :map]]})
   (Operation screen
     "The single pure derivation from view-state to what a surface shows. Pure, so the TUI and
      the dashboard render the same board without either being its definition."
@@ -364,7 +357,8 @@
     "Do what a gate action asks of the core, as the person's keyed command; nil when the action is
      not one the core answers. An option, a reply or Send answers — a choice and a comment per
      question, rendered to one string — answers the oldest open ask, a withdrawal takes
-     it back, Land grants the landing, Promote opens the workstream's unit, Done and Drop retract
+     it back, Land grants the landing, Retry sends the core its :retry-provision of the unit whose
+     session failed to start, Promote opens the workstream's unit, Done and Drop retract
      its open units and close it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any] [:payload [:? :any]]]
                  [:maybe :map]]})

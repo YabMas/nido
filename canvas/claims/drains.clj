@@ -14,7 +14,7 @@
             [canvas.coordinator.lane.drive :refer [lane-pipeline]]
             [canvas.coordinator.work :refer [coordinator-work]]
             [canvas.coordinator.view.workstreams :refer [view-workstreams]]
-            [canvas.ui.surface :refer [ui-server]]))
+            [canvas.ui.surface :refer [drains-page ui-server]]))
 
 (Claim drain-born-from-established-pattern
   "A workstream is a drain exactly when its ledger holds a :drain birth entry. lane-drain's start of a drain, which the /drains page offers, makes it: it refuses a named workstream or commit the project does not hold, and otherwise writes the :drain entry naming what established the pattern (a workstream or a landed commit) and the exit criterion. The drain class is read from that entry alone."
@@ -65,8 +65,8 @@
   {:about [coordinator-work view-workstreams] :evidence "round"})
 
 (Claim drains-page-and-one-inbox-row
-  "/drains shows each open drain's phase, recipe version, newest census, slices by state and open escalations. A drain's escalations, and those its slices raise through it, reach the gate inbox as one row for the drain."
-  {:about [view-drains ui-server coordinator-work] :evidence "round"})
+  "/drains shows each open drain's phase, recipe version, newest census, slices by state and open escalations. A drain's escalations reach the gate inbox as the drain's own card, and each slice's as that slice's own [needs-you-list-is-the-activity]."
+  {:about [drains-page coordinator-work] :evidence "round"})
 
 (Claim slices-rest-on-slices
   "A slice whose plan names slices it rests on is started on top of their unlanded work, or after they land, as its plan says, and is never landed before every slice it rests on has landed."

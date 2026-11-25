@@ -229,6 +229,20 @@
   (let [open (filter #(= :open (:status %)) (vals (:units state)))]
     (boolean (and (seq open) (every? :held? open)))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe [:enum :conductor-stopped :start-failed]]]}
+  failure
+  "The failure in held workstream `w` only the person clears, or nil: :conductor-stopped while
+   the core holds the conductor stopped — it failed until the core asked the person — else
+   :start-failed while an open unit nobody holds has a session that failed to start. Whether a
+   failed start is the person's yet — the conductor still deciding on it is not — is the
+   activity's to say."
+  [{:keys [state]}]
+  (cond
+    (:conductor-stopped? state) :conductor-stopped
+    (some #(and (= :open (:status %)) (not (:held? %)) (= :failed (get-in % [:session :status])))
+          (vals (:units state)))
+    :start-failed))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} position
   "Where held workstream `w` stands by its coordination, for a workstream whose ledger records none
    of the work: {:at :core-asking} — the next move the person's — while an ask awaits them,

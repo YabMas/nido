@@ -126,10 +126,11 @@
                   remains to be done` stay different answers — a terminal
                   position carries no next action, and this carries one nobody
                   but a human can take.
-   :release       a release candidate's landing: the person's move, offered
-                  rather than asked. Owed by the person, so the board lights it
-                  as their turn; not :human, because it raises no gate and no
-                  question — the change waits as a candidate."
+   :release       a release candidate's landing: the person's move, given as
+                  Land rather than answered. Owed by the person, so it needs them
+                  as a landing (`nido.coordinator.view.activity/needs-categories`);
+                  not :human, because it asks no question — the change waits as
+                  a candidate."
   #{:mechanical :authoring :working-copy :human :release})
 
 ;; ── How the work arrived ────────────────────────────────────────────────────
@@ -810,7 +811,7 @@
    :published         {:stage :land                  :mode :human}
    ;; Granted: the seat lands it by its project's procedure, so nobody owes a person's move.
    :land-granted      {:stage :land                  :mode :working-copy}
-   ;; A candidate: Land is the person's move, offered rather than asked — no gate, no question.
+   ;; A candidate: Land is the person's move — on Needs you as a landing, offering Land, never a question.
    :release-candidate {:stage :land                  :mode :release}
    ;; A drain's recipe: the coordinator proposes a recipe, the person approves it, nido takes the
    ;; census, the coordinator runs the drain, and the person closes it once the census reads zero.
@@ -1389,11 +1390,15 @@
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
    or :release move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :paused is a person's standing pause — their choice not to push
-   the workstream forward."
+   the workstream forward. :activated? is whether nido's recipe runs on it: one not activated — a
+   scratch session a person started by hand — owes nothing, so its position never puts it on
+   Needs you."
   [project ws-id]
-  (let [position (of project ws-id)]
-    {:position position
-     :owed-by  (if-let [mode (get-in position [:next :mode])]
-                 (owed-by-mode mode :nobody)
-                 :nobody)
-     :paused   (boolean (some-> (ws/read-ws project ws-id) standing/paused?))}))
+  (let [position (of project ws-id)
+        w        (ws/read-ws project ws-id)]
+    {:position   position
+     :owed-by    (if-let [mode (get-in position [:next :mode])]
+                   (owed-by-mode mode :nobody)
+                   :nobody)
+     :activated? (boolean (some-> w standing/activated?))
+     :paused     (boolean (some-> w standing/paused?))}))

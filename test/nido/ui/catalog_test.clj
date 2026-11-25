@@ -138,7 +138,8 @@
 (deftest a-state-mark-scene-tells-a-pause-from-a-fault
   ;; The two glyphs a person must never confuse: ‖ is their own pause and ⚠ is a workstream
   ;; nothing is moving and nothing is asking about.
-  (let [html (html-of "state-mark" "running, paused, stalled, quiet")]
+  (let [html (html-of "state-mark" "needs you, running, paused, stalled, quiet")]
+    (is (str/includes? html "class=\"needs\""))
     (is (str/includes? html "st-mark paused"))
     (is (str/includes? html "st-mark stalled"))
     (is (str/includes? html "st-mark live"))

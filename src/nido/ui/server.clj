@@ -100,24 +100,22 @@
    runs through this one function, so no two render sites disagree.
 
    `{:board? false}` is a screen with no board: no refresh and no bands, only the gates, which
-   the core answers (`work/read-gates`), and the release candidates among rows already held
-   (`work/held-candidates`) — what Needs you and every page's rail badge render, so neither waits
-   on held rows being built."
+   the core answers (`work/read-gates`) beside what the rows already held owe the person — what
+   Needs you and every page's rail badge render, so neither waits on held rows being built."
   ([view-state] (derive-screen view-state {}))
   ([view-state {:keys [board?] :or {board? true}}]
   (when board? (refresh-for! view-state))
-  (let [{:keys [gates errors unavailable]} (work/read-gates)
+  (let [{:keys [gates unavailable]} (work/read-gates)
         groups (if board? (work/all-grouped) [])
         screen (work/screen view-state
                             {:groups           groups
                              :gates            gates
-                             :errors           errors
                              :unavailable      unavailable
                              :pending          (dev/pending-resolve-keys)
                              :winddown-pending (dev/pending-winddown-keys)})
         sel (:selection view-state)
         ws-errors (dev/failed-ws-errors)]
-    (-> (cond-> screen (not board?) (assoc :candidates (work/held-candidates)))
+    (-> screen
         ;; The workstreams whose rows carry the side chat's mark: a chat pinned there has news.
         (assoc :chats-unseen (side-chat/unseen))
         (assoc :selection
@@ -146,13 +144,6 @@
                             (cond-> g
                               (and err (not (:pending? g))) (assoc :error-msg err))))
                         gates)))
-        (update :errors
-                (fn [errors]
-                  (mapv (fn [e]
-                          (let [err (get ws-errors (str (:project e) "/" (:ws-id e)))]
-                            (cond-> e
-                              (and err (not (:pending? e))) (assoc :error-msg err))))
-                        errors)))
         (update :groups
                 (fn [groups]
                   (mapv (fn [{:keys [project] :as g}]
@@ -205,8 +196,6 @@
    :active      active
    :scope       focus
    :needs-count (:needs-count screen)
-   :error-count (:error-count screen)
-   :candidates-count (count (:candidates screen))
    :needs-unread (:unavailable screen)
    :daemon      (read-rail-daemon)
    :projects    (project-names)})
@@ -216,8 +205,6 @@
    (sse-fragment
     (str (views/needs-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
-                                      :error-count (:error-count screen)
-                                      :candidates-count (count (:candidates screen))
                                       :needs-unread (:unavailable screen)
                                       :daemon (read-rail-daemon)})))))
 
@@ -226,8 +213,6 @@
    (sse-fragment
     (str (views/workstreams-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
-                                      :error-count (:error-count screen)
-                                      :candidates-count (count (:candidates screen))
                                       :needs-unread (:unavailable screen)
                                       :daemon (read-rail-daemon)})))))
 
@@ -414,10 +399,9 @@
   (sse-response
    (sse-fragment
     (str (views/ops-panel-fragment (ops-context))
-         (let [{:keys [gates errors unavailable]} (work/read-gates)]
+         (let [{:keys [gates unavailable]} (work/read-gates)]
            (views/rail-status-fragment
             {:needs-count  (count gates)
-             :error-count  (count errors)
              :needs-unread unavailable
              :daemon       (read-rail-daemon)}))))))
 

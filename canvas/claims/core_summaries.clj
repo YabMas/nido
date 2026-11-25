@@ -1,7 +1,7 @@
 (ns canvas.claims.core-summaries
   "The claims the core-summaries design (workstream ws-20261124-84c150) commits nido to: the core
-   keeps a reading of every workstream beside its state, and Needs you reads its gates from the
-   core. Each Claim's name is the claim's id, its docstring the statement, and its :about the
+   keeps a reading of every workstream beside its state, and Needs you reads its gates from
+   read-gates. Each Claim's name is the claim's id, its docstring the statement, and its :about the
    elements it is about."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.work :refer [all-gates gate gates read-gates]]
@@ -19,20 +19,16 @@
   {:about [asking awaiting-person] :evidence "round"})
 
 (Claim asking-serves-the-cards-in-time
-  "One :asking request answers everything a project's cards show — each open ask's question, who owes the move, the workstream's title — read from the states it returns, in under 200 ms against the live store (~3,000 workstreams), as a timed read against that store measures before the landing."
-  {:about [asking core-client] :evidence "round"})
+  "One :asking request answers everything a project's core asks' cards show — each open ask's question, who owes the move, the workstream's title — read from the states it returns."
+  {:about [asking] :evidence "round"})
 
 (Claim gates-from-the-core
-  "all-gates reads each project's gates with one :asking request and builds each gate from that workstream's record, its sessions and its open asks alone; it reads no held row, refreshes nothing, and folds no other workstream's ledger. A slice's gate is not a card of its own; its drain's card names it in :raised-by."
-  {:about [all-gates core-client] :evidence "test"})
+  "all-gates reads each project's core asks with one :asking request and builds each such gate from that workstream's record, its sessions and its open asks; beside them it takes, of the rows this process holds, the card of each whose activity answers :needs-you with no core ask open [needs-you-list-is-the-activity]. It builds and refreshes no row and folds no other workstream's ledger, and a slice's gate is a card of its own."
+  {:about [all-gates] :evidence "test"})
 
 (Claim pane-gate-from-the-core
-  "gate answers a workstream's gate as read-gates derives it, from one :asking request for its project: the card the Needs you list holds for that workstream from the same reply, or nil when it holds none. It reads no held row."
-  {:about [gate core-client] :evidence "test"})
-
-(Claim gate-iff-open-ask
-  "Every card on Needs you is the oldest open operator ask the core holds on a workstream it has not closed; the ask's content is the card. A workstream whose ledger records it dismissed is no card, and a slice is never a card of its own: its ask raises its drain, named by the slice's ledger birth, only when the drain has an open ask of its own. No other ledger reading — stage, position, engagement — makes or suppresses a card."
-  {:about [gate gates awaiting-person] :evidence "round"})
+  "gate answers a workstream's gate as read-gates derives it, from one :asking request for its project and the row this process holds for the workstream: the card the Needs you list holds for that workstream, or nil when it holds none."
+  {:about [gate] :evidence "test"})
 
 (Claim unread-project-said
   "read-gates answers a GateReading, the boundary where each project's core reply becomes its outcome: a project whose :asking read fails — no core answers, or it answers an error — is a key of :unavailable with the reason and contributes no gates. derive-screen carries :unavailable into the screen, Needs you renders a not-loaded line for each such project, and 'Nothing needs you right now.' renders only when no gate and no unavailable project is left."

@@ -113,15 +113,15 @@
                      are not obviously the three that matter most."
               :render #(rail name board-stages state/stage-chip)}]}
    {:name "position-chip"
-    :note "Where the pipeline says the work stands. Muted by default, lit only when the next
-           move is a person's."
+    :note "Where the pipeline says the work stands. Muted by default, lit only when the
+           workstream's activity says the person owes the next move."
     :scenes [{:title "nido's move, and yours"
               :note "The whole point of the chip is this contrast — a board is scanned for the
                      lit ones. If they do not separate at a glance, the chip has failed."
               :render #(rail (fn [p] (name (:mode (:next p))))
                              [{:at :baselined :next {:stage :verify-baseline :mode :authoring}}
                               {:at :blocked :next {:stage :answer-blocker :mode :human}}]
-                             state/position-chip)}
+                             (fn [p] (state/position-chip p nil ({:human :ask :release :landing} (:mode (:next p))))))}
              {:title "with layers, and with a caller's tip"
               :note "A layered position carries done/of inside the chip; the second arity adds a
                      caller's phrase to the title, after the next move."
@@ -131,7 +131,7 @@
                              " "
                              (state/position-chip {:at :blocked
                                                    :next {:stage :answer-blocker :mode :human}}
-                                                  "waiting since Tuesday"))}
+                                                  "waiting since Tuesday" :ask))}
              {:title "no position"
               :note "A bare watched page, or a band the projection is not computed for. It must
                      render nothing at all rather than an empty chip."
@@ -149,20 +149,44 @@
                      waits on."
               :render #(list (state/needs-mark) " " (state/needs-mark "waiting on you"))}]}
    {:name "error-mark"
-    :note "The machine stopped on a failure and the person's move is its recovery. Never the
-           needs-you dot: nothing is asked, so a board scanned for questions does not find it."
+    :note "The machine stopped on a failure and the person's move is its recovery: the mark that
+           heads a system error's account of what failed, in the pane."
     :scenes [{:title "plain, and titled by its caller"
               :render #(list (state/error-mark) " " (state/error-mark "its conductor stopped"))}]}
+   {:name "needs-words"
+    :note "The words for the category the person is needed in — an ask, a landing, a system error
+           — which every surface's needs-you mark, heading and card say alike."
+    :scenes [{:title "each category"
+              :note "One concept, three kinds: the title tells a question from a landing from a
+                     failure, so a scan of the dots can be followed by a hover that sorts them."
+              :render #(rail str [:ask :landing :system-error nil]
+                             (fn [n] [:span (state/needs-mark (state/needs-words n)) " "
+                                      (state/needs-words n)]))}]}
+   {:name "gate-standing"
+    :note "Where a needs-you card's request stands, in words: its resolve running, the session it
+           is parked on, or the category the person is needed in."
+    :scenes [{:title "working, parked, each category"
+              :render #(rail str [{:pending? true} {:session "impl-1"} {:needs :ask}
+                                  {:needs :landing} {:needs :system-error}]
+                             (fn [g] [:span (state/gate-standing g)]))}]}
+   {:name "winddown-words"
+    :note "Where a closed workstream still holding live sessions stands: stopping, or how it closed
+           and what it still holds."
+    :scenes [{:title "holding sessions, and stopping"
+              :render #(rail str [{:outcome :done :session-count 2 :rss-str "1.2 GB"} {:pending? true}]
+                             (fn [r] [:span (state/winddown-words r)]))}]}
    {:name "state-mark"
     :note "Whether anything is happening right now, as one mark and no words. What runs and who
            owes the next move are the mark's title — hover to read them."
-    :scenes [{:title "running, paused, stalled, quiet"
-              :note "The four a board row can be in. Paused is a person's decision and stalled
+    :scenes [{:title "needs you, running, paused, stalled, quiet"
+              :note "The five a board row can be in. Needing the person outranks the rest, since
+                     it is what a board is scanned for. Paused is a person's decision and stalled
                      is a fault, so they must not read alike — and quiet must render nothing at
                      all: a row where nothing is happening is the common case, and a mark on
-                     every row would drown the three that mean something."
+                     every row would drown the four that mean something."
               :render #(rail first
-                             [["live" {:owed-by :agent :live true} {:source :claim :kind :diff-review
+                             [["needs you" {:owed-by :person :needs-you true} nil]
+                              ["live" {:owed-by :agent :live true} {:source :claim :kind :diff-review
                                                                     :progress {:round 2 :phase :fixing
                                                                                :findings 3}}]
                               ["paused" {:owed-by :agent :paused true} nil]
@@ -214,7 +238,12 @@
                      breathing dot, blue. Both outrank the record state beneath them, so they are
                      what a reader scanning an arc lands on."
               :render #(rail str [:awaiting :running]
-                             (fn [n] (state/arc-mark :done n)))}]}])
+                             (fn [n] (state/arc-mark :done n)))}
+             {:title "waiting on the person, by category"
+              :note "The awaiting stage's title says what the person is needed for, in the words
+                     the board row and the Needs you card use."
+              :render #(rail str [:ask :landing :system-error]
+                             (fn [k] (state/arc-mark :current :awaiting k)))}]}])
 
 ;; ---------------------------------------------------------------------------
 ;; The registry
@@ -244,8 +273,7 @@
            which one your eye lands on: compare the ordinary row against the ones that need
            something."
     :blocks [(registered "board-row" row/board-row) (registered "gate-row" row/gate-row)
-             (registered "winddown-row" row/winddown-row) (registered "arc-row" row/arc-row)
-             (registered "candidate-row" row/candidate-row)]}
+             (registered "winddown-row" row/winddown-row) (registered "arc-row" row/arc-row)]}
    {:id "ask" :title "The Ask"
     :note "One decision, offered for answer. Datastar is live on this page, so the stepper, the
            choices and the answered-markers work exactly as they do on a real gate; the buttons

@@ -34,32 +34,9 @@
      (str (or n 0) "?")]
     [:span {:id "rail-needs-count" :class (str "rail-badge" (when (zero? (or n 0)) " zero"))} n]))
 
-(defn- rail-candidates-badge [n]
-  [:span {:id "rail-candidates-count" :class (str "rail-badge rail-badge-rc" (when (zero? (or n 0)) " zero"))}
-   (or n 0)])
-
-(defn- rail-errors-badge
-  "The errors count. Read with the gates, project by project, so `unread` leaves it as unknown as
-   Needs you's: marked as not fully read, never the zero style."
-  [n unread]
-  (if (seq unread)
-    [:span {:id "rail-errors-count" :class "rail-badge rail-badge-err unread"
-            :title (str "not fully read: " (str/join ", " (sort (keys unread))))}
-     (str (or n 0) "?")]
-    [:span {:id "rail-errors-count" :class (str "rail-badge rail-badge-err" (when (zero? (or n 0)) " zero"))}
-     (or n 0)]))
-
-(def ^:private errors-icon
-  "Errors: the machine stopped on a failure — nothing is asked, something has to be recovered."
-  "⛔")
-
 (def ^:private needs-icon
-  "Needs you: a question waits on the person."
+  "Needs you: something waits on the person — an ask, a landing or a system error."
   "✋")
-
-(def ^:private candidates-icon
-  "Release candidates: work ready to land when the person chooses — no question asked."
-  "🚀")
 
 (defn- rail-health [{:keys [state]}]
   (let [s (name (or state :down))]
@@ -105,25 +82,18 @@
         [:a {:href (str path "?scope=" p) :class (when (= p scope) "active")} p])]]))
 
 (defn- topbar
-  "What spans every project: the project switcher, Needs you, the errors — kept apart from Needs
-   you because a machine that stopped on a failure asks the person nothing; it needs recovering —
-   the release candidates — kept apart because a candidate asks nothing, it only waits to be
-   landed — and the menu holding nido's own pages. Each of the three is an icon and its count."
-  [{:keys [active needs-count needs-unread error-count candidates-count] :as ctx}]
+  "What spans every project: the project switcher, Needs you — every category the person is
+   needed in, a landing among them — as an icon and its count, and the menu holding nido's own
+   pages."
+  [{:keys [active needs-count needs-unread] :as ctx}]
   [:header.topbar
    [:a.topbar-brand {:href "/" :title "nido"}
     [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 44 :height 44}]]
    (project-switcher ctx)
    [:div.topbar-gap]
    [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/#needs-you"
-        :title "Needs you — questions waiting on you" :aria-label "Needs you"}
+        :title "Needs you — asks, landings and system errors waiting on you" :aria-label "Needs you"}
     [:span.topbar-icon needs-icon] (rail-needs-badge needs-count needs-unread)]
-   [:a {:class "topbar-link" :href "/#errors"
-        :title "Errors — what failed on nido's side, with its recovery" :aria-label "Errors"}
-    [:span.topbar-icon errors-icon] (rail-errors-badge error-count needs-unread)]
-   [:a {:class "topbar-link" :href "/#candidates"
-        :title "Release candidates — ready to land" :aria-label "Release candidates"}
-    [:span.topbar-icon candidates-icon] (rail-candidates-badge candidates-count)]
    [:details.gear {"data-on:click__outside" "el.open = false"}
     [:summary {:title "menu" :aria-label "menu"} "⚙"]
     [:div.menu
@@ -170,11 +140,8 @@
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   rail-status-fragment
   "The live top-bar elements, for SSE patching alongside a surface fragment."
-  [{:keys [needs-count needs-unread error-count candidates-count daemon]}]
+  [{:keys [needs-count needs-unread daemon]}]
   (str (h/html (rail-needs-badge needs-count needs-unread))
-       (h/html (rail-errors-badge error-count needs-unread))
-       ;; Patched only by a poll that read the candidates: the ops poll reads none.
-       (when candidates-count (h/html (rail-candidates-badge candidates-count)))
        (h/html (rail-health daemon))))
 
 (defn ^{:malli/schema [:=> [:cat :any :keyword] :string]}
@@ -576,23 +543,6 @@
   [pos]
   (update pos :history? not))
 
-(defn- error-row
-  "One error: the workstream, what failed, linking to its pane, where its recovery is."
-  [{:keys [project ws-id label what because pending?]} selection href]
-  [:a {:class (str "gate-card error-card" (when (and (= project (:project selection)) (= ws-id (:ws-id selection))) " sel"))
-       :href href}
-   [:div.gate-top (state/error-mark) [:span.lbl (or label ws-id)]]
-   [:div.gate-sub [:span project] [:span.error-what what] (when pending? [:span.meta "recovering…"])]
-   [:div.gate-prev because]])
-
-(defn- errors-list
-  "The errors, each opening its workstream's pane beside the list."
-  [{:keys [errors selection] :as screen}]
-  (if (seq errors)
-    (for [e errors]
-      (error-row e selection (str "/" (screen-query screen {:sel (str (:project e) ":" (:ws-id e))}))))
-    [:p.empty "Nothing has failed."]))
-
 (declare ask-bar)
 
 (defn- error-block
@@ -612,27 +562,13 @@
      [:p.meta "Recovering…"]
      (ask-bar project ws-id actions nil))])
 
-(defn- candidates-list
-  "The release candidates, each opening its workstream's pane beside the list."
-  [{:keys [candidates selection chats-unseen] :as screen}]
-  (if (seq candidates)
-    (for [r candidates]
-      (block/render row/candidate-row (str (:project r) ":" (:ws-id r))
-                    {:row       (assoc r :project (name (:project r)) :ws-id (str (:ws-id r)))
-                     :href      (str "/" (screen-query screen {:sel (str (:project r) ":" (:ws-id r))}))
-                     :selected? (and (= (:project r) (:project selection)) (= (:ws-id r) (:ws-id selection)))
-                     :chat?     (contains? chats-unseen {:project (name (:project r)) :ws-id (str (:ws-id r))})}
-                    {} no-router))
-    [:p.empty "No release candidates."]))
-
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
-  "The home lists — initial render + SSE refresh — as three sections: Needs you, one row per gate;
-   the errors, one row per workstream whose machine stopped on a failure; and the release
-   candidates, one row per workstream ready to land. Each row opens that workstream's pane beside
-   the lists (/?sel=), where its question is answered, its recovery or its Land is, and the open
-   one is marked. Apart because neither an error nor a candidate asks anything. A project whose
-   gates could not be read is named as not loaded, never shown as an empty list."
+  "The home list — initial render + SSE refresh: Needs you, one row per gate, each in the
+   category the person is needed in — an ask, a landing, a system error. Each row opens that
+   workstream's pane beside the list (/?sel=), where its question is answered, its Land given or
+   its failure retried, and the open one is marked. A project whose gates could not be read is
+   named as not loaded, never shown as an empty list."
   [{:keys [gates selection unavailable] :as screen}]
   (str
    (h/html
@@ -660,11 +596,7 @@
             [:a.gate-tag {:href (str "/drains?scope=" (:project g))}
              (str (count (:raised-by g)) " slice question" (when (< 1 (count (:raised-by g))) "s")
                   " on the drains page →")])))]
-      [:div {:id "needs-gates"} [:p.empty "Nothing needs you right now."]])
-     [:h3.inbox-head {:id "errors"} [:span.topbar-icon errors-icon] " Errors"]
-     [:div {:id "needs-errors"} (errors-list screen)]
-     [:h3.inbox-head {:id "candidates"} [:span.topbar-icon candidates-icon] " Release candidates"]
-     [:div {:id "needs-candidates"} (candidates-list screen)]])))
+      [:div {:id "needs-gates"} [:p.empty "Nothing needs you right now."]])])))
 
 (defn- gate-action-fragment
   "Shared shape for the immediate, action-keyed gate-action pane fragment:
@@ -1760,7 +1692,7 @@
    it; when it does not, the entry was reached from the raw index and the viewer
    renders down there instead. One viewer either way — reading an entry twice on
    one page is worse than reaching it from two places."
-  [pos {:keys [stages excursions]} entries report report-here? doing-label]
+  [pos {:keys [stages excursions past]} entries report report-here? doing-label]
   [:div
    (into [:div.arc]
          (mapcat (fn [{:keys [stage seqs] :as facet}]
@@ -1776,6 +1708,14 @@
                               (report-viewer pos (first (filter #(= (:entry pos) (:seq %)) entries))
                                              report))])))
                  stages))
+   ;; The person awaited past the spine — a landing, or a blocker after the implementation —
+   ;; where no stage is the one the work is in, so the arc still says what the activity does.
+   (when-let [n (:needs past)]
+     [:div.arc-past (state/arc-mark nil :awaiting n) [:span (state/needs-words n)]])
+   ;; A merge underway lies past the spine as well: the arc says it in the mark's own words —
+   ;; the merge badge alone, read off no status, so it can light no working dot.
+   (when-let [d (:doing past)]
+     [:div.arc-past (state/state-mark nil d)])
    (when (seq excursions)
      [:p.meta "off the arc · "
       (str/join " · " (map (fn [{:keys [stage entries]}]
@@ -1848,8 +1788,10 @@
 
    `position` is the workstream's pipeline position — the pane already has it for
    its heading — and is here because one of the buttons is owed by a PERSON
-   rather than by a parked agent (work/awaiting-human)."
-  [project ws-id origin stage sessions report position plan replyable?]
+   rather than by a parked agent (work/awaiting-human). `needs` is the category its
+   activity needs the person in: a :system-error with no ask beside it — the pane renders
+   this bar only with no gate — is a failed start, offered Retry."
+  [project ws-id origin stage sessions report position plan replyable? needs]
   (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
     (ask-bar project ws-id
@@ -1868,11 +1810,12 @@
                                     ;; does, off the same reading of the same
                                     ;; position — a design decision is owed a
                                     ;; person whether or not an agent is parked.
-                                    ;; A release candidate owes nobody, and still offers Land:
-                                    ;; the landing is the person's whenever they choose.
-                                    :awaiting      (if (work/release-candidate? position)
-                                                     :land
-                                                     (work/awaiting-human position))
+                                    ;; A release candidate offers Land, the landing the person is
+                                    ;; needed for; a failed start no ask carries offers Retry, the
+                                    ;; system error only they clear — what the Needs you card offers.
+                                    :awaiting      (cond (= :system-error needs)          :retry-start
+                                                         (work/release-candidate? position) :land
+                                                         :else                          (work/awaiting-human position))
                                     :landable?     (work/release-candidate? position)
                                     :gate-criterion (get-in plan [:owed-gate :criterion])
                                     :seq           (:seq report)}))
@@ -1962,7 +1905,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? gate error pending? pause]
+  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? gate pending? pause]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -1993,7 +1936,7 @@
             ;; stream, so the standing records and the log of every superseded
             ;; revision of them read as the same kind of thing — which is exactly
             ;; the confusion the standing records were added to end.
-            [:h2 (state/status-heading position doing) " " (state/state-mark status doing)]
+            [:h2 (state/status-heading position doing status) " " (state/state-mark status doing)]
             (when-not (= :done stage) (pause-line project ws-id pause))
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
@@ -2002,14 +1945,15 @@
             (when (seq (:stages arc))
               (arc-block pos arc entries report in-stage? (state/round-label doing)))
             (when (seq holds) (holds-block holds))
-            ;; What failed on the machine's side, and its recovery — an error, not a question,
-            ;; so it stands apart from the question card below.
-            (when error
-              (error-block project ws-id (assoc error :pending? pending? :error-msg (when-not gate error-msg))))
+            ;; A system error the core raised — its conductor stopped — is its card: what failed,
+            ;; why, and its one recovery, Wake. It asks nothing, so it is no question card.
+            (when (and gate (= :system-error (:needs gate)) (:what gate))
+              (error-block project ws-id (assoc gate :pending? (boolean (or (:working? gate) pending?))
+                                                :error-msg error-msg)))
             ;; What waits on the person comes after the context that orients them,
             ;; and above the log. The card owns the gate's error line and every
             ;; control, so the pane offers neither of its own beside it.
-            (when gate
+            (when (and gate (not (and (= :system-error (:needs gate)) (:what gate))))
               (block/render ask/card ws-id
                             {:project project :ws-id ws-id :ask (:ask gate) :actions (vec (:actions gate))
                              :pending? (boolean (or (:working? gate) pending?))
@@ -2020,9 +1964,9 @@
             ;; the CURRENT report, never the entry a reader happens to have open.
             ;; Left below the ledger they read as actions on the thing being read,
             ;; which is the one thing they are not.
-            (when (and on-latest? error-msg (not gate) (not error))
+            (when (and on-latest? error-msg (not gate))
               [:div.action-err "⚠ " error-msg])
-            (when (and on-latest? (not gate)) (pane-action-bar project ws-id origin stage sessions action-report position plan replyable?))
+            (when (and on-latest? (not gate)) (pane-action-bar project ws-id origin stage sessions action-report position plan replyable? (:needs status)))
             (when (= :done stage) (file-findings-form project ws-id))
 
             ;; Collapsed by default. The arc above is the reading a driver

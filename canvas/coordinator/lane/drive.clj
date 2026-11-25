@@ -16,7 +16,7 @@
 
 (Kind WorkstreamStatus
   "What a workstream's records say about where it stands and who owes it: its position, who owes
-   its next move, and whether a person's pause stands.
+   its next move, whether nido's recipe runs on it, and whether a person's pause stands.
 
    RECORD FACTS ONLY. Position is the fold over the ledger; owed-by is read off the mode the
    position's next stage runs in. Whether anything runs is the core's, never a record fact, and
@@ -24,6 +24,7 @@
   [:map {:closed true}
    [:position :map]
    [:owed-by [:enum :person :agent :machine :nobody]]
+   [:activated? :boolean]
    [:paused :boolean]])
 
 (Module lane-pipeline

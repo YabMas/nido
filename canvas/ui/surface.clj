@@ -104,10 +104,11 @@
   (Operation stage-chip "A board stage as a chip."
     {:signature [:=> [:catn [:stage :any]] :any]})
   (Operation position-chip
-    "Where the pipeline says a row is. Muted by default and lit only when the next move is a
-     person's, because that is the distinction a board is scanned for; what would move it, and
-     any caller's extra tip, are the chip's title."
-    {:signature [:=> [:catn [:position [:maybe :map]] [:tip [:? :any]]] :any]})
+    "Where the pipeline says a row is. Muted by default and lit while the category the caller
+     hands it — the activity's :needs — names one, because that is the distinction a board is
+     scanned for; that category in needs-words, what would move it, and any caller's extra tip are
+     the chip's title."
+    {:signature [:=> [:catn [:position [:maybe :map]] [:tip [:? :any]] [:needs [:? [:maybe :keyword]]]] :any]})
   (Operation state-mark
     "Whether anything is happening in a workstream, as one mark and no words. What runs and who
      owes the next move are the mark's title; a merge keeps its words."
@@ -119,11 +120,10 @@
     {:signature [:=> [:catn [:doing [:maybe :map]]] [:maybe :string]]})
   (Operation phase-chip "Which landing of a phased plan a row is in, or nothing."
     {:signature [:=> [:catn [:phase [:maybe :map]]] :any]})
-  (Operation status-heading "The status section's heading: the position, or — while the core works
-    a stage of the arc — that stage in progress."
-    {:signature [:function
-                 [:=> [:catn [:ctx :map]] :any]
-                 [:=> [:catn [:ctx :map] [:doing [:maybe :map]]] :any]]})
+  (Operation status-heading "The status section's heading: the position label, which nothing replaces
+    — what runs, a merge's words included, is the state mark's beside it — and that the person is
+    needed, in the category's words, while the workstream's activity needs them."
+    {:signature [:=> [:catn [:ctx :map] [:doing [:? [:maybe :map]]] [:status [:? [:maybe :map]]]] :any]})
   (Operation arc-name "One arc stage's heading."
     {:signature [:=> [:catn [:stage :any]] :any]})
   (Operation needs-mark
@@ -131,18 +131,31 @@
      said — a board row, a needs-you row, an arc stage. Its title is the caller's to word."
     {:signature [:=> [:catn [:title [:? :string]]] :any]})
   (Operation error-mark
-    "The error mark: the machine stopped on a failure and the person's move is its recovery — never
-     the needs-you dot, since nothing is asked. Its title is the caller's to word."
+    "The error mark: the machine stopped on a failure, and the person's move is its recovery. Its
+     title is the caller's to word."
     {:signature [:=> [:catn [:title [:? :string]]] :any]})
+  (Operation gate-standing
+    "How a needs-you card says where its request stands: working while its resolve runs, parked on
+     the session it waits in, else the category's word."
+    {:signature [:=> [:catn [:gate :map]] :string]})
+  (Operation winddown-words
+    "How a closed workstream still holding live sessions says where it stands: stopping while its
+     bring-down runs, else how it closed and what it still holds."
+    {:signature [:=> [:catn [:row :map]] :string]})
+  (Operation needs-words
+    "How every surface says the category the person is needed in — an ask, a landing, a system
+     error — so the mark, the heading, the arc and the card word it alike."
+    {:signature [:=> [:catn [:needs [:maybe :keyword]]] :string]})
   (Operation arc-mark
-    "The mark for one arc stage: what is happening there right now if anything is, and otherwise
+    "The mark for one arc stage: what is happening there right now if anything is — the person
+     waited on, titled with the category they are needed in, or an agent working — and otherwise
      what the stage's records amount to."
-    {:signature [:=> [:catn [:state :any] [:now :any]] :any]}))
+    {:signature [:=> [:catn [:state :any] [:now :any] [:needs [:? [:maybe :keyword]]]] :any]}))
 
 (Module ui-components-row
-  "The scannable list rows, registered with the UI library as five blocks: `board-row`, one
-   selectable Workstreams row; `gate-row`, one needs-you row previewing the question it asks;
-   `candidate-row`, one release candidate on Needs you; `winddown-row`, a closed workstream still
+  "The scannable list rows, registered with the UI library as four blocks: `board-row`, one
+   selectable Workstreams row; `gate-row`, one needs-you row in the category the person is needed
+   in, previewing the question it asks or what it waits on; `winddown-row`, a closed workstream still
    holding live sessions, with one action; and `arc-row`, one stage of a workstream's arc, whose
    click is an action the pane routes.
 
@@ -207,7 +220,7 @@
    out — a card is read from a ledger record's shape, and reading twenty of those apart is a
    different job from the blocks a person iterates on. Its rows listing workstreams, on the board
    and on Needs you, say which workstreams have a side chat with news."
-  (Operation rail-status-fragment "The top bar's live bits: what needs you, what failed, and how the daemon is."
+  (Operation rail-status-fragment "The top bar's live bits: what needs you, and how the daemon is."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation fire-signal "The signal name for one field of a fire form."
     {:signature [:=> [:catn [:trigger-name :any] [:k :keyword]] :string]})
@@ -219,7 +232,7 @@
     "The page chrome every page sits inside: a top bar for what spans projects, a sidebar of the
      focused project's slices."
     {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [assembled-stylesheet lib/script]})
-  (Operation needs-fragment "The home column: Needs you, the errors and the release candidates."
+  (Operation needs-fragment "The home column: Needs you, one card per workstream that needs the person, in its category."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation gate-action-confirm-fragment "The immediate confirmation a gate action swaps in."
     {:signature [:=> [:catn [:action-id :any] [:project ProjectName] [:ws-id WorkstreamId]
@@ -335,8 +348,8 @@
   (Operation derive-screen
     "Gather what the screen needs and derive it — the gate inbox's casualty card from the
      workstreams owed a revive, beside the gates and never among them. Without the board it
-     refreshes no row and reads only the gates, which the core answers: what Needs you and the
-     rail badge render."
+     refreshes no row and reads only the gates read-gates answers: what Needs you and the rail
+     badge render."
     {:signature [:=> [:catn [:view-state :any] [:opts [:? :map]]] Screen]
      :delegates [work/screen work/owed-revivals work/read-gates]})
   (Operation wrap-slow-request-log
@@ -363,9 +376,17 @@
   "The terminal surface.
 
    One public entry, and everything else is private: the TUI is a rendering of the same screen
-   the dashboard shows, so its internals are not a second model."
+   the dashboard shows, so its internals are not a second model. The surface benchmark alone
+   reaches two of those private renders through their vars, to time the TUI's board, detail and
+   navigation, so they are its interface too."
   (Operation run-once "Run the TUI to completion."
-    {:signature [:=> [:catn] :any]}))
+    {:signature [:=> [:catn] :any]})
+  (Operation board-rows "The spine board's rows, as foldable bands — what the benchmark times as
+     the TUI's board."
+    {:signature [:=> [:catn [:project :any] [:origin :any] [:collapsed [:? :any]] [:facet-filter [:? :any]]] :any]})
+  (Operation environment-block "A workstream's environment panel body — what the benchmark times
+     as the TUI's detail."
+    {:signature [:=> [:catn [:project :any] [:ws-id :any]] :any]}))
 
 (Module ui-dev
   "The development-environment lever: what a session's app is doing, and how to restart it.

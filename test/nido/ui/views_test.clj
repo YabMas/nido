@@ -68,6 +68,23 @@
     (is (not (str/includes? html "href=\"/workstreams/brian/ws-1\"")))
     (is (not (str/includes? html "gate-card sel")) "nothing is selected, so no row is marked")))
 
+(deftest needs-fragment-cards-every-category-in-one-list
+  (let [landing {:project "nido" :ws-id "ws-2" :origin :scratch :stage :in-progress :label "Ship it"
+                 :tag "ws-2" :needs :landing :owes :land :note "Ready to land." :ask nil
+                 :actions [{:id :land :label "Land" :kind :mutation :style :primary}]}
+        failed  {:project "nido" :ws-id "ws-3" :origin :scratch :stage :in-progress :label "Boot it"
+                 :tag "ws-3" :needs :system-error :owes :retry-start
+                 :note "A session failed to start: pg would not start" :ask nil}
+        html    (views/needs-fragment {:gates [(assoc sample-gate :needs :ask) landing failed]
+                                       :selection nil :scope "all"})]
+    (is (str/includes? html "title=\"needs you · ask\""))
+    (is (str/includes? html "title=\"needs you · landing\""))
+    (is (str/includes? html "title=\"needs you · system error\""))
+    (is (str/includes? html "Ready to land.") "a landing says what it waits on, asking nothing")
+    (is (str/includes? html "pg would not start"))
+    (is (not (str/includes? html "Release candidates"))
+        "a landing is carded in Needs you, not listed apart")))
+
 (deftest needs-fragment-says-a-project-was-not-loaded
   (let [html (views/needs-fragment {:gates [] :selection nil :scope "all"
                                     :unavailable {"brian" "the core daemon is not running"}})]
@@ -134,7 +151,7 @@
   ;; Parked-on-a-human and busy are separate facts — a claim outranks session
   ;; state, so a gate holds both at once — and the Needs-you queue and pane were
   ;; the surfaces that said only the first.
-  (let [g (assoc sample-gate :doing {:source :claim :kind :diff-review})]
+  (let [g (assoc sample-gate :doing {:source :claim :kind :diff-review} :status {:live true})]
     (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
                        "reviewing the diff")
         "the inbox row carries the activity badge")
@@ -1377,10 +1394,12 @@
   {:surface :workstreams :scope "all" :selection nil})
 
 (defn- board-row
-  [position]
+  [position & [needs-you?]]
   (block/render row/board-row "nido:ws-1"
                 {:project "nido"
-                 :row (cond-> {:ws-id "ws-1" :origin :notion :label "the pipeline" :stage :in-progress}
+                 :row (cond-> {:ws-id "ws-1" :origin :notion :label "the pipeline" :stage :in-progress
+                               :status (cond-> {:needs-you (boolean needs-you?) :owed-by (if needs-you? :person :agent)}
+                                         needs-you? (assoc :needs :ask))}
                         position (assoc :position position))
                  :href (str "/workstreams" (#'views/screen-query a-board-screen {:sel "nido:ws-1"}))}
                 {} (fn [& _] "#")))
@@ -1396,11 +1415,15 @@
 
 (deftest a-row-waiting-on-a-human-is-lit-and-one-that-is-not-is-muted
   (let [mine  (str (h/html (board-row {:at :blocked
-                                       :next {:stage :answer-blocker :mode :human}})))
+                                       :next {:stage :answer-blocker :mode :human}} true)))
+        plain (str (h/html (board-row {:at :blocked
+                                       :next {:stage :answer-blocker :mode :human}} false)))
         nido' (str (h/html (board-row {:at :baselined
                                        :next {:stage :verify-baseline :mode :mechanical}})))]
     (is (str/includes? mine "pos pos-you")
-        "the next move is a person's — that is what a board is scanned for")
+        "the activity says the person owes the move — that is what a board is scanned for")
+    (is (not (str/includes? plain "pos-you"))
+        "the position's mode alone lights nothing: the activity says whether the person is needed")
     (is (not (str/includes? nido' "pos-you")))))
 
 (deftest a-terminal-row-names-no-next-stage
@@ -1498,7 +1521,7 @@
   (let [html (views/workstream-pane
               (assoc a-pane :arc (assoc-in an-arc [:stages 3 :now] :awaiting)) {})]
     (is (re-find #"arc-row \w+ awaiting" html))
-    (is (str/includes? html "title=\"waiting on you\""))
+    (is (str/includes? html "title=\"needs you\""))
     (is (not (str/includes? html "arc-live")) "a stage waiting on a person is not running"))
   (let [html (views/workstream-pane
               (assoc a-pane :doing {:source :core :activity :working} :arc an-arc) {})]
@@ -1598,6 +1621,41 @@
   (is (= "Status — Baseline verified" (state/status-heading {:at :baseline-verified})))
   (is (= "Status" (state/status-heading nil)) "no position, no dash"))
 
+(deftest the-status-heading-says-when-the-person-is-waited-on
+  (is (= "Status — Blocked · needs you · ask"
+         (state/status-heading {:at :blocked} nil {:needs-you true :owed-by :person :needs :ask})))
+  (is (= "Status — Release candidate · needs you · landing"
+         (state/status-heading {:at :release-candidate} nil {:needs-you true :owed-by :person :needs :landing}))
+      "a landing is said as a landing, not a question")
+  (is (= "Status — Blocked" (state/status-heading {:at :blocked} nil {:needs-you false}))
+      "a position alone says nothing about the person: the activity does")
+  (is (= "Status — Asking you" (state/status-heading {:at :core-asking} nil {:needs-you true}))
+      "a heading that already says so does not say it twice"))
+
+(deftest a-merge-waiting-its-turn-reads-as-the-board-reads-it
+  (let [doing  {:source :merge :phase :queued}
+        status {:owed-by :machine :live false :stalled false :paused false :needs-you false}]
+    (is (= "Status — Draft PR open" (state/status-heading {:at :published} doing status))
+        "the heading keeps the position; the merge's words are the mark's")
+    (is (= "merging · queued" (last (state/state-mark status doing))) "the row's mark is the merge badge")
+    (is (not (re-find #"st-mark\.live" (pr-str (state/state-mark status doing)))) "and no working dot")))
+
+(deftest the-arc-says-a-queued-merge-as-the-mark-does
+  (let [doing {:source :merge :phase :queued}
+        arc   (pr-str (#'views/arc-block {:ws-id "w"} {:stages [] :excursions [] :past {:doing doing}}
+                                         [] nil false nil))]
+    (is (re-find #"arc-past" arc) "said past the spine")
+    (is (re-find #"merging · queued" arc) "in the merge badge's words")
+    (is (not (re-find #"st-mark\.live" arc)) "with no working dot")))
+
+(deftest a-merge-that-needs-you-shows-both-marks
+  (let [doing  {:source :merge :phase :queued}
+        status {:owed-by :person :live false :stalled false :paused false :needs-you true :needs :ask}
+        mark   (pr-str (state/state-mark status doing))]
+    (is (re-find #"needs you · ask" mark) "the needs-you dot, in its category")
+    (is (re-find #"merging · queued" mark) "and the merge's words beside it")
+    (is (not (re-find #"st-mark\.live" mark)) "and no working dot")))
+
 (deftest no-pane-class-silently-inherits-a-bare-rule
   ;; The general form of the bug: a short class name that some other component
   ;; already owns. Every SHORT class the pane's own components introduce is
@@ -1690,7 +1748,7 @@
 (deftest the-panes-gate-form-carries-the-owed-criterion
   (let [html (str (h/html (#'views/pane-action-bar "nido" "ws-1" :notion :awaiting-gate [] nil
                                                    {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}
-                                                   a-plan nil)))]
+                                                   a-plan nil nil)))]
     (is (str/includes? html "a quiet week"))
     (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))))
 
@@ -1841,7 +1899,7 @@
   ;; Such a verdict is a gate, and a gate is answered on its card; the bar beside no card
   ;; offers neither the Accept nor the Defer, and no link elsewhere to find them.
   (let [html (str (h/html (#'views/pane-action-bar "brian" "ws-1" nil :triage [{:parked? true :name "s"}]
-                                                   two-question-report nil nil false)))]
+                                                   two-question-report nil nil false nil)))]
     (is (not (str/includes? html "/apply")) "the bar never accepts a verdict whose questions it hides")
     (is (not (str/includes? html "/defer")))
     (is (not (str/includes? html "Needs you ▸")) "and points nowhere else")))

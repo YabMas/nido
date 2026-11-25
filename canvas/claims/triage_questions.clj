@@ -40,8 +40,8 @@
   {:about [report-ask ui-components-ask] :evidence "test"})
 
 (Claim card-leads-with-the-question
-  "A needs-you row previews its Ask :question. A failed action's error line, when there is one, sits at the top of the question card, above its first question."
-  {:about [needs-fragment ui-components-ask Ask] :evidence "test"})
+  "A needs-you row in the :ask category previews its Ask :question. A failed action's error line, when there is one, sits at the top of the question card, above its first question."
+  {:about [needs-fragment Ask] :evidence "test"})
 
 (Claim ask-carries-questions
   "The accept-triage Ask is read from the newer of a triage report and a Slack proposal. Over a triage report it carries one question per question of the report, in order; a report with no questions is asked as its own acceptance — one question, the headline's, over its determination and summary, with no options. Each has its words ('Which fix should be built?' where a legacy question has none), its context, recommendation and after, and its directions as options with no :action, label, summary and the effort as consequence. :submit is :apply when the report asks a question; a report with none has no :submit, its Apply answering as its own button. The headline asks to accept the triage. Over a Slack proposal it asks to file it as a ticket, as one option-less question over the proposal's sections, answered by Apply with no :submit. An answer-blocker Ask carries one question from report/blocker-parts, whose options carry their :option-<letter> actions. Every other kind yields one question from its own record."
@@ -76,8 +76,8 @@
   {:about [ui-components-ask] :evidence "test"})
 
 (Claim panes-use-the-card
-  "The workstream map carries :gate exactly when `gates` lists a gate for the workstream, and it is that gate. workstream-pane over a map carrying :gate renders the card registration over that gate's :ask, :actions and :session, routed to pane-route, after its status section — the status heading, the plan, the stage list, holds and denials — and before History, passing it the pane's :error-msg and, as :pending?, the reading work/screen gives a needs gate: the gate's :working?, or a gate action on the workstream still resolving. It then renders no error line of its own and no pane-action-bar. The card's step and choices survive the pane's refresh. A pane over a map without :gate renders pane-action-bar without the actions that answer an Ask's questions (an action with :answers :questions, and :defer), and none of its actions is a link to another page. No other pane renders an Ask."
-  {:about [workstream-pane workstream gates ui-components-ask] :evidence "test"})
+  "The workstream map carries :gate exactly when `gates` lists a gate for the workstream, and it is that gate. workstream-pane over a map whose :gate carries an :ask renders the card registration over that gate's :ask, :actions and :session, routed to pane-route, after its status section — the status heading, the plan, the stage list, holds and denials — and before History, passing it the pane's :error-msg and, as :pending?, the reading work/screen gives a needs gate: the gate's :working?, or a gate action on the workstream still resolving. It then renders no error line of its own and no pane-action-bar. The card's step and choices survive the pane's refresh. A pane over a map whose :gate carries no :ask, or that carries no :gate, renders pane-action-bar without the actions that answer an Ask's questions (an action with :answers :questions, and :defer), and none of its actions is a link to another page. No other pane renders an Ask."
+  {:about [workstream-pane workstream gates] :evidence "test"})
 
 (Claim skill-splits-defects
   "The triage-bug skill's report template writes :questions. It tells the agent to write one question per independent defect, each with its question, context and after and a recommendation only when it genuinely holds one; to list within a question only alternatives that exclude one another; and that a question may carry a single direction."

@@ -22,9 +22,9 @@
 
    IT ADDS NO VOCABULARY. The mode is the whole of the answer, and whether a PERSON owes the next
    stage comes from `coordinator-work/awaiting-human` rather than from a test of its own. That is
-   a dependency chosen against the easier option of asking `(= :human mode)` here: the same
-   function decides whether a workstream stands in the needs-you inbox, so asking it means the
-   inbox and the turn boundary cannot come apart about who is holding something up. A second
+   a dependency chosen against the easier option of asking `(= :human mode)` here: it is the work
+   plane's reading of which stage a person owes a position, so asking it means the work plane and
+   the turn boundary cannot come apart about that stage. A second
    reading of the same field would be a second answer waiting to disagree.
 
    The activity claim is part of the answer rather than a caller's afterthought: a workstream
