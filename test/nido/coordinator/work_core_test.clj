@@ -254,3 +254,24 @@
         (let [p (pane)]
           (is (= :awaiting (:now (stage p :baseline))) "an ask the core holds: the stage waits on you")
           (is (nil? (:doing p))))))))
+
+(deftest a-list-refresh-keeps-its-rows-while-the-core-is-down
+  (with-ws
+    (fn [_c ws-id]
+      (work/hold! {:sweep? false})
+      (try
+        (work/refresh-list! :brian)
+        (let [before (work/list-workstreams :brian #{})]
+          ;; what nido.core.client throws when the socket is gone, from the read that reaches the
+          ;; core — tests run an in-process core, which never touches the socket
+          (with-redefs-fn {#'work/held-project
+                           (fn [_] (throw (ex-info "the core daemon is not running"
+                                                   {:core :unreachable :socket "/x"})))}
+            #(is (nil? (work/refresh-list! :brian)) "a core restarting is not a failure of the refresh"))
+          (is (= (map :ws-id before) (map :ws-id (work/list-workstreams :brian #{})))
+              "the rows held before the core went away are still held")
+          (is (some #{ws-id} (map :ws-id before)))
+          (with-redefs-fn {#'work/held-project (fn [_] (throw (ex-info "other" {:core :refused})))}
+            #(is (thrown-with-msg? clojure.lang.ExceptionInfo #"other" (work/refresh-list! :brian))
+                 "anything else still throws")))
+        (finally (work/release!))))))

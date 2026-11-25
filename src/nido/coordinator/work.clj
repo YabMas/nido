@@ -2232,15 +2232,22 @@
    every workstream not at rest, every one at rest with a live session, the rows whose own page's
    Notion facts moved and any workstream new to the core, and recomputes the ones whose
    stamp moved or whose liveness came due. At rest is settled history and finished review-loop
-   analyses; only the sweep reaches those. A no-op when this process holds nothing."
+   analyses; only the sweep reaches those. A no-op when this process holds nothing.
+
+   A core that cannot be reached leaves the held rows as they were: it is down for seconds on
+   every landing while a release swaps, and a surface refreshing then renders what it last read
+   rather than failing."
   ;; A project that cannot be read keeps the rows it had, as `all-gates` and `all-grouped` skip
   ;; it: one unreadable project must not cost every other project's board.
   ([] (doseq [[pname _] (project/list-projects)]
         (try (refresh-list! pname) (catch Throwable _ nil))))
   ([project]
    (when (holding?)
-     (held-project project)
-     (swap-project! project (fn [pr p] (refresh-project pr p :list)))
+     (try
+       (held-project project)
+       (swap-project! project (fn [pr p] (refresh-project pr p :list)))
+       (catch clojure.lang.ExceptionInfo e
+         (when-not (= :unreachable (:core (ex-data e))) (throw e))))
      nil)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}

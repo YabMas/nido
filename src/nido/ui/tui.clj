@@ -482,6 +482,23 @@
         (-> (refresh-list state (current-rows state))
             (assoc ::board-tick {:stamp stamp' :built-at now}))))))
 
+(defn- tick
+  "`tick-rows`, surviving a refresh that throws. The TUI is one loop, so a throw escaping a tick
+   ended it — on every landing, which restarts the core and leaves its socket gone for a few
+   seconds. A failed tick keeps the rows on screen, says why on the status line, and the next
+   tick tries again; the first that succeeds clears the message it left."
+  [state now]
+  (try
+    (let [s (tick-rows state now)]
+      (if (::tick-fault s)
+        (cond-> (dissoc s ::tick-fault) (= (::tick-fault s) (:status s)) (dissoc :status))
+        s))
+    (catch Throwable t
+      (let [why (if (= :unreachable (:core (ex-data t)))
+                  "⚠ the core is not answering (restarting?) — showing what was last read; retrying"
+                  (str "⚠ refresh failed: " (ex-message t) " — retrying"))]
+        (assoc state :status why ::tick-fault why)))))
+
 (defn- tick-cmd []
   (program/cmd (fn [] (Thread/sleep refresh-ms) {:type ::tick})))
 
@@ -1284,7 +1301,7 @@
     (= ::tick (msg/msg-type msg))
     (if (or (:modal state) (:busy state))
       [state (tick-cmd)]
-      [(tick-rows state (System/currentTimeMillis)) (tick-cmd)])
+      [(tick state (System/currentTimeMillis)) (tick-cmd)])
 
     ;; ctrl+c always quits. `q` only quits when no modal is active so the
     ;; create-session text-input can accept it as a literal character.

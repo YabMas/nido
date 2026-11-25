@@ -696,3 +696,19 @@
                   lifecycle/spawn-tab! (fn [sn opts] (swap! opened conj [sn opts]) "/home")]
       (#'tui/enter-session {} :brian "mine" :worktree)
       (is (= [["mine" {:project :brian :cd :worktree}]] @opened)))))
+
+(deftest a-tick-survives-the-core-restarting
+  ;; Every landing restarts the core; a tick that threw while its socket was gone ended the TUI.
+  (let [state (assoc (board-state :all) :status "earlier")
+        down  (ex-info "the core daemon is not running" {:core :unreachable :socket "/x"})
+        tick  (fn [s] (first (#'tui/update-fn s {:type :nido.ui.tui/tick})))]
+    (with-redefs [work/refresh-list! (fn [& _] (throw down))]
+      (let [s (tick state)]
+        (is (= (:list state) (:list s)) "the board keeps what it last read")
+        (is (re-find #"core is not answering" (:status s)))
+        (with-redefs [work/refresh-list! (fn [& _] nil)
+                      work/board-stamp   (constantly 1)
+                      work/grouped       (constantly {})]
+          (is (nil? (:status (tick s))) "the first tick that succeeds clears what the fault said"))))
+    (with-redefs [work/refresh-list! (fn [& _] (throw (ex-info "boom" {})))]
+      (is (re-find #"refresh failed: boom" (:status (tick state))) "any other failure is said too"))))
