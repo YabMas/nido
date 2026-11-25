@@ -10,6 +10,8 @@
             [nido.ui.chat-host]
             [nido.coordinator.work :as work]
             [nido.session.chat :as chat]
+            [nido.session.lifecycle :as lifecycle]
+            [nido.session.state :as state]
             [nido.test.fake-core :as fake-core]
             [nido.ui.server :as server]
             [nido.ui.side-chat :as side-chat]
@@ -113,6 +115,21 @@
         (is (str/includes? i "nido:workstream:tell :project <p> :ws-id <id>"))
         (is (str/includes? i ":images <digest>"))
         (is (str/includes? i ":grants merge"))))))
+
+(deftest the-operator-runs-in-its-session-home-not-its-worktree
+  ;; On project nido the worktree is a copy of nido nothing keeps current: a verb run against its
+  ;; bb.edn is that copy's, not the one that runs.
+  (let [sent (atom nil) ups (atom [])]
+    (with-redefs [chat/send!            (fn [c & _] (reset! sent c) true)
+                  lifecycle/runtime-of  (fn [_ _] nil)
+                  lifecycle/up!         (fn [s opts] (swap! ups conj [s opts]))]
+      (side-chat/handle! {:request-method :post :uri "/_chat/send" :headers {}
+                          :body (java.io.ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"hi\"}}}"))})
+      (let [c @sent]
+        (is (= (state/session-home-dir "nido" "operator") ((:dir c) c)))
+        (is (= [["operator" {:project "nido"}]] @ups) "a session that is down is brought up first")
+        (is (not (str/includes? (:instructions c) "--config <nido>"))
+            "the instructions leave no bb.edn for the agent to guess")))))
 
 (def ^:private png-bytes
   (byte-array (concat [0x89 0x50 0x4e 0x47 0x0d 0x0a 0x1a 0x0a] (.getBytes "not much of a png"))))

@@ -3,7 +3,8 @@
    the shell with the dashboard's context — the catalog, which keeps its own chat, aside. One
    conversation, the same on every page: moving between pages never changes what the panel shows.
 
-   HIDES the operator — what its agent is told, where it runs, and that it reaches a workstream's
+   HIDES the operator — what its agent is told, where it runs (its session's home, not its
+   worktree: see `operator`), and that it reaches a workstream's
    conductor only through `bb nido:workstream:tell`, by its own judgment, so nothing the person
    sends is a core command and what the operator does not pass on never reaches the core — the
    path it is served under, and that whether the panel is open is kept in a cookie, so the next
@@ -21,6 +22,8 @@
             [nido.libraries.ui.block :as block]
             [nido.libraries.ui.names :as names]
             [nido.session.chat :as chat]
+            [nido.session.lifecycle :as lifecycle]
+            [nido.session.state :as state]
             [nido.ui.chat-host :as host]
             [nido.ui.components.chat :as panel]
             [nido.ui.place :as place]))
@@ -47,8 +50,9 @@ where the person was then, not now.
 
 The block also names each image the message carries, in order, as \"image n · <digest>\".
 
-Work through nido's own bb verbs, run as your session briefing shows (`bb --config <nido>/bb.edn
-...`); `bb --config <nido>/bb.edn tasks` lists them. `nido:workstream:list :project <p>` says where
+Work through nido's own bb verbs, run as `bb <verb> ...` from where you stand, your session's home:
+its bb.edn is nido's own, so `bb tasks` lists them. Never point `--config` at another bb.edn — a
+copy of nido elsewhere is not the one that runs. `nido:workstream:list :project <p>` says where
 a project's workstreams stand, `nido:workstream:show` reads one, `nido:workstream:start :project <p>
 <session> :brief \"…\"` starts a new one from a goal, and `nido:workstream:close` and
 `nido:deactivate` stop one. Read freely. An action that changes something —
@@ -83,10 +87,22 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
                   :detail (str "Image " (inc i) " of this message, attached after its words, digest " digest ".")})
                images))
 
+(defn- operator-home
+  "Where the operator's agent runs: its session's home, brought up first when it is down. Not the
+   session's worktree — on project nido that is a copy of nido which nothing keeps current, and a
+   `bb --config bb.edn` run there runs that copy's verbs. The home's bb.edn links nido's own, and
+   its briefing is what the agent reads."
+  [{:keys [project session]}]
+  (let [opts {:project project}]
+    (when-not (lifecycle/runtime-of session opts) (lifecycle/up! session opts))
+    (state/session-home-dir project session)))
+
 (def ^:private operator
-  "nido's operator: one session of nido's, told `instructions`. A send keeps each image it carries
-   for a relay before the agent hears of it, and names it to the agent by digest."
+  "nido's operator: one session of nido's, told `instructions`, run in its home (`operator-home`).
+   A send keeps each image it carries for a relay before the agent hears of it, and names it to
+   the agent by digest."
   {:project "nido" :session "operator" :name "operator" :instructions instructions
+   :dir operator-home
    :backend {:send! (fn [c words refs images]
                       (doseq [img images] (wcore/keep-chat-image! img))
                       (chat/send! c words (into (vec refs) (image-refs images)) images))}})
