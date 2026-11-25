@@ -147,6 +147,19 @@
   [ws-id state]
   (record-of ws-id state))
 
+(defn ^{:malli/schema [:=> [:cat [:? [:maybe [:map-of :string :string]]]] [:maybe [:tuple :keyword :string]]]}
+  turn-ws
+  "The workstream the core turn this process runs in works on, as [project ws-id], or nil outside
+   every turn — the core names it \"<project>/<ws-id>\" in NIDO_CORE_WS, and every process a turn
+   starts inherits it. `env` is the environment to read (default the process's). The one way a
+   process finds its own workstream: a working copy names none, since the core provisions a
+   unit's session without one."
+  ([] (turn-ws nil))
+  ([env]
+   (when-let [k (if env (get env "NIDO_CORE_WS") (System/getenv "NIDO_CORE_WS"))]
+     (let [i (.indexOf ^String k "/")]
+       (when (pos? i) [(keyword (subs k 0 i)) (subs k (inc i))])))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
   read-ws
   "The workstream `ws-id` of `project` as the core holds it — its identity and its ledger's index

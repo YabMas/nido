@@ -56,6 +56,10 @@
      do not collide."
     {:signature [:=> [:catn] WorkstreamId]
      :delegates [clock/now-iso]})
+  (Operation turn-ws
+    "The workstream the core turn this process runs in works on, from the environment the core
+     gives every turn, or nil outside every turn."
+    {:signature [:=> [:catn [:env [:? [:maybe [:map-of :string :string]]]]] [:maybe [:tuple :keyword :string]]]})
   (Operation read-ws
     "One workstream by id, or nil: its identity and its ledger's index as the core holds them,
      without the stored status fields older records carry. A project's sweep reads every

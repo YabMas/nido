@@ -72,12 +72,9 @@
 
 
 (defn- turn-ws
-  "The workstream the core turn this process runs in works on, as [project ws-id], or nil outside
-   one. The core names it \"<project>/<ws-id>\" in NIDO_CORE_WS."
+  "`ws/turn-ws` with its project as a string, as this lane compares it."
   []
-  (when-let [k (System/getenv "NIDO_CORE_WS")]
-    (let [i (.indexOf ^String k "/")]
-      (when (pos? i) [(subs k 0 i) (subs k (inc i))]))))
+  (some-> (ws/turn-ws) (update 0 name)))
 
 (defn- turn-unit
   "The unit the core turn this process runs in works for, or nil for a conductor turn and outside

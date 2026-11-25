@@ -12,8 +12,8 @@
    [nido.design.check :as design]
    [nido.platform.config :as config]
    [nido.platform.task-args :as task-args]
-   [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.workstream :as cws]
+   [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.jj :as jj]))
 
@@ -85,9 +85,8 @@
    establish a scope cannot be handed one."
   [cwd]
   (try
-    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-      (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-        (:scope (cws/latest-entry (keyword project) ws-id :baseline))))
+    (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+      (:scope (cws/latest-entry project ws-id :baseline)))
     (catch Throwable _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

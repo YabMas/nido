@@ -6503,3 +6503,9 @@
                   ws/read-ws       (fn [_ _] {:entries (take 2 rows)})]
       (is (= #{"h-old"} (set (keys (#'stages/generation-cache :brian "ws-1" (#'stages/current-generation :brian "ws-1")))))
           "a workstream never re-cut reads its cache as it did"))))
+
+(deftest a-verb-in-a-core-turn-works-on-the-turns-workstream
+  (with-redefs [ws/turn-ws                (fn [& _] [:nido "ws-turn"])
+                lifecycle/session-from-cwd (fn [& _] (throw (ex-info "the worktree is not read" {})))]
+    (is (= [:nido "ws-turn"] (stages/project+ws-from-cwd "/any/where"))
+        "a unit's session the core provisioned names no workstream; the turn's environment does")))

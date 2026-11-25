@@ -588,13 +588,15 @@
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   project+ws-from-cwd
-  "Resolve cwd → [project ws-id] via the session, or nil. The same path
-   tasks.nido-review/append-review-entry! takes to find where to write."
+  "The workstream a verb run at `cwd` works on, as [project ws-id], or nil: the core turn's it runs
+   in (`ws/turn-ws`), else the one whose record holds the session `cwd` is the worktree of. Every
+   verb that writes to or reads from \"its\" workstream finds it here."
   [cwd]
   (try
-    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-      (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-        [(keyword project) ws-id]))
+    (or (ws/turn-ws)
+        (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+          (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+            [(keyword project) ws-id])))
     (catch Throwable _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
@@ -1863,9 +1865,10 @@
   "`project+ws-from-cwd`, throwing where that answers nil for a failure as for a cwd outside any
    workstream."
   [cwd]
-  (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-    (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-      [(keyword project) ws-id])))
+  (or (ws/turn-ws)
+      (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+        (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+          [(keyword project) ws-id]))))
 
 (defn- preflight-design
   "The workstream's governing design as the round's preflight reads it — delivered or not — with

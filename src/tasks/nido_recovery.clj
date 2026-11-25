@@ -122,15 +122,6 @@
   (println (str "\nHow to clear it:\n  " way-out))
   1)
 
-(defn- turn-ws
-  "The workstream the core turn this process runs in works on, as [project ws-id], or nil
-   outside one. A recovery the core provisions is a unit whose session no workstream record
-   holds, so its worktree names no workstream; the core names it in NIDO_CORE_WS instead."
-  []
-  (when-let [k (System/getenv "NIDO_CORE_WS")]
-    (let [i (str/index-of k "/")]
-      (when (and i (pos? i)) [(keyword (subs k 0 i)) (subs k (inc i))]))))
-
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
   land
   "bb nido:recovery:land — land this recovery's nido fix. Refuses unless the
@@ -142,7 +133,7 @@
   (let [[_ opts] (task-args/split-args args)
         cwd      (cwd-of opts)
         session  (lifecycle/session-from-cwd cwd)
-        [project ws-id] (or (stages/project+ws-from-cwd cwd) (turn-ws))
+        [project ws-id] (stages/project+ws-from-cwd cwd)
         diagnosis (when ws-id (cws/latest-entry project ws-id :session-diagnosis))]
     (cond
       (not= "nido" (some-> (:project session) name))

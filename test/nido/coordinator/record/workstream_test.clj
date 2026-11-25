@@ -1952,3 +1952,8 @@
         (is (not (fs/exists? (fs/path d "sessions"))))
         (doseq [[f c] leg]
           (is (= c (slurp (str (fs/path d f)))) f))))))
+
+(deftest turn-ws-reads-the-core-turns-environment
+  (is (= [:brian "ws-1"] (ws/turn-ws {"NIDO_CORE_WS" "brian/ws-1"})))
+  (is (nil? (ws/turn-ws {})) "outside every turn")
+  (is (nil? (ws/turn-ws {"NIDO_CORE_WS" "no-slash"}))))

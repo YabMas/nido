@@ -14,8 +14,7 @@
         out      (with-out-str
                    (with-redefs [lifecycle/worktree-from-cwd (constantly "/wt")
                                  lifecycle/session-from-cwd  (constantly {:project project :session "recover-x"})
-                                 stages/project+ws-from-cwd  (constantly cwd-ws)
-                                 recovery/turn-ws            (constantly turn-ws)
+                                 stages/project+ws-from-cwd  (constantly (or cwd-ws turn-ws))
                                  cws/latest-entry            (fn [p ws kind]
                                                                (when (and (= :session-diagnosis kind)
                                                                           (= [:nido (or (second cwd-ws) (second turn-ws))] [p ws]))

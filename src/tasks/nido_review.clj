@@ -19,7 +19,6 @@
    [nido.coordinator.daemon.pid :as daemon-pid]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
-   [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.generation :as generation]
@@ -669,12 +668,10 @@
   [cwd final verdict]
   (try
     (when-let [blocker (parked-blocker (verdict/owed-rows final) verdict (:status final))]
-      (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-        (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-          (let [p (keyword project)]
-            (or (already-asked blocker (unanswered-blockers p ws-id))
-                (do (ws/append-entry! p ws-id {:kind :blocker} (pr-str blocker))
-                    blocker))))))
+      (when-let [[p ws-id] (stages/project+ws-from-cwd cwd)]
+        (or (already-asked blocker (unanswered-blockers p ws-id))
+            (do (ws/append-entry! p ws-id {:kind :blocker} (pr-str blocker))
+                blocker))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "review-loop: could not append the :blocker — " (ex-message e))))
@@ -834,12 +831,11 @@
    ledger, and the verdict itself is unharmed by it — the caller records the
    value either way, so a refusal is diagnosis rather than loss."
   [cwd v]
-  (let [{:keys [project session]} (lifecycle/session-from-cwd cwd)
-        ws-id (when project (csession/workstream-id-for (keyword project) session))]
+  (let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-not ws-id
       {:ledger :no-workstream}
       (try
-        (ws/append-entry! (keyword project) ws-id {:kind :design-verdict} (pr-str v))
+        (ws/append-entry! project ws-id {:kind :design-verdict} (pr-str v))
         {:ledger :appended}
         (catch Exception e
           {:ledger :refused :because (refusal-reason e)})))))
