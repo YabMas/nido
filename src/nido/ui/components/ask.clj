@@ -111,7 +111,7 @@
                                                  "Tell the agent what to do next…")}]
                       [:div {:style "margin-top:var(--space-9)"}
                        [:button.btn.btn-primary
-                        {"data-on:click" (click action project ws-id :reply {:id :reply})}
+                        {"data-on:click" (click action project ws-id :reply free-text)}
                         (if answer? "Record answer ▸" "Send & resume ▸")]
                        (when (and session (not answer?))
                          [:span.meta {:style "margin-left:var(--space-10)"} "resumes " session])]])]]

@@ -2063,3 +2063,12 @@
                                              :ask-id "conductor stopped 7"}]
                                            nil)))]
     (is (str/includes? html "/workstreams/brian/ws-1/gate/wake?ask=conductor+stopped+7"))))
+
+(deftest a-free-text-answer-posts-the-source-its-card-was-built-from
+  (let [bar #(str (h/html (#'views/ask-bar "brian" "ws-1" [%] nil)))]
+    (is (str/includes? (bar {:id :reply :label "Answer" :kind :resume :style :default :answers :ledger :seq 7})
+                       "/workstreams/brian/ws-1/gate/reply?entry=7")
+        "a ledger card's words answer the blocker it showed")
+    (is (str/includes? (bar {:id :reply :label "Answer" :kind :resume :style :default :ask-id "a1"})
+                       "/workstreams/brian/ws-1/gate/reply?ask=a1")
+        "and a core card's words the ask it showed")))
