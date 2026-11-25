@@ -24,6 +24,8 @@
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.proposal :as proposal]
+   [nido.coordinator.record.records :as records]
+   [nido.test.runs :as test-runs]
    [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.platform.io :as nido-io]
@@ -2620,6 +2622,11 @@
 
 ;; ── Proposals ───────────────────────────────────────────────────────────────
 
+(defn- journal [] (records/of (records/journal :nido proposal/journal-name)))
+
+(defn- journal-kinds [kind] (filter #(= kind (:kind %)) (journal)))
+
+
 (defn- with-analysis-ws
   "A review-run workstream holding one analysis, in a throwaway nido root."
   [observations f]
@@ -2655,18 +2662,20 @@
     [{:kind :waste :where "w" :summary "s" :evidence "e" :proposal "p"}]
     (fn [id]
       (let [p (first (work/proposals :nido))]
-        (is (= 1 (:at-seq p)) "the position to answer is the ledger's latest, not the analysis's seq")
-        (is (= {:decision :stale :latest 1}
+        (is (= 0 (:at-seq p)) "the position to answer is the improvement journal's, not the analysis's seq")
+        (is (= {:decision :stale :latest 0}
                (work/decide-proposal! :nido id (assoc p :verdict :approved :at-seq 99)))
-            "a decision naming a position the ledger never had is refused")
+            "a decision naming a position the journal never had is refused")
         (is (= :recorded (:decision (work/decide-proposal! :nido id (assoc p :verdict :approved)))))
         (let [after (first (work/proposals :nido))]
           (is (= :approved (:verdict (:decision after))) "the row carries what was decided")
           (is (seq (:decided-by (:decision after)))
               "and who decided, stamped here rather than sent by a caller")
-          (is (= {:decision :stale :latest 2}
+          (is (= {:decision :stale :latest 1}
                  (work/decide-proposal! :nido id (assoc p :verdict :declined)))
-              "the same click again is stale — the decision it made is now the latest entry"))))))
+              "the same click again is stale — the decision it made is now the latest record")
+          (is (empty? (workstream/entries-of :nido id :improvement-decision))
+              "it is kept in the journal, not on the analysis's workstream"))))))
 
 (deftest a-landing-is-a-fact-about-the-repo-not-an-answer-to-a-page
   (with-analysis-ws
@@ -2688,7 +2697,7 @@
         (is (= :recorded (:landed (work/record-landing!
                                    :nido id {:analysis-seq 1 :observation 0
                                              :rev "zzzzzzzz"})))
-            "no at-seq guard: the ledger has moved twice and the record is still true")
+            "no at-seq guard: the journal has moved twice and the record is still true")
         (is (= "zzzzzzzz" (:rev (:landed (first (work/proposals :nido)))))
             "and the newest one is where a reader should go look")))))
 
@@ -2712,11 +2721,11 @@
      {:kind :miss :where "w2" :summary "s2" :evidence "e2" :proposal "p2"}]
     (fn [id]
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0 :verdict :approved
-                                       :at-seq 1 :note "implemented: the guard fails open"})
+                                       :at-seq 0 :note "implemented: the guard fails open"})
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 1 :verdict :approved
-                                       :at-seq 2 :note "worth doing when someone has a day"})
+                                       :at-seq 1 :note "worth doing when someone has a day"})
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 2 :verdict :declined
-                                       :at-seq 3 :note "the seam is deliberate"})
+                                       :at-seq 2 :note "the seam is deliberate"})
       (is (= {:landed 1 :skipped 2} (work/backfill-landings! :nido)))
       (let [by-obs (into {} (map (juxt :observation identity)) (work/proposals :nido))]
         (is (some? (:landed (by-obs 0))))
@@ -2726,7 +2735,7 @@
             "an approval whose note is a plan rather than an outcome is untouched")
         (is (nil? (:landed (by-obs 2))) "and a decline discharges nothing"))
       (is (= {:landed 0 :skipped 3} (work/backfill-landings! :nido))
-          "idempotent — the ledger has no delete, so a second run must add nothing"))))
+          "idempotent — the journal has no delete, so a second run must add nothing"))))
 
 (deftest changing-your-mind-is-an-append-and-the-last-one-counts
   (with-analysis-ws
@@ -2739,8 +2748,8 @@
         (let [d (:decision (first (work/proposals :nido)))]
           (is (= :declined (:verdict d)) "the later decision is the one that counts")
           (is (= "on reflection" (:note d)))
-          (is (= 3 (count (:entries (workstream/read-ws :nido id))))
-              "and the first one is still there — the ledger has no delete"))))))
+          (is (= 2 (count (journal)))
+              "and the first one is still there — the journal has no delete"))))))
 
 ;; ── The move a person owes ─────────────────────────────────────────────────
 ;; Rounds run as tasks and park nobody, so a move gated on a parked session would
@@ -2791,6 +2800,24 @@
 
 ;; ── the improvement sweep's writes ──────────────────────────────────────────
 
+(defn- plan-run!
+  "A plan run of the sweep, running, as its fire starts one. Answers its core key."
+  []
+  (client/run-key :nido (test-runs/run! :nido :improvement-plan
+                                        {:adapter :improvement :id "plan/2026-09-04"} :running)))
+
+(defn- claim-run!
+  "A claim run of the sweep for claim 0 of plan seq 1 held by `plan-holder`, running."
+  ([] (claim-run! "plan-run"))
+  ([plan-holder]
+   (client/run-key :nido (test-runs/run! :nido :improvement-claim
+                                         {:adapter :improvement :id (str plan-holder "/1#0")
+                                          :plan-ws plan-holder :plan-seq 1 :claim 0}
+                                         :running))))
+
+(defn- closed-as [run-key]
+  (some #(when (= :closed (:kind %)) (:outcome %)) (records/of run-key)))
+
 (defn- seed-analysis!
   "A workstream carrying one :review-analysis with `n` proposal-bearing
    observations, as `of-project` derives proposals from."
@@ -2811,14 +2838,17 @@
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 2)
-            plan-ws (:id (workstream/create! :nido {:external-refs []}))
+            plan (plan-run!)
             res (work/record-plan!
-                 :nido plan-ws
+                 :nido plan
                  {:date "2026-09-04"
                   :frontier {:proposals [{:ws-id ws :at-seq 1}] :attempts []}
                   :claims [{:statement "one change" :disposition :land
                             :addresses [(str ws "/1.0") (str ws "/1.1")]}]})]
-        (is (= :recorded (:plan res)))))))
+        (is (= :recorded (:plan res)))
+        (is (= [["2026-09-04" (second (re-find #"run:nido/(.+)" plan))]]
+               (map (juxt :date :ws-id) (proposal/plans-of :nido)))
+            "the plan is what its run did, held by that run")))))
 
 (deftest a-plan-that-leaves-an-owed-proposal-unclaimed-is-refused
   ;; The refusal is the point: the generic ledger boundary validates shape and
@@ -2826,9 +2856,8 @@
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 2)
-            plan-ws (:id (workstream/create! :nido {:external-refs []}))
             res (work/record-plan!
-                 :nido plan-ws
+                 :nido (plan-run!)
                  {:date "2026-09-04"
                   :frontier {:proposals [{:ws-id ws :at-seq 1}] :attempts []}
                   :claims [{:statement "half of it" :disposition :land
@@ -2840,9 +2869,8 @@
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 1)
-            plan-ws (:id (workstream/create! :nido {:external-refs []}))
             res (work/record-plan!
-                 :nido plan-ws
+                 :nido (plan-run!)
                  {:date "2026-09-04"
                   :frontier {:proposals [{:ws-id ws :at-seq 1}] :attempts []}
                   :claims [{:statement "x" :disposition :land
@@ -2854,12 +2882,14 @@
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 1)
-            claim-ws (:id (workstream/create! :nido {:external-refs []}))
-            res (work/reserve-claim! :nido claim-ws
+            claim (claim-run!)
+            res (work/reserve-claim! :nido claim
                                      {:plan-seq 1 :claim 0 :addresses [(str ws "/1.0")]})]
         (is (= :recorded (:reserved res)))
-        (is (some #(= :improvement-claim-reserved (:kind %))
-                  (:entries (workstream/read-ws :nido claim-ws))))))))
+        (is (= [["plan-run" 1 0]] (map (juxt :holder :plan-seq :claim)
+                                       (journal-kinds :improvement-claim-reserved)))
+            "the reservation is in the journal, naming the plan that holds the claim")
+        (is (nil? (closed-as claim)) "and the claim goes on")))))
 
 (deftest a-claim-covering-a-declined-address-is-vetoed-and-reserves-nothing
   ;; This is the veto. A refused reservation is what stops the push, because
@@ -2867,26 +2897,47 @@
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 1)
-            claim-ws (:id (workstream/create! :nido {:external-refs []}))]
+            claim (claim-run!)]
         (work/decide-proposal! :nido ws {:analysis-seq 1 :observation 0
-                                         :verdict :declined :at-seq 1})
-        (let [res (work/reserve-claim! :nido claim-ws
+                                         :verdict :declined :at-seq 0})
+        (let [res (work/reserve-claim! :nido claim
                                        {:plan-seq 1 :claim 0 :addresses [(str ws "/1.0")]})]
           (is (= :vetoed (:reserved res)))
           (is (= [(str ws "/1.0")] (:declined res)))
-          (is (not-any? #(= :improvement-claim-reserved (:kind %))
-                        (:entries (workstream/read-ws :nido claim-ws)))))))))
+          (is (empty? (journal-kinds :improvement-claim-reserved)))
+          (is (= :vetoed (closed-as claim)) "the claim run's work is ended vetoed, by the verb"))))))
+
+(deftest a-decline-the-reservation-did-not-read-is-seen-on-its-retry
+  ;; The race the journal's compare-and-append settles: a decline committed between the
+  ;; reservation's read and its append makes the append stale, and the claim is decided again.
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 1)
+            claim (claim-run!)
+            raced (atom false)
+            real  client/append-record!]
+        (with-redefs [client/append-record!
+                      (fn [k key r after]
+                        (when (and (= :improvement-claim-reserved (:kind r)) (not @raced))
+                          (reset! raced true)
+                          (work/decide-proposal! :nido ws {:analysis-seq 1 :observation 0
+                                                           :verdict :declined :at-seq after}))
+                        (real k key r after))]
+          (is (= :vetoed (:reserved (work/reserve-claim! :nido claim
+                                                         {:plan-seq 1 :claim 0
+                                                          :addresses [(str ws "/1.0")]})))))
+        (is (empty? (journal-kinds :improvement-claim-reserved)))))))
 
 (deftest an-unreserved-claim-is-never-pushed
   ;; The restriction the whole design turns on: no reservation, no push. The
   ;; test would spawn a real jj push if this leaked, so it also proves it did not.
   (with-tmp
     (fn [_]
-      (let [claim-ws (:id (workstream/create! :nido {:external-refs []}))
+      (let [claim (claim-run!)
             pushed (atom false)]
         (with-redefs [nido.session.lifecycle/advance-remote!
                       (fn [& _] (reset! pushed true) {:outcome :advanced})]
-          (let [res (work/discharge-claim! :nido claim-ws
+          (let [res (work/discharge-claim! :nido claim
                                            {:worktree "/tmp/x" :bookmark "main"
                                             :rev "abc" :addresses ["ws-a/1.0"]})]
             (is (= :unreserved (:discharged res)))
@@ -2896,17 +2947,16 @@
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 1)
-            claim-ws (:id (workstream/create! :nido {:external-refs []}))]
-        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses [(str ws "/1.0")]})
+            claim (claim-run!)]
+        (work/reserve-claim! :nido claim {:plan-seq 1 :claim 0 :addresses [(str ws "/1.0")]})
         (with-redefs [nido.session.lifecycle/advance-remote!
                       (fn [& _] {:outcome :rejected :detail "non-fast-forward"})]
-          (let [res (work/discharge-claim! :nido claim-ws
+          (let [res (work/discharge-claim! :nido claim
                                            {:worktree "/tmp/x" :bookmark "main"
                                             :rev "abc" :addresses [(str ws "/1.0")]})]
             (is (= :not-pushed (:discharged res)))
-            (is (nil? (workstream/closure (workstream/read-ws :nido claim-ws))))
-            (is (not-any? #(= :improvement-landed (:kind %))
-                          (:entries (workstream/read-ws :nido ws))))))))))
+            (is (nil? (closed-as claim)))
+            (is (empty? (journal-kinds :improvement-landed)))))))))
 
 (deftest a-remote-that-already-held-the-revision-records-the-landing
   ;; A crash between a successful push and its first append leaves a retry
@@ -2914,49 +2964,73 @@
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 2)
-            claim-ws (:id (workstream/create! :nido {:external-refs []}))
+            claim (claim-run!)
             addrs [(str ws "/1.0") (str ws "/1.1")]]
-        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses addrs})
+        (work/reserve-claim! :nido claim {:plan-seq 1 :claim 0 :addresses addrs})
         (with-redefs [nido.session.lifecycle/advance-remote!
                       (fn [& _] {:outcome :already-there})]
-          (let [res (work/discharge-claim! :nido claim-ws
+          (let [res (work/discharge-claim! :nido claim
                                            {:worktree "/tmp/x" :bookmark "main"
                                             :rev "abc" :addresses addrs})]
             (is (= :recorded (:discharged res)))
-            (is (= 2 (count (filter #(= :improvement-landed (:kind %))
-                                    (:entries (workstream/read-ws :nido ws))))))
-            (is (some? (workstream/closure (workstream/read-ws :nido claim-ws))))))))))
+            (is (= 2 (count (journal-kinds :improvement-landed))))
+            (is (= :done (closed-as claim)))))))))
 
 (deftest a-claim-spanning-two-proposals-lands-both-at-one-revision
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 2)
-            claim-ws (:id (workstream/create! :nido {:external-refs []}))
+            claim (claim-run!)
             addrs [(str ws "/1.0") (str ws "/1.1")]]
-        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses addrs})
+        (work/reserve-claim! :nido claim {:plan-seq 1 :claim 0 :addresses addrs})
         (with-redefs [nido.session.lifecycle/advance-remote! (fn [& _] {:outcome :advanced})]
-          (work/discharge-claim! :nido claim-ws {:worktree "/tmp/x" :bookmark "main"
-                                                 :rev "deadbeef" :addresses addrs}))
+          (work/discharge-claim! :nido claim {:worktree "/tmp/x" :bookmark "main"
+                                              :rev "deadbeef" :addresses addrs}))
         (let [ps (proposal/of-project :nido)]
           (is (= #{"deadbeef"} (set (map #(get-in % [:landed :rev]) ps)))
               "one revision carries every proposal the claim covered"))))))
 
 (deftest re-running-an-interrupted-discharge-completes-it-without-doubling
-  ;; Interrupted between appends it leaves the workstream open; running again
+  ;; Interrupted between appends it leaves the claim unended; running again
   ;; appends only for what does not already carry a landing at this revision.
   (with-tmp
     (fn [_]
       (let [ws (seed-analysis! "a" 2)
-            claim-ws (:id (workstream/create! :nido {:external-refs []}))
+            claim (claim-run!)
             addrs [(str ws "/1.0") (str ws "/1.1")]]
-        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses addrs})
+        (work/reserve-claim! :nido claim {:plan-seq 1 :claim 0 :addresses addrs})
         (work/record-landing! :nido ws {:analysis-seq 1 :observation 0 :rev "deadbeef"})
         (with-redefs [nido.session.lifecycle/advance-remote! (fn [& _] {:outcome :already-there})]
-          (work/discharge-claim! :nido claim-ws {:worktree "/tmp/x" :bookmark "main"
-                                                 :rev "deadbeef" :addresses addrs}))
-        (is (= 2 (count (filter #(= :improvement-landed (:kind %))
-                                (:entries (workstream/read-ws :nido ws)))))
+          (work/discharge-claim! :nido claim {:worktree "/tmp/x" :bookmark "main"
+                                              :rev "deadbeef" :addresses addrs}))
+        (is (= 2 (count (journal-kinds :improvement-landed)))
             "the address already recorded is not recorded twice")))))
+
+(deftest an-analysis-a-run-recorded-is-proposed-and-decided-by-its-run
+  (with-tmp
+    (fn [_]
+      (let [id (test-runs/run! :nido :review-analysis {:id "rr-9" :title "a review"} :running)]
+        (records/append-to-run! (client/run-key :nido id)
+                                {:kind :review-analysis :verdict :degraded :run-id "rr-9"
+                                 :status "clean" :rounds 1 :summary "s"
+                                 :observations [{:kind :waste :where "w" :summary "s" :evidence "e"
+                                                 :proposal "p"}]})
+        (let [[p :as ps] (work/proposals :nido)]
+          (is (= [(str id "/1.0")] (map proposal/address ps)) "addressed by the run that holds it")
+          (is (= "a review" (:title p)))
+          (is (= :recorded (:decision (work/decide-proposal! :nido id (assoc p :verdict :declined)))))
+          (is (= :declined (get-in (first (work/proposals :nido)) [:decision :verdict]))))))))
+
+(deftest a-claim-run-that-died-returns-its-addresses
+  ;; A failed or cancelled run is the run dying, not the work given up: its addresses are owed
+  ;; again. One whose turn completed without saying how its claim ended gave up: they are tried.
+  (with-tmp
+    (fn [_]
+      (let [died (test-runs/run! :nido :improvement-claim {:adapter :improvement :id "p/1#0"} :failed)
+            quit (test-runs/run! :nido :improvement-claim {:adapter :improvement :id "p/1#1"} :done)
+            by   (into {} (map (juxt :ws-id identity)) (proposal/attempts :nido))]
+        (is (= [false :orphaned] ((juxt :open? :outcome) (by died))))
+        (is (= [false :dropped] ((juxt :open? :outcome) (by quit))))))))
 
 
 (defn- invalidated

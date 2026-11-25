@@ -304,16 +304,17 @@
   (Operation proposals "Every proposal this project's review analyses have made."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [workstream/project-records]})
-  (Operation decide-proposal! "Record a human decision about one proposal."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:decision :map]] :map]
-     :delegates [workstream/append-entry-at!]})
+  (Operation decide-proposal!
+    "Record a human decision about one proposal in the improvement journal, answering the journal
+     as the page read it: a decision from a page the journal has moved past is refused stale."
+    {:signature [:=> [:catn [:project ProjectName] [:holder :string] [:decision :map]] :map]})
   (Operation record-landing!
     "Record that an approved proposal is now carried by a revision.
 
      No position guard, unlike `decide-proposal!`: that guard makes a decision an honest answer
      to the page it was read from, and a landing is not an answer to a page — it is a fact about
-     the repository, true whatever the ledger has grown since."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]})
+     the repository, true whatever the journal has grown since."
+    {:signature [:=> [:catn [:project ProjectName] [:holder :string] [:opts :map]] :map]})
   (Operation backfill-landings!
     "Discharge every approval whose note already says what became of it, from before there was a
      landing record. Idempotent — the ledger has no delete."
@@ -427,31 +428,30 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:evidence [:maybe :string]]] :map]
      :delegates [lanes/advance!]})
   (Operation record-plan!
-    "Append one day's plan of the owed proposals into claims, or refuse it.
+    "Record one day's plan of the owed proposals into claims as what a plan run did, or refuse it.
 
-     Derives the owed set ITSELF rather than trusting the caller's, because the generic
-     ledger boundary validates an entry's shape and has no access to it — a plan appended
-     any other way would satisfy every schema and none of the claim. Derivation and append
-     happen under the append locks of every workstream the frontier names, so nothing can
-     be decided or landed between deciding what is owed and writing the partition down."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:plan :map]] :map]})
+     Derives the owed set ITSELF rather than trusting the caller's, because a record's schema
+     validates its shape and has no access to it — a plan recorded any other way would satisfy
+     every schema and none of the claim."
+    {:signature [:=> [:catn [:project ProjectName] [:run-key :string] [:plan :map]] :map]})
   (Operation reserve-claim!
-    "Fix a claim's veto deadline, or refuse it because a covered address was declined.
+    "Fix a claim run's veto deadline, or refuse it because a covered address was declined, ending
+     the claim vetoed.
 
-     The deadline is a ledger entry rather than a moment inside an agent, so the board can
-     answer whether a late decline stopped anything. Eligibility is re-derived under the
-     append lock of every workstream the claim's addresses live in, and the reservation is
-     appended while they are held — to the claim's OWN workstream, which is not among them."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:claim :map]] :map]})
+     The deadline is a record in the improvement journal rather than a moment inside an agent, so
+     the board can answer whether a late decline stopped anything. It is appended after exactly
+     the journal records eligibility was decided from, so a decline committed in between is seen
+     on the retry: the core's writer orders the two."
+    {:signature [:=> [:catn [:project ProjectName] [:run-key :string] [:claim :map]] :map]})
   (Operation discharge-claim!
     "Push a revision and record what it carried, or refuse — the only path by which the
      sweep reaches nido's main.
 
      Refuses without a standing reservation, which is what makes the veto a restriction
-     rather than an instruction. The push happens under no lock. Re-runnable: an
-     interruption between the push and the last append leaves the workstream open, and
-     running it again appends only for the addresses that do not already carry a landing."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:claim :map]] :map]
+     rather than an instruction. Re-runnable: an interruption between the push and the last append
+     leaves the claim unended, and running it again appends only for the addresses that do not
+     already carry a landing, then records the claim done."
+    {:signature [:=> [:catn [:project ProjectName] [:run-key :string] [:claim :map]] :map]
      :delegates [lifecycle/advance-remote!]})
   (Operation drains
     "Every open drain, as the drains page shows it, across every project or the one a scope names."

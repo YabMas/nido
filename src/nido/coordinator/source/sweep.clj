@@ -9,21 +9,16 @@
    whose own text says no change is needed gets a worktree and a budget like any
    other. The claim is the unit here; the address stays the unit of record.
 
-   BOTH FIRES TAKE THE SAME ONE SLOT, and the slot is the one the area already
-   has: an open workstream carrying the :improvement adapter, released by a close
-   and by nothing weaker. Keeping that adapter rather than minting a new one is
-   what lets the hold span its own cutover — `attempts` reads by adapter, so a
-   legacy proposal-level workstream still open holds this source on the day it
-   ships, with no migration and no window in which the two are invisible to each
-   other.
+   BOTH FIRES TAKE THE SAME ONE SLOT: an open improvement attempt
+   (`proposal/attempts`) — a run either fire started, released when its turn ends, which the core
+   records whatever the agent did; or a workstream one minted before runs, released by a close.
 
    The plan-for-today test is NOT a second hold and releases nothing. It stops a
    second plan being written on a day that already has one, and orders planning
-   ahead of implementing within a day. Appending the plan does not free the slot:
-   while the planning workstream is open nothing else fires, and a session that
-   dies without closing wedges the path exactly as one does today. That wedge is
-   inherited whole and deliberately: every release condition weaker than a close
-   lets a second agent start on a branch the first abandoned mid-edit.
+   ahead of implementing within a day. Recording the plan does not free the slot:
+   while the plan run runs nothing else fires. Nothing weaker than the turn's end releases it,
+   because every weaker condition lets a second agent start on a branch the first abandoned
+   mid-edit.
 
    Emits AT MOST ONE EVENT PER POLL, for the reason improvement.clj gives:
    provisioning mints workstream, run and session at drain time, before any

@@ -615,24 +615,34 @@
    :doc "Merge a forked unit's design back into its parent. :project <p> (:ws-id <child> | :ref <BR-####>) [:worktree <dir>] [:file <merged design's own fields, EDN>]. Prints every conflict and exits 1 while any stands; with :file and none standing, appends the merged design to the parent."
    :task (apply nido-workstream/merge-cmd *command-line-args*)}
 
+  nido:run:record
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Record what this run did: :kind <entry kind> :file <edn> (e.g. review-analysis), or :outcome done|dropped|vetoed [:note <why>] to say how its work ended. [:project <p> :run <run-id>, default the calling turn's run]"
+   :task (apply nido-workstream/run-record-cmd *command-line-args*)}
+
+  nido:improvement:owed
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Print, as EDN, every improvement proposal still owed — address, evidence, decision — and the frontier a plan records. :project <p>"
+   :task (apply nido-workstream/owed-cmd *command-line-args*)}
+
   nido:improvement:landed
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Record that an approved proposal is now in the tree. :project <p> :ws-id <id> :analysis-seq <n> :observation <n> :rev <change-id> [:note <str>]"
+   :doc "Record that an approved proposal is now in the tree. :project <p> :ws-id <the analysis's holder: its run, or the workstream it was written on> :analysis-seq <n> :observation <n> :rev <change-id> [:note <str>]"
    :task (apply nido-workstream/landed-cmd *command-line-args*)}
 
   nido:improvement:plan
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Append one day's improvement plan from a file, refusing a grouping that does not partition what is owed. :project <p> :ws-id <id> :file <path>"
+   :doc "Record one day's improvement plan from a file as what this plan run did, refusing a grouping that does not partition what is owed. :project <p> :file <path> [:run <run-id>, default the calling turn's run]"
    :task (apply nido-workstream/plan-cmd *command-line-args*)}
 
   nido:improvement:reserve
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Fix a claim's veto deadline before pushing; exits non-zero if a decline reached it first. :project <p> :ws-id <claim-ws> :plan-seq <n> :claim <n> :addresses a,b,c"
+   :doc "Fix a claim's veto deadline before pushing; exits non-zero if a decline reached it first. :project <p> :plan-seq <n> :claim <n> :addresses a,b,c [:run <run-id>, default the calling turn's run]"
    :task (apply nido-workstream/reserve-cmd *command-line-args*)}
 
   nido:improvement:discharge
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Push a reserved claim and record a landing for every address it covers. :project <p> :ws-id <claim-ws> :worktree <dir> :rev <change-id> :addresses a,b,c [:bookmark main]"
+   :doc "Push a reserved claim and record a landing for every address it covers. :project <p> :worktree <dir> :rev <change-id> :addresses a,b,c [:bookmark main] [:run <run-id>, default the calling turn's run]"
    :task (apply nido-workstream/discharge-cmd *command-line-args*)}
 
   nido:workstream:layer:complete

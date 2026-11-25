@@ -107,8 +107,22 @@
     "bb nido:improvement:backfill-landings — the entry point for `backfill-landings*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
 
+  (Operation run-record*
+    "Record what the calling run did — one record of a ledger kind, from an EDN file, or how its
+     work ended — checked against the kind's schema before the core sees it."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation run-record-cmd
+    "bb nido:run:record — the entry point for `run-record*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation owed*
+    "Print every improvement proposal still owed, with its evidence and decision, and the frontier
+     a plan records — what a planner partitions."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation owed-cmd
+    "bb nido:improvement:owed — the entry point for `owed*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation plan*
-    "Append one day's improvement plan, read from a file. Goes through record-plan!
+    "Record one day's improvement plan, read from a file, as what the calling plan run did. Goes through record-plan!
      and never through entry:add, because only the verb derives the owed set and can
      refuse a grouping that does not cover it; a refusal names what is uncovered and
      what is claimed but not owed, because those are different mistakes."

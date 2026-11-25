@@ -3562,6 +3562,9 @@
    no words: the proposal is the words."
   [:map {:closed true}
    [:format       [:= :improvement-decision]]
+   ;; The run or workstream holding the analysis, for a decision kept apart from it (the
+   ;; improvement journal); absent, the analysis is on the ledger this entry is on.
+   [:holder       {:optional true} string?]
    [:analysis-seq int?]
    [:observation  int?]                      ; 0-based index into :observations
    [:verdict      [:enum :approved :declined]]
@@ -3604,6 +3607,8 @@
    proposal was carried out as written."
   [:map {:closed true}
    [:format       [:= :improvement-landed]]
+   ;; As on :improvement-decision: the analysis's holder, when the landing is kept apart from it.
+   [:holder       {:optional true} string?]
    [:analysis-seq int?]
    [:observation  int?]                      ; addressed exactly as the decision is
    [:rev          {:optional true} string?]
@@ -3692,6 +3697,8 @@
    not have to re-derive it."
   [:map {:closed true}
    [:format    [:= :improvement-claim-reserved]]
+   ;; The run or workstream holding the plan, for a reservation kept apart from the claim.
+   [:holder    {:optional true} string?]
    [:plan-seq  int?]
    [:claim     int?]
    [:addresses [:vector {:min 1} string?]]])

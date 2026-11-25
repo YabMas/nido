@@ -9,6 +9,10 @@
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.record.records :as records]
+   [nido.coordinator.record.proposal :as proposal]
+   [clojure.pprint :as pprint]
+   [nido.core.client :as core-client]
    [nido.coordinator.record.fork :as fork]
    [nido.review.merge :as unit-merge]
    [nido.platform.task-args :as task-args]
@@ -28,6 +32,16 @@
         (some-> (and ref (ws/find-by-ref p :notion ref)) :id)
         (throw (ex-info "Cannot resolve workstream — pass :ws-id or a known :ref"
                         {:project project :ref ref})))))
+
+(defn- resolve-run
+  "The core key of the run a verb acts for: explicit :run (a run id) of :project, else the run the
+   turn calling it runs in (`NIDO_CORE_RUN`). Exits when neither names one — these verbs record
+   what a run did, and a person's shell is no run."
+  [{:keys [project run]}]
+  (or (when run (core-client/run-key (keyword project) (str run)))
+      (not-empty (System/getenv "NIDO_CORE_RUN"))
+      (do (println "No run — pass :run <run-id>, or call this from the run's own turn (NIDO_CORE_RUN)")
+          (System/exit 2))))
 
 (def ^:private raw-string-keys
   "Kwarg keys whose values must reach us verbatim. An entry body for a typed
@@ -203,7 +217,7 @@
     (println "Missing :file <path> — the plan is EDN and does not survive a shell argument")
     (System/exit 2))
   (let [plan (edn/read-string (slurp (str file)))
-        res  (work/record-plan! (keyword project) (resolve-ws-id opts) plan)]
+        res  (work/record-plan! (keyword project) (resolve-run opts) plan)]
     (if (= :refused (:plan res))
       (do (println "plan REFUSED — it does not partition what is owed")
           (when-let [u (get-in res [:defect :uncovered])]
@@ -220,14 +234,14 @@
    Exits non-zero when vetoed, so a skill that runs this before pushing stops
    there without having to read the output."
   [{:keys [project plan-seq claim addresses] :as opts}]
-  (let [res (work/reserve-claim! (keyword project) (resolve-ws-id opts)
+  (let [res (work/reserve-claim! (keyword project) (resolve-run opts)
                                  {:plan-seq  (parse-long (str plan-seq))
                                   :claim     (parse-long (str claim))
                                   :addresses (str/split (str addresses) #",")})]
     (if (= :vetoed (:reserved res))
       (do (println "claim VETOED — declined since it was planned:")
           (doseq [a (:declined res)] (println "  " a))
-          (println "the claim workstream is closed; its other addresses are owed again")
+          (println "the claim is ended, vetoed; its other addresses are owed again")
           (System/exit 1))
       (println "reserved"))))
 
@@ -235,7 +249,7 @@
   discharge*
   "Push the claim and record what it carried. Refuses without a reservation."
   [{:keys [project worktree bookmark rev addresses] :as opts}]
-  (let [res (work/discharge-claim! (keyword project) (resolve-ws-id opts)
+  (let [res (work/discharge-claim! (keyword project) (resolve-run opts)
                                    {:worktree  (str worktree)
                                     :bookmark  (or (some-> bookmark str) "main")
                                     :rev       (str rev)
@@ -247,6 +261,45 @@
       :not-pushed (do (println "NOT PUSHED —" (name (:outcome res)))
                       (when-let [d (:detail res)] (println " " d))
                       (System/exit 1)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run-record*
+  "Record what this run did: one record of :kind, its fields the EDN map in :file — a ledger
+   entry's content of that kind, `:format` and all or without it. A `:closed` record needs no file:
+   :outcome done, dropped or vetoed says how the run's work ended. Checked against the kind's
+   schema before the core sees it; a refusal prints why."
+  [{:keys [kind file outcome note] :as opts}]
+  (let [k   (keyword (or kind (when outcome "closed")))
+        rec (if file
+              (-> (records/->record (assoc (edn/read-string (slurp (str file))) :format k)) (assoc :kind k))
+              (cond-> {:kind k :outcome (keyword (or outcome "done")) :by :nido}
+                note (assoc :note (str note))))
+        n   (records/append-to-run! (resolve-run opts) rec)]
+    (println "recorded" (name k) "at seq" n)))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  owed*
+  "Print what a plan must partition, as EDN: every proposal of :project still owed, by address,
+   with its evidence and what was decided about it, and the frontier it was derived at — the
+   `:frontier` a plan records, ready to copy."
+  [{:keys [project]}]
+  (let [pk    (keyword project)
+        props (proposal/of-project pk)
+        atts  (proposal/claim-attempts pk)
+        ow    (proposal/owed props (proposal/plans-of pk) atts)]
+    (pprint/pprint
+     {:owed     (mapv (fn [p] (-> (select-keys p [:kind :where :summary :evidence :proposal :run-id :at])
+                                  (assoc :address (proposal/address p)
+                                         :decided (get-in p [:decision :verdict]))))
+                      ow)
+      :frontier {:proposals (vec (distinct (map #(select-keys % [:ws-id :at-seq]) props)))
+                 :attempts  (mapv (fn [a] {:ws-id (:ws-id a) :closed? (not (:open? a))}) atts)}})))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  owed-cmd [& args] (run* owed* args))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run-record-cmd [& args] (run* run-record* args #{:file :note}))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   close-cmd     [& args] (run* close* args))

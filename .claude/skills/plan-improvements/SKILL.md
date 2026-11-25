@@ -1,6 +1,6 @@
 ---
 name: plan-improvements
-description: Read every proposal nido's review-loop analyses still owe an answer, group them by what one change would close, and append the day's plan. Fired once a day by the :improvement-sweep trigger. Reads and writes one ledger entry; never touches code.
+description: Read every proposal nido's review-loop analyses still owe an answer, group them by what one change would close, and append the day's plan. Fired once a day by the :improvement-sweep trigger. Records one plan as what its run did; never touches code.
 ---
 
 # plan-improvements skill
@@ -12,14 +12,14 @@ You write **one record**: today's partition of the owed proposals into claims. Y
 ## Rules
 
 1. **Every owed proposal is in exactly one claim.** The append derives the owed set itself and refuses a partition that misses or invents an address.
-2. **You hold the only slot.** Close this workstream when the plan is appended, or `dropped` if you stop. An open one wedges the sweep.
+2. **You hold the only slot.** This is a run: the sweep fires nothing else until your turn ends, so end it once the plan is recorded — there is nothing to close.
 3. **Not the planning machinery.** `record.proposal`, `source.sweep`, the plan and reservation ledger kinds, and these three skills are out of bounds for `:land`; a proposal about them is `:file`.
 4. **Never `git`** — this is a jj workspace; bare git binds to the parent repo.
 
 ## 1. Read
 
 ```bash
-bb nido:work:proposals :project nido     # every proposal, with what was decided and landed
+bb nido:improvement:owed :project nido   # every owed proposal, its evidence, and the frontier to record
 bb nido:review:trend                     # which loop is regressing, on which measure
 ```
 
@@ -41,20 +41,18 @@ bb nido:followup:add :title "..." :kind cleanup :reason "..." :decay compounding
 
 Order is firing order: what other claims depend on goes first, and a proposal that says "land with X, not before" is read only by your ordering.
 
-## 4. Append, then close
+## 4. Record the plan
 
 ```bash
 cat > artifacts/plan.edn <<'EDN'
 {:format   :improvement-plan
  :date     "<YYYY-MM-DD>"
- :frontier {:proposals [{:ws-id "ws-…" :at-seq 12} …]      ; each ws read, at the entry count you read
-            :attempts  [{:ws-id "ws-…" :closed? true} …]}   ; each claim ws read, and whether it had closed
+ :frontier <the :frontier `nido:improvement:owed` printed, as it printed it>
  :claims   [{:statement "…" :disposition :land  :addresses ["ws-…/1.1" "ws-…/1.2"]}
             {:statement "…" :disposition :no-op :addresses ["ws-…/1.3"]}
             {:statement "…" :disposition :file  :addresses ["ws-…/1.4"] :ref "FU-99 · <url>"}]}
 EDN
-bb nido:improvement:plan :project nido :ws-id <this-ws-id> :file artifacts/plan.edn
-bb nido:workstream:close :project nido :ws-id <this-ws-id> :outcome done
+bb nido:improvement:plan :project nido :file artifacts/plan.edn
 ```
 
-A refusal prints what is owed but unclaimed and what is claimed but not owed; the second usually means the ledger moved — re-read and append again. Never append the plan with `bb nido:workstream:entry:add`: only `improvement:plan` checks it.
+A refusal prints what is owed but unclaimed and what is claimed but not owed; the second usually means a decision or a landing moved what is owed — read `owed` again and record again. Never append the plan with `bb nido:workstream:entry:add`: only `improvement:plan` checks it.

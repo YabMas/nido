@@ -12,7 +12,7 @@ You analyse **the loop, not the code it reviewed**, and **the whole run, not its
 ## Boundaries
 
 1. **Never touch the reviewed branch.** You get `{{event/reviewed-project}} / {{event/reviewed-session}}` as names, not a path. Everything you need is in the run dir and nido's ledger; wanting the diff is itself a finding about what the report records.
-2. **Never edit code.** This `:lite` worktree is a symlink to `~/Code/nido`; an edit lands outside any branch. You write `artifacts/analysis.md` and one ledger entry.
+2. **Never edit code.** This `:lite` worktree is a symlink to `~/Code/nido`; an edit lands outside any branch. You write `artifacts/analysis.md` and one record of what this run did.
 
 ## 1. Read the run
 
@@ -78,10 +78,10 @@ cat > artifacts/analysis.edn <<'EDN'
                  :proposal "…"}]  ; optional
  :report-path "<report-path>" :artifact "artifacts/analysis.md"}
 EDN
-bb nido:workstream:entry:add :project nido :ws-id <your ws-id, from CLAUDE.md> :kind review-analysis :file artifacts/analysis.edn
+bb nido:run:record :project nido :kind review-analysis :file artifacts/analysis.edn
 echo '{:phase :complete :note "Analysis filed" :artifact "artifacts/analysis.md"}' > _run-status.edn
 ```
 
 A refused body prints why; fix and retry. **`:healthy` is the usual answer** — one omitted ruling in a run that converged is a `:miss` on a healthy run. `:degraded` is for rounds spent for nothing, `:broken` for a run that did not do its job. Never park at `:awaiting-input`.
 
-Re-fired for a run already analysed (same workstream, keyed on run id): if the entry is there and the run is unchanged, finish `:complete` without filing again.
+This is a run: it has no workstream and no ledger of its own, and nobody to ask — `nido:run:record` records the analysis as what this run did. A review run is analysed once; a re-fire of the same one starts no second run.

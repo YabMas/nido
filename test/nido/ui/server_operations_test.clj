@@ -51,13 +51,13 @@
     (fn [id]
       (let [uri (str "/operations/nido/" id "/1/0")
             post (fn [qs] (server/handle-request {:request-method :post :uri uri :query-string qs}))]
-        (is (= 200 (:status (post "entry=1&verdict=approved&scope=nido"))))
+        (is (= 200 (:status (post "entry=0&verdict=approved&scope=nido"))))
         (let [d (:decision (first (work/proposals :nido)))]
           (is (= :approved (:verdict d)))
-          (is (= 1 (:at-seq d)) "it recorded the position the row was rendered from"))
-        (is (str/includes? (str (:body (post "entry=1&verdict=approved&scope=nido")))
+          (is (= 0 (:at-seq d)) "it recorded the position the row was rendered from"))
+        (is (str/includes? (str (:body (post "entry=0&verdict=approved&scope=nido")))
                            "The page moved")
-            "the same click again is refused and says why — its own decision moved the ledger")))))
+            "the same click again is refused and says why — its own decision moved the journal")))))
 
 (deftest a-verdict-the-surface-never-offered-records-nothing
   ;; The buttons post a fixed verdict, so anything else arrived by hand. It is
@@ -116,7 +116,7 @@
     (fn [id]
       (server/handle-request {:request-method :post
                               :uri (str "/operations/nido/" id "/1/0")
-                              :query-string "entry=1&verdict=approved&scope=nido"})
+                              :query-string "entry=0&verdict=approved&scope=nido"})
       (let [body (str (:body (server/handle-request
                               {:request-method :get :uri "/_fragment/operations/improvements"
                                :query-string "scope=nido"})))]
@@ -134,7 +134,7 @@
     (fn [id]
       (server/handle-request {:request-method :post
                               :uri (str "/operations/nido/" id "/1/0")
-                              :query-string "entry=1&verdict=approved&scope=nido"})
+                              :query-string "entry=0&verdict=approved&scope=nido"})
       (work/record-landing! :nido id {:analysis-seq 1 :observation 0 :rev "qlosnwus"
                                       :note "the second half is spun out"})
       (let [body (str (:body (server/handle-request
@@ -152,7 +152,7 @@
   (with-one-proposal
     (fn [id]
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0 :verdict :declined
-                                       :at-seq 1 :note "the seam it names is deliberate"})
+                                       :at-seq 0 :note "the seam it names is deliberate"})
       (let [body (str (:body (server/handle-request
                               {:request-method :get :uri "/_fragment/operations/improvements"
                                :query-string "scope=nido"})))]
@@ -173,7 +173,7 @@
   (with-one-proposal
     (fn [id]
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0
-                                       :verdict :approved :at-seq 1})
+                                       :verdict :approved :at-seq 0})
       (let [body (board)]
         (is (str/includes? body "verdict=declined") "the veto is still offered")
         (is (not (str/includes? body "verdict=approved"))
@@ -183,7 +183,7 @@
   (with-one-proposal
     (fn [id]
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0
-                                       :verdict :declined :at-seq 1})
+                                       :verdict :declined :at-seq 0})
       (let [body (board)]
         (is (not (str/includes? body "verdict=declined")) "declining twice changes nothing")))))
 
@@ -203,7 +203,7 @@
   (with-one-proposal
     (fn [id]
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0
-                                       :verdict :declined :at-seq 1})
+                                       :verdict :declined :at-seq 0})
       (with-redefs [nido.coordinator.record.proposal/claim-attempts
                     (constantly [{:address "ws-p/1#0" :ws-id "ws-c" :open? true
                                   :addresses [(str id "/1.0")]}])]
