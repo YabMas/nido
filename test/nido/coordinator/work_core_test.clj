@@ -269,6 +269,22 @@
       (is (= {:live false :stalled false :paused true}
              (select-keys (:status (first (work/list-workstreams :brian))) [:live :stalled :paused]))))))
 
+(deftest a-release-candidate-is-the-persons-turn-not-stalled
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
+      (with-redefs [pipeline/of (constantly {:at :release-candidate :next {:stage :land :mode :release}})]
+        (let [row  (first (work/list-workstreams :brian))
+              chip (str (ui-state/position-chip (:position row)))
+              mark (ui-state/state-mark (:status row) (:doing row))]
+          (testing "only the person's landing grant moves it: the person owes it, and nothing has stalled"
+            (is (= {:owed-by :person :live false :stalled false :paused false} (:status row)))
+            (is (not= :stalled (:engagement row))))
+          (testing "the board lights its chip as the person's turn and draws no ⚠"
+            (is (re-find #"pos-you" chip))
+            (is (not (re-find #"⚠" (str mark))))))))))
+
 (deftest a-claim-with-the-core-idle-runs-nothing
   (with-ws
     (fn [c ws-id]

@@ -1519,7 +1519,7 @@
           (add! :grant {:format :grant :grants [:merge] :words "Land"})
           (is (= before (:at (p/of :brian id)))))))))
 
-(deftest a-converged-review-makes-a-release-candidate-owed-by-nobody
+(deftest a-converged-review-makes-a-release-candidate-the-persons-to-land
   (testing "a project that lands no PR is a candidate once its review passed"
     (is (= :release-candidate (#'p/place {:ks #{:intent :review} :review-passed? true :lands-pr? false}))))
   (testing "a PR-landing project is a candidate only once its PR is open"
@@ -1530,8 +1530,9 @@
     (is (= :published (#'p/place {:ks #{:intent :review :pr-opened} :review-passed? false :lands-pr? true}))))
   (testing "a granted landing outranks the candidate"
     (is (= :land-granted (#'p/place {:ks #{:intent :review} :review-passed? true :lands-pr? false :merge-granted? true}))))
-  (testing "its landing is offered, never owed: no person's move, so it is no gate"
-    (is (= {:stage :land :mode :release} (p/next-action :release-candidate :pickup)))))
+  (testing "its landing is offered, not asked: the person's move, but no gate"
+    (is (= {:stage :land :mode :release} (p/next-action :release-candidate :pickup)))
+    (is (= :person (#'p/owed-by-mode :release)))))
 
 (defn- a-review [status]
   {:format :review-report :status status :base "main" :base-rev nil :rounds 1 :fix-attempts 0

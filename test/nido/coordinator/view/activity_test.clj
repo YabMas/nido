@@ -39,7 +39,9 @@
     (is (not (:stalled (act/of (assoc quiet :movable? true :paused? true)))) "while a pause stands")
     (is (not (:stalled (act/of (assoc quiet :movable? true :core {:kind :deciding})))) "while the core is owed a move")
     (is (not (:stalled (act/of (assoc quiet :movable? true :core {:kind :asking})))) "while it asks the person")
-    (is (not (:stalled (act/of (assoc quiet :movable? true :closed? true)))) "once settled")))
+    (is (not (:stalled (act/of (assoc quiet :movable? true :closed? true)))) "once settled")
+    (is (not (:stalled (act/of (assoc quiet :movable? true :owed-by :person))))
+        "while the next move is the person's: it waits on them")))
 
 (deftest only-a-core-ask-needs-the-person
   (let [a (act/of (assoc quiet :core {:kind :asking}))]

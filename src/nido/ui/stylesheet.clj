@@ -355,7 +355,6 @@
      .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:var(--radius-9);
                    padding:0 var(--space-7); font-size:var(--fs-xs); min-width:18px; text-align:center; }
      .rail-badge.zero { background:var(--neutral-bg); color:var(--text-faint); }
-     .pos.pos-rc .pos-at { color:var(--accent-strong); }
      .rail-badge-rc { background:var(--neutral-bg); color:var(--text-strong); }
      .topbar-icon { font-size:var(--fs-md); line-height:1; }
      .inbox-head { margin:var(--space-12) var(--space-16) var(--space-4); font-size:var(--fs-sm); color:var(--text-muted); }

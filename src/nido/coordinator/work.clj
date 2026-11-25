@@ -461,7 +461,7 @@
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   release-candidate?
   "Whether `position` is a release candidate: its implementation review converged and it is
-   landable as it stands. Land is offered on it, and nobody owes the move — it waits as a
+   landable as it stands. Land is offered on it, and the move is the person's — but it waits as a
    candidate, never as a question, so it is no gate and never in Needs you."
   [position]
   (= :release-candidate (:at position)))

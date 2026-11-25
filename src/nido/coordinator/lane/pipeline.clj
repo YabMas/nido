@@ -127,10 +127,10 @@
                   remains to be done` stay different answers — a terminal
                   position carries no next action, and this carries one nobody
                   but a human can take.
-   :release       a move OFFERED to a person and owed by nobody: a release
-                  candidate's landing. Not :human, because a person who has not
-                  landed yet is not holding anything up — the change waits as a
-                  candidate, never as a question."
+   :release       a release candidate's landing: the person's move, offered
+                  rather than asked. Owed by the person, so the board lights it
+                  as their turn; not :human, because it raises no gate and no
+                  question — the change waits as a candidate."
   #{:mechanical :authoring :working-copy :human :release})
 
 ;; ── How the work arrived ────────────────────────────────────────────────────
@@ -813,7 +813,7 @@
    :published         {:stage :land                  :mode :human}
    ;; Granted: the seat lands it by its project's procedure, so nobody owes a person's move.
    :land-granted      {:stage :land                  :mode :working-copy}
-   ;; A candidate: Land is offered, owed by nobody, so it raises no question.
+   ;; A candidate: Land is the person's move, offered rather than asked — no gate, no question.
    :release-candidate {:stage :land                  :mode :release}
    ;; A drain's recipe: the coordinator proposes a recipe, the person approves it, nido takes the
    ;; census, the coordinator runs the drain, and the person closes it once the census reads zero.
@@ -1379,8 +1379,9 @@
 ;; ── What every surface shows ───────────────────────────────────────────────
 
 (def ^:private owed-by-mode
-  "Who owes a move, by the mode it runs in."
-  {:human :person :mechanical :machine :authoring :agent :working-copy :agent})
+  "Who owes a move, by the mode it runs in. A release candidate's landing is the person's: nothing
+   but their Land moves it, so a board that read it as nobody's showed it stalled."
+  {:human :person :release :person :mechanical :machine :authoring :agent :working-copy :agent})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :WorkstreamStatus]}
   status
@@ -1389,7 +1390,7 @@
    the core's, and `nido.coordinator.view.activity/of` reads these facts beside it as one value.
 
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
-   move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
+   or :release move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :paused is a person's standing pause — their choice not to push
    the workstream forward."
   [project ws-id]

@@ -70,10 +70,12 @@
       :live       something is underway
       :owed-by    :person while the core asks them, else the position's
       :paused     a person's pause stands
-      :stalled    the core holds an open unit nobody holds, does nothing and is owed nothing, and
-                  no pause stands: no turn's end, inbox item or ask will wake it, so only a person
-                  moves it again — a fault, never a resting state. A workstream with no such unit
-                  is never stalled: nothing of it is the core's to move.
+      :stalled    the core holds an open unit nobody holds, does nothing and is owed nothing, no
+                  pause stands and the next move is not the person's: no turn's end, inbox item or
+                  ask will wake it, so only a person moves it again — a fault, never a resting
+                  state. A workstream whose next move the person owes is waiting on them, not
+                  stalled, and one with no such unit is never stalled: nothing of it is the core's
+                  to move.
       :needs-you  the core asks the person something. Only a core ask: a ledger that says the
                   person owes a move asks nothing until the core raises it.
       :engagement :settled, :parked-at-gate (asked), :active (live), :stalled, :queued (the
@@ -84,7 +86,7 @@
         live    (some? doing)
         owed-by (if asking? :person (or owed-by :nobody))
         paused  (boolean paused?)
-        stalled (boolean (and (not closed?) movable? (nil? core) (not paused)))]
+        stalled (boolean (and (not closed?) movable? (nil? core) (not paused) (not= :person owed-by)))]
     {:doing      doing
      :live       live
      :owed-by    owed-by

@@ -93,17 +93,17 @@
    The band alone could not say it. Everything between authoring an intent and
    opening a draft PR is :in-progress, so forty rows read identically while one
    waited on a baseline, one on a decision and one on a person. The chip is muted
-   by default and lit only when the next move is a HUMAN's, because that is the
-   distinction a board is scanned for.
+   by default and lit only when the next move is a PERSON's — a :human move, or a
+   release candidate's landing — because that is the distinction a board is
+   scanned for.
 
    Renders nothing for a row with no position — a bare watched page, or a band
    the projection is not computed for."
   ([position] (position-chip position nil))
   ([{:keys [at next] :as position} tip]
    (when position
-     (let [human? (= :human (:mode next))
-           rc?    (= :release (:mode next))]
-       [:span (cond-> {:class (str "pos" (cond human? " pos-you" rc? " pos-rc"))}
+     (let [yours? (#{:human :release} (:mode next))]
+       [:span (cond-> {:class (str "pos" (when yours? " pos-you"))}
                 (or next tip)
                 (assoc :title (str/join " · " (remove nil? [(when next (str "next: " (get stage-label (:stage next) (name (:stage next)))))
                                                             tip]))))
