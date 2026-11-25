@@ -160,6 +160,10 @@
                              ;; from the release it loaded, as the executor's hook and ask tool do —
                              ;; not from the checkout, which moves ahead of it on every landing.
                              {:socket (:socket ps) :bb-bin bb-bin
+                              ;; What the recipe owes past clearance is the pipeline's reading, asked
+                              ;; of nido's own verb in the checkout, as the session verb is.
+                              :owed (when nido-dir
+                                      ((req 'nido.core.buffer/owed-reader) {:bb-bin bb-bin :nido-dir nido-dir}))
                               :ws-dir (fn [ws] (let [d (io/file (:workstreams ps) ws)] (.mkdirs d) (str d)))})})
           prov ((req 'nido.core.provision/start) {:submit submit :nido-dir nido-dir :bb-bin bb-bin})
           all-wss ((req 'nido.core.store/changed-since) s 0)

@@ -86,13 +86,23 @@
   owed-cmd*
   "Print what is owed. A READING, and it exits zero whatever it finds — the same
    contract `bb nido:reentry:report` and `bb nido:design:diff` hold, and for the
-   same reason: a question that fails is a question nobody can ask in a script."
-  [{:keys [cwd]}]
-  (let [given (or cwd (System/getProperty "user.dir"))]
-    (if-let [answer (owed-at given)]
-      (do (println (owed-line answer)) answer)
-      (do (println (str given " resolves to no workstream — nothing owes anything here"))
-          nil))))
+   same reason: a question that fails is a question nobody can ask in a script.
+
+   `:project` with `:ws-id` names the workstream instead of the cwd: the core asks
+   this way, from no worktree, to tell a conductor what the recipe owes. `:edn
+   true` prints the answer as one EDN map rather than the line."
+  [{:keys [cwd project ws-id edn]}]
+  (let [given  (or cwd (System/getProperty "user.dir"))
+        answer (if (and project ws-id)
+                 (assoc (owed (keyword (name project)) (str ws-id))
+                        :project (keyword (name project)) :ws-id (str ws-id))
+                 (owed-at given))]
+    (cond
+      (and answer edn) (prn answer)
+      answer           (println (owed-line answer))
+      edn              (prn nil)
+      :else            (println (str given " resolves to no workstream — nothing owes anything here")))
+    answer))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   owed-cmd [& args]

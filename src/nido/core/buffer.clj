@@ -27,6 +27,7 @@
    Asleep, nothing here runs: the rules run per commit, and a conductor turn per wake. Loads under
    bb as well, because the tools run under bb."
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io]
             [nido.core.ask-tool :as ask-tool]
             [clojure.string :as str]
@@ -165,15 +166,73 @@
     :arrival       (str "work arrived and waits for the person to promote or dismiss it: " (:summary item))
     (pr-str kind)))
 
-(defn- recipe-lines
-  "Where nido's recipe stands on the workstream, as the conductor is told it."
+(defn- recipe-running? [state]
+  (= :activated (:kind (last (filter #(#{:activated :deactivated} (:kind %)) (:ledger state))))))
+
+(defn- owed-wanted?
+  "Whether a conductor turn on `state` is told what the recipe owes, read off the pipeline: the
+   recipe runs and the design is cleared. Before clearance `code-held` already says it, from the
+   index alone."
   [state]
+  (boolean (and (recipe-running? state) (not (d/code-held state)))))
+
+(def ^:private nido-verb "bb --config ~/Code/nido/bb.edn")
+
+(defn- owed-direction
+  "What the conductor is told the recipe owes now, from `owed` — `bb nido:owed`'s answer
+   ({:at :stage :mode :person :held-by :project :ws-id}). The stage is the pipeline's; only the
+   wording of how a unit does it is said here."
+  [{:keys [at stage mode person held-by project ws-id]}]
+  (let [at   (some-> at name)
+        held (when held-by (str " A run holds the workstream (" held-by "): something is already advancing it; "
+                                "direct nothing that would race it, and look again once it has let go."))]
+    (str
+     (cond
+       (nil? stage)
+       (str "  Owed: nothing — at " at ", and this arc is over.")
+
+       person
+       (str "  Owed: " (name person) " — at " at ", and it is the person's to do. Direct no unit to do it.")
+
+       (= :release mode)
+       (str "  Owed: nothing — at " at ": the workstream is a release candidate, and the person lands it with Land.")
+
+       (= :implement stage)
+       (str "  Owed now: implement — at " at ". Direct the unit whose working copy holds the change to build what "
+            "the cleared design says and to RECORD it as it goes, in that working copy (the unit writes these "
+            "records; you do not): each finished layer a :layer-completed, and once the whole design is built and "
+            "its tests pass an :implementation-completed citing the design the :design-cleared names "
+            "({:design {:seq N}}, with :design-delta), each with `" nido-verb " nido:workstream:entry:add :project "
+            (some-> project name) " :ws-id " ws-id " :kind <kind> :file <edn>`. Building without recording leaves "
+            "implement owed, however much is built; the implementation review is owed next.")
+
+       (= :review-implementation stage)
+       (str "  Owed now: the implementation review — at " at ". Direct the unit holding the change to run `"
+            nido-verb " nido:review:loop` in its working copy and to report the status it ends at; the loop "
+            "records the :review and fixes what it finds. Once it converges the workstream is a release candidate.")
+
+       (= :address-findings stage)
+       (str "  Owed now: the findings the review left open — at " at ". Direct the unit holding the change to "
+            "address them, then to run `" nido-verb " nido:review:loop` again.")
+
+       (= :publish-draft-pr stage)
+       (str "  Owed now: the draft PR — at " at ". Direct the unit holding the change to open it with "
+            "/prepare-draft-pr, which records the :pr-opened.")
+
+       :else
+       (str "  Owed now: " (name stage) " (" (name mode) ") — at " at ". Direct a unit to do it; `" nido-verb
+            " nido:owed` in its working copy names it."))
+     held)))
+
+(defn- recipe-lines
+  "Where nido's recipe stands on the workstream, as the conductor is told it. `owed` is what
+   `bb nido:owed` answered for it, or nil when it was not asked or could not be read."
+  [state owed]
   (let [l        (:ledger state)
         kinds    (set (map :kind l))
-        act      (:kind (last (filter #(#{:activated :deactivated} (:kind %)) l)))
         recorded (filter kinds [:intent :baseline :design :design-cleared])]
     (cond
-      (not= :activated act)
+      (not (recipe-running? state))
       ["Recipe: not running on this workstream; unit turns may change code."]
 
       (d/code-held state)
@@ -184,11 +243,19 @@
        "  A product question is a design question: put it to the person while designing, never after building."]
 
       :else
-      ["Recipe: running, and the design is cleared: unit turns may change code, to build what the cleared design says."])))
+      ["Recipe: running, and the design is cleared: unit turns may change code, to build what the cleared design says."
+       (if owed
+         (owed-direction owed)
+         (str "  What the recipe owes could not be read now. In order it owes: implement, recorded by the unit as "
+              ":layer-completed entries and an :implementation-completed citing the cleared design; then the "
+              "implementation review, `" nido-verb " nido:review:loop` in the unit's working copy, which records "
+              "the :review. `" nido-verb " nido:owed` in a unit's working copy says which is owed now."))
+       "  Every stage advances only by its record: direct each unit through the one owed, and on its outcome through the next."])))
 
-(defn ^{:malli/schema [:=> [:cat :string :map [:sequential :map]] :string]} brief
-  "What a conductor turn is told: its role, what it has not yet heard, and the workstream now."
-  [ws state items]
+(defn ^{:malli/schema [:=> [:cat :string :map [:sequential :map] [:? [:maybe :map]]] :string]} brief
+  "What a conductor turn is told: its role, what it has not yet heard, and the workstream now.
+   `owed` is what `bb nido:owed` answered for the workstream (see `owed-wanted?`), else nil."
+  [ws state items & [owed]]
   (str/join
    "\n"
    (concat
@@ -215,7 +282,7 @@
       (str "- " (:id u) " [" (name (:status u)) (when (:held? u) ", HELD")
            ", session " (name (get-in u [:session :status] :none)) "] in " (:project u) ": " (:goal u)))
     [""]
-    (recipe-lines state))))
+    (recipe-lines state owed))))
 
 ;; ── the conductor tools ──────────────────────────────────────────────────────
 
@@ -322,16 +389,38 @@
               (try (println (call-tool conn ws turn tool (json/read-str (or args "{}") :key-fn keyword)))
                    (finally (api/disconnect conn))))))
 
+(defn ^{:malli/schema [:=> [:cat :map] fn?]} owed-reader
+  "(fn [ws]) -> what `bb nido:owed` answers for core workstream `ws` (\"<project>/<ws-id>\"), or nil
+   when it fails, prints no map or takes longer than `:timeout-ms`. The pipeline that places a
+   workstream is not the core's to require, so it is asked through nido's own verb, as the session
+   verb is (`nido.core.provision`)."
+  [{:keys [bb-bin nido-dir timeout-ms] :or {timeout-ms 30000}}]
+  (fn [ws]
+    (try
+      (let [[project ws-id] (str/split ws #"/" 2)
+            p (.start (doto (ProcessBuilder. ^java.util.List
+                                             [(or bb-bin "bb") "--config" (str nido-dir "/bb.edn") "nido:owed"
+                                              ":project" project ":ws-id" ws-id ":edn" "true"])
+                        (.redirectError java.lang.ProcessBuilder$Redirect/DISCARD)))
+            out (future (slurp (.getInputStream p)))]
+        (if (.waitFor p timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+          (some (fn [line] (try (let [x (edn/read-string line)] (when (map? x) x)) (catch Exception _ nil)))
+                (reverse (str/split-lines (deref out 5000 ""))))
+          (do (.destroyForcibly p) nil)))
+      (catch Exception _ nil))))
+
 (defn ^{:malli/schema [:=> [:cat :map] fn?]} conductor-spec-fn
   "The spec of a conductor turn as the daemon runs it: `executor` with the brief, in the
    workstream's own directory (`(ws-dir ws)`), with the conductor tools speaking to `socket`, and
    the digests of the images the chat messages it hears carry as `:images`, each once in order,
-   which the executor puts in its prompt."
-  [{:keys [executor model socket src bb-bin ws-dir] :or {executor :claude}}]
+   which the executor puts in its prompt. `owed`, (fn [ws]) -> `bb nido:owed`'s answer or nil, is
+   asked only where the brief says what the recipe owes (`owed-wanted?`)."
+  [{:keys [executor model socket src bb-bin ws-dir owed] :or {executor :claude}}]
   (fn [ws turn state items]
-    (let [images (vec (distinct (mapcat :images (filter #(= :chat (:kind %)) items))))]
+    (let [images (vec (distinct (mapcat :images (filter #(= :chat (:kind %)) items))))
+          owed   (when (and owed (owed-wanted? state)) (owed ws))]
       (cond-> {:executor executor
-               :instructions (brief ws state items)
+               :instructions (brief ws state items owed)
                :cwd (ws-dir ws)
                :mcp-servers {"nido-conductor" (mcp-server {:bb-bin bb-bin :src src :socket socket :ws ws :turn turn})}}
         (seq images) (assoc :images images)

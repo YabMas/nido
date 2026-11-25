@@ -163,3 +163,50 @@
       (is (re-find #"design is NOT cleared \(recorded: intent\)" (brief held)))
       (is (re-find #"do not direct a unit to build" (brief held)))
       (is (re-find #"the design is cleared" (brief (reduce add held [:baseline :design :design-cleared])))))))
+
+(deftest past-clearance-the-conductor-is-told-what-the-pipeline-says-is-owed
+  (let [s       (state-after [{:command :create-workstream :identity {:project :brian :external-refs [] :created-at "2026-11-24T00:00:00Z"}}])
+        add     (fn [s kind] (first (d/step s {:command :append-entry :after (d/latest-seq s)
+                                                :row {:kind kind :at "t" :ext "edn"} :content "{}"})))
+        held    (reduce add s [:activated :intent :baseline :design])
+        cleared (add held :design-cleared)
+        owed    (fn [at stage mode] {:at at :stage stage :mode mode :person nil :held-by nil
+                                     :project :brian :ws-id "ws-1"})
+        brief   #(b/brief "brian/ws-1" cleared [] %)]
+    (testing "asked only where the recipe runs and the design is cleared"
+      (is (not (#'b/owed-wanted? s)))
+      (is (not (#'b/owed-wanted? held)))
+      (is (#'b/owed-wanted? cleared)))
+    (testing "implement owed: the unit records the layers and the implementation, citing the cleared design"
+      (let [t (brief (owed :design-cleared :implement :working-copy))]
+        (is (re-find #"Owed now: implement — at design-cleared" t))
+        (is (re-find #":layer-completed" t))
+        (is (re-find #":implementation-completed citing the design the :design-cleared names" t))
+        (is (re-find #"nido:workstream:entry:add :project brian :ws-id ws-1" t))))
+    (testing "implemented: the implementation review is owed, run by the unit"
+      (let [t (brief (owed :implemented :review-implementation :mechanical))]
+        (is (re-find #"Owed now: the implementation review — at implemented" t))
+        (is (re-find #"nido:review:loop" t))
+        (is (not (re-find #"Owed now: implement —" t)))))
+    (testing "a release candidate owes a unit nothing"
+      (is (re-find #"Owed: nothing — at release-candidate" (brief (owed :release-candidate :land :release)))))
+    (testing "a person's stage is not directed to a unit"
+      (is (re-find #"it is the person's to do"
+                   (brief (assoc (owed :blocked :answer-blocker :human) :person :answer-blocker)))))
+    (testing "unread, the brief still names the order the recipe owes"
+      (is (re-find #"could not be read now.*implement.*nido:review:loop" (brief nil))))))
+
+(deftest the-spec-asks-what-is-owed-only-past-clearance
+  (let [s       (state-after [{:command :create-workstream :identity {:project :brian :external-refs [] :created-at "2026-11-24T00:00:00Z"}}])
+        add     (fn [s kind] (first (d/step s {:command :append-entry :after (d/latest-seq s)
+                                                :row {:kind kind :at "t" :ext "edn"} :content "{}"})))
+        asked   (atom [])
+        f       (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws")
+                                      :owed (fn [ws] (swap! asked conj ws)
+                                              {:at :implemented :stage :review-implementation :mode :mechanical
+                                               :project :brian :ws-id "ws-1"})})]
+    (f "brian/ws-1" "c1" (reduce add s [:activated :intent]) [])
+    (is (= [] @asked) "not while the design is uncleared")
+    (let [spec (f "brian/ws-1" "c2" (reduce add s [:activated :intent :baseline :design :design-cleared]) [])]
+      (is (= ["brian/ws-1"] @asked))
+      (is (re-find #"the implementation review" (:instructions spec))))))

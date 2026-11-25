@@ -26,8 +26,13 @@
     "The keyed commands the rules issue for a workstream at a committed state, each admitted by the domain against the state the ones before it leave."
     {:signature [:=> [:catn [:opts :map] [:ws :string] [:state :map] [:pos :int]] [:sequential :map]]})
   (Operation brief
-    "What a conductor turn is told: its role, what it has not yet heard, and the workstream now."
-    {:signature [:=> [:catn [:ws :string] [:state :map] [:items [:sequential :map]]] :string]})
+    "What a conductor turn is told: its role, what it has not yet heard, and the workstream now —
+     past a cleared design, what the recipe owes next, as the pipeline places it."
+    {:signature [:=> [:catn [:ws :string] [:state :map] [:items [:sequential :map]] [:owed [:? [:maybe :map]]]] :string]})
+  (Operation owed-reader
+    "What the recipe owes a workstream, asked of nido's own owed verb: the pipeline that places it
+     is not the core's to require."
+    {:signature [:=> [:catn [:opts :map]] fn?]})
   (Operation call-tool
     "Run one conductor tool for a conductor turn, through core-api; answers what the agent reads back."
     {:signature [:=> [:catn [:conn :map] [:ws :string] [:turn :string] [:tool :string] [:args :map]] :string]})

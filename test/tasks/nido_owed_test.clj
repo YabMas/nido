@@ -69,3 +69,14 @@
 (deftest a-path-that-is-no-workstream-answers-nil
   (is (nil? (owed/owed-at "/tmp/nowhere-that-is-a-nido-session"))
       "a reading asked outside a session answers nothing rather than throwing"))
+
+(deftest a-named-workstream-answers-as-edn
+  (let [out (with-out-str
+              (with-redefs [pipeline/of        (constantly {:at :implemented
+                                                            :next {:stage :review-implementation :mode :mechanical}})
+                            activity/read-live (constantly nil)
+                            ws/read-ws         (constantly {:entries [{:kind :activated}]})]
+                (owed/owed-cmd* {:project "brian" :ws-id "ws-1" :edn true})))
+        a   (read-string out)]
+    (is (= [:review-implementation :brian "ws-1"] [(:stage a) (:project a) (:ws-id a)])
+        "the core asks this way, from no worktree, and reads one EDN map")))
