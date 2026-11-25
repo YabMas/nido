@@ -8,7 +8,7 @@
   (:require
    [clojure.edn :as edn]
    [nido.bench.memory :as bench]
-   [nido.coordinator.record.session :as csession]))
+   [nido.coordinator.record.workstream :as cws]))
 
 (defn- parse-opts [args]
   (if (empty? args)
@@ -36,7 +36,7 @@
         settle-ms (:settle-ms opts)
         ;; The benchmark stops and starts the session; a workstream holding it keeps it on the
         ;; workstream's runtime, which only nido can say.
-        ws-id (csession/workstream-id-for (keyword project-name) session-name)
+        ws-id (cws/of-session (keyword project-name) session-name)
         kwargs (cond-> {:session-name session-name}
                  ws-id (assoc :runtime-key ws-id)
                  levers (assoc :levers levers)

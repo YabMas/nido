@@ -35,7 +35,6 @@
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.generation :as generation]
-   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
    [nido.coordinator.source.drain :as source-drain]
@@ -343,9 +342,9 @@
 ;; ── starting a slice ────────────────────────────────────────────────────────
 
 (defn- slice-session
-  "The name of slice `slice-id`'s session, or nil before its unit's session is recorded."
+  "The name of slice `slice-id`'s session — its unit's — or nil before the core holds a unit for it."
   [project slice-id]
-  (some :name (remove :conductor (session/list-sessions project slice-id))))
+  (some :name (ws/sessions project slice-id)))
 
 (defn- rested-on-sessions
   "For an :on-top plan of drain `dw`, the session of each slice it rests on that has not landed —

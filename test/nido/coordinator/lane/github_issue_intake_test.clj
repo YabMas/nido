@@ -5,7 +5,7 @@
    [nido.platform.core :as core]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.lane.github-issue-intake :as intake]
-   [nido.coordinator.record.session :as session]
+   [nido.test.units :as units]
    [nido.coordinator.source.state :as sstate]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
@@ -118,8 +118,8 @@
       (with-redefs [gh/list-assigned-issues (fn [_ _] {:status :ok :issues [{:number 1}]})]
         (intake/poll-and-reconcile! :brian cfg))
       (let [ws-id (:id (ws/find-by-ref :brian :github-issue "o/r#1"))]
-        ;; still :ready but now has a session ⇒ promoted ⇒ must be kept on unassign
-        (session/create! :brian ws-id {:name "impl-1" :weight :light :autonomy nil})
+        ;; still :ready but now has a unit's session ⇒ promoted ⇒ must be kept on unassign
+        (units/open-unit! :brian ws-id "impl-1" {:session "impl-1"})
         (with-redefs [gh/list-assigned-issues (fn [_ _] {:status :ok :issues []})]
           (intake/poll-and-reconcile! :brian cfg))
         (is (some? (ws/read-ws :brian ws-id)) ":ready + has-session ⇒ kept")))))

@@ -10,7 +10,6 @@
    [babashka.fs :as fs]
    [babashka.process :as p]
    [clojure.string :as str]
-   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.platform.core :as core]
@@ -66,7 +65,7 @@
    (->> (ws/project-records project)
         (remove ws/closure)
         (keep (fn [w]
-                (let [basis (wsv/title-basis w (session/list-sessions project (:id w)))]
+                (let [basis (wsv/title-basis w (ws/sessions project (:id w)))]
                   (cond
                     (and (nil? basis) (:title w))
                     (ws/clear-title! project (:id w))
@@ -101,7 +100,7 @@
     (into []
           (for [w     (ws/project-records project)
                 :when (not (ws/closure w))
-                :let  [sessions (session/list-sessions project (:id w))
+                :let  [sessions (ws/sessions project (:id w))
                        title    (str/replace (wsv/label w sessions) #"[\t\r\n]+" " ")]
                 s     sessions
                 :let  [sname (:name s)]

@@ -32,7 +32,6 @@
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.entry :as entry]
    [nido.coordinator.record.generation :as generation]
-   [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]))
 
@@ -1355,7 +1354,7 @@
         ;; derivation would be the two-answers defect this change exists to close.
         :read   {:ledger        (count (:entries w))
                  :kinds         ks
-                 :sessions      (mapv :name (csession/list-sessions project ws-id))
+                 :sessions      (mapv :name (ws/sessions project ws-id))
                  :standing      (when st (select-keys st [:live? :decidable? :decided?]))}}
 
         re (assoc :re-entry re)

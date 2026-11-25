@@ -32,6 +32,13 @@
    entry that could be rewritten would silently move the ground under every judgement made
    against it.")
 
+(Kind UnitSession
+  "One session of a workstream, as the core holds it: the session of one of its units, named as
+   the core's provisioning names it, with where that provisioning has it (`:ready` is up) and
+   whether its unit is open. A session no unit has is no workstream's."
+  [:map [:name :string] [:unit :string] [:open? :boolean]
+   [:status [:enum :none :ready :failed :stopped :destroyed]] [:cwd [:maybe :string]]])
+
 (Module record-workstream
   "The workstream: its record, its stage, and the append-only ledger everything else cites.
 
@@ -47,7 +54,7 @@
    writable when it was written stays readable after the schema moves on, and a reader that
    cannot parse one gets nil rather than a throw."
 
-  {:child [Workstream LedgerEntry]}
+  {:child [Workstream LedgerEntry UnitSession]}
   (Operation validate
     "The record, or a throw carrying malli's explanation."
     {:signature [:=> [:catn [:w Workstream]] Workstream]})
@@ -60,6 +67,14 @@
     "The workstream the core turn this process runs in works on, from the environment the core
      gives every turn, or nil outside every turn."
     {:signature [:=> [:catn [:env [:? [:maybe [:map-of :string :string]]]]] [:maybe [:tuple :keyword :string]]]})
+  (Operation sessions
+    "The sessions of a workstream: one per unit the core holds for it, whatever became of the
+     unit; none for a workstream the core holds none of."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:vector UnitSession]]})
+  (Operation of-session
+    "The open workstream one of whose units has the named session, or nil — a person's own session
+     is no workstream's."
+    {:signature [:=> [:catn [:project ProjectName] [:session-name state/SessionName]] [:maybe WorkstreamId]]})
   (Operation read-ws
     "One workstream by id, or nil: its identity and its ledger's index as the core holds them,
      without the stored status fields older records carry. A project's sweep reads every

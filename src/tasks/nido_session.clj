@@ -37,7 +37,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.lane.scratch :as scratch]
-   [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.work :as work]
    [nido.platform.core :as core]
@@ -458,7 +458,7 @@
                          :else (throw (ex-info "Missing :brief-file <path> or :brief <text>" {})))]
     (when (str/blank? brief)
       (throw (ex-info "The brief is empty" {})))
-    (when (or (csession/workstream-id-for p session)
+    (when (or (cws/of-session p session)
               (fs/exists? (:wt-path (lifecycle/session-coords session {:project project}))))
       (println (str "Refused — a session named " session " already exists."))
       (exit! 1))
@@ -468,12 +468,13 @@
       ws-id)))
 
 (defn- on-its-workstream
-  "`opts` naming, as the runtime key, the workstream holding `session` — so a verb that starts its
-   services brings it up on that workstream's runtime even while it is down. Unchanged for a
-   session no workstream holds, or when the caller named a key."
+  "`opts` naming, as the runtime key, the open workstream a unit of which has `session`
+   (`cws/of-session`) — so a verb that starts its services brings it up on that workstream's
+   runtime even while it is down. Unchanged for a person's own session, or when the caller named
+   a key."
   [project session opts]
   (if-let [ws-id (and (not (:runtime-key opts))
-                      (csession/workstream-id-for (keyword project) session))]
+                      (cws/of-session (keyword project) session))]
     (assoc opts :runtime-key ws-id)
     opts))
 

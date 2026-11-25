@@ -9,7 +9,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.lane.drive :as drive]
             [canvas.coordinator.record.activity :as activity]
-            [canvas.coordinator.record.session :as session]
+            [canvas.coordinator.record.workstream :as workstream]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.review.core :as review]
@@ -34,7 +34,7 @@
      most needs telling what they owe."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:position :any]
                             [:decision :map]] [:vector :string]]
-     :delegates [session/list-sessions]})
+     :delegates [workstream/sessions]})
   (Operation amendment-lines
     "The stages an amended goal still owes, worded as the numbered lines a person is shown — the
      record each stage writes or the command that runs it — so the entry task and attach name one

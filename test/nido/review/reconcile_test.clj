@@ -84,7 +84,7 @@
       (with-redefs [core/nido-root (constantly (str tmp))
                     lifecycle/session-from-cwd (constantly {:project :brian
                                                             :session "fix-thing"})
-                    csession/workstream-id-for (constantly "ws-1")]
+                    ws/of-session (constantly "ws-1")]
         (f))
       (finally (fs/delete-tree tmp)))))
 
@@ -362,7 +362,7 @@
         (let [ws-id (:id (ws/create! :brian {:external-refs []}))]
           (with-redefs [lifecycle/session-from-cwd (constantly {:project :brian
                                                                 :session "fix-thing"})
-                        csession/workstream-id-for (constantly ws-id)]
+                        ws/of-session (constantly ws-id)]
             (f ws-id))))
       (finally (fs/delete-tree tmp)))))
 

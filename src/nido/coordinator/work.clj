@@ -769,9 +769,8 @@
                      ;; and a row is on exactly one.
                      (when (or (and closed (not= :between-phases (:outcome closed)))
                                (contains? done-ids (:id w)))
-                       (let [sessions (csession/list-sessions project (:id w))
-                             ;; Never the conductor's record: it is no work left winding down.
-                             live-s   (filterv #(and (not (:conductor %)) (contains? live (:name %))) sessions)]
+                       (let [sessions (cws/sessions project (:id w))
+                             live-s   (filterv #(contains? live (:name %)) sessions)]
                          (when (seq live-s)
                            {:ws-id     (:id w)
                             :project   (name project)
@@ -863,26 +862,17 @@
      (sstate/read-registry)
      (notion-cache/project-page-facts project)]))
 
-(defn- session-status
-  "Unified status across the autonomy axis: an autonomous session reports the state of the run
-   that owns it (`run-states`, session name → run state), nil when none does; an interactive
-   (human) session reads :up when live, :down when archived."
-  [s run-states]
-  (if (:autonomy s)
-    (run-states (:name s))
-    (if (csession/live? s) :up :down)))
-
 (defn- session-facet
-  "One session on the autonomy axis. `waiting` is the session waiting on a person's reply
-   (nil now: an ask is the core's, and no session waits on a reply)."
-  [s waiting run-states]
-  (let [auto (:autonomy s)]
-    {:name           (:name s)
-     :autonomy-level (if auto :autonomous :interactive)
-     :parked?        (= (:name s) (:name waiting))
-     :status         (session-status s run-states)
-     :brakes         (when auto (:limits auto))
-     :error          (when auto (:error auto))}))
+  "One of the workstream's sessions (`cws/sessions`) as the pane lists it: the core's turns drive
+   every one, so each is autonomous, and it reads :up while the core has it ready, :down
+   otherwise. No session waits on a reply — an ask is the core's — and none carries brakes."
+  [s]
+  {:name           (:name s)
+   :autonomy-level :autonomous
+   :parked?        false
+   :status         (if (= :ready (:status s)) :up :down)
+   :brakes         nil
+   :error          nil})
 
 (defn- ledger-summary
   "Light ledger facet for the detail view: its key (BR-#### / slack id), where its triage stands
@@ -1026,12 +1016,10 @@
     :settled        :working))
 
 (defn- last-session-change
-  "The latest transition any of the workstream's runs recorded, or substrate change any of
-   `sessions` did, or nil when there is neither. For an idle workstream that is when its last
-   session ended. Compared as strings: both histories are ISO-8601 UTC by construction."
-  [project ws-id sessions]
-  (->> (concat (mapcat #(map :at (:state-history %)) (runs/runs-of project ws-id))
-               (mapcat #(map :at (:substrate-history %)) sessions))
+  "The latest transition any of the workstream's runs recorded, or nil when there is none.
+   Compared as strings: run histories are ISO-8601 UTC by construction."
+  [project ws-id]
+  (->> (mapcat #(map :at (:state-history %)) (runs/runs-of project ws-id))
        (remove nil?)
        sort
        last))
@@ -1060,7 +1048,6 @@
              {:keys [ws-id address open?]} (proposal/attempts pk)
              :when open?
              :let  [w        (cws/read-ws pk ws-id)
-                    sessions (filter csession/work-session? (csession/list-sessions pk ws-id))
                     state    (hold-state (with-status pk
                                                       (wsv/workstream-row pk w) true))]]
          (cond-> {:project    pname
@@ -1070,7 +1057,7 @@
                                     (:external-refs w))
                   :state      state
                   :started-at (:created-at w)}
-           (= :stuck state) (assoc :ended-at (last-session-change pk ws-id sessions))))))
+           (= :stuck state) (assoc :ended-at (last-session-change pk ws-id))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   proposals
@@ -1249,19 +1236,12 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   environment
-  "The workstream's single current environment: its latest live HEAVY (impl)
-   work session record, or nil when none exists yet (still triage, or a light-only
-   scratch). Resolved by weight + recency, NOT by liveness — a down-but-provisioned
-   impl session is still the environment (you Start it). :archived (torn-down)
-   sessions are excluded, and so are the conductor's and the chat's records
-   (`csession/work-session?`): both are heavy and live, often newer than the impl
-   session, and hold no branch — the gate's Land ships whatever this answers.
-   Callers use (:name env) to resolve dev-state/facts."
+  "The workstream's single current environment: the session of its last open unit the core has
+   ready (`cws/sessions`), or nil when no open unit's session is up yet. The gate's Land ships
+   whatever this answers. Callers use (:name env) to resolve dev-state/facts."
   [project ws-id]
-  (->> (filter csession/work-session? (csession/list-sessions project ws-id))
-       (filter #(= :heavy (:weight %)))
-       (filter csession/live?)
-       (sort-by :created-at)
+  (->> (cws/sessions project ws-id)
+       (filter #(and (:open? %) (= :ready (:status %))))
        last))
 
 (defn- bare-pane
@@ -1428,7 +1408,7 @@
   ([project ws-id] (workstream project ws-id nil))
   ([project ws-id selected-seq]
    (if-let [w (cws/read-ws project ws-id)]
-     (let [sessions (csession/list-sessions project ws-id)
+     (let [sessions (cws/sessions project ws-id)
            ;; The same row the board list builds, with the same status over it, so the pane and
            ;; the list cannot place one workstream two ways.
            row      (with-status project
@@ -1532,10 +1512,7 @@
         ;; Shown on the workstream whether or not it is a gate: a denial needs no answer, so the
         ;; inbox never carries it on its own, and this is where a reader of the work finds it.
         :denials      (driven-denials project ws-id)
-        :sessions     (let [waiting    nil
-                            run-states (into {} (map (juxt :session-name :state))
-                                             (runs/runs-of project ws-id))]
-                        (mapv #(session-facet % waiting run-states) sessions))})
+        :sessions     (mapv session-facet sessions)})
      ;; No workstream at this id. For a bare watched-view row the ws-id IS the
      ;; Notion page-id, so read-ws always misses and there are two live cases:
      ;;   1. a workstream now covers the page — Start triage minted one under a
@@ -1767,7 +1744,7 @@
   [project ws-id held]
   (let [w        (cws/record-of-state ws-id (:state held))
         dismissed? (and w (= :dismissed (:outcome (cws/closure w))))
-        sessions (when w (csession/list-sessions project ws-id))
+        sessions (when w (cws/sessions project ws-id))
         origin   (if w (classify-origin w) :notion)
         row      {:ws-id  ws-id
                   :origin origin
@@ -1989,7 +1966,10 @@
           ;; commit the feed applies during the read then moves the stamp next time. Taken after,
           ;; it recorded a state the row never saw, and the row kept its stale reading.
           core-hash (hash (:state (core-of project ws-id)))
-          sessions  (csession/list-sessions project ws-id)
+          sessions  (cws/sessions project ws-id)
+          ;; What the old driver's facets recorded of sessions it drove: no session the core
+          ;; provisions carries one.
+          records   (csession/list-sessions project ws-id)
           row       (with-status project (wsv/workstream-row project w facts))
           settled?  (= :settled (:engagement row))
           page-id   (:page-id (wsv/notion-ref w))
@@ -2008,12 +1988,12 @@
                      :sessions  (set (map :name sessions))
                      :driven    (vec (keep #(let [{:keys [driver session-id]} (:claude %)]
                                               (when (= :nido driver) session-id))
-                                           sessions))
+                                           records))
                      ;; The ids the agent listing names its sessions by: a facet's full id, and
                      ;; a start still in flight by the :bg-id its note keeps.
                      :listed    (into #{} (remove nil?)
-                                      (concat (keep #(get-in % [:claude :session-id]) sessions)
-                                              (keep #(get-in % [:dispatching :bg-id]) sessions)))
+                                      (concat (keep #(get-in % [:claude :session-id]) records)
+                                              (keep #(get-in % [:dispatching :bg-id]) records)))
                      :settled?  settled?
                      ;; At rest: only the sweep reaches it — settled history, as the core's
                      ;; engagement or the ledger's own close says (the core keeps most closed
@@ -3546,22 +3526,12 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   open-target
-  "Where `open` lands for a workstream: the most-recently-active LIVE session,
-   else the most-recently-active session, else nil. Returns {:project :session}.
-   Ordering reuses wsv/session-rows (newest-active first); only rows a work session's record
-   backs are candidates (`csession/work-session?`) — open lands on the work, never on the
-   conductor's or the chat's record, and a listed session no record names is not one to open."
+  "Where `open` lands for a workstream: the session of an open unit the core has ready, else of
+   any unit it has ready, else nil — the latest unit first. Returns {:project :session}."
   [project ws-id]
-  (let [work       (filter csession/work-session? (csession/list-sessions project ws-id))
-        work-names (set (map :name work))
-        rows       (filter #(and (:recorded? %) (work-names (:name %)))
-                           (wsv/session-rows project ws-id []))
-        live-names (->> work
-                        (filter csession/live?)
-                        (map :name)
-                        set)
-        pick       (or (first (filter #(live-names (:name %)) rows))
-                       (first rows))]
+  (let [ss   (rseq (cws/sessions project ws-id))
+        up?  #(= :ready (:status %))
+        pick (or (first (filter #(and (:open? %) (up? %)) ss)) (first (filter up? ss)))]
     (when pick {:project project :session (:name pick)})))
 
 
@@ -3808,13 +3778,12 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   bring-down!
-  "Down every live session of a workstream but its conductor — the winding-down band's one action.
+  "Down every live session of a workstream — the winding-down band's one action.
    Synchronous and slow (lifecycle/down! per session); callers own async + UI
    optimism. Returns {:downed [names]}."
   [project ws-id]
   (let [live  (live-session-names project)
-        ;; The band's sessions, never the conductor's: retiring it is the conduct pass's.
-        names (->> (remove :conductor (csession/list-sessions project ws-id))
+        names (->> (cws/sessions project ws-id)
                    (map :name)
                    (filterv live))]
     (doseq [n names]

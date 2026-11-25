@@ -41,7 +41,6 @@
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.record.activity :as activity]
-   [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.review.analysis :as analysis]
@@ -190,7 +189,7 @@
     (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
       {:reviewed-project project
        :reviewed-session session
-       :reviewed-ws-id   (csession/workstream-id-for (keyword project) session)})
+       :reviewed-ws-id   (ws/of-session (keyword project) session)})
     (catch Throwable _ nil)))
 
 (defn- analysis-run

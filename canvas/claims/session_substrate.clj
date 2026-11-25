@@ -10,7 +10,6 @@
             [canvas.coordinator.record.session-events :refer [record-session-events]]
             [canvas.tasks.nido-session-hook :refer [nido-session-hook]]
             [canvas.boot.attention :refer [boot-attention]]
-            [canvas.coordinator.view.workstreams :refer [session-rows]]
             [canvas.session.briefing :refer [session-launcher]]))
 
 (Claim one-shot-calls-stay-calls
@@ -20,7 +19,3 @@
 (Claim hooks-record-never-decide
   "nido's session event hooks — the hook command that appends to a session's event log, not the commit gate the launch baseline installs beside them — only record what the session reported, add the supervisor briefing as context at session start, and always let the session proceed, including when recording fails; they make no decision about a session."
   {:about [nido-session-hook record-session-events] :evidence "round"})
-
-(Claim session-list-shows-substrate-state
-  "nido's session list — a workstream's session rows — shows each session the substrate lists whose SessionStart nido's session event hook recorded from that workstream's session home or worktree and whose latest recorded event shows a permission mode that asks nobody, as one-launch-baseline states, in the state the listing reports for it, and who drives it in one vocabulary whoever started it: the driver its :claude facet records, and nobody for a session without one."
-  {:about [session-rows] :evidence "round"})

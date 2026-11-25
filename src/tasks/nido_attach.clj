@@ -11,7 +11,7 @@
   (:require
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
-   [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.work :as work]
    [nido.platform.task-args :as task-args]
    [nido.review.frontend :as frontend]
@@ -142,7 +142,7 @@
   (let [at    (name (:at position))
         stage (:stage (:next position))
         mode  (:mode (:next position))
-        sname (:name (first (filter csession/work-session? (csession/list-sessions project ws-id))))]
+        sname (:name (first (cws/sessions project ws-id)))]
     (into
      (into [(str "at " at (when stage (str " · next is " (name stage)
                                            (when mode (str " (" (name mode) ")")))))]

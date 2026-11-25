@@ -3,7 +3,6 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.lane.titles :as titles]
-   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.session.state :as session-state]))
@@ -63,7 +62,7 @@
     (try
       (with-redefs [core/nido-root              (constantly (str tmp))
                     core/nido-home              (constantly (str tmp))
-                    session/list-sessions       (fn [_ _] [{:name "rag-raptor-index"}])
+                    ws/sessions                 (fn [_ _] [{:name "rag-raptor-index"}])
                     session-state/read-registry (constantly {"/wt/rag-raptor-index"
                                                              {:instance-id  "brian--ws-1"
                                                               :project-name "brian"

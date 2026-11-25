@@ -13,7 +13,6 @@
    then one probe runs (success clears, failure re-arms)."
   (:require
    [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.source.state :as sstate]
    [nido.coordinator.record.workstream :as ws]
@@ -48,7 +47,7 @@
   [project w]
   (and (nil? (ws/closure w))
        (not (standing/ever-chose? project (:id w) :in-progress))
-       (empty? (remove :conductor (session/list-sessions project (:id w))))))
+       (empty? (ws/sessions project (:id w)))))
 
 (defn- upsert-issue!
   "Ensure a :ready workstream exists for one assigned issue, holding the :issue entry that records

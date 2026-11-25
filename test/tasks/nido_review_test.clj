@@ -1046,7 +1046,7 @@
     (is (= 7 (get-in final [:design :seq]))
         "the run ends holding the design its reviewers were given")
     (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
-                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/of-session (fn [_ _] "ws-1")
                   ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 7}]})
                   ws/append-entry! (fn [_ _ _ content] (reset! appended content) "/path")]
       (is (= {:ledger :appended :ws-id "ws-1"}
@@ -1154,7 +1154,7 @@
 (deftest append-review-entry-writes-when-workstream-resolves
   (let [appended (atom nil)]
     (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
-                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/of-session (fn [_ _] "ws-1")
                   ws/append-entry! (fn [p id entry content]
                                      (reset! appended {:p p :id id :entry entry :content content})
                                      "/path")]
@@ -1174,7 +1174,7 @@
   ;; under the newest design would record a review of a design no round read.
   (let [appended (atom [])]
     (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
-                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/of-session (fn [_ _] "ws-1")
                   ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 3}]})
                   ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/path")]
       (let [out (t/append-review-entry! "/w" {:status :converged :findings []}
@@ -1201,7 +1201,7 @@
   ;; refused as :no-design.
   (let [appended (atom [])]
     (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
-                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/of-session (fn [_ _] "ws-1")
                   ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 53}]})
                   ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/path")]
       (is (= {:ledger :appended :ws-id "ws-1"}
@@ -1279,7 +1279,7 @@
   ;; to stderr leaves every durable artifact of a run whose entry was refused
   ;; identical to one whose entry landed — and the run dir does not keep stderr.
   (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
-                csession/workstream-id-for (fn [_ _] "ws-1")
+                ws/of-session (fn [_ _] "ws-1")
                 ws/append-entry! (fn [& _]
                                    (throw (ex-info "Invalid event review"
                                                    {:explain {:errors [{:in [:status]
@@ -1919,7 +1919,7 @@
   (with-redefs [stages/discover-design-record (fn [_] a-design)
                 verdict/run! (fn [_] a-verdict)
                 lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
-                csession/workstream-id-for (fn [_ _] "ws-1")
+                ws/of-session (fn [_ _] "ws-1")
                 ws/append-entry! (fn [& _]
                                    (throw (ex-info "Invalid event report"
                                                    {:explain {:errors [{:in [:needs]
@@ -2078,7 +2078,7 @@
                   layers/conflicted (fn [_ _] [])
                   verdict/run! (fn [_] a-verdict)
                   lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
-                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/of-session (fn [_ _] "ws-1")
                   ws/append-entry! (fn [_ _ {:keys [kind]} _] (swap! kinds conj kind))]
       (t/loop-cmd ":cwd" "/w")
       (is (= [:review :design-verdict :blocker] @kinds)))))
@@ -2102,7 +2102,7 @@
                   layers/conflicted (fn [_ _] [])
                   verdict/run! (fn [_] answered)
                   lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
-                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/of-session (fn [_ _] "ws-1")
                   ws/append-entry! (fn [_ _ {:keys [kind]} payload]
                                      (swap! appended conj [kind (clojure.edn/read-string payload)]))]
       (is (= :clean (t/loop-cmd ":cwd" "/w")) "the run's own answer is the settled one")
@@ -2442,7 +2442,7 @@
   ;; a design-less run says `:yardstick :none` rather than leaving it to be inferred.
   (let [appended (atom [])]
     (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
-                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/of-session (fn [_ _] "ws-1")
                   ws/read-ws (fn [_ _] {:id "ws-1" :entries []})
                   ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/path")]
       (is (= {:ledger :appended :ws-id "ws-1"}

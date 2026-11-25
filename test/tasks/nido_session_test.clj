@@ -3,7 +3,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [babashka.fs :as fs]
-   [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.workstream]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.work :as work]
    [nido.coordinator.record.session-events :as session-events]
@@ -162,7 +162,7 @@
                   babashka.fs/exists?                   (fn [p & _] (boolean (and wt? (str/starts-with? (str p) "/nonexistent-wt/"))))
                   lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
                   work/start-goal!                      (fn [p s b] (swap! calls conj [:start-goal p s b]) "ws-new")
-                  csession/workstream-id-for            (fn [_ _] held)
+                  nido.coordinator.record.workstream/of-session            (fn [_ _] held)
                   task/exit!                            (fn [c] (throw (ex-info (str "exit " c) {:exit c})))]
       (let [out (with-out-str
                   (try (apply task/start (concat [":project" "nido" "goal"] args))
@@ -257,7 +257,7 @@
 (deftest revive-brings-a-held-session-back-on-its-workstream
   (let [calls (atom [])
         keys  (atom [])]
-    (with-redefs [nido.coordinator.record.session/workstream-id-for
+    (with-redefs [nido.coordinator.record.workstream/of-session
                   (fn [p s] (when (= [:brian "quiz"] [p s]) "ws-9"))]
       (revive-world calls
                     #(with-redefs [lifecycle/up! (fn [_ o] (swap! keys conj (:runtime-key o)))]
@@ -270,7 +270,7 @@
       (with-redefs [lifecycle/reset!   (fn [_ o] (reset! seen o))
                     lifecycle/isolate! (fn [_ o] (reset! seen o))
                     lifecycle/share!   (fn [_ o] (reset! seen o))
-                    nido.coordinator.record.session/workstream-id-for
+                    nido.coordinator.record.workstream/of-session
                     (fn [p s] (when (= [:brian "held"] [p s]) "ws-7"))]
         (verb ":project" "brian" "held")
         (is (= "ws-7" (:runtime-key @seen)) (str v " starts it on its workstream's runtime"))

@@ -9,7 +9,8 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as workstream]
-   [nido.coordinator.view.workstreams :as wsv]))
+   [nido.coordinator.view.workstreams :as wsv]
+   [nido.test.units :as units]))
 
 (defn- one-off!
   "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
@@ -38,14 +39,6 @@
   [project overrides]
   (let [w (workstream/create! project {:stage (:stage overrides :triaging)})]
     (history/write! (merge w overrides {:id (:id w) :project project}))))
-
-(defn- make-session!
-  "Create a session under a workstream, then apply overrides (substrate, autonomy)."
-  [project ws-id sname overrides]
-  (let [s (session/create! project ws-id
-                           {:name sname :weight (:weight overrides :light)
-                            :autonomy (:autonomy overrides)})]
-    (session/write! (merge s (dissoc overrides :weight)))))
 
 (def ^:private autonomy-running
   {:skill :triage-bug :first-message "x" :agent :claude :claude-session-id nil
@@ -99,8 +92,8 @@
 
 (deftest tag-is-the-stable-identifier-not-the-title
   ;; The tag is what a person searches for: it ignores the generated title and
-  ;; any session a ticket also has, and a scratch workstream goes by the name of
-  ;; its first non-conductor session — its worktree.
+  ;; any session a ticket also has, and a workstream with no ticket goes by the name of
+  ;; its first unit's session — its worktree.
   (let [titled {:title {:text "Drift in the session index" :basis "x"} :entries []}]
     (is (= "BR-1421" (wsv/tag (assoc titled :id "ws-1"
                                      :external-refs [{:adapter :notion :id "BR-1421"}])
@@ -111,9 +104,7 @@
     (is (= "drift-fix"
            (wsv/tag (assoc titled :id "ws-1"
                            :external-refs [{:adapter :slack-message :id "slack-C1-1781.0"}])
-                    [{:name "later-seat" :created-at "2026-02-01"}
-                     {:name "conductor" :conductor true :created-at "2025-01-01"}
-                     {:name "drift-fix" :created-at "2026-01-01"}])))
+                    [{:name "drift-fix"} {:name "later-unit"}])))
     (is (= "ws-1" (wsv/tag (assoc titled :id "ws-1" :external-refs []) [])))))
 
 (deftest label-notion-ref-without-title-uses-id
@@ -154,22 +145,12 @@
             :entries [{:kind :triage :title "First"} {:kind :plan :title "Latest"}]}]
     (is (= "Latest" (wsv/label ws [])))))
 
-(deftest label-falls-back-to-trigger-and-suffix
-  (let [ws {:id "ws-20260601-abcdef" :external-refs [] :entries []}
-        sessions [{:autonomy {:trigger :triage-bug}}]]
-    (is (= "triage-bug · abcdef" (wsv/label ws sessions)))))
-
 (deftest label-falls-back-to-session-name-before-raw-id
   ;; A human scratch workstream has no ref/entry/trigger — its session name is
   ;; far more legible than the raw ws-id.
   (let [ws {:id "ws-20260613-7aeaed" :external-refs [] :entries []}
         sessions [{:name "text2speech-latex" :autonomy nil}]]
     (is (= "text2speech-latex" (wsv/label ws sessions)))))
-
-(deftest label-trigger-still-beats-session-name
-  (let [ws {:id "ws-20260601-abcdef" :external-refs [] :entries []}
-        sessions [{:name "run-a" :autonomy {:trigger :triage-bug}}]]
-    (is (= "triage-bug · abcdef" (wsv/label ws sessions)))))
 
 (deftest label-falls-back-to-raw-id
   (let [ws {:id "ws-20260601-abcdef" :external-refs [] :entries []}]
@@ -181,14 +162,12 @@
 
 (deftest last-activity-takes-max-across-sources
   (let [ws {:created-at "2026-06-01T00:00:00Z"
-            :entries [{:kind :intent :seq 1 :at "2026-06-05T09:00:00Z"}]}
-        sessions [{:created-at "2026-06-02T00:00:00Z"
-                   :substrate-history [{:at "2026-06-03T00:00:00Z" :substrate :live}]}]]
-    (is (= "2026-06-05T09:00:00Z" (wsv/last-activity ws sessions)))))
+            :entries [{:kind :intent :seq 1 :at "2026-06-05T09:00:00Z"}]}]
+    (is (= "2026-06-05T09:00:00Z" (wsv/last-activity ws)))))
 
-(deftest last-activity-handles-no-sessions
+(deftest last-activity-handles-no-entries
   (let [ws {:created-at "2026-06-01T00:00:00Z"}]
-    (is (= "2026-06-01T00:00:00Z" (wsv/last-activity ws [])))))
+    (is (= "2026-06-01T00:00:00Z" (wsv/last-activity ws)))))
 
 ;; ---------------------------------------------------------------------------
 ;; workstream-rows — assembled from disk
@@ -200,7 +179,7 @@
       (make-ws! :brian {:stage :triaging})
       (let [w (make-ws! :brian {:stage :triaging
                                 :external-refs [{:adapter :notion :id "BR-1" :title "Active one"}]})]
-        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running}))
+        (units/open-unit! :brian (:id w) "u1" {:session "run-a"}))
       (let [rows (wsv/workstream-rows :brian)
             by-label (into {} (map (juxt :label identity)) rows)]
         (is (= 2 (count rows)))
@@ -209,16 +188,6 @@
         (is (every? #(= :brian (:project %)) rows))
         (is (not-any? #(contains? % :stage) rows)
             "where a workstream sits is status's answer, never the view's")))))
-
-(deftest workstream-rows-carries-max-session-priority
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :triaging})]
-        (make-session! :brian (:id w) "lo" {:autonomy (assoc autonomy-running :priority 3)})
-        (make-session! :brian (:id w) "hi" {:autonomy (assoc autonomy-running :priority 7)}))
-      (is (= 7 (:priority (first (wsv/workstream-rows :brian))))
-          "row severity = highest autonomy :priority across its sessions"))))
-
 
 ;; ---------------------------------------------------------------------------
 ;; grouped-by-stage + workstream-rows stage projection
@@ -268,46 +237,6 @@
 ;; ---------------------------------------------------------------------------
 ;; session-rows (workstream detail) + formatting
 ;; ---------------------------------------------------------------------------
-
-(deftest session-rows-reports-weight-substrate
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :triaging})]
-        (make-session! :brian (:id w) "run-auto"
-                       {:weight :heavy :autonomy autonomy-running})
-        (make-session! :brian (:id w) "human-sess" {:autonomy nil})
-        (let [rows  (wsv/session-rows :brian (:id w) [])
-              by    (into {} (map (juxt :name identity)) rows)]
-          (is (= 2 (count rows)))
-          (is (= :heavy   (:weight (by "run-auto"))))
-          (is (= :live    (:substrate (by "run-auto")))))))))
-
-(deftest session-rows-show-the-substrates-state-and-who-drives
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :triaging})]
-        (make-session! :brian (:id w) "driven" {:autonomy nil})
-        (session/update-claude! :brian (:id w) "driven"
-                                (constantly {:session-id "s-1" :bg-id "s-1" :origin :person :driver :nido
-                                             :hold nil :pending nil :queued nil :own-work? false
-                                             :policy {:auto-respawn? false} :cursor 0 :driving-since "t"
-                                             :announced-blocked? false :recovered-boot nil}))
-        (make-session! :brian (:id w) "plain" {:autonomy nil})
-        (let [listing [{:sessionId "s-1" :kind "background" :state "working"}
-                       {:sessionId "s-own" :kind "background" :state "done" :name "mine"
-                        :baseline-shown? true}
-                       {:sessionId "s-manual" :kind "background" :state "done" :name "not-auto"
-                        :baseline-shown? false}
-                       {:sessionId "s-tty" :kind "interactive"}]
-              by (into {} (map (juxt :name identity)) (wsv/session-rows :brian (:id w) listing))]
-          (is (= {:state "working" :driver :nido} (select-keys (by "driven") [:state :driver])))
-          (is (= {:state nil :driver :nobody} (select-keys (by "plain") [:state :driver]))
-              "a session without a facet: nobody drives it")
-          (is (= {:state "done" :driver :nobody :session-id "s-own"}
-                 (select-keys (by "mine") [:state :driver :session-id]))
-              "a person's own background session in the workstream, adoptable")
-          (is (not (contains? by "not-auto")) "its events do not show the baseline: not listed beside nido's")
-          (is (= 3 (count by)) "an interactive session is not a row of its own"))))))
 
 (deftest format-session-row-human-vs-autonomous
   (is (= "run-auto  ·  running  ·  heavy  ·  live"

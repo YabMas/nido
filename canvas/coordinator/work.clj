@@ -126,9 +126,9 @@
      :delegates [owed-revivals]})
   (Operation latest-report "The workstream's most recent ledger entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
-  (Operation environment "The workstream's current environment — its latest live heavy work session, never its conductor's or its chat's record."
+  (Operation environment "The workstream's current environment — the session of its last open unit the core has ready."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [session/list-sessions session/work-session?]})
+     :delegates [workstream/sessions]})
   (Operation holds
     "The three records that CURRENTLY hold for a workstream — what it is standing on right now,
      as against everything its ledger ever said. The design is the governing one."
@@ -198,9 +198,9 @@
   (Operation new! "Birth a scratch workstream and bring its session up."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [lanes/birth! lifecycle/up!]})
-  (Operation open-target "Where opening a workstream lands — on a work session, never its conductor's or its chat's record."
+  (Operation open-target "Where opening a workstream lands — on a unit's session the core has ready, an open unit's first."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [session/list-sessions view/session-rows]})
+     :delegates [workstream/sessions]})
   (Operation reclaimed? "Whether a session's substrate was reclaimed under it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session :any]] :boolean]})
   (Operation ensure-open! "Make a session landable, re-provisioning it if it was reclaimed."
@@ -223,9 +223,9 @@
                  session/person? lifecycle/session-coords]})
   (Operation prune-dead-registry! "Drop registry entries whose session no longer holds a port."
     {:signature [:=> [:catn [:now-ms [:? :int]]] :any] :delegates [sstate/session-live? casualties/record!]})
-  (Operation bring-down! "Down every live session of a workstream but its conductor."
+  (Operation bring-down! "Down every live session of a workstream's units."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
-     :delegates [session/list-sessions lifecycle/down!]})
+     :delegates [workstream/sessions lifecycle/down!]})
   (Operation orphan-live-sessions "The live sessions no workstream owns. Pure."
     {:signature [:=> [:catn [:live :any] [:owned :any]] :any]})
   (Operation activate!
@@ -289,8 +289,7 @@
      what the core says of it: a hold the core runs no turn on and asks nothing about is one
      nothing will ever release."
     {:signature [:=> [:catn] [:vector :map]]
-     :delegates [triggers/load-for-project workstream/project-records
-                 session/list-sessions]})
+     :delegates [triggers/load-for-project workstream/project-records]})
   (Operation review-queues
     "The latest review-queue grooming of every project whose triggers declare the plan trigger —
      its stage, its plan's tickets in rank order each with its proposed writes, and what was

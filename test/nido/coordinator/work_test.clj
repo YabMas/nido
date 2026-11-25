@@ -1,6 +1,7 @@
 (ns nido.coordinator.work-test
   (:require
    [nido.test.fake-core :as fake-core]
+   [nido.test.units :as units]
    [nido.coordinator.record.history :as history]
  [babashka.fs :as fs]
    [clojure.set :as set]
@@ -165,7 +166,7 @@
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :p {:external-refs []})]
-        (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
+        (units/open-unit! :p (:id w) "u1" {:session "s1"})
         (workstream/close! :p (:id w) :done)
         (let [[row :as rows] (work/winding-down :p #{"s1"})]
           (is (= 1 (count rows)))
@@ -175,16 +176,6 @@
           (is (= ["s1"] (:sessions row)))
           (is (false? (:needs-you row))))
         (is (= [] (work/winding-down :p #{})) "downed sessions → gone")))))
-
-(deftest winding-down-reads-past-the-conductor
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :p {:external-refs []})]
-        (session/create! :p (:id w) {:name "c" :weight :heavy :autonomy nil :conductor true})
-        (is (= [] (work/winding-down :p #{"c"} [{:ws-id (:id w) :stage :done}]))
-            "only the conductor left running is no work winding down")
-        (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
-        (is (= [["s1"]] (mapv :sessions (work/winding-down :p #{"c" "s1"} [{:ws-id (:id w) :stage :done}]))))))))
 
 (deftest winding-down-ignores-open-workstreams
   (with-tmp
@@ -200,7 +191,7 @@
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :p {:external-refs []})]
-        (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
+        (units/open-unit! :p (:id w) "u1" {:session "s1"})
         (is (= [] (work/winding-down :p #{"s1"} [{:ws-id (:id w) :stage :in-progress}]))
             "still in flight → not winding down")
         (let [[row :as rows] (work/winding-down :p #{"s1"} [{:ws-id (:id w) :stage :done}])]
@@ -216,8 +207,8 @@
     (fn [_]
       (let [w (workstream/create! :p {:external-refs []})
             downed (atom [])]
-        (session/create! :p (:id w) {:name "live1" :weight :light :autonomy nil})
-        (session/create! :p (:id w) {:name "dead1" :weight :light :autonomy nil})
+        (units/open-unit! :p (:id w) "u1" {:session "live1"})
+        (units/open-unit! :p (:id w) "u2" {:session "dead1"})
         (workstream/close! :p (:id w) :done)
         (with-redefs [work/live-session-names (constantly #{"live1"})
                       nido.session.lifecycle/down! (fn [n _] (swap! downed conj n))]
@@ -378,23 +369,20 @@
    :phase :running :phase-history [{:at "2026-06-01T00:00:00Z" :phase :running}]
    :error nil})
 
-(deftest workstream-detail-presents-sessions-on-the-autonomy-axis
+(deftest workstream-detail-presents-its-units-sessions
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-5" :title "t"}]})]
-        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-running})
-        (write-run! "r-auto" (:id w) "auto" nil :running)
-        (session/create! :brian (:id w) {:name "me"   :weight :light :autonomy nil})
+        (units/open-unit! :brian (:id w) "u1" {:session "up"})
+        (units/open-unit! :brian (:id w) "u2")
         (let [d  (work/workstream :brian (:id w))
               by (into {} (map (juxt :name identity)) (:sessions d))]
           (is (= (:id w) (:ws-id d)) "detail uses the same :ws-id key as list-workstreams rows")
           (is (= :notion (:origin d)))
-          (is (= :autonomous (:autonomy-level (by "auto"))))
-          (is (= {:budget "30m"} (:brakes (by "auto"))) "brakes = the autonomy :limits")
-          (is (= :running (:status (by "auto"))) "an autonomous session reports its run's state")
-          (is (= :interactive (:autonomy-level (by "me"))))
-          (is (nil? (:brakes (by "me"))) "interactive sessions carry no brakes")
-          (is (= :up (:status (by "me"))) "a live human session reads :up"))))))
+          (is (= #{"up" "u2"} (set (keys by))) "one session per unit, named for its worktree or its unit")
+          (is (every? #(= :autonomous (:autonomy-level %)) (vals by)) "the core's turns drive every one")
+          (is (= :up (:status (by "up"))) "a session the core has ready reads :up")
+          (is (= :down (:status (by "u2"))) "one it still owes reads :down"))))))
 
 (deftest workstream-detail-flags-the-current-ledger-entry
   (with-tmp
@@ -476,15 +464,14 @@
               (is (= ["spike-thing"]
                      (map :name (session/list-sessions :brian ws-id)))))))))))
 
-(deftest open-target-prefers-the-live-session
+(deftest open-target-prefers-a-ready-session
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w) {:name "old"  :weight :light :autonomy nil})
-        (session/archive! :brian (:id w) "old")
-        (session/create! :brian (:id w) {:name "live" :weight :light :autonomy nil})
+        (units/open-unit! :brian (:id w) "u1" {:session "live"})
+        (units/open-unit! :brian (:id w) "u2")
         (is (= {:project :brian :session "live"} (work/open-target :brian (:id w)))
-            "open lands in the live session, not the archived one")))))
+            "open lands in the session the core has ready, not one it still owes")))))
 
 (deftest a-denial-is-an-operational-notice-not-a-gate
   ;; Nothing waits on a person here: a denial needs no answer, so it is listed for Operations
@@ -518,6 +505,17 @@
                               :tool-input "{\"command\":\"rm\"}"}]}]
                  (map #(dissoc % :label) (work/all-denials)))
               "it is listed for Operations, with the denial recorded since nido began driving it"))))))
+
+(deftest environment-is-the-last-open-units-ready-session
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:external-refs []})]
+        (is (nil? (work/environment :brian (:id w))) "no unit, no environment")
+        (units/open-unit! :brian (:id w) "u1" {:session "first"})
+        (units/open-unit! :brian (:id w) "u2" {:session "second"})
+        (units/open-unit! :brian (:id w) "u3")
+        (is (= "second" (:name (work/environment :brian (:id w))))
+            "the last open unit whose session is up; one still owed is not yet an environment")))))
 
 (deftest open-target-nil-when-no-sessions
   (with-tmp
@@ -1465,44 +1463,11 @@
     (is (not (contains? s :source-counts)) "source-counts is gone")
     (is (not (contains? s :facet-dims)) "facet-dims is gone")))
 
-(deftest environment-resolves-latest-live-heavy-session
-  (with-redefs [nido.coordinator.record.session/list-sessions
-                (fn [_ _]
-                  [{:name "triage-BR-1" :weight :light :substrate :live :created-at "2026-07-20T10:00:00Z"}
-                   {:name "impl-BR-1"   :weight :heavy :substrate :live :created-at "2026-07-21T10:00:00Z"}
-                   {:name "impl-BR-1b"  :weight :heavy :substrate :live :created-at "2026-07-22T10:00:00Z"}])]
-    (is (= "impl-BR-1b" (:name (work/environment :brian "ws-1")))
-        "latest heavy session by :created-at")))
-
 (deftest environment-nil-when-no-heavy-session
   (with-redefs [nido.coordinator.record.session/list-sessions
                 (fn [_ _] [{:name "triage-BR-1" :weight :light :substrate :live :created-at "2026-07-20T10:00:00Z"}])]
     (is (nil? (work/environment :brian "ws-1"))
         "triage-only (light) workstream has no environment")))
-
-(deftest environment-excludes-archived-heavy
-  (with-redefs [nido.coordinator.record.session/list-sessions
-                (fn [_ _]
-                  [{:name "impl-old" :weight :heavy :substrate :archived :created-at "2026-07-22T10:00:00Z"}
-                   {:name "impl-new" :weight :heavy :substrate :live     :created-at "2026-07-21T10:00:00Z"}])]
-    (is (= "impl-new" (:name (work/environment :brian "ws-1")))
-        "an archived heavy session is excluded even if newer")))
-
-(def ^:private impl-and-newer-chat
-  "A workstream whose impl session predates its chat: both heavy and live, the chat newer — the
-   shape fukan ws-20261117-2786b5 was in when every Land shipped its chat."
-  [{:name "view-on-the-fly"        :weight :heavy :substrate :live :created-at "2026-11-17T10:00:00Z"}
-   {:name "ws-1--conductor"        :weight :heavy :substrate :live :created-at "2026-11-17T11:00:00Z" :conductor true}
-   {:name "ws-1--chat"             :weight :heavy :substrate :live :created-at "2026-11-17T12:00:00Z" :chat true}])
-
-(deftest env-is-latest-live-work-heavy
-  (with-redefs [nido.coordinator.record.session/list-sessions (fn [_ _] impl-and-newer-chat)]
-    (is (= "view-on-the-fly" (:name (work/environment :fukan "ws-1")))
-        "a newer heavy chat record (and the conductor's) is never the environment"))
-  (with-redefs [nido.coordinator.record.session/list-sessions
-                (fn [_ _] (filterv #(or (:chat %) (:conductor %)) impl-and-newer-chat))]
-    (is (nil? (work/environment :fukan "ws-1"))
-        "a workstream holding only its chat and conductor records has no environment")))
 
 (deftest work-session-excludes-chat-and-conductor
   (is (session/work-session? {:name "impl" :weight :heavy}))
@@ -3176,22 +3141,16 @@
           (let [ended   (improvement-ws! :nido "ws-p/1#0")
                 parked  (improvement-ws! :nido "ws-p/1#1")
                 never   (improvement-ws! :nido "plan/2026-09-21")
-                _       (session/create! :nido ended {:name "e" :weight :light :autonomy nil})
-                archived (session/archive! :nido ended "e")
-                _       (session/create! :nido parked {:name "g" :weight :heavy
-                                                       :autonomy parked-autonomy})
                 ;; What a parked improvement leaves: a halt only a person's answer clears.
                 _       (workstream/append-entry! :nido parked {:kind :blocker}
                                                   (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
                 by-ws   (into {} (map (juxt :ws-id identity)) (work/improvement-holds))]
             (is (= :stuck (:state (by-ws ended))))
-            (is (= (:at (last (:substrate-history archived))) (:ended-at (by-ws ended)))
-                "and says when its last session ended")
             (is (= :waiting-on-you (:state (by-ws parked)))
                 "a workstream halted at a gate is waiting on a person, not stuck")
             (is (nil? (:ended-at (by-ws parked))))
             (is (= :stuck (:state (by-ws never))))
-            (is (nil? (:ended-at (by-ws never))) "no session, so no end to report")))))))
+            (is (nil? (:ended-at (by-ws never))) "no run, so no end to report")))))))
 
 ;; ── Phases ──────────────────────────────────────────────────────────────────
 

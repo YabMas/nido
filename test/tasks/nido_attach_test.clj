@@ -6,7 +6,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
-   [nido.coordinator.record.session :as session]
+   [nido.test.units :as units]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.review.frontend :as frontend]
@@ -118,7 +118,7 @@
   (with-tmp
     (fn []
       (let [id (a-ws)]
-        (session/create! :brian id {:name "impl-1" :weight :heavy :autonomy nil})
+        (units/open-unit! :brian id "impl-1" {:session "impl-1"})
         (baselined! id)
         (ws/append-entry! :brian id {:kind :baseline-review}
                           (pr-str {:format :baseline-review :baseline-seq 2

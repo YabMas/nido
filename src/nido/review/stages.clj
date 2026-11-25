@@ -11,7 +11,6 @@
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.phase :as phase]
-   [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
@@ -589,13 +588,14 @@
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   project+ws-from-cwd
   "The workstream a verb run at `cwd` works on, as [project ws-id], or nil: the core turn's it runs
-   in (`ws/turn-ws`), else the one whose record holds the session `cwd` is the worktree of. Every
-   verb that writes to or reads from \"its\" workstream finds it here."
+   in (`ws/turn-ws`), else the open one a unit of which has the session `cwd` is the worktree of
+   (`ws/of-session`). A person's own session is no workstream's, so a verb run there names its
+   workstream itself. Every verb that writes to or reads from \"its\" workstream finds it here."
   [cwd]
   (try
     (or (ws/turn-ws)
         (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-          (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+          (when-let [ws-id (ws/of-session (keyword project) session)]
             [(keyword project) ws-id])))
     (catch Throwable _ nil)))
 
@@ -1867,7 +1867,7 @@
   [cwd]
   (or (ws/turn-ws)
       (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-        (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+        (when-let [ws-id (ws/of-session (keyword project) session)]
           [(keyword project) ws-id]))))
 
 (defn- preflight-design

@@ -91,7 +91,7 @@
      :drain-of      (when w (drain/drain-of w))
      :homes?        (boolean (some #(and (:name %)
                                          (fs/exists? (session-state/session-home-dir (name project) (:name %))))
-                                   records))
+                                   (ws/sessions project ws-id)))
      :conversations (into #{} (keep conversation-of) records)}))
 
 ;; ---------------------------------------------------------------------------

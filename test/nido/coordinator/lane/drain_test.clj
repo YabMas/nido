@@ -10,7 +10,7 @@
    [nido.coordinator.lane.drain :as lane]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.drain :as drain]
-   [nido.coordinator.record.session :as session]
+   [nido.test.units :as units]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.review.stages :as stages]
@@ -41,7 +41,7 @@
                           {:events [:chat-posted]})))
      :open-slice! (fn [proj slice unit brief]
                     (swap! opened conj [slice unit brief])
-                    (session/create! proj slice {:name unit :weight :heavy :autonomy nil}))
+                    (units/open-unit! proj slice unit {:session unit}))
      :land!       (fn [_ slice] (swap! landed conj slice) :granted)}))
 
 (defn- with-tmp [f]

@@ -64,7 +64,7 @@
     "One display row: what the workstream is and where it came from. Where it sits on the board is
      status's answer, added above this."
     {:signature [:=> [:catn [:project ProjectName] [:ws Workstream] [:facts [:? :any]]] WorkstreamRow]
-     :delegates [label tag last-activity ws-source session/list-sessions]})
+     :delegates [label tag last-activity ws-source workstream/sessions]})
   (Operation bare-row
     "A display row for a watched Notion page that has no workstream yet — what the board shows
      before anything local exists."
@@ -84,13 +84,6 @@
   (Operation grouped-by-engagement
     "Scratch rows grouped by whether anything is live on them."
     {:signature [:=> [:catn [:rows [:vector WorkstreamRow]]] :map]})
-  (Operation session-rows
-    "Display rows for one workstream's sessions, in the state the substrate's listing reports.
-     The listing is an argument: View may not reach Agent, so a composition root reads it through
-     the substrate adapter's listing and hands it down to whoever asks for rows."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
-                            [:listing [:sequential :map]]] [:vector :map]]
-     :delegates [session/list-sessions]})
   (Operation engagement-substatus
     "The short liveness tag shown beside a label."
     {:signature [:=> [:catn [:eng :keyword]] :string]})

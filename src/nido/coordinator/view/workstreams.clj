@@ -8,7 +8,6 @@
    [clojure.string :as str]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.record.phase :as phase]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.drain :as drain]
    [nido.coordinator.record.standing :as standing]
@@ -100,11 +99,6 @@
     (some #(= :review-run (:adapter %)) (:external-refs ws))     :review-run
     :else                                                         :notion))
 
-(defn- short-suffix
-  "The rand6 tail of a ws-id (segment after the final dash)."
-  [ws-id]
-  (last (str/split (str ws-id) #"-")))
-
 (defn- machine-name? [s]
   (boolean (some->> s (re-find #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}"))))
 
@@ -136,24 +130,20 @@
    3. the newest ledger entry recording the work's :title (when present and non-blank) — a
       close or a stage move is not what the work is
    4. a ticket id — Notion BR-####, GitHub repo#number
-   5. originating trigger (from a session's autonomy) + short ws-id suffix
-   6. a session name (human one-offs have no ref/entry/trigger — the name reads
-      far better than the raw ws-id)
-   7. raw ws-id.
+   5. a session name (`workstream/sessions`) — the name reads far better than the raw ws-id
+   6. raw ws-id.
    A ticket id is never prefixed: the row carries it as :br-id."
   [ws sessions]
   (let [nref        (notion-ref ws)
         sref        (slack-ref ws)
         gref        (github-ref ws)
         entry-title (not-empty (some-> ws workstream/newest-record :title))
-        trigger     (some #(get-in % [:autonomy :trigger]) sessions)
         sname       (some (comp not-empty :name) sessions)]
     (or (not-empty (get-in ws [:title :text]))
         (some (comp not-empty :title) [nref sref gref])
         entry-title
         (:id nref)
         (:id gref)
-        (when trigger (str (name trigger) " · " (short-suffix (:id ws))))
         sname
         (:id ws))))
 
@@ -164,47 +154,27 @@
    poor thing to look for; this never changes for the life of the workstream:
      1. the ticket id — Notion BR-####, GitHub repo#number — what a ticket-driven
         workstream is known by everywhere else
-     2. the session (= worktree) name a person or nido chose — what `cd`, the tab
-        and `nido session:*` all go by. The oldest session that is not the
-        conductor: a later seat or a conductor joins without renaming the work.
+     2. the session (= worktree) name of its first unit — what `cd`, the tab and
+        `nido session:*` all go by. A later unit joins without renaming the work.
      3. the ws-id, which every workstream has.
    A Slack ref's slack-<channel>-<ts> id is skipped: nobody searches for it."
   [ws sessions]
   (or (:id (notion-ref ws))
       (:id (github-ref ws))
-      (some->> sessions
-               (remove :conductor)
-               (filter (comp not-empty :name))
-               (sort-by :created-at)
-               first
-               :name)
+      (some (comp not-empty :name) sessions)
       (:id ws)))
 
-(defn- timestamps [ws sessions]
-  (concat
-   [(:created-at ws)]
-   (map :at (:entries ws))
-   (mapcat (fn [s]
-             (concat (map :at (:substrate-history s))
-                     [(:created-at s)]))
-           sessions)))
+(defn- timestamps [ws]
+  (cons (:created-at ws) (map :at (:entries ws))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream :any] [:maybe :string]]}
   last-activity
-  "Latest ISO-8601 timestamp across the workstream's creation, its ledger entries and each
-   session's substrate-history / created-at. ISO strings sort lexically = chronologically. nil
-   when nothing is present."
-  [ws sessions]
+  "Latest ISO-8601 timestamp across the workstream's creation and its ledger entries. ISO strings
+   sort lexically = chronologically. nil when nothing is present."
+  [ws]
   ;; The greatest, found in one pass: sorting every row's timestamps was a fifth of a board read.
   (reduce (fn [a b] (if (or (nil? a) (and b (pos? (compare b a)))) b a))
-          nil (timestamps ws sessions)))
-
-(defn- max-priority
-  "Highest autonomy :priority across a workstream's sessions (0 when none carry
-   one). This is the triage severity — `:triage-teacher-bugs` sets it from the
-   ticket's severity-calc, so it drives the same ordering the executor picks by."
-  [sessions]
-  (->> sessions (keep #(get-in % [:autonomy :priority])) (reduce max 0)))
+          nil (timestamps ws)))
 
 (defn- standing-design
   "The design whose plan governs the workstream (`standing/governing-design` — the one
@@ -226,7 +196,7 @@
    (nido.coordinator.source.notion-cache); nil ⇒ no Notion priority is stamped."
   ([project ws] (workstream-row project ws nil))
   ([project ws facts]
-   (let [sessions (session/list-sessions project (:id ws))
+   (let [sessions (workstream/sessions project (:id ws))
          page-id  (:page-id (notion-ref ws))]
      {:ws-id           (:id ws)
       :project         project
@@ -240,10 +210,10 @@
       :tag             (tag ws sessions)
       :links           (ref-links ws)
       :source          (ws-source ws)
-      :priority        (max-priority sessions)
+      :priority        0
       :notion-priority (get-in facts [page-id :priority])
       :session-count   (count sessions)
-      :last-activity   (last-activity ws sessions)
+      :last-activity   (last-activity ws)
       :facets          (:facets ws)
       ;; Standing's answer, read off the ledger — the one placement asks. Asked only of a ledger
       ;; holding a findings round that is not settled: nearly none are, a board reads thousands
@@ -394,58 +364,6 @@
   (let [live? #(contains? live-engagements (:engagement %))]
     {:active (by-newest (filter live? rows))
      :idle   (by-newest (remove live? rows))}))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:sequential :map]] [:vector :map]]}
-  session-rows
-  "Display rows for one workstream's sessions, ordered most-recently-active first, in the state
-   the substrate's listing reports and with who drives each in one vocabulary whoever started it:
-   :driver is what a session's :claude facet records, :nobody without one or for a :person a facet
-   written before still carries; :state is the
-   listing's, nil for a session it does not list.
-
-   `listing` is the substrate's rows for this workstream's directories — View may not reach the
-   substrate, so its caller reads them and hands them down, each marked :baseline-shown? by the
-   check conduct makes. A listed background session no record names gets a row of its own when it
-   is so marked: a person's own session in the workstream's home or worktree, which nido could
-   adopt. :recorded? says which: only a recorded row's :name is a nido session to open. A recorded
-   row's :last-activity is its owning run's newest transition, else its own."
-  [project ws-id listing]
-  (let [by-id     (into {} (map (juxt :sessionId identity)) listing)
-        sessions  (session/list-sessions project ws-id)
-        ran-at    (into {} (map (juxt :session-name #(-> % :state-history last :at)))
-                        (runs/runs-of project ws-id))
-        on-record (set (keep #(get-in % [:claude :session-id]) sessions))
-        recorded  (mapv (fn [s]
-                          (let [row (get by-id (get-in s [:claude :session-id]))]
-                            {:name          (:name s)
-                             :project       project
-                             :recorded?     true
-                             :weight        (:weight s)
-                             :substrate     (:substrate s)
-                             :state         (:state row)
-                             ;; :person, written before a prompt stopped changing who drives,
-                             ;; is nobody.
-                             :driver        (let [d (get-in s [:claude :driver])]
-                                              (if (or (nil? d) (= :person d)) :nobody d))
-                             :last-activity (or (ran-at (:name s))
-                                                (some-> s :substrate-history last :at)
-                                                (:created-at s))}))
-                        sessions)
-        unrecorded (for [row listing
-                         :when (and (= "background" (:kind row))
-                                    (not (on-record (:sessionId row)))
-                                    (:baseline-shown? row))]
-                     {:name          (or (:name row) (:id row))
-                      :project       project
-                      :recorded?     false
-                      :session-id    (:sessionId row)
-                      :state         (:state row)
-                      :driver        :nobody
-                      :last-activity (some-> (:startedAt row) java.time.Instant/ofEpochMilli str)})]
-    (->> (concat recorded unrecorded)
-         ;; newest-active first; nil :last-activity sorts last. Lexical = chronological.
-         (sort-by #(or (:last-activity %) "") #(compare %2 %1))
-         vec)))
 
 (def ^:private title-max 52)
 

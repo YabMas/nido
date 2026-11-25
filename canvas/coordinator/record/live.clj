@@ -35,7 +35,7 @@
      census has passed that on."
     {:signature [:=> [:catn [:projects [:sequential ProjectName]]] :any]
      :delegates [workstream/over-project workstream/read-ws workstream/activation workstream/closure
-                 drain/drain? session/list-sessions runs/list-run-ids runs/read-run
+                 drain/drain? session/list-sessions workstream/sessions runs/list-run-ids runs/read-run
                  state/workstreams-dir state/workstream-dir state/ws-sessions-dir state/runs-dir
                  state/run-dir state/session-events-path events/use-index!]})
   (Operation stop!

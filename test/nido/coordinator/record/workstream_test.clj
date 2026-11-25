@@ -12,7 +12,8 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.core.client :as client]
-   [nido.platform.io :as io]))
+   [nido.platform.io :as io]
+   [nido.test.units :as units]))
 
 
 (def example-ws
@@ -1957,3 +1958,27 @@
   (is (= [:brian "ws-1"] (ws/turn-ws {"NIDO_CORE_WS" "brian/ws-1"})))
   (is (nil? (ws/turn-ws {})) "outside every turn")
   (is (nil? (ws/turn-ws {"NIDO_CORE_WS" "no-slash"}))))
+
+(deftest a-workstreams-sessions-are-its-units
+  (with-tmp
+    (fn [_]
+      (let [id (:id (ws/create! :brian {:external-refs []}))]
+        (is (= [] (ws/sessions :brian id)) "no unit, no session")
+        (units/open-unit! :brian id "u1" {:session "fix-drift"})
+        (units/open-unit! :brian id "u2")
+        (is (= [{:name "fix-drift" :unit "u1" :open? true :status :ready :cwd "/worktrees/fix-drift"}
+                {:name "u2" :unit "u2" :open? true :status :none :cwd nil}]
+               (ws/sessions :brian id))
+            "named for its worktree once it has one, for its unit before")))))
+
+(deftest a-session-belongs-to-the-open-workstream-whose-unit-has-it
+  (with-tmp
+    (fn [_]
+      (let [open-id   (:id (ws/create! :brian {:external-refs []}))
+            closed-id (:id (ws/create! :brian {:external-refs []}))]
+        (units/open-unit! :brian open-id "u1" {:session "fix-drift"})
+        (units/open-unit! :brian closed-id "u1" {:session "old-work"})
+        (ws/close! :brian closed-id :done)
+        (is (= open-id (ws/of-session :brian "fix-drift")))
+        (is (nil? (ws/of-session :brian "old-work")) "a closed workstream's sessions are torn down")
+        (is (nil? (ws/of-session :brian "my-exploration")) "a person's own session is no workstream's")))))

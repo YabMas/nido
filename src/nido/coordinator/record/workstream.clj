@@ -25,6 +25,7 @@
    [nido.coordinator.report.model :as report-model]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
+   [nido.core.provision :as provision]
    [nido.core.client :as client]
    [nido.platform.core :as core]
    [nido.platform.io :as io]))
@@ -166,6 +167,43 @@
    rows — or nil when the core holds no such workstream."
   [project ws-id]
   (record-of ws-id (core-state project ws-id)))
+
+(declare read-project closure)
+
+(defn- unit-sessions
+  "The sessions of committed core `state`'s units, as `sessions` answers them."
+  [state]
+  (->> (vals (:units state))
+       (sort-by :id)
+       (mapv (fn [{:keys [id status session]}]
+               {:name   (provision/session-name {:unit id :cwd (:cwd session)})
+                :unit   id
+                :open?  (= :open status)
+                :status (:status session :none)
+                :cwd    (:cwd session)}))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:vector :UnitSession]]}
+  sessions
+  "The sessions of workstream `ws-id`: one per unit the core holds for it, in unit order, whatever
+   became of the unit. `:status` is where the core's provisioning has its session — `:ready` is up
+   — and `:open?` whether its unit is. Empty for a workstream the core holds none of. A session
+   no unit has, a person's own, is no workstream's."
+  [project ws-id]
+  (if-let [st (core-state project ws-id)]
+    (if (:discarded? st) [] (unit-sessions st))
+    []))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :WorkstreamId]]}
+  of-session
+  "The open workstream of `project` one of whose units has the session named `session-name`, or
+   nil when none does — a person's own session included. Open as the core says and with no
+   closure on its ledger, read in one request: a closed workstream's sessions are torn down, and
+   no verb works on one through them."
+  [project session-name]
+  (->> (read-project project {:open? true})
+       (some (fn [[id st]] (when (and (some #(= session-name (:name %)) (unit-sessions st))
+                                      (not (closure (record-of id st))))
+                             id)))))
 
 (defn- create-command!
   "Send `command` on workstream `ws-id` under `key`, and throw unless the core admits it."
