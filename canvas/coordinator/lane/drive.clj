@@ -78,6 +78,10 @@
      at all is a one-click approval of the design its own round sent back."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
      :delegates [standing/governing-design standing/proceeding?]})
+  (Operation implementation-review-passed?
+    "Whether the newest review over the implementation passed, with nothing built since — what
+     makes a workstream a release candidate."
+    {:signature [:=> [:catn [:w :any]] :boolean]})
   (Operation next-action "The stage to run next and the mode it runs in, or nil at a terminus."
     {:signature [:=> [:catn [:position :any] [:kind :keyword]] [:maybe :map]]})
   (Operation amendment-owed

@@ -439,3 +439,12 @@
                                         :call {:id "k2" :question "q?"}}
                           ask]))
         "an ask awaiting the person outranks everything else")))
+
+(deftest a-granted-landing-is-the-conductors-to-direct
+  (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
+                  {:command :give-grant :grant :merge :by "person"}])]
+    (is (= [:landing-granted] (keep #(#{:landing-granted} (:kind %)) (vals (:inbox s))))
+        "the person's Land wakes the conductor, which nothing else would"))
+  (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
+                  {:command :give-grant :grant :intent :by "person"}])]
+    (is (not-any? #(= :landing-granted (:kind %)) (vals (:inbox s))) "a grant of another kind wakes nothing")))

@@ -457,6 +457,28 @@
    page is /drains."
   #{:done :dismissed :analysed :drained})
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  release-candidate?
+  "Whether `position` is a release candidate: its implementation review converged and it is
+   landable as it stands. Land is offered on it, and nobody owes the move — it waits as a
+   candidate, never as a question, so it is no gate and never in Needs you."
+  [position]
+  (= :release-candidate (:at position)))
+
+(defn- release-candidates
+  "Every workstream row of `groups` (all-grouped's) that is a release candidate, each with its
+   :project, oldest activity first — the order they became ready in, near enough."
+  [groups]
+  (->> (for [{:keys [project grouped]} groups
+             rows (vals grouped)
+             row  rows
+             :when (release-candidate? (:position row))]
+         (assoc row :project project))
+       (reduce (fn [acc r] (assoc acc [(:project r) (:ws-id r)] r)) {})
+       vals
+       (sort-by #(or (:last-activity %) ""))
+       vec))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :keyword]]}
   awaiting-human
   "The stage a PERSON owes this position, or nil when the next move is nido's.
@@ -597,7 +619,11 @@
             ;; where it stands, and a workstream under way is out of the triage pen.
             core-at (when (= :intake (get-in row [:position :at])) (wcore/position w))
             doing   (wcore/doing w)
-            asking? (boolean (seq (:awaiting w)))]
+            asking? (boolean (seq (:awaiting w)))
+            ;; The person's Land is a grant the core holds until a merge spends it, never a ledger
+            ;; record: until then the candidate is landing, the seat's move on nido's instruction.
+            landing? (and (contains? (get-in w [:state :grants]) :merge)
+                          (#{:release-candidate :published} (get-in row [:position :at])))]
         (cond-> (assoc row
                        :needs-you  asking?
                        :engagement eng
@@ -606,6 +632,8 @@
           doing                 (assoc-in [:status :live] true)
           asking?               (assoc-in [:status :owed-by] :person)
           core-at               (assoc :position core-at)
+          landing?              (update :position assoc :at :land-granted
+                                        :next {:stage :land :mode :working-copy})
           (and core-at (#{:triage :ready} (:stage row))) (assoc :stage :in-progress)
           (wcore/held-units? w) (assoc-in [:status :paused] true)
           closed?               (assoc :stage (if (= :dismissed (:stage row)) :dismissed :done)
@@ -3297,8 +3325,13 @@
                        :withdrawn)
         {:decision :core-refused :because "nothing is asked"})
 
+      ;; Land is the person's grant, and only over a change that is landable as it stands: a
+      ;; release candidate, or a PR published before candidates were read. A grant given
+      ;; anywhere else would be spent on whatever the arc reaches next.
       (= :land action-id)
-      (core-decision (act! {:command :give-grant :grant :merge :by "person"}) :granted)
+      (if (#{:release-candidate :published} (:at (pipeline/of project ws-id)))
+        (core-decision (act! {:command :give-grant :grant :merge :by "person"}) :granted)
+        {:decision :nothing-to-land})
 
       ;; A workstream the pen held back starts as its fire would have.
       ;; The workstream's first unit is named for it; a later arc's, after its own count.
@@ -4099,7 +4132,10 @@
      :gates       kept-gates
      ;; Every project's, not the scope's: Needs you spans all projects whatever
      ;; a view is focused on, and this is the count its badge shows.
-     :needs-count (count gates)}))
+     :needs-count (count gates)
+     ;; Every project's release candidates, for the same reason: their own list and badge,
+     ;; apart from Needs you, since a candidate asks nobody anything.
+     :candidates  (release-candidates groups)}))
 
 ;; ── the acts a surface performs on the work plane ────────────────────────────
 ;;

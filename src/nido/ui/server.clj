@@ -195,6 +195,7 @@
    :active      active
    :scope       focus
    :needs-count (:needs-count screen)
+   :candidates-count (count (:candidates screen))
    :daemon      (read-rail-daemon)
    :projects    (project-names)})
 
@@ -203,6 +204,7 @@
    (sse-fragment
     (str (views/needs-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
+                                      :candidates-count (count (:candidates screen))
                                       :daemon (read-rail-daemon)})))))
 
 (defn- workstreams-fragment-response [screen]
@@ -210,6 +212,7 @@
    (sse-fragment
     (str (views/workstreams-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
+                                      :candidates-count (count (:candidates screen))
                                       :daemon (read-rail-daemon)})))))
 
 (defn- fleet-context

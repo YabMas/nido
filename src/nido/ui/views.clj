@@ -26,6 +26,18 @@
 (defn- rail-needs-badge [n]
   [:span {:id "rail-needs-count" :class (str "rail-badge" (when (zero? (or n 0)) " zero"))} n])
 
+(defn- rail-candidates-badge [n]
+  [:span {:id "rail-candidates-count" :class (str "rail-badge rail-badge-rc" (when (zero? (or n 0)) " zero"))}
+   (or n 0)])
+
+(def ^:private needs-icon
+  "Needs you: a question waits on the person."
+  "✋")
+
+(def ^:private candidates-icon
+  "Release candidates: work ready to land when the person chooses — no question asked."
+  "🚀")
+
 (defn- rail-health [{:keys [state]}]
   (let [s (name (or state :down))]
     [:div {:id "rail-health" :class "rail-health"}
@@ -65,16 +77,21 @@
         [:a {:href (str path "?scope=" p) :class (when (= p scope) "active")} p])]]))
 
 (defn- topbar
-  "What spans every project: the project switcher, Needs you, and the menu
-   holding nido's own pages."
-  [{:keys [active needs-count] :as ctx}]
+  "What spans every project: the project switcher, Needs you, the release candidates — kept
+   apart from Needs you because a candidate asks nothing, it only waits to be landed — and the
+   menu holding nido's own pages. Each of the two is an icon and its count."
+  [{:keys [active needs-count candidates-count] :as ctx}]
   [:header.topbar
    [:a.topbar-brand {:href "/" :title "nido"}
     [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 44 :height 44}]]
    (project-switcher ctx)
    [:div.topbar-gap]
-   [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/"}
-    [:span "Needs you"] (rail-needs-badge needs-count)]
+   [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/#needs-you"
+        :title "Needs you — questions waiting on you" :aria-label "Needs you"}
+    [:span.topbar-icon needs-icon] (rail-needs-badge needs-count)]
+   [:a {:class "topbar-link" :href "/#candidates"
+        :title "Release candidates — ready to land" :aria-label "Release candidates"}
+    [:span.topbar-icon candidates-icon] (rail-candidates-badge candidates-count)]
    [:details.gear {"data-on:click__outside" "el.open = false"}
     [:summary {:title "menu" :aria-label "menu"} "⚙"]
     [:div.menu
@@ -97,9 +114,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   rail-status-fragment
-  "The two live top-bar elements, for SSE patching alongside a surface fragment."
-  [{:keys [needs-count daemon]}]
+  "The live top-bar elements, for SSE patching alongside a surface fragment."
+  [{:keys [needs-count candidates-count daemon]}]
   (str (h/html (rail-needs-badge needs-count))
+       ;; Patched only by a poll that read the candidates: the ops poll reads none.
+       (when candidates-count (h/html (rail-candidates-badge candidates-count)))
        (h/html (rail-health daemon))))
 
 (defn ^{:malli/schema [:=> [:cat :any :keyword] :string]}
@@ -507,16 +526,35 @@
   [:li [:span.meta at] " · " session " · " [:code (or tool-name "?")]
    (when tool-input [:span.meta " " tool-input])])
 
+(defn- candidate-row
+  "One release candidate: the workstream, linking to its pane, where Land is."
+  [{:keys [project ws-id label position]} selection href]
+  [:a {:class (str "gate-card" (when (and (= project (:project selection)) (= ws-id (:ws-id selection))) " sel"))
+       :href href}
+   [:div.gate-top [:span.candidate-mark {:title "release candidate"} candidates-icon] [:span.lbl (or label ws-id)]]
+   [:div.gate-sub [:span project] (state/position-chip position)]])
+
+(defn- candidates-list
+  "The release candidates, each opening its workstream's pane beside the list."
+  [{:keys [candidates selection] :as screen}]
+  (if (seq candidates)
+    (for [r candidates]
+      (candidate-row r selection (str "/" (screen-query screen {:sel (str (:project r) ":" (:ws-id r))}))))
+    [:p.empty "No release candidates."]))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
-  "The needs-you list — initial render + SSE refresh: one row per gate, each opening that
-   workstream's pane beside the list (/?sel=), where its question is answered, and the open one
-   marked."
+  "The home lists — initial render + SSE refresh — as two sections: Needs you, one row per gate,
+   and the release candidates, one row per workstream ready to land. Each row opens that
+   workstream's pane beside the lists (/?sel=), where its question is answered or its Land is,
+   and the open one is marked. Apart because a candidate asks nothing."
   [{:keys [gates selection] :as screen}]
   (str
    (h/html
+    [:div {:id "needs"}
+     [:h3.inbox-head {:id "needs-you"} [:span.topbar-icon needs-icon] " Needs you"]
     (if (seq gates)
-      [:div {:id "needs"}
+      [:div {:id "needs-gates"}
        (for [g gates
              :let [sel (str (:project g) ":" (:ws-id g))]]
          (list
@@ -531,7 +569,9 @@
             [:a.gate-tag {:href (str "/drains?scope=" (:project g))}
              (str (count (:raised-by g)) " slice question" (when (< 1 (count (:raised-by g))) "s")
                   " on the drains page →")])))]
-      [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
+      [:div {:id "needs-gates"} [:p.empty "Nothing needs you right now."]])
+     [:h3.inbox-head {:id "candidates"} [:span.topbar-icon candidates-icon] " Release candidates"]
+     [:div {:id "needs-candidates"} (candidates-list screen)]])))
 
 (defn- gate-action-fragment
   "Shared shape for the immediate, action-keyed gate-action pane fragment:
@@ -1732,7 +1772,12 @@
                                     ;; does, off the same reading of the same
                                     ;; position — a design decision is owed a
                                     ;; person whether or not an agent is parked.
-                                    :awaiting      (work/awaiting-human position)
+                                    ;; A release candidate owes nobody, and still offers Land:
+                                    ;; the landing is the person's whenever they choose.
+                                    :awaiting      (if (work/release-candidate? position)
+                                                     :land
+                                                     (work/awaiting-human position))
+                                    :landable?     (work/release-candidate? position)
                                     :gate-criterion (get-in plan [:owed-gate :criterion])
                                     :seq           (:seq report)}))
                 session)))

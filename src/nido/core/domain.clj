@@ -364,7 +364,9 @@
                                       :status :open :content content})))
 
 (defmethod evolve :grant-given [state {:keys [grant by]}]
-  (assoc-in state [:grants grant] {:by by}))
+  ;; A landing granted is the conductor's to direct: nothing else tells a unit to land.
+  (cond-> (assoc-in state [:grants grant] {:by by})
+    (= :merge grant) (hear-later {:kind :landing-granted :by by})))
 
 (defmethod evolve :grant-spent [state {:keys [grant]}]
   (update state :grants dissoc grant))

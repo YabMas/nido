@@ -132,8 +132,12 @@
       (testing "promote is the person's start: the workstream's unit opened"
         (is (= {:decision :promoted} (work/set-stage! :brian ws-id :in-progress)))
         (is (= :open (get-in (core-state c ws-id) [:units ws-id :status]))))
-      (testing "land grants the landing"
-        (is (= {:decision :granted} (work/resolve-gate! :brian ws-id :land nil)))
+      (testing "land grants nothing where nothing is landable as it stands"
+        (is (= {:decision :nothing-to-land} (work/resolve-gate! :brian ws-id :land nil)))
+        (is (not (contains? (:grants (core-state c ws-id)) :merge))))
+      (testing "land grants the landing of a release candidate"
+        (with-redefs [pipeline/of (constantly {:at :release-candidate})]
+          (is (= {:decision :granted} (work/resolve-gate! :brian ws-id :land nil))))
         (is (contains? (:grants (core-state c ws-id)) :merge)))
       (testing "pause holds each open unit, and resume releases it"
         (work/pause! :brian ws-id "later")

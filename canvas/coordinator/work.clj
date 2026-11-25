@@ -50,6 +50,9 @@
     "Whether an action must be rendered with the ledger position it was derived from — the
      optimistic lock that stops two people deciding the same thing twice."
     {:signature [:=> [:catn [:action-id :any]] :boolean]})
+  (Operation release-candidate?
+    "Whether a position is a release candidate: Land offered, owed by nobody — so never a gate."
+    {:signature [:=> [:catn [:position [:maybe :map]]] :boolean]})
   (Operation awaiting-human
     "The stage a PERSON owes a position, or nil when the next move is nido's own. What makes a
      grant reachable: the round that decides a design runs as a task and parks nobody, so a

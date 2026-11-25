@@ -55,6 +55,7 @@
    :awaiting-gate     "Awaiting gate"
    :published         "Draft PR open"
    :land-granted      "Landing"
+   :release-candidate "Release candidate"
    :shipped           "Merged"
    :findings-open     "Findings open"
    :blocked           "Blocked"
@@ -100,8 +101,9 @@
   ([position] (position-chip position nil))
   ([{:keys [at next] :as position} tip]
    (when position
-     (let [human? (= :human (:mode next))]
-       [:span (cond-> {:class (str "pos" (when human? " pos-you"))}
+     (let [human? (= :human (:mode next))
+           rc?    (= :release (:mode next))]
+       [:span (cond-> {:class (str "pos" (cond human? " pos-you" rc? " pos-rc"))}
                 (or next tip)
                 (assoc :title (str/join " · " (remove nil? [(when next (str "next: " (get stage-label (:stage next) (name (:stage next)))))
                                                             tip]))))

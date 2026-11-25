@@ -1569,3 +1569,38 @@
         (let [before (:at (p/of :brian id))]
           (add! :grant {:format :grant :grants [:merge] :words "Land"})
           (is (= before (:at (p/of :brian id)))))))))
+
+(deftest a-converged-review-makes-a-release-candidate-owed-by-nobody
+  (testing "a project that lands no PR is a candidate once its review passed"
+    (is (= :release-candidate (#'p/place {:ks #{:intent :review} :review-passed? true :lands-pr? false}))))
+  (testing "a PR-landing project is a candidate only once its PR is open"
+    (is (= :reviewed (#'p/place {:ks #{:intent :review} :review-passed? true :lands-pr? true})))
+    (is (= :release-candidate (#'p/place {:ks #{:intent :review :pr-opened} :review-passed? true :lands-pr? true}))))
+  (testing "a review that did not pass makes no candidate"
+    (is (= :reviewed (#'p/place {:ks #{:intent :review} :review-passed? false :lands-pr? false})))
+    (is (= :published (#'p/place {:ks #{:intent :review :pr-opened} :review-passed? false :lands-pr? true}))))
+  (testing "a granted landing outranks the candidate"
+    (is (= :land-granted (#'p/place {:ks #{:intent :review} :review-passed? true :lands-pr? false :merge-granted? true}))))
+  (testing "its landing is offered, never owed: no person's move, so it is no gate"
+    (is (= {:stage :land :mode :release} (p/next-action :release-candidate :pickup)))))
+
+(defn- a-review [status]
+  {:format :review-report :status status :base "main" :base-rev nil :rounds 1 :fix-attempts 0
+   :defects-settled 0 :findings-remaining 0 :report-path "r.edn"})
+
+(deftest only-the-newest-review-over-the-built-change-passes-it
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            w #(ws/read-ws :brian id)]
+        (intent! add!)
+        (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts []})
+        (is (false? (p/implementation-review-passed? (w))) "no review yet")
+        (add! :review (a-review :converged))
+        (is (true? (p/implementation-review-passed? (w))))
+        (add! :implementation-completed {:format :implementation-completed :summary "more" :artifacts []})
+        (is (false? (p/implementation-review-passed? (w))) "built again since: the review judged an older change")
+        (add! :review (a-review :unresolved))
+        (is (false? (p/implementation-review-passed? (w))) "a newer review that did not pass withdraws the pass")
+        (add! :review (a-review :clean))
+        (is (true? (p/implementation-review-passed? (w))))))))

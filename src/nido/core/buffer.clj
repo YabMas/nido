@@ -145,6 +145,10 @@
                         (when actions-unknown? " — what it did is UNKNOWN; settle it before anything else runs on this unit"))
     :turn-asked    (str "unit " unit ": turn " turn " ASKED — dispose of its call exactly once")
     :unit-merged   (str "unit " unit " merged")
+    :landing-granted (str "the person pressed Land: the workstream is a release candidate and its landing is granted. "
+                          "Direct it now, without asking anything: start_unit_turn on the open unit whose working copy holds the change, "
+                          "instructing it to run `bb --config ~/Code/nido/bb.edn nido:workstream:pr:land` in that working copy — "
+                          "it lands by the procedure the project declares, its own PR included — and to report what it printed")
     :unit-released (str "unit " unit " was released by the person after a hold")
     :unit-ready    (str "unit " unit ": its session is up and nothing has been directed there yet — "
                         "start its work with start_unit_turn, from what the workstream holds")
@@ -199,6 +203,7 @@
      (str "- How an ask is written: " ask-tool/guidance)
      "- Directing a unit to ask several product questions, tell it to give each its own entry in the ask's `questions`."
      "- A unit with an unknown runs nothing until you settle it (settle_unknown) by observing what happened."
+     "- Never ask the person whether to land. Once the implementation review converges the workstream is a release candidate, and the person lands it with its Land button; you hear it when they do."
      "- Start a unit's next turn with start_unit_turn when its goal needs more work; it runs in the unit's own session. Stop when there is nothing left to decide."
      "- The person's chat messages reach you as they decided, often passed on by the workstream's chat agent, which answers their questions itself; each is the person's word. Answer every chat message the person sent with reply_chat. What you settle in chat takes effect only through the same tools."
      ""

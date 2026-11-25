@@ -27,9 +27,11 @@
    ask them, so there is one answer to that question in the system and not two."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.lane.landing :as landing]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.drain :as drain]
+   [nido.coordinator.record.entry :as entry]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
@@ -71,6 +73,10 @@
    ;; The person granted the landing of a published PR and it has not landed yet: the seat
    ;; lands it, on nido's instruction.
    :land-granted
+   ;; The newest review over the implementation converged, and the change is ready to land as it
+   ;; stands — on a PR-landing project, once its PR is open. Nobody owes a move: Land is offered,
+   ;; and taking it is the person's whenever they choose.
+   :release-candidate
    :published
    :reviewed
    :implemented
@@ -124,8 +130,12 @@
                   than left nil so that `nothing can be fired here` and `nothing
                   remains to be done` stay different answers — a terminal
                   position carries no next action, and this carries one nobody
-                  but a human can take."
-  #{:mechanical :authoring :working-copy :human})
+                  but a human can take.
+   :release       a move OFFERED to a person and owed by nobody: a release
+                  candidate's landing. Not :human, because a person who has not
+                  landed yet is not holding anything up — the change waits as a
+                  candidate, never as a question."
+  #{:mechanical :authoring :working-copy :human :release})
 
 ;; ── How the work arrived ────────────────────────────────────────────────────
 
@@ -580,6 +590,20 @@
 
 ;; ── The fold ────────────────────────────────────────────────────────────────
 
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  implementation-review-passed?
+  "Whether `w`'s newest :review over the implementation passed — its status :clean or :converged —
+   and no implementation was recorded after it, so it judged the change as it stands. A newer
+   review that ended otherwise withdraws an older pass. Read off the whole workstream, so a
+   workstream of several units is ready only once the review over all of their work passed."
+  [w]
+  (let [es     (:entries w)
+        review (last (filter #(= :review (:kind %)) es))
+        built  (last (filter #(#{:implementation-completed :layer-completed} (:kind %)) es))]
+    (boolean (and review
+                  (or (nil? built) (> (:seq review) (:seq built)))
+                  (#{:clean :converged} (:status (entry/parsed w (:seq review))))))))
+
 (defn- place
   "The position, given everything already read. Pure — every argument is a fact
    the caller gathered, so the precedence order is readable in one screen and
@@ -591,7 +615,7 @@
    a position is always answerable by pointing at an entry."
   [{:keys [closed? closed-outcome findings-open? blocker-seq retraction ks decided? approved?
            cleared? verified? re-entry trail-records layers triage-unaccepted? class-position
-           merge-granted?]}]
+           merge-granted? review-passed? lands-pr?]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
   ;; true, is true for ever. `re-entry` is the reading that says how far up the
@@ -618,6 +642,9 @@
   (let [;; The kinds of the records the trail clauses read (`trail-records`), so the record
         ;; that placed a trail position is nameable (`placed-by`). Absent, the whole index.
         trail-ks       (if trail-records (into #{} (map :kind) trail-records) ks)
+        ;; Landable as it stands: a PR-landing project lands its open PR, any other its working
+        ;; copy, so a converged review is the whole of it there.
+        landable?      (or (contains? trail-ks :pr-opened) (and (false? lands-pr?) review-passed?))
         design-stands? (not (and (= :design (:stage re-entry))
                                  (not (:indeterminate? re-entry))))]
     (cond
@@ -651,7 +678,8 @@
 
     ;; The person granted the landing (`ws/unspent-grants`) and it has not landed since: the next
     ;; move is the seat's, which nido instructs, so no gate offers Land again.
-    (and merge-granted? (contains? trail-ks :pr-opened)) :land-granted
+    (and merge-granted? landable?)       :land-granted
+    (and review-passed? landable?)       :release-candidate
     (contains? trail-ks :pr-opened)      :published
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
@@ -734,6 +762,8 @@
     :design-invalidated (get-in re-entry [:because :seq])
     :triage-awaiting    verdict-seq
     :published          (:seq (last (filter #(= :pr-opened (:kind %)) trail-records)))
+    ;; The converged review that made it a candidate: what a Land is checked against.
+    :release-candidate  (:seq (last (filter #(= :review (:kind %)) trail-records)))
     nil))
 
 (def ^:private next-by-position
@@ -787,6 +817,8 @@
    :published         {:stage :land                  :mode :human}
    ;; Granted: the seat lands it by its project's procedure, so nobody owes a person's move.
    :land-granted      {:stage :land                  :mode :working-copy}
+   ;; A candidate: Land is offered, owed by nobody, so it raises no question.
+   :release-candidate {:stage :land                  :mode :release}
    ;; A drain's recipe: the coordinator proposes a recipe, the person approves it, nido takes the
    ;; census, the coordinator runs the drain, and the person closes it once the census reads zero.
    :drain-chartered   {:stage :propose-recipe        :mode :authoring}
@@ -1272,10 +1304,14 @@
                          ;; `baseline-verified?`'s answer, from the reading
                          ;; already in hand rather than a second closure.
                          :verified?      (boolean (:verified? bst))
-                         ;; Read only where a PR was published: the grant matters nowhere else.
-                         :merge-granted? (boolean (and (contains? ks :pr-opened)
+                         ;; Read only where something is landable: the grant matters nowhere else.
+                         :merge-granted? (boolean (and (or (contains? ks :pr-opened) (contains? ks :review))
                                                        (some #(= :merge (:kind %))
-                                                             (ws/unspent-grants project ws-id))))}
+                                                             (ws/unspent-grants project ws-id))))
+                         :review-passed? (implementation-review-passed? w)
+                         ;; A declaration `landing` refuses reads as PR-landing: nothing then becomes
+                         ;; a candidate before a PR is open, and its Land refuses it by name.
+                         :lands-pr?      (not (false? (landing/names-pr? project)))}
           pos    (place facts)
           kind   (intake-kind whole (kinds whole))
           next-of (fn [p]
