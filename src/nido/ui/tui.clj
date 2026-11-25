@@ -969,13 +969,15 @@
    observed) names why — surface both honestly rather than claiming success."
   [state]
   (if-let [ws (selected-workstream state)]
-    (let [{:keys [decision message]} (work/set-stage! (:project state) (:ws-id ws) :done)
+    (let [{:keys [decision message because]} (work/set-stage! (:project state) (:ws-id ws) :done)
           label    (or (:br-id ws) (:ws-id ws))]
       [(-> state (refresh-list (current-rows state))
            (assoc :status (case decision
                             :no-workstream (str "no workstream yet — " label)
                             ;; A slice is done only by landing, a drain only on its observed exit.
                             :refused       (str "not marked done — " label ": " message)
+                            ;; The core refused the close, e.g. a unit still has a turn running.
+                            :core-refused  (str "not marked done — " label ": the core refused (" because ")")
                             (str "marked " label " done"))))
        nil])
     [(assoc state :status "(no workstream selected)") nil]))

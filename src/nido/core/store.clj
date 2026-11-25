@@ -59,7 +59,7 @@
    "CREATE TABLE IF NOT EXISTS units(
       ws     TEXT NOT NULL,
       id     TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('open','merged','retracted')),
+      status TEXT NOT NULL CHECK (status IN ('open','merged','retracted','finished')),
       held   INTEGER NOT NULL CHECK (held IN (0,1)),
       PRIMARY KEY (ws, id))"
    "CREATE TABLE IF NOT EXISTS turns(
@@ -129,6 +129,25 @@
 
 (defn- exec! [^Connection c sql] (with-open [st (.createStatement c)] (.execute st sql)))
 
+(defn- widen-unit-status!
+  "Rebuild the units table of a store created before a unit could finish, whose CHECK refuses
+   'finished' — so every commit folding a unit :finished failed, leaving its turn running and its
+   workstream impossible to close. The rows are a cache of the state, so they are kept as they
+   are and the table is recreated by `schema`; its trigger on turns reads units, so it is dropped
+   with it and recreated beside it. Runs before `schema`; a no-op on a store already widened."
+  [^Connection c]
+  (let [ddl (:sql (jdbc/execute-one! c ["SELECT sql FROM sqlite_master WHERE type='table' AND name='units'"]
+                                     {:builder-fn rs/as-unqualified-maps}))]
+    (when (and ddl (not (str/includes? ddl "'finished'")))
+      (jdbc/with-transaction [tx c]
+        (exec! tx "CREATE TEMP TABLE units_keep AS SELECT ws, id, status, held FROM units")
+        (exec! tx "DROP TRIGGER IF EXISTS held_unit_runs_nothing")
+        (exec! tx "DROP TABLE units")
+        (doseq [s schema :when (re-find #"(?s)^CREATE (TABLE|TRIGGER) IF NOT EXISTS (units|held_unit_runs_nothing)\b" s)]
+          (exec! tx s))
+        (exec! tx "INSERT INTO units(ws, id, status, held) SELECT ws, id, status, held FROM units_keep")
+        (exec! tx "DROP TABLE units_keep")))))
+
 (defn- connect ^Connection [path]
   (io/make-parents (io/file path))
   (jdbc/get-connection {:dbtype "sqlite" :dbname (str path)}))
@@ -140,6 +159,7 @@
   (let [c (connect path)]
     (exec! c "PRAGMA journal_mode=WAL")
     (exec! c "PRAGMA synchronous=FULL")
+    (widen-unit-status! c)
     (doseq [s schema] (exec! c s))
     (backfill-summaries! c)
     {:conn c :path (str path)}))

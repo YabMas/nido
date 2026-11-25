@@ -5,6 +5,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [next.jdbc :as jdbc]
+            [next.jdbc.result-set]
             [nido.core.domain :as d]
             [nido.core.domain-test :as dt]
             [nido.core.store :as store])
@@ -229,3 +230,29 @@
     (testing "the newest entry of the named kinds, for those that hold one"
       (is (= {"nido/a" {1 "{:format :closed :outcome :done}"}}
              (:contents (store/project-states s "nido" {:newest-of [:closed :reopened]})))))))
+
+(deftest a-store-whose-units-refuse-finished-is-widened-when-opened
+  (let [path (str (temp-dir) "/core.db")]
+    ;; A store created before a unit could finish: its units CHECK names no 'finished'.
+    (store/close (store/open path))
+    (with-open [c (jdbc/get-connection {:dbtype "sqlite" :dbname path})]
+      (jdbc/execute! c ["DROP TRIGGER held_unit_runs_nothing"])
+      (jdbc/execute! c ["DROP TABLE units"])
+      (jdbc/execute! c [(str "CREATE TABLE units(ws TEXT NOT NULL, id TEXT NOT NULL,"
+                             " status TEXT NOT NULL CHECK (status IN ('open','merged','retracted')),"
+                             " held INTEGER NOT NULL CHECK (held IN (0,1)), PRIMARY KEY (ws, id))")])
+      (jdbc/execute! c ["INSERT INTO units(ws,id,status,held) VALUES ('w','u','open',0)"]))
+    (let [s (store/open path)]
+      (try
+        (testing "the rows it held are kept"
+          (is (= [{:status "open"}]
+                 (jdbc/execute! (:conn s) ["SELECT status FROM units WHERE ws='w' AND id='u'"]
+                                {:builder-fn next.jdbc.result-set/as-unqualified-maps}))))
+        (testing "a finished unit is now admitted"
+          (jdbc/execute! (:conn s) ["INSERT INTO units(ws,id,status,held) VALUES ('w','f','finished',0)"])
+          (is (= 2 (count (jdbc/execute! (:conn s) ["SELECT 1 FROM units WHERE ws='w'"])))))
+        (testing "the held-unit trigger stands again"
+          (is (thrown? Exception
+                       (do (jdbc/execute! (:conn s) ["INSERT INTO units(ws,id,status,held) VALUES ('w','h','open',1)"])
+                           (jdbc/execute! (:conn s) ["INSERT INTO turns(ws,id,unit,status) VALUES ('w','t','h','running')"])))))
+        (finally (store/close s))))))
