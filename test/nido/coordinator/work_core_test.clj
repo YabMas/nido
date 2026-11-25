@@ -465,6 +465,36 @@
         (is (= {:ws-id ws-id :needs :landing} (work/gate :brian ws-id))
             "the pane answers from the selection the list holds")))))
 
+(deftest a-ledger-blocker-s-answer-is-recorded-on-the-ledger
+  (with-ws
+    (fn [_ ws-id]
+      (workstream/append-entry! :brian ws-id {:kind :blocker}
+                                (pr-str {:format :blocker :summary "stuck" :needs "Which way?" :after "it resumes"
+                                         :options [{:label "Left" :summary "go left"} {:label "Right" :summary "go right"}]}))
+      (let [n (pipeline/owed-blocker :brian ws-id)]
+        (is (= {:decision :option-stale} (work/resolve-gate! :brian ws-id :option-b (inc n)))
+            "a letter naming another record answers nothing")
+        (is (= {:decision :answered-unresumed} (work/resolve-gate! :brian ws-id :option-b n)))
+        (is (= [{:blocker-seq n :summary "Right"}]
+               (map #(select-keys % [:blocker-seq :summary]) (workstream/entries-of :brian ws-id :blocker-answered))))
+        (is (nil? (pipeline/owed-blocker :brian ws-id)) "and the blocker is owed no longer")))))
+
+(deftest a-drain-s-owed-moves-are-carded-with-their-acts
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
+      (doseq [[at owed act] [[:recipe-proposed :approve-recipe :approve-recipe]
+                             [:drain-exhausted :close-drain :close-drain]
+                             [:slice-cleared :land :land-slice]]]
+        (with-redefs [pipeline/of (constantly {:at at :next {:stage owed :mode :human}})
+                      nido.coordinator.record.standing/activated? (constantly true)]
+          (let [row (first (work/list-workstreams :brian))
+                g   (first (work/gates :brian))]
+            (is (not= :landing (get-in row [:status :needs])) (str at " is no landing"))
+            (is (= :ask (:needs g)))
+            (is (= [act] (map :id (:actions g))) (str at " offers the act that makes its move"))))))))
+
 (deftest retry-hands-back-the-failed-start-the-card-describes
   (with-ws
     (fn [c ws-id]

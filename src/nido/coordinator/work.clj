@@ -161,7 +161,7 @@
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
-      (contains? #{:apply :defer :land :answer-questions} action-id)))
+      (contains? #{:apply :defer :land :answer-questions :approve-recipe} action-id)))
 
 (defn- lettered-actions
   "One button per branch of an enumerated question, lettered by position. `:kind
@@ -311,6 +311,23 @@
            ;; bring-up back to the core.
            (= :retry-start awaiting)
            [{:id :retry-start :label "Retry" :kind :mutation :style :primary}]
+
+           ;; A blocker is answered whatever band its workstream sits in: its branches, then Reply
+           ;; to a parked agent or, with nobody parked, the Answer the ledger records.
+           (= :answer-blocker awaiting)
+           (cond-> answers
+             parked?       (conj reply-action)
+             (not parked?) (conj answer-action))
+
+           ;; A drain's moves are the person's acts on it, the ones the drains page makes.
+           (= :approve-recipe awaiting)
+           [(cond-> {:id :approve-recipe :label "Approve recipe" :kind :mutation :style :primary}
+              entry-seq (assoc :seq entry-seq))]
+           (= :close-drain awaiting)
+           [{:id :close-drain :label "Close drain" :kind :mutation :style :primary}]
+           ;; A cleared slice lands by its drain (`drain-land!`), never by the gate's Land.
+           (= :land-slice awaiting)
+           [{:id :land-slice :label "Land slice" :kind :mutation :style :primary}]
 
            ;; Landing is a person's gesture, given as one button: it grants the landing, and the
            ;; seat lands by the procedure its project declares. Offered only where a grant has
@@ -577,6 +594,12 @@
 ;; it needs the person — is one reading: `act/of` over the row's observation, built here because
 ;; this is the band that reaches every source it takes (records and the core).
 
+(def ^:private landing-positions
+  "The positions the person's Land lands: a release candidate, or a draft published before
+   candidates were read. What the observation's :landing?, the landing card and Land's resolver
+   all read."
+  #{:release-candidate :published})
+
 (defn- observation
   "Workstream `ws-id`'s `act/Observation`: the record facts `facts` (`pipeline/status`, or nil for
    a settled row nobody reads it for), whether it is settled, its band, and the core's state of it
@@ -590,8 +613,9 @@
      :activated? (boolean (:activated? facts))
      ;; A Land the person makes — a candidate's or a published draft's. A Land the core already
      ;; holds as a grant (placed :land-granted) is the seat's move, owed by an agent: no landing.
-     :landing?   (and (= :land (get-in facts [:position :next :stage]))
-                      (contains? #{:release :human} (get-in facts [:position :next :mode])))
+     ;; Read off the declared landing positions, never the move's mode: a cleared slice's :land
+     ;; is its drain's to make.
+     :landing?   (contains? landing-positions (get-in facts [:position :at]))
      :failure    (wcore/failure cw)
      :paused?    (boolean (or (:paused facts) (wcore/held-units? cw)))
      :core     core
@@ -648,7 +672,7 @@
                ;; ledger record: until then the candidate is landing, the seat's move on nido's
                ;; instruction.
                landing? (and (contains? (get-in cw [:state :grants]) :merge)
-                             (#{:release-candidate :published} (:at pos)))
+                             (landing-positions (:at pos)))
                band     (cond
                           core-closed?                           :done
                           closed                                 :awaiting-gate
@@ -1883,12 +1907,16 @@
     (let [ws-id   (:ws-id row)
           report  (try (answered-report project ws-id (latest-report project ws-id) (:position row))
                        (catch Exception _ nil))
-          actions (gate-actions (:stage row) false (:origin row)
+          ;; The actions are the owed move's, never the board band's: a triage verdict is
+          ;; accepted as the triage band offers, and a cleared slice lands by its drain.
+          actions (gate-actions (if (= :accept-triage owed) :triage (:stage row)) false (:origin row)
                                 {:report-format  (:format report)
                                  :options        (:options report)
                                  :questions      (report/triage-questions report)
                                  :several?       (asks-several? report)
-                                 :awaiting       owed
+                                 :awaiting       (if (= :slice-cleared (get-in row [:position :at]))
+                                                   :land-slice
+                                                   owed)
                                  :gate-criterion (get-in row [:phase :exit :criterion])
                                  :seq            (:seq report)})]
       (assoc (card project row owed report nil actions)
@@ -1900,7 +1928,7 @@
    none — the person lands when they choose — so it offers the one gesture the pane does, which
    `core-resolve!` grants over exactly these positions, and records nothing until it is given."
   [project row]
-  (when (#{:release-candidate :published} (get-in row [:position :at]))
+  (when (landing-positions (get-in row [:position :at]))
     (card project row :land nil "Ready to land."
           (gate-actions (:stage row) false nil {:awaiting :land :landable? true}))))
 
@@ -3481,7 +3509,7 @@
       ;; release candidate, or a PR published before candidates were read. A grant given
       ;; anywhere else would be spent on whatever the arc reaches next.
       (= :land action-id)
-      (if (#{:release-candidate :published} (:at (pipeline/of project ws-id)))
+      (if (landing-positions (:at (pipeline/of project ws-id)))
         (core-decision (act! {:command :give-grant :grant :merge :by "person"}) :granted)
         {:decision :nothing-to-land})
 
@@ -3553,6 +3581,48 @@
       :refused  (vec (for [o outs :when (not (wcore/admitted? o))]
                        (or (some-> (get-in o [:refused :reason]) name) (str (:error o)))))})))
 
+(declare drain-act! drain-land!)
+
+(defn- core-asking?
+  "Whether the core holds a question open for the person on `ws-id` — an ask that is no machine
+   failure."
+  [project ws-id]
+  (boolean (some #(and (= :open (:status %)) (not (domain/machine-ask? %)))
+                 (vals (:operator-asks (wcore/state project ws-id))))))
+
+(defn- drain-decision
+  "A resolver's answer for drain act result `r` ({:ok …} or {:refused message})."
+  [{:keys [refused]}]
+  (if refused {:decision :core-refused :because refused} {:decision :done}))
+
+(defn- answer-blocker!
+  "Record the person's answer to the blocker the ledger owes (`pipeline/owed-blocker`) as their
+   :blocker-answered work record: the branch `action-id` letters, the answer to each of its
+   several questions (`:answer-questions`, `payload` {:seq :answers}), or their words (:reply).
+   A lettered or several-question click must name that blocker's :seq, else it is stale. A branch
+   carrying :grants hands them to the core as the person's. Answers {:decision :answered-unresumed}."
+  [project ws-id action-id payload]
+  (let [p      (keyword (name project))
+        n      (pipeline/owed-blocker p ws-id)
+        {:keys [ledger entries]} (active-ledger p ws-id)
+        report (report-at ledger entries n)
+        at     (if (map? payload) (:seq payload) payload)
+        opt    (when (option-action? action-id) (get (vec (:options report)) (option-index action-id)))
+        answer (cond
+                 (= :reply action-id)            (some-> payload str str/trim not-empty)
+                 opt                             (some-> (:label opt) str str/trim not-empty)
+                 (= :answer-questions action-id) (questions-answer {:questions (report/blocker-questions report)}
+                                                                   (:answers payload)))]
+    (cond
+      (and (not= :reply action-id) (not= at n)) {:decision :option-stale}
+      (nil? answer) {:decision :core-refused :because "an answer needs a choice or words"}
+      :else
+      (do (cws/append-entry! p ws-id {:kind :blocker-answered}
+                             (pr-str {:format :blocker-answered :blocker-seq n :summary answer}))
+          (doseq [g (:grants opt)]
+            (wcore/act! p ws-id {:command :give-grant :grant g :by "person"}))
+          {:decision :answered-unresumed}))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] :map]}
   resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
@@ -3574,6 +3644,9 @@
      :land    -> queue the published PR on the merge lane, iff `payload` still names
                  the record the landing is owed over
      :retry-start -> hand a unit's failed session start back to the core (`core-resolve!`)
+     :approve-recipe / :close-drain / :land-slice -> the drain's acts (`drain-act!`, `drain-land!`)
+   A lettered option, :reply or :answer-questions with no question the core asks, on a workstream
+   the ledger holds owed a blocker, records the answer on the ledger (`answer-blocker!`).
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
 
@@ -3595,6 +3668,20 @@
        :start-triage (start-triage-page! project ws-id))
 
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
+
+     ;; An answer to a blocker the ledger owes, with no question the core asks beside it, is a
+     ;; work record: the ledger's, whatever card offered it.
+     (and (or (option-action? action-id) (#{:reply :answer-questions} action-id))
+          (not (core-asking? project ws-id))
+          (pipeline/owed-blocker (keyword (name project)) ws-id))
+     (answer-blocker! project ws-id action-id payload)
+
+     ;; A drain's acts, as the drains page makes them: approve its recipe, close it, land a slice.
+     (= :approve-recipe action-id) (drain-decision (drain-act! project ws-id :approve payload))
+     (= :close-drain action-id)    (drain-decision (drain-act! project ws-id :close nil))
+     (= :land-slice action-id)
+     (drain-decision (try {:ok (drain-land! (keyword (name project)) ws-id)}
+                          (catch clojure.lang.ExceptionInfo e {:refused (ex-message e)})))
 
      ;; Coordination is the core's: every action it answers is the person's command to it.
      (contains? #{:reply :withdraw :wake :land :retry-start :promote :done :drop :answer-questions} action-id)
@@ -4432,7 +4519,12 @@
                       (throw (ex-info (str "the core refused the slice's unit: " (pr-str (or (:refused r) (:error r))))
                                       {:reason :core-refused})))
                     r))
-   :land!       (fn [project slice-id] (:decision (core-resolve! project slice-id :land nil)))})
+   ;; The person's grant on the slice, given here: a slice lands by its drain, never through the
+   ;; gate's Land, which grants only at a release candidate or a published draft.
+   :land!       (fn [project slice-id]
+                  (:decision (core-decision (wcore/act! project slice-id {:command :give-grant :grant :merge
+                                                                          :by "person"})
+                                            :granted)))})
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   drain-fire!
