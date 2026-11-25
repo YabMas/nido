@@ -546,9 +546,10 @@
 (declare ask-bar)
 
 (defn- error-block
-  "A workstream's error in its pane: what failed, why — each failed turn's reason and the last its
-   run wrote to stderr — and the recovery, through the ask's bar so its click posts as a gate's."
-  [project ws-id {:keys [what because failures actions pending? error-msg]}]
+  "A workstream's error in its pane: what failed and why — each failed turn's reason and the last
+   its run wrote to stderr. Its recovery is the gate's action, which the pane's action bar offers
+   beneath it."
+  [{:keys [what because failures]}]
   [:div.card.error-block
    [:h3 (state/error-mark) " " what]
    [:p because]
@@ -556,11 +557,7 @@
      (into [:ul.error-failures]
            (for [{:keys [turn outcome why stderr]} failures]
              [:li [:code turn] " " (name outcome) " — " why
-              (when stderr [:pre.error-stderr stderr])])))
-   (when error-msg [:div.action-err "⚠ " error-msg])
-   (if pending?
-     [:p.meta "Recovering…"]
-     (ask-bar project ws-id actions nil))])
+              (when stderr [:pre.error-stderr stderr])])))])
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
@@ -1784,24 +1781,32 @@
    gate showing a design decision offers a different question from one showing a
    blocker that named its branches, and the pane and the gate inbox must not
    disagree about which. Callers still gate on :on-latest?, so an older entry
-   being read renders no action bar at all.
+   being read renders no action bar at all — except over a held gate's actions, which act on
+   that gate whatever entry is open, as its card would.
 
    `position` is the workstream's pipeline position — the pane already has it for
    its heading — and is here because one of the buttons is owed by a PERSON
    rather than by a parked agent (work/awaiting-human). `needs` is the category its
-   activity needs the person in: a :system-error with no ask beside it — the pane renders
-   this bar only with no gate — is a failed start, offered Retry, and Land is offered only for
-   a :landing, never on the position alone."
-  [project ws-id origin stage sessions report position plan replyable? needs]
+   activity needs the person in: with no gate held, a :system-error is a failed start, offered
+   Retry, and Land is offered only for
+   a :landing, never on the position alone.
+
+   `held` is the actions of a gate the pane holds that asks nothing — a stopped conductor's
+   Wake, a failed start's Retry, a landing's Land — offered as that gate was built, so each
+   click carries what its card named."
+  ([project ws-id origin stage sessions report position plan replyable? needs]
+   (pane-action-bar project ws-id origin stage sessions report position plan replyable? needs nil))
+  ([project ws-id origin stage sessions report position plan replyable? needs held]
   (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
     (ask-bar project ws-id
-                ;; Rendered only for a workstream that is no gate, which owes no Ask: an action that
+                ;; Rendered only where the pane holds no Ask: an action that
                 ;; answers a verdict's questions, or Defer, which accepts with every one left open,
                 ;; would accept questions nobody was shown, so neither is offered here, nor the send
                 ;; of a blocker's several answers — a gate's are the question card's.
                 (into []
                  (remove (fn [{:keys [answers id]}] (or (= :questions answers) (#{:defer :answer-questions} id))))
+                 (or held
                  (work/gate-actions stage parked? origin
                                    {:report-format (:format report)
                                     :options       (:options report)
@@ -1822,8 +1827,8 @@
                                     ;; Needs you card offers it: never on the position alone.
                                     :landable?     (= :landing needs)
                                     :gate-criterion (get-in plan [:owed-gate :criterion])
-                                    :seq           (:seq report)}))
-                session)))
+                                    :seq           (:seq report)})))
+                session))))
 
 (defn- file-findings-form
   "Findings-filing form shown on a shipped (:done) workstream's pane. One finding
@@ -1949,15 +1954,17 @@
             (when (seq (:stages arc))
               (arc-block pos arc entries report in-stage? (state/round-label doing)))
             (when (seq holds) (holds-block holds))
-            ;; A system error the core raised — its conductor stopped — is its card: what failed,
-            ;; why, and its one recovery, Wake. It asks nothing, so it is no question card.
-            (when (and gate (= :system-error (:needs gate)) (:what gate))
-              (error-block project ws-id (assoc gate :pending? (boolean (or (:working? gate) pending?))
-                                                :error-msg error-msg)))
+            ;; A gate that asks nothing — a stopped conductor, a failed start, a landing — says
+            ;; what it is: what failed and why, or the card's note. Its controls are the action
+            ;; bar's below, never a question card.
+            (when (and gate (not (:ask gate)))
+              (if (:what gate)
+                (error-block gate)
+                (when-let [n (not-empty (str (:note gate)))] [:p.meta.gate-note n])))
             ;; What waits on the person comes after the context that orients them,
-            ;; and above the log. The card owns the gate's error line and every
+            ;; and above the log. A card over an Ask owns the gate's error line and every
             ;; control, so the pane offers neither of its own beside it.
-            (when (and gate (not (and (= :system-error (:needs gate)) (:what gate))))
+            (when (:ask gate)
               (block/render ask/card ws-id
                             {:project project :ws-id ws-id :ask (:ask gate) :actions (vec (:actions gate))
                              :pending? (boolean (or (:working? gate) pending?))
@@ -1968,9 +1975,17 @@
             ;; the CURRENT report, never the entry a reader happens to have open.
             ;; Left below the ledger they read as actions on the thing being read,
             ;; which is the one thing they are not.
-            (when (and on-latest? error-msg (not gate))
+            (when (and error-msg (or (and gate (not (:ask gate))) (and on-latest? (not gate))))
               [:div.action-err "⚠ " error-msg])
-            (when (and on-latest? (not gate)) (pane-action-bar project ws-id origin stage sessions action-report position plan replyable? (:needs status)))
+            (cond
+              ;; A gate asking nothing offers its own actions — the ones its card was built with.
+              (and gate (not (:ask gate)))
+              (if (or (:working? gate) pending?)
+                [:p.meta (state/gate-standing {:pending? true :needs (:needs gate)})]
+                (pane-action-bar project ws-id origin stage sessions action-report position plan replyable?
+                                 (:needs status) (:actions gate)))
+              (and on-latest? (not gate))
+              (pane-action-bar project ws-id origin stage sessions action-report position plan replyable? (:needs status)))
             (when (= :done stage) (file-findings-form project ws-id))
 
             ;; Collapsed by default. The arc above is the reading a driver

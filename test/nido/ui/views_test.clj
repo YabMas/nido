@@ -2072,3 +2072,19 @@
     (is (str/includes? (bar {:id :reply :label "Answer" :kind :resume :style :default :ask-id "a1"})
                        "/workstreams/brian/ws-1/gate/reply?ask=a1")
         "and a core card's words the ask it showed")))
+
+(deftest a-pane-over-a-gate-asking-nothing-keeps-its-explanation-and-its-own-actions
+  (let [failed  {:project "nido" :ws-id "ws-1" :needs :system-error :owes :retry-start :ask nil
+                 :note "A session failed to start: pg would not start"
+                 :actions [{:id :retry-start :label "Retry" :kind :mutation :style :primary}]}
+        stopped {:project "nido" :ws-id "ws-1" :needs :system-error :ask nil
+                 :what "Its conductor stopped" :because "The last conductor turn failed." :failures []
+                 :actions [{:id :wake :label "Wake it again" :kind :mutation :style :primary :ask-id "s7"}]}
+        pane    #(views/workstream-pane (assoc a-pane :gate %) {})]
+    (let [html (pane failed)]
+      (is (str/includes? html "pg would not start") "the failed start says why")
+      (is (str/includes? html "/workstreams/nido/ws-1/gate/retry-start"))
+      (is (not (str/includes? html "class=\"qcard\"")) "and is no question card"))
+    (let [html (pane stopped)]
+      (is (str/includes? html "Its conductor stopped"))
+      (is (str/includes? html "/workstreams/nido/ws-1/gate/wake?ask=s7") "its Wake names the stop it answers"))))
