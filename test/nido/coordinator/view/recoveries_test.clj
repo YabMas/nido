@@ -68,6 +68,24 @@
     (is (= "2026-09-17T12:01:00Z" (:due-at row)) "two failures wait two poll intervals from the last")
     (is (not (sf/due? runs now pacing)) "the page and the source agree it is not yet due")))
 
+(deftest a-recovery-run-paces-and-parks-after-it-ended
+  ;; A run is over when its turn is, so its recovery is closed — yet a run that ended leaving the
+  ;; cause owed still paces it, and one that stopped for a person still asks for one.
+  (let [ended "2026-09-17T11:59:30Z"
+        rec   (fn [id state]
+                (assoc (recovery id "c" :named ["F1"] :closed {:at ended :outcome :dropped}
+                                 :runs [(run id state :ended ended)])
+                       :run? true))]
+    (is (= :waiting (state-of (overview [(failure "F1" "c")] [(rec "r1" :failed)]) "c")))
+    (let [row (first (:causes (overview [(failure "F1" "c")] [(rec "r1" :failed) (rec "r2" :awaiting-review)])))]
+      (is (= [:needs-you "r2"] [(:state row) (:gate-ws row)])))
+    (is (= :restored
+           (state-of (overview [(failure "F1" "c")]
+                               [(assoc (rec "r1" :done) :settled #{"F1"}
+                                       :closed {:at ended :outcome :done})])
+                     "c"))
+        "a run that settled what it named discharges it, though no workstream closed")))
+
 (deftest a-cause-past-its-delay-is-owed-not-waiting
   (let [ov (overview [(failure "F1" "c")]
                      [(recovery "ws" "c" :named ["F1"] :runs [(run "r1" :failed :ended "2026-09-17T11:00:00Z")])])]

@@ -1,19 +1,20 @@
 (ns nido.coordinator.lane.restore-test
-  "What a restore brings back, what it hands the daemon, and what it records."
+  "What a restore brings back, and what it records on its recovery run."
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.lane.restore :as restore]
-   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.records :as records]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.triggers :as triggers]
-   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.queue :as queue]
+   [nido.core.client :as client]
    [nido.platform.core :as core]
    [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]
-   [nido.session.state :as sstate]))
+   [nido.session.state :as sstate]
+   [nido.test.runs :as test-runs]))
 
 (defn- with-tmp
   "Call `f` with the ledger, the runs and the kept failures under a temp dir, the
@@ -50,44 +51,51 @@
                             attempt)
                      (ex-info message {}))))
 
-(defn- recovery-ws!
-  "A recovery workstream for `f`'s cause, as the source's fire would make it."
+(defn- recovery-run!
+  "A recovery run for `f`'s cause, running, as the source's fire would start it; diagnosed unless
+   told otherwise. Answers its core key."
   [f & {:keys [diagnosed?] :or {diagnosed? true}}]
-  (let [w (ws/create! :nido {:external-refs [{:adapter :session-recovery
-                                              :id (str (failure/cause f) "@" (:id f))}]})]
+  (let [cause (failure/cause f)
+        id    (test-runs/run! :nido :session-recovery
+                              {:adapter :session-recovery :id (str cause "@" (:id f))
+                               :cause cause :failures (:id f)}
+                              :running)
+        k     (client/run-key :nido id)]
     (when diagnosed?
-      (ws/append-entry! :nido (:id w) {:kind :session-diagnosis}
-                        (pr-str {:format :session-diagnosis :failures [(:id f)] :verdict :one-off
+      (records/append-to-run! k {:kind :session-diagnosis :failures [(:id f)] :verdict :one-off
                                  :cause "a stale pid" :evidence ["repl.log: pid 7 not running"]
-                                 :remedy "cleared the pid file"})))
-    (:id w)))
+                                 :remedy "cleared the pid file"}))
+    k))
+
+(defn- restored-on [k]
+  (some #(when (= :session-restored (:kind %)) %) (records/of k)))
 
 (deftest a-restore-refuses-an-undiagnosed-failure
   (with-tmp
     (fn [_]
       (let [f (keep-failure! {} "Timed out waiting for .nrepl-port")
-            w (recovery-ws! f :diagnosed? false)]
+            w (recovery-run! f :diagnosed? false)]
         (is (= :undiagnosed
                (try (restore/restore! :nido w) nil
                     (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))))))))
 
-(deftest a-persons-session-comes-back-and-the-recovery-closes
+(deftest a-persons-session-comes-back-and-the-run-records-it
   (with-tmp
     (fn [enqueued]
       (typed! "feat")
       (let [f      (keep-failure! {} "Timed out waiting for .nrepl-port")
-            w      (recovery-ws! f)
+            w      (recovery-run! f)
             ups    (atom [])]
         (with-redefs [lifecycle/up! (fn [name opts] (swap! ups conj [name opts]) :up)]
-          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+          (let [{:keys [outcomes settled?]} (restore/restore! :nido w)]
             (is (= [{:failure (:id f) :outcome :restored :continuation {:kind :none}}] outcomes))
-            (is closed? "every failure named on it came back")))
+            (is settled? "nothing of the cause is owed any more")))
         (is (= "feat" (ffirst @ups)))
         (is (= {:kind :person :restoring (:id f)} (:origin (second (first @ups))))
             "a restore's own start says what it is restoring, so its failure is traceable")
         (is (empty? @enqueued) "a person's start continues nothing")
-        (is (some? (ws/closure (ws/read-ws :nido w))))
-        (is (= :restored (-> (ws/latest-entry :nido w :session-restored) :outcomes first :outcome)))))))
+        (is (= :restored (-> (restored-on w) :outcomes first :outcome))
+            "what became of it is recorded on the run")))))
 
 (deftest a-start-nobody-typed-into-is-withdrawn-not-restored
   ;; 2026-11-04: a shared-PG outage failed the starts conductors' agents had made — kept with a
@@ -96,13 +104,13 @@
     (fn [enqueued]
       (typed! "other")
       (let [f   (keep-failure! {} "reading shared flyway history failed: FATAL: the database system is shutting down")
-            w   (recovery-ws! f)
+            w   (recovery-run! f)
             ups (atom 0)]
         (with-redefs [lifecycle/up! (fn [& _] (swap! ups inc))]
-          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+          (let [{:keys [outcomes settled?]} (restore/restore! :nido w)]
             (is (= [{:failure (:id f) :outcome :withdrawn :why :no-person}] outcomes)
                 "a prompt in another session is no one at work in this one")
-            (is closed? "nothing is left owed, so the recovery closes")))
+            (is settled? "nothing is left owed")))
         (is (zero? @ups) "nothing is brought up")
         (is (empty? @enqueued))))))
 
@@ -112,144 +120,65 @@
   (with-tmp
     (fn [enqueued]
       (let [f   (keep-failure! {} "Timed out waiting for .nrepl-port")
-            w   (recovery-ws! f)
+            w   (recovery-run! f)
             ups (atom 0)]
         (with-redefs [lifecycle/up!                (fn [& _] (swap! ups inc))
                       session-events/prompts-since (fn [_] (throw (ex-info "disk gone" {})))]
-          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+          (let [{:keys [outcomes settled?]} (restore/restore! :nido w)]
             (is (= [:not-restored] (map :outcome outcomes)))
             (is (nil? (:why (first outcomes))) "not withdrawn as nobody's")
-            (is (not closed?) "the failure stays owed")))
+            (is (not settled?) "the failure stays owed")))
         (is (zero? @ups))
         (is (empty? @enqueued))))))
 
-(deftest a-start-that-fails-again-is-not-restored-and-the-recovery-stays-open
+(deftest a-start-that-fails-again-is-not-restored-and-stays-owed
   (with-tmp
     (fn [_]
       (typed! "feat")
       (let [f (keep-failure! {} "Timed out waiting for .nrepl-port")
-            w (recovery-ws! f)]
+            w (recovery-run! f)]
         (with-redefs [lifecycle/up! (fn [& _] (throw (ex-info "Timed out waiting for .nrepl-port"
                                                               {:session-failure/id "F-again"})))]
-          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+          (let [{:keys [outcomes settled?]} (restore/restore! :nido w)]
             (is (= :not-restored (:outcome (first outcomes))))
             (is (= "F-again" (:failure-left (first outcomes)))
                 "the outcome names the failure its own attempt kept")
-            (is (not closed?))
-            (is (nil? (ws/closure (ws/read-ws :nido w)))
-                "closing now would settle a failure nobody brought back")))))))
+            (is (not settled?) "a failure nobody brought back is still owed")))))))
 
-(deftest a-failed-run-continues-as-its-successor-with-its-session-already-up
+(deftest a-restore-refuses-a-run-that-is-not-a-recovery
+  (with-tmp
+    (fn [_]
+      (let [k (client/run-key :nido (test-runs/run! :nido :review-analysis {:id "rr"} :running))]
+        (is (= :not-a-recovery
+               (try (restore/restore! :nido k) nil
+                    (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))))))))
+
+(deftest a-start-made-for-a-run-or-a-reply-is-withdrawn
+  ;; The core runs every turn: a turn whose session did not come up ended failed there, and intake
+  ;; drops an envelope that would continue it, so there is nothing a restore could hand on.
   (with-tmp
     (fn [enqueued]
-      (let [origin-ws (ws/create! :brian {:external-refs []})
-            trigger   {:name :triage-new :source {:type :notion-view} :skill :triage-bug
-                       :payload "{{event/id}}" :limits {:budget "1h"}}
-            failed    (runs/create-run! {:project :brian :trigger trigger :payload {:id "BR-1"}
-                                         :priority 3 :session-profile :full
-                                         :workstream-id (:id origin-ws)}
-                                        {:fired-at "t" :fired-by "test"})
-            _         (runs/transition! (:id failed) :failed)
-            f         (keep-failure! {:origin (runs/run-origin (runs/read-run (:id failed)))}
-                                     "Advancing shared cluster failed")
-            w         (recovery-ws! f)
-            spawned   (atom [])]
-        (with-redefs [triggers/load-for-project (fn [p] (if (= :brian p) [trigger] []))
-                      nido.coordinator.record.session/create! (fn [& _] nil)
-                      runs/spawn-session-for-run! (fn [run origin] (swap! spawned conj [(:id run) origin]))]
-          (let [{:keys [outcomes]} (restore/restore! :nido w)
-                {:keys [continuation]} (first outcomes)
-                next-id (:run-id continuation)]
-            (is (= :successor (:kind continuation)))
-            (is (= (:id failed) (:of continuation)))
-            (is (= :failed (:state (runs/read-run (:id failed)))) ":failed stays failed")
-            (is (= (:id origin-ws) (:workstream-id (runs/read-run next-id)))
-                "the successor carries on the failed Run's workstream")
-            (is (= {:id "BR-1"} (:event-payload (runs/read-run next-id))))
-            (is (= [next-id] (mapv first @spawned))
-                "its session is started here, before the daemon hears of it")
-            (is (= [{:type :execute-run :run-id next-id}] @enqueued))))))))
-
-(deftest a-failed-run-gets-one-successor-however-many-of-its-starts-failed
-  (with-tmp
-    (fn [enqueued]
-      (let [origin-ws (ws/create! :brian {:external-refs []})
-            trigger   {:name :triage-new :source {:type :notion-view} :skill :triage-bug
-                       :payload "{{event/id}}" :limits {:budget "1h"}}
-            failed    (runs/create-run! {:project :brian :trigger trigger :payload {:id "BR-1"}
-                                         :priority 3 :session-profile :full
-                                         :workstream-id (:id origin-ws)}
-                                        {:fired-at "t" :fired-by "test"})
-            _         (runs/transition! (:id failed) :failed)
-            origin    (runs/run-origin (runs/read-run (:id failed)))
-            ;; Two earlier restores' successors that failed to start: both name
-            ;; the same failed Run as their origin, under one cause.
-            f1        (keep-failure! {:session "run-a" :origin origin} "relation already exists")
-            f2        (keep-failure! {:session "run-b" :origin origin} "relation already exists")
-            w         (recovery-ws! f1)]
-        (with-redefs [triggers/load-for-project (fn [p] (if (= :brian p) [trigger] []))
-                      nido.coordinator.record.session/create! (fn [& _] nil)
-                      runs/spawn-session-for-run! (fn [& _] nil)]
-          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)
-                {[minted] :restored [other] :withdrawn} (group-by :outcome outcomes)
-                next-id (-> minted :continuation :run-id)]
-            (is (= :successor (-> minted :continuation :kind)))
-            (is (= #{(:id f1) (:id f2)} (set (map :failure outcomes))))
-            (is (= {:outcome :withdrawn :continuation {:continued-by next-id}}
-                   (dissoc other :failure))
-                "whichever comes second names the successor the first minted, and mints none")
-            (is (= [{:type :execute-run :run-id next-id}] @enqueued)
-                "the triage runs once")
-            (is closed?)))))))
-
-(deftest a-failed-run-whose-work-is-already-carried-on-is-withdrawn
-  (let [f   {:at "2026-09-17T10:00:00Z" :origin {:kind :run :run-id "R"}}
-        run {:id "R" :state :failed}]
-    (is (= {:kind :withdrawn :continued-by "S"}
-           (restore/continuation f {:run run :ws {} :continued-by "S"})))
-    (is (= :successor (:kind (restore/continuation f {:run run :ws {} :continued-by nil}))))))
-
-(deftest a-failure-whose-work-was-closed-is-withdrawn
-  (with-tmp
-    (fn [enqueued]
-      (let [origin-ws (ws/create! :brian {:external-refs []})
-            f         (keep-failure! {:origin {:kind :resume :project :brian :ws-id (:id origin-ws)
-                                               :session "impl" :input "apply it"}}
-                                     "Re-hydration failed")
-            _         (ws/close! :brian (:id origin-ws) :dismissed)
-            w         (recovery-ws! f)]
+      (doseq [origin [{:kind :run :run-id "R"} {:kind :resume :project :brian :ws-id "w" :input "x"}]]
+        (is (= {:kind :withdrawn} (restore/continuation {:origin origin} {:typed? true}))))
+      (let [f (keep-failure! {:origin {:kind :run :run-id "R"}} "Timed out waiting for .nrepl-port")
+            w (recovery-run! f)]
         (with-redefs [lifecycle/up! (fn [& _] (throw (Exception. "must not start")))]
-          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
-            (is (= :withdrawn (:outcome (first outcomes))))
-            (is closed?)
-            (is (empty? @enqueued))))))))
-
-(deftest continuation-reads-the-origin
-  (let [f {:at "2026-09-17T10:00:00Z"}]
-    (testing "a Run that parked on its failed start is executed again as itself"
-      (is (= {:kind :execute :run-id "R"}
-             (restore/continuation (assoc f :origin {:kind :run :run-id "R"})
-                                   {:run {:id "R" :state :awaiting-review} :ws {}}))))
-    (testing "a session that is merely gone is brought back, not withdrawn"
-      (is (= :successor
-             (:kind (restore/continuation (assoc f :origin {:kind :run :run-id "R"})
-                                          {:run {:id "R" :state :failed} :ws {:closed nil}})))))
-    (testing "a workstream closed BEFORE the failure withdraws nothing"
-      (is (= :resume-turn
-             (:kind (restore/continuation (assoc f :origin {:kind :resume :ws-id "w" :input "x"})
-                                          {:ws {:closed {:at "2026-09-17T09:00:00Z"}}})))))))
+          (let [{:keys [outcomes settled?]} (restore/restore! :nido w)]
+            (is (= [:withdrawn] (map :outcome outcomes)))
+            (is settled?)
+            (is (empty? @enqueued) "nothing is handed to the daemon")))))))
 
 (deftest a-start-under-a-name-up-refuses-is-withdrawn-not-retried
   (with-tmp
     (fn [enqueued]
       (let [f   (keep-failure! {:session "teacher assistant contextual awerness"}
                                "Error: Failed to parse name pattern: Syntax error")
-            w   (recovery-ws! f)
+            w   (recovery-run! f)
             ups (atom 0)]
         (with-redefs [lifecycle/up! (fn [& _] (swap! ups inc))]
-          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+          (let [{:keys [outcomes settled?]} (restore/restore! :nido w)]
             (is (= [{:failure (:id f) :outcome :withdrawn}] outcomes))
-            (is closed? "nothing is left owed, so the recovery closes")))
+            (is settled? "nothing is left owed")))
         (is (zero? @ups) "restoring it could only be refused again")
         (is (empty? @enqueued))))))
 
@@ -258,7 +187,7 @@
     (fn [_]
       (typed! "feat")
       (let [f   (keep-failure! {} "Timed out waiting for .nrepl-port")
-            w   (recovery-ws! f)
+            w   (recovery-run! f)
             ups (atom [])]
         (with-redefs [lifecycle/up! (fn [name opts] (swap! ups conj [name opts]) :up)
                       nido.coordinator.record.session/workstream-id-for

@@ -13,20 +13,20 @@
   "The verbs a recovery session works through: read what failed, restore it, land a nido fix.
 
    The land verb is the gate, not advice. A recovery lands on nido's main unattended, so the
-   verb itself runs the tests and the landing check at the exact tip it pushes, and refuses on a
-   workstream whose diagnosis does not name a nido defect — a skill that skipped a step cannot
-   land around it."
+   verb itself runs the tests and the landing check at the exact tip it pushes, and refuses for a
+   run whose diagnosis does not name a nido defect — a skill that skipped a step cannot land
+   around it. Restore and land act for the recovery run calling them."
   (Operation failures
     "Print kept failures with their evidence: all of them, the owed ones, or one cause's."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation restore
-    "Restore a cause's owed failures onto the recovery workstream the session belongs to."
+    "Restore a cause's owed failures, recording what became of each on the calling recovery run."
     {:signature [:=> [:catn [:args [:* :any]]] :int]})
   (Operation restore-cmd "bb entry point for restore: exits with its code."
     {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [restore]})
   (Operation land
     "Land a recovery's nido fix: refuse without a nido-defect diagnosis, test and check the tip,
-     fast-forward origin's main, record the :merged once."
+     fast-forward origin's main, record the :merged on the run once."
     {:signature [:=> [:catn [:args [:* :any]]] :int]})
   (Operation land-cmd "bb entry point for land: exits with its code."
     {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [land]}))

@@ -30,19 +30,10 @@
    [clojure.set]
    [nido.coordinator.record.records :as records]
    [nido.coordinator.record.workstream :as cws]
-   [nido.coordinator.report :as report]
-   [nido.core.client :as client]))
+   [nido.coordinator.report :as report]))
 
 (def ^{:doc "The name of a project's improvement journal: decisions, landings, reservations."}
   journal-name "improvement")
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
-  runs-of
-  "Every run of `project`, each its core summary (`:run` its identity, `:status`, `:closed?`) with
-   its records parsed under `:records` and its id under `:id`."
-  [project]
-  (->> (client/value! (client/runs project) :runs)
-       (mapv (fn [[id sm]] (assoc sm :id id :records (into [] (keep records/parse) (:records sm)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   journal-of
@@ -202,7 +193,7 @@
                        :let [ref (some #(when (= :review-run (:adapter %)) %) (:external-refs w))]
                        a (analysis-entries pk (:id w))]
                    {:holder (:id w) :a a :title (:title ref)})
-                 (for [r (runs-of pk)
+                 (for [r (records/runs pk)
                        a (filter #(= :review-analysis (:kind %)) (:records r))]
                    {:holder (:id r) :a (assoc a :at (get-in r [:run :fired-at]))
                     :title (get-in r [:run :payload :title])}))]
@@ -286,7 +277,7 @@
                       {:address (:id ref) :ws-id ws-id :open? (nil? closed)
                        :outcome (:outcome closed)}))))
           vec)
-     (for [r (runs-of pk)
+     (for [r (records/runs pk)
            :let [p (get-in r [:run :payload])]
            :when (= improvement-adapter (keyword (:adapter p)))]
        {:address (:id p) :ws-id (:id r) :open? (not (:closed? r)) :outcome (run-outcome r)
@@ -466,7 +457,7 @@
                                   (let [r (entry->report ledger e)]
                                     (when (= :improvement-plan (:format r))
                                       (assoc r :ws-id ws-id)))))))))
-         (into (for [r (runs-of pk)
+         (into (for [r (records/runs pk)
                      plan (filter #(= :improvement-plan (:kind %)) (:records r))]
                  (assoc plan :ws-id (:id r) :at (get-in r [:run :fired-at]))))
          (sort-by :at)

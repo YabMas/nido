@@ -4,19 +4,28 @@
 
    The land verb is the gate, not advice. A recovery lands on nido's main with
    nobody watching, so the verb runs the tests and the landing check itself, at
-   the exact tip it pushes, and refuses on a workstream whose diagnosis does not
-   name a nido defect — a skill that skipped a step cannot land around it."
+   the exact tip it pushes, and refuses for a run whose diagnosis does not name a
+   nido defect — a skill that skipped a step cannot land around it.
+
+   Restore and land act for the recovery run calling them: `:run <id>`, else the
+   run the calling turn runs in (`NIDO_CORE_RUN`)."
   (:require
    [clojure.string :as str]
    [nido.coordinator.lane.restore :as restore]
+   [nido.coordinator.record.records :as records]
    [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.source.start-failures :as start-failures]
    [nido.platform.task-args :as task-args]
-   [nido.review.stages :as stages]
    [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.jj :as jj]
    [tasks.nido-land :as nido-land]))
+
+(defn- run-key-of
+  "The core key of the recovery run a verb acts for, or nil when nothing names one."
+  [opts]
+  (or (some->> (:run opts) str (str "run:nido/"))
+      (not-empty (System/getenv "NIDO_CORE_RUN"))))
 
 (defn- cwd-of [opts]
   (let [given (or (some-> (:cwd opts) str) (System/getProperty "user.dir"))]
@@ -43,14 +52,20 @@
 
 (defn- print-recoveries [recs cause]
   (let [mine (filter #(= cause (:cause %)) recs)]
-    (println (str "\nRecovery workstreams for cause " cause ": " (count mine)))
-    (doseq [{:keys [ws-id closed runs named settled]} mine]
-      (let [failed (->> (reverse runs) (take-while #(= :failed (:state %))) count)]
-        (println (str "  " ws-id "  " (if closed (str "closed " (name (:outcome closed)) " " (:at closed)) "open")
-                      "  runs " (count runs) (when (pos? failed) (str " (" failed " failed in a row)"))
-                      "  named " (count named) "  settled " (count settled)))
-        (when-let [d (cws/latest-entry :nido ws-id :session-diagnosis)]
-          (println (str "    diagnosis: " (name (:verdict d)) " — " (:cause d))))))))
+    (println (str "\nEarlier recoveries of cause " cause ": " (count mine)
+                  "  (" (start-failures/failed-in-a-row (start-failures/pacing-runs (vec recs) cause))
+                  " ended in a row leaving it owed)"))
+    (doseq [{:keys [ws-id run? closed runs named settled entries]} mine]
+      (println (str "  " (if run? "run " "workstream ") ws-id "  "
+                    (if closed (str "ended " (name (:outcome closed)) " " (:at closed)) "running")
+                    (when run? (str "  " (name (:state (first runs)))))
+                    "  named " (count named) "  settled " (count settled)))
+      (when-let [d (if run?
+                     (last (:session-diagnosis entries))
+                     (cws/latest-entry :nido ws-id :session-diagnosis))]
+        (println (str "    diagnosis: " (name (:verdict d)) " — " (:cause d))))
+      (when-let [b (last (:blocker entries))]
+        (println (str "    stopped for a person: " (:needs b (:summary b))))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   failures
@@ -78,18 +93,17 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
   restore
-  "bb nido:recovery:restore [:ws-id <id>] — restore the owed failures of this
-   recovery workstream's cause. Exits 1 on a refusal or when a failure was not
-   restored."
+  "bb nido:recovery:restore [:run <id>] — restore the owed failures of this
+   recovery run's cause, and record what became of each on the run. Exits 1 on a
+   refusal or when a failure was not restored."
   [& args]
   (let [[_ opts] (task-args/split-args args)
-        cwd      (cwd-of opts)
-        ws-id    (or (some-> (:ws-id opts) str) (second (stages/project+ws-from-cwd cwd)))]
-    (if-not ws-id
-      (do (println "restore REFUSED · no recovery workstream: pass :ws-id or run from the recovery worktree")
+        run-key  (run-key-of opts)]
+    (if-not run-key
+      (do (println "restore REFUSED · no recovery run: pass :run <id>, or call it from the run's own turn")
           1)
       (try
-        (let [{:keys [outcomes closed?]} (restore/restore! :nido ws-id)]
+        (let [{:keys [outcomes settled?]} (restore/restore! :nido run-key)]
           (if (empty? outcomes)
             (println "restore · nothing owed for this cause")
             (doseq [{:keys [failure outcome continuation failure-left note]} outcomes]
@@ -97,9 +111,9 @@
                             (when continuation (str " → " (pr-str continuation)))
                             (when failure-left (str " · its attempt kept " failure-left))
                             (when note (str " · " note))))))
-          (println (if closed?
-                     (str "restore · " ws-id " closed: every failure named on it is restored or withdrawn")
-                     (str "restore · " ws-id " stays open")))
+          (println (if settled?
+                     "restore · settled: nothing of this cause is owed any more"
+                     "restore · something of this cause is still owed"))
           (if (some #(= :not-restored (:outcome %)) outcomes) 1 0))
         (catch clojure.lang.ExceptionInfo e
           (println (str "restore REFUSED · " (ex-message e)))
@@ -124,45 +138,44 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
   land
-  "bb nido:recovery:land — land this recovery's nido fix. Refuses unless the
-   workstream's diagnosis names a nido defect and the worktree is nido's; then lands
-   through `nido-land/gate!` — rebase onto origin's main, bb nido:test and
-   bb nido:land:check at that tip, push — and records the :merged once. It does
-   not close the workstream: restore does, once every failure is back."
+  "bb nido:recovery:land [:run <id>] — land this recovery's nido fix. Refuses
+   unless the run's diagnosis names a nido defect and the worktree is nido's; then
+   lands through `nido-land/gate!` — rebase onto origin's main, bb nido:test and
+   bb nido:land:check at that tip, push — and records the :merged on the run once."
   [& args]
   (let [[_ opts] (task-args/split-args args)
         cwd      (cwd-of opts)
         session  (lifecycle/session-from-cwd cwd)
-        [project ws-id] (stages/project+ws-from-cwd cwd)
-        diagnosis (when ws-id (cws/latest-entry project ws-id :session-diagnosis))]
+        run-key  (run-key-of opts)
+        recorded (when run-key (records/of run-key))
+        diagnosis (last (filter #(= :session-diagnosis (:kind %)) recorded))]
     (cond
       (not= "nido" (some-> (:project session) name))
       (refused (str cwd " is not a nido worktree — this verb lands only nido's own repository")
                "a project defect is a pull request in that project, never a landing here")
 
-      (nil? ws-id)
-      (refused "this worktree belongs to no workstream" "run it from the recovery session's worktree")
+      (nil? run-key)
+      (refused "no recovery run" "pass :run <id>, or call it from the recovery run's own turn")
 
       (not= :nido-defect (:verdict diagnosis))
-      (refused (str "the workstream's diagnosis is "
+      (refused (str "the run's diagnosis is "
                     (if diagnosis (name (:verdict diagnosis)) "missing")
                     ", not a nido defect")
-               "append a :session-diagnosis naming a nido defect, with its evidence, before landing")
+               "record a :session-diagnosis naming a nido defect, with its evidence, before landing")
 
       :else
       (let [{:keys [landed way-out] why :refused} (nido-land/gate! cwd)]
         (if why
           (refused why way-out)
           (let [title  (:out (jj/jj! cwd "log" "-r" landed "--no-graph" "-T" "description.first_line()"))
-                result (cws/append-entry-once!
-                        project ws-id {:kind :merged}
-                        (pr-str {:format :merged
-                                 :commit landed
-                                 :url    (commit-url cwd landed)
-                                 :title  (str title)})
-                        #(= landed (:commit %)))]
+                fresh? (not-any? #(and (= :merged (:kind %)) (= landed (:commit %))) (records/of run-key))]
+            (when fresh?
+              (records/append-to-run! run-key {:kind   :merged
+                                               :commit landed
+                                               :url    (commit-url cwd landed)
+                                               :title  (str/trim (str title))}))
             (println (str "recovery:land ok · " (subs landed 0 12) " is on origin's main"
-                          (when (:appended result) ", and its landing is recorded")))
+                          (when fresh? ", and its landing is recorded")))
             0))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

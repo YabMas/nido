@@ -899,10 +899,11 @@
   "Session recovery as the Operations page shows it: counts, one row per live or
    recently settled cause, and the activity feed — see view.recoveries/overview.
 
-   The door, not the derivation. It gathers what recovery keeps — each recovery
-   workstream of every project that declares a :session-failure trigger, with the
-   entries a recovery writes, and the pacing that trigger declares, so the
-   waiting times shown are the ones the source fires on. Read on every call.
+   The door, not the derivation. It gathers what recovery keeps — each recovery of
+   every project that declares a :session-failure trigger, with what it recorded (a
+   run's own records; a workstream's ledger entries, from before runs), and the
+   pacing that trigger declares, so the waiting times shown are the ones the source
+   fires on. Read on every call.
 
    Failure records are read only where the page needs them: undischarged ones,
    the newest few a shown recovery names, and ones on the feed page being asked
@@ -923,10 +924,12 @@
                      [pk t])
          recs      (vec (for [[pk _] declaring
                               r      (start-failures/recoveries pk)]
-                          (assoc r :entries
-                                 (into {} (for [kind [:session-diagnosis :session-restored
-                                                      :blocker :merged :pr-opened]]
-                                            [kind (vec (cws/entries-of pk (:ws-id r) kind))])))))]
+                          (if (:run? r)
+                            r
+                            (assoc r :entries
+                                   (into {} (for [kind [:session-diagnosis :session-restored
+                                                        :blocker :merged :pr-opened]]
+                                              [kind (vec (cws/entries-of pk (:ws-id r) kind))]))))))]
      (let [now   (or now (java.time.Instant/now))
            index (mapv (fn [id] {:id id :ms (failure/id-ms id)}) (failure/ids))
            gone  (start-failures/discharged-ids recs)

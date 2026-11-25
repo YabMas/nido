@@ -2,10 +2,16 @@
   "Which kept failures are owed a recovery, and when a cause may be recovered —
    decided without a coordinator, over failures and recoveries given as data."
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.record.records :as records]
+   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.source.start-failures :as sf]
-   [nido.session.failure :as failure]))
+   [nido.core.client :as client]
+   [nido.platform.core :as core]
+   [nido.session.failure :as failure]
+   [nido.test.runs :as test-runs]))
 
 
 (defn- kept [id & {:keys [session message origin project]
@@ -125,3 +131,62 @@
                                [(recovery "c" :closed {:at "t"} :named ["F1" "F2"])]))))
       (is (= ["F3"] @opened)
           "the records a closed recovery named are known settled from their ids"))))
+
+;; ── recovery runs ────────────────────────────────────────────────────────────
+
+(defn- run-recovery [cause state & {:keys [named settled ended] :or {ended "2026-09-17T10:00:00Z"}}]
+  (assoc (recovery cause :closed (when-not (#{:queued :running} state) {:at ended :outcome :dropped})
+                   :named named :settled settled :runs [(run state ended)])
+         :run? true))
+
+(deftest a-run-settles-what-it-recorded-and-nothing-else
+  (let [[a b] [(kept "F1") (kept "F2")]
+        cause (failure/cause a)]
+    (is (= ["F2"] (mapv :id (sf/owed [a b] [(run-recovery cause :done :named ["F1" "F2"] :settled ["F1"])])))
+        "over, the run discharges only what it recorded restored or withdrawn")
+    (is (= ["F1" "F2"] (mapv :id (sf/owed [a b] [(run-recovery cause :failed :named ["F1" "F2"])])))
+        "a run that died settles nothing, though it is over")))
+
+(deftest a-run-that-ended-leaving-its-cause-owed-paces-it
+  (let [f     (kept "F1")
+        cause (failure/cause f)
+        now   (at "2026-09-17T10:00:30Z")]
+    (doseq [state [:failed :awaiting-review]]
+      (is (empty? (sf/recovery-events [f] [(run-recovery cause state :named ["F1"])] now pacing))
+          (str "a run ended " (name state) " less than a poll interval ago holds the cause")))
+    (is (empty? (sf/recovery-events [f] [(run-recovery cause :running :named ["F1"])] now pacing))
+        "a running one holds it in flight")
+    (is (= [(str cause "@F1#1")]
+           (map :id (sf/recovery-events [f] [(run-recovery cause :failed :named ["F1"])]
+                                        (at "2026-09-17T10:01:00Z") pacing)))
+        "its retry is a new run: the id counts the runs the cause has had")))
+
+(deftest recoveries-reads-the-recovery-runs-in-the-core
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [cause (str "cause-" (random-uuid))
+              start (fn [failures]
+                      (let [id (test-runs/run! :nido :session-recovery
+                                               {:adapter :session-recovery :id (str cause "@F1")
+                                                :cause cause :failures failures} :running)]
+                        [id (client/run-key :nido id)]))
+              end!  (fn [id] (client/command! (client/run-key :nido id) (str "end/" id)
+                                              {:command :record-outcome :turn (str id " first")
+                                               :outcome :completed}))
+              [done done-k]   (start "F1,F2")
+              [parked park-k] (start "F3")]
+          (records/append-to-run! done-k {:kind :session-restored
+                                          :outcomes [{:failure "F1" :outcome :restored}
+                                                     {:failure "F2" :outcome :withdrawn}]})
+          (records/append-to-run! park-k {:kind :blocker :summary "s" :needs "may I reset the cluster?"
+                                          :after "a"})
+          (end! done) (end! parked)
+          (let [by (into {} (map (juxt :ws-id identity)) (filter #(= cause (:cause %)) (sf/recoveries :nido)))]
+            (is (= [true :done :done #{"F1" "F2"}]
+                   ((juxt :run? (comp :outcome :closed) (comp :state first :runs) :settled) (by done))))
+            (is (= :awaiting-review (-> (by parked) :runs first :state))
+                "a run that recorded a blocker and settled nothing stopped for a person")
+            (is (= 1 (count (get-in (by parked) [:entries :blocker])))))))
+      (finally (fs/delete-tree tmp)))))

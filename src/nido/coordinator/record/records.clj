@@ -9,15 +9,19 @@
    `NIDO_CORE_RUN`. A journal holds what outlives any one run, named per project. Every append is
    checked against the kind's write schema here, before the core sees it, and names the record seq
    its author read: a journal append that decides from what it read retries on a stale refusal by
-   reading and deciding again, so two authors racing are ordered by the core's writer."
+   reading and deciding again, so two authors racing are ordered by the core's writer.
+
+   Every record carries `:at`, when its author appended it, beside the core's `:seq` — both are
+   the store's, never the kind's, so neither is in its schema."
   (:require
+   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.report :as report]
    [nido.core.client :as client]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} ->event
-  "Record `r` as the ledger event of its kind: `:format` for `:kind`, without the core's `:seq`."
+  "Record `r` as the ledger event of its kind: `:format` for `:kind`, without its `:seq` and `:at`."
   [r]
-  (-> r (dissoc :kind :seq) (assoc :format (:kind r))))
+  (-> r (dissoc :kind :seq :at) (assoc :format (:kind r))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} ->record
   "Ledger event `e` (`:format`-tagged, as written) as a record."
@@ -26,9 +30,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]} parse
   "Record `r` read against its kind's read contract, as `report/parse-event` reads an entry, with
-   its `:seq`; nil when it does not read — a record of a kind this reader is too old or too new for."
+   its `:seq` and `:at`; nil when it does not read — a record of a kind this reader is too old or too
+   new for. `:at` is absent on a record appended before records carried it."
   [r]
-  (try (some-> (report/parse-event (:kind r) (->event r)) ->record (assoc :seq (:seq r)))
+  (try (some-> (report/parse-event (:kind r) (->event r)) ->record (assoc :seq (:seq r))
+               (cond-> (:at r) (assoc :at (:at r))))
        (catch Exception _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} checked
@@ -37,6 +43,8 @@
   [r]
   (report/validate-event (:kind r) (->event r))
   r)
+
+(defn- stamped [r] (assoc (checked r) :at (clock/now-iso)))
 
 (defn ^{:malli/schema [:=> [:cat :any :string] :string]} journal
   "The core key of `project`'s journal named `jname`."
@@ -49,6 +57,15 @@
   [k]
   (into [] (keep parse) (client/value! (client/records k) :records)))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:vector :map]]} runs
+  "Every run of `project`, each its core summary (`:run` its identity, `:status`, `:closed?`) with
+   its records parsed under `:records`, its id under `:id` and its core key under `:key`. Throws
+   when the core is unreachable."
+  [project]
+  (->> (client/value! (client/runs project) :runs)
+       (mapv (fn [[id sm]] (assoc sm :id id :key (client/run-key project id)
+                                  :records (into [] (keep parse) (:records sm)))))))
+
 (defn- outcome! [o]
   (when (client/unavailable? o) (client/value! o :records))
   o)
@@ -58,15 +75,15 @@
    when the run is over (`:run-is-over` — its unit finished, and what it did is closed), or when
    another append keeps landing first."
   [run-key r]
-  (checked r)
-  (loop [tries 5]
+  (let [r (stamped r)]
+   (loop [tries 5]
     (let [n (count (client/value! (client/records run-key) :records))
           o (outcome! (client/append-record! run-key (str "rec/" run-key "/" (random-uuid)) r n))]
       (cond
         (:events o) (inc n)
         (and (= :stale (get-in o [:refused :reason])) (> tries 1)) (recur (dec tries))
         :else (throw (ex-info (str "run record refused: " (pr-str (:refused o (:error o))))
-                              {:run run-key :record (:kind r) :outcome o}))))))
+                              {:run run-key :record (:kind r) :outcome o})))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :any] :any]} decide-and-append!
   "Append to journal `k` what `decide` makes of the journal's records as they stand, ordered against
@@ -82,7 +99,7 @@
       (if-not (contains? d :append)
         (:answer d)
         (let [o (outcome! (client/append-record! k (str "rec/" k "/" (random-uuid))
-                                                 (checked (:append d)) (count raw)))]
+                                                 (stamped (:append d)) (count raw)))]
           (cond
             (:events o) (:then d)
             (and (= :stale (get-in o [:refused :reason])) (> tries 1)) (recur (dec tries))

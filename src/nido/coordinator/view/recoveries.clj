@@ -3,8 +3,8 @@
    what happened, in order.
 
    A pure read model over records it is handed — kept failures, each carrying its
-   cause, and the recovery source's own reading of the recovery workstreams, with
-   their ledger entries. It stores nothing and writes nothing: the feed is derived
+   cause, and the recovery source's own reading of the recoveries — runs, and the
+   workstreams from before runs — with what each recorded. It stores nothing and writes nothing: the feed is derived
    from the facts recovery already keeps, so it cannot disagree with them.
 
    The states are the recovery source's decisions, not a second reading of them.
@@ -48,34 +48,27 @@
   (or (first (remove :closed mine))
       (first (by-time-desc (filter :closed mine) #(-> % :closed :at)))))
 
-(defn- open-runs [mine]
-  (vec (sort-by first-at (mapcat :runs (remove :closed mine)))))
-
-(defn- run-states [mine]
-  (for [r mine, run (:runs r)]
-    {:open? (not (:closed r)) :state (:state run) :ws-id (:ws-id r)}))
-
 (defn ^{:malli/schema [:=> [:cat :string :map] :map]}
   cause-state
   "Where `cause` stands, given the owed failures and recoveries in `ctx`:
 
-     :needs-you   a recovery run of it is parked for review on an open workstream — a
-                  person is being asked something (:gate-ws names where)
+     :needs-you   its latest recovery run stopped for a person, and it is still owed
+                  (:gate-ws names the recovery that holds it)
      :recovering  a recovery run of it is queued or running
-     :waiting     its open workstream's latest recoveries failed and it is not
-                  yet due (:due-at is when it is)
-     :owed        failures are owed or a workstream is open, and nothing above
+     :waiting     its latest recoveries ended leaving it owed and it is not yet
+                  due (:due-at is when it is)
+     :owed        failures are owed or a recovery is open, and nothing above
      :restored    nothing owed or open; its latest recovery closed :done
      :dismissed   nothing owed or open; its latest recovery closed otherwise"
   [cause {:keys [owed recoveries now pacing]}]
   (let [mine   (filter #(= cause (:cause %)) recoveries)
-        parked (some #(when (and (:open? %) (= :awaiting-review (:state %))) %) (run-states mine))
-        runs   (open-runs mine)
+        runs   (sf/pacing-runs (vec recoveries) cause)
         due-at (when (seq runs) (sf/due-at runs pacing))
         live?  (or (some #(= cause (:cause %)) owed) (some (complement :closed) mine))]
     (cond
-      parked
-      {:state :needs-you :gate-ws (:ws-id parked)}
+      (and live? (= :awaiting-review (:state (peek runs))))
+      {:state :needs-you
+       :gate-ws (some #(when (some (fn [r] (= (:id (peek runs)) (:id r))) (:runs %)) (:ws-id %)) mine)}
 
       (sf/in-flight? (vec recoveries) cause)
       {:state :recovering}
@@ -124,6 +117,8 @@
      (cause-state cause ctx)
      {:cause     cause
       :ws-id     (:ws-id ws)
+      :run?      (boolean (:run? ws))
+      :needs     (some-> (last (entries ws :blocker)) (as-> b (or (:needs b) (:summary b))))
       :failures  (vec ids)
       :sessions  (vec (distinct (map #(str (:project %) "/" (:session %)) (reverse sample))))
       :message   (some-> (last sample) innermost-message)
@@ -201,7 +196,7 @@
                                              :url (:url m) :text (:title m)})))
               (for [p (entries r :pr-opened)]
                 (evt (at-seq p) (merge base {:at (:at p) :kind :pr-opened :url (:url p) :text (:title p)})))
-              (when-let [c (:closed r)]
+              (when-let [c (when-not (:run? r) (:closed r))]
                 [(evt (:ws-id r) (merge base {:at (:at c) :kind :closed :outcome (:outcome c)}))]))]
        e))))
 

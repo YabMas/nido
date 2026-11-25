@@ -3934,8 +3934,9 @@
    into in the day before it failed. :not-restored
    names, under :failure-left, the failure its own attempt kept.
 
-   A failure named :restored or :withdrawn here is settled once this workstream
-   closes; one named only :not-restored is still owed."
+   A failure named :restored or :withdrawn here is settled — at once on a recovery
+   run, once its workstream closed on a recovery from before runs; one named only
+   :not-restored is still owed. :continuation {:continued-by …} is only on the latter."
   [:map {:closed true}
    [:format   [:= :session-restored]]
    [:outcomes [:vector {:min 1}

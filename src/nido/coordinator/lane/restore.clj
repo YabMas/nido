@@ -1,125 +1,56 @@
 (ns nido.coordinator.lane.restore
-  "Bring back what a failed session start stopped: the session, and whatever was
-   waiting on it.
+  "Bring back what a failed session start stopped.
 
-   The session is started HERE, in the process running the restore, and the
-   daemon is handed — by envelope — only what continues once it is up: a Run to
-   execute, or a reply's turn to replay. That split is the point. The daemon loads
-   nido's code once; when the failure was a defect a recovery has just landed a fix
-   for, a bring-up the daemon performed would run the code that failed. A
-   continuation reaches a session that is already up, so it never runs the start
-   path.
+   What a person was working in comes back up here, in the process running the restore — the
+   recovery's own session, never the daemon: when the failure was a defect a recovery has just
+   landed a fix for, a bring-up the daemon performed would run the code that failed.
 
-   A :failed Run stays failed. What it was doing continues as a new Run of its
-   trigger and payload on its workstream; a Run that parked instead of failing is
-   executed again as itself."
+   A start kept on behalf of a Run or a reply's turn is withdrawn: the core runs every turn now,
+   and a turn whose session did not come up ended failed there, so there is nothing left here to
+   continue."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.records :as records]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
-   [nido.coordinator.record.triggers :as triggers]
-   [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.source.start-failures :as start-failures]
    [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]))
 
-(defn- closed-after?
-  "Whether workstream `w` was closed after the moment `at`."
-  [w at]
-  (when-let [closed-at (:at (ws/closure w))]
-    (pos? (compare (java.time.Instant/parse closed-at) (java.time.Instant/parse at)))))
-
 (defn ^{:malli/schema [:=> [:cat :map :map] :map]}
   continuation
-  "What continues failure `f` once its session is up, given `facts` read for it:
-   :run (the Run its origin names), :ws (the workstream its origin names),
-   :continued-by (the id of a Run already carrying on a failed :run's work, or nil) and
-   :typed? (whether a person typed a prompt in the failed session within
-   `session/worked-window-ms` before it failed).
+  "What continues failure `f` once its session is up, given `facts` read for it: :typed? (whether
+   a person typed a prompt in the failed session within `session/worked-window-ms` before it
+   failed, or :unread).
 
      {:kind :none}                       a person's start; bringing it up is all
-     {:kind :execute :run-id id}         a Run that parked on its failed start
-     {:kind :successor :run run}         a Run that failed on it
-     {:kind :resume-turn …}              a reply whose turn could not start
-     {:kind :withdrawn}                  the origin's workstream closed after the
-                                         failure, or the start named a session
-                                         `up!` now refuses; there is nothing left
-                                         to continue
-     {:kind :withdrawn :continued-by id} a failed Run whose work Run `id` already
-                                         carries on; another successor would do
-                                         the same work twice
-     {:kind :unread}                     a person's start whose prompt log could not
-                                         be read: nothing is decided, and the failure
-                                         stays owed
-     {:kind :withdrawn :why :no-person}  a start kept as a person's in a session
-                                         nobody typed into in the day before it
-                                         failed — a start an agent nido drives
-                                         made reads as a person's, and restoring
-                                         it would only bring up what nobody is
-                                         working in
+     {:kind :withdrawn}                  a start made for a Run or a reply's turn, or one naming a
+                                         session `up!` now refuses; there is nothing left to
+                                         continue
+     {:kind :unread}                     a person's start whose prompt log could not be read:
+                                         nothing is decided, and the failure stays owed
+     {:kind :withdrawn :why :no-person}  a start kept as a person's in a session nobody typed into
+                                         in the day before it failed — restoring it would only
+                                         bring up what nobody is working in
 
-   Withdrawn for a closed workstream or an unnameable session — never because
-   the session is gone, which the teardown of every failed Run makes true. An
-   unnameable session predates the refusal: restoring it could only be refused
-   again, and the refusal is not a failure, so it would stay owed forever."
-  [f {:keys [run ws continued-by typed?]}]
-  (let [{:keys [kind] :as origin} (:origin f)]
+   An unnameable session predates the refusal: restoring it could only be refused again, and the
+   refusal is not a failure, so it would stay owed forever."
+  [f {:keys [typed?]}]
+  (let [{:keys [kind]} (:origin f)]
     (cond
       (or (some-> (:session f) lifecycle/session-name-problem)
-          (some-> (get-in f [:opts :branch]) lifecycle/session-name-problem))
+          (some-> (get-in f [:opts :branch]) lifecycle/session-name-problem)
+          (#{:run :resume} kind))
       {:kind :withdrawn}
 
-      (and (#{:run :resume} kind) ws (closed-after? ws (:at f)))
-      {:kind :withdrawn}
-
-      (= :resume kind)
-      {:kind :resume-turn :project (:project origin) :ws-id (:ws-id origin) :input (:input origin)}
-
-      (and (= :run kind) run (= :awaiting-review (:state run)))
-      {:kind :execute :run-id (:id run)}
-
-      (and (= :run kind) run (= :failed (:state run)) continued-by)
-      {:kind :withdrawn :continued-by continued-by}
-
-      (and (= :run kind) run (= :failed (:state run)))
-      {:kind :successor :run run}
-
-      (and (#{nil :person} kind) (= :unread typed?))
+      (= :unread typed?)
       {:kind :unread}
 
-      (and (#{nil :person} kind) (not typed?))
+      (not typed?)
       {:kind :withdrawn :why :no-person}
 
       :else
       {:kind :none})))
-
-(def ^:private carrying-on
-  "Run states in which a Run is still doing, or has done, its trigger's work."
-  #{:queued :preprocessing :running :awaiting-review :done})
-
-(defn- continued-by
-  "The id of a Run that already carries on failed `run`'s work — its trigger and
-   payload on its workstream, minted after it, in a state in `carrying-on` — or nil.
-
-   A restore's successor that fails to start is a failure of the same cause whose
-   origin is still `run`, so one cause can name several failures of one Run; each
-   would otherwise mint a successor of its own. Reads every Run record."
-  [run]
-  (let [{:keys [id trigger workstream-id event-payload]} run
-        minted (fn [r] (:at (first (:state-history r))))]
-    (some (fn [other-id]
-            (when (not= other-id id)
-              (when-let [r (runs/read-run other-id)]
-                (when (and (= trigger (:trigger r))
-                           (= workstream-id (:workstream-id r))
-                           (= event-payload (:event-payload r))
-                           (carrying-on (:state r))
-                           (pos? (compare (minted r) (minted run))))
-                  other-id))))
-          (sort (runs/list-run-ids)))))
 
 (defn- typed-before?
   "Whether a person typed a prompt in failure `f`'s session within `session/worked-window-ms`
@@ -135,110 +66,28 @@
          (contains? typed [(name (:project f)) (str (:session f))]))))
     (catch Exception _ :unread)))
 
-(defn- facts-for [f]
-  (let [{:keys [kind run-id project ws-id session]} (:origin f)
-        run (case kind
-              :run    (when run-id (runs/read-run run-id))
-              :resume (when (and project ws-id session)
-                        (runs/find-for-session (keyword (name project)) ws-id session))
-              nil)
-        ws-id (or ws-id (:workstream-id run))
-        p     (or (some-> project name keyword) (:project run))]
-    {:run          run
-     :ws           (when (and p ws-id) (ws/read-ws p ws-id))
-     :continued-by (when (and (= :run kind) (= :failed (:state run)))
-                     (continued-by run))
-     :typed?       (typed-before? f)}))
-
-(defn- successor!
-  "A new Run of `run`'s trigger and payload on `run`'s own workstream, its session
-   brought up here. The trigger is read as it is declared now."
-  [run origin]
-  (let [trigger (triggers/find-by-name (triggers/load-for-project (:project run)) (:trigger run))
-        _       (when-not trigger
-                  (throw (ex-info (str "trigger " (name (:trigger run)) " is no longer declared for "
-                                       (name (:project run)))
-                                  {:reason :trigger-gone})))
-        routed  {:project         (:project run)
-                 :trigger         trigger
-                 :payload         (:event-payload run)
-                 :priority        (or (:priority run) 0)
-                 :session-profile (:session-profile run)
-                 :uncapped?       (boolean (:uncapped? run))
-                 :workstream-id   (:workstream-id run)}
-        next    (runs/create-run! routed {:fired-at (clock/now-iso) :fired-by "restore"})]
-    (session/create! (:project next) (:workstream-id run)
-                     {:name     (:session-name next)
-                      :weight   (if (= :lite (:session-profile next)) :light :heavy)
-                      :autonomy {:skill (:skill next) :first-message (:first-message next)
-                                 :agent (or (:agent next) :claude) :claude-session-id nil
-                                 :trigger (:trigger next) :limits (or (:limits next) {})
-                                 :priority (or (:priority next) 0) :uncapped? (boolean (:uncapped? next))
-                                 :on-promote (:on-promote next) :error nil}})
-    (try
-      (runs/spawn-session-for-run! next origin)
-      next
-      (catch Throwable t
-        (runs/transition! (:id next) :failed)
-        (runs/write-run! (assoc (runs/read-run (:id next)) :error
-                                (cond-> {:reason :spawn-failed :detail (ex-message t)}
-                                  (:session-failure/id (ex-data t))
-                                  (assoc :failure-id (:session-failure/id (ex-data t))))))
-        (runs/teardown-session-for-run! next)
-        (throw t)))))
-
 (defn- restore-one!
-  "Bring failure `f` back and hand on its continuation. Returns its outcome."
+  "Bring failure `f` back. Returns its outcome."
   [f]
-  (let [facts  (facts-for f)
-        cont   (continuation f facts)
+  (let [cont   (continuation f {:typed? (typed-before? f)})
         origin (assoc (:origin f) :restoring (:id f))]
-    (cond
-      (= :unread (:kind cont))
+    (case (:kind cont)
+      :unread
       {:failure (:id f) :outcome :not-restored
        :note    "the prompt log could not be read, so whether a person was working in it is unknown; left owed"}
 
-      (= :withdrawn (:kind cont))
+      :withdrawn
       (cond-> {:failure (:id f) :outcome :withdrawn}
-        (:continued-by cont) (assoc :continuation {:continued-by (:continued-by cont)})
-        (:why cont)          (assoc :why (:why cont)))
+        (:why cont) (assoc :why (:why cont)))
 
-      :else
       (try
-        (let [handed
-              (case (:kind cont)
-                :none
-                ;; On the runtime of the workstream holding it now, else one of its own: a
-                ;; kept failure carries no key, since who holds the session may have
-                ;; changed since it failed.
-                (do (lifecycle/up! (:session f)
-                                   (let [held-by (session/workstream-id-for
-                                                  (keyword (name (:project f))) (:session f))]
-                                     (cond-> (assoc (:opts f)
-                                                    :project (:project f)
-                                                    :origin origin)
-                                       held-by (assoc :runtime-key held-by))))
-                    {:kind :none})
-
-                :execute
-                (do (runs/spawn-session-for-run! (:run facts) origin)
-                    (queue/enqueue! {:type :execute-run :run-id (:run-id cont)})
-                    {:kind :execute :run-id (:run-id cont)})
-
-                :successor
-                (let [next (successor! (:run cont) origin)]
-                  (queue/enqueue! {:type :execute-run :run-id (:id next)})
-                  {:kind :successor :run-id (:id next) :of (:id (:run cont))})
-
-                :resume-turn
-                (do (when-let [run (:run facts)]
-                      (runs/spawn-session-for-run! run origin))
-                    (queue/enqueue! {:type    :resume-turn
-                                     :project (:project cont)
-                                     :ws-id   (:ws-id cont)
-                                     :input   (:input cont)})
-                    {:kind :resume-turn :ws-id (:ws-id cont)}))]
-          {:failure (:id f) :outcome :restored :continuation handed})
+        ;; On the runtime of the workstream holding it now, else one of its own: a kept failure
+        ;; carries no key, since who holds the session may have changed since it failed.
+        (lifecycle/up! (:session f)
+                       (let [held-by (session/workstream-id-for (keyword (name (:project f))) (:session f))]
+                         (cond-> (assoc (:opts f) :project (:project f) :origin origin)
+                           held-by (assoc :runtime-key held-by))))
+        {:failure (:id f) :outcome :restored :continuation {:kind :none}}
         (catch Throwable t
           (let [left (some #(:session-failure/id (ex-data %))
                            (take-while some? (iterate #(.getCause ^Throwable %) t)))]
@@ -246,40 +95,30 @@
                      :note    (str/trim (str (ex-message t)))}
               left (assoc :failure-left left))))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :map]}
   restore!
-  "Restore every failure of recovery workstream `ws-id`'s cause still owed that no
-   earlier :session-restored entry on it names restored or withdrawn; append one
-   :session-restored entry with each failure's outcome; close the workstream once
-   every failure named on it has been named restored or withdrawn.
+  "Restore every failure of recovery run `run-key`'s cause still owed, and record one
+   :session-restored on the run with each failure's outcome.
 
-   Refuses — throws with :reason — on a workstream that is not a recovery
-   (:not-a-recovery) or holds no :session-diagnosis (:undiagnosed): restoring an
-   undiagnosed failure is repair by guesswork.
+   Refuses — throws with :reason — on a run that is not a recovery (:not-a-recovery) or has
+   recorded no :session-diagnosis (:undiagnosed): restoring an undiagnosed failure is repair by
+   guesswork.
 
-   Returns {:outcomes [...] :closed? bool}; :outcomes is empty when nothing was
-   owed, and nothing is appended then."
-  [project ws-id]
-  (let [w   (or (ws/read-ws project ws-id)
-                (throw (ex-info "no such workstream" {:reason :not-a-recovery :ws-id ws-id})))
-        ref (some #(when (= start-failures/adapter (:adapter %)) %) (:external-refs w))
-        _   (when-not ref
-              (throw (ex-info (str ws-id " is not a session recovery") {:reason :not-a-recovery})))
-        _   (when-not (ws/latest-entry project ws-id :session-diagnosis)
-              (throw (ex-info (str ws-id " holds no :session-diagnosis — diagnose before restoring")
-                              {:reason :undiagnosed})))
-        cause    (first (str/split (:id ref) #"@" 2))
-        mine     (some #(when (= ws-id (:ws-id %)) %) (start-failures/recoveries project))
-        covered  (->> (start-failures/owed-failures project)
-                      (filter #(= cause (failure/cause %)))
-                      (remove #((:settled mine #{}) (:id %)))
-                      (sort-by :id))
-        outcomes (mapv restore-one! covered)]
+   Returns {:outcomes [...] :settled? bool}, :settled? when nothing of the cause is owed any
+   more; :outcomes is empty when nothing was owed, and nothing is recorded then."
+  [project run-key]
+  (let [run      (some #(when (= run-key (:key %)) %) (records/runs project))
+        payload  (-> run :run :payload)
+        _        (when-not (= start-failures/adapter (:adapter payload))
+                   (throw (ex-info (str run-key " is not a session recovery") {:reason :not-a-recovery})))
+        _        (when-not (some #(= :session-diagnosis (:kind %)) (:records run))
+                   (throw (ex-info (str run-key " has recorded no :session-diagnosis — diagnose before restoring")
+                                   {:reason :undiagnosed})))
+        cause    (str (:cause payload))
+        owed-now #(->> (start-failures/owed-failures project)
+                       (filter (fn [f] (= cause (failure/cause f))))
+                       (sort-by :id))
+        outcomes (mapv restore-one! (owed-now))]
     (when (seq outcomes)
-      (ws/append-entry! project ws-id {:kind :session-restored}
-                        (pr-str {:format :session-restored :outcomes outcomes})))
-    (let [after    (some #(when (= ws-id (:ws-id %)) %) (start-failures/recoveries project))
-          settled? (and after (seq (:named after)) (every? (:settled after) (:named after)))]
-      (when (and settled? (not (:closed after)))
-        (ws/close! project ws-id :done))
-      {:outcomes outcomes :closed? (boolean settled?)})))
+      (records/append-to-run! run-key {:kind :session-restored :outcomes outcomes}))
+    {:outcomes outcomes :settled? (empty? (owed-now))}))

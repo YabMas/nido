@@ -16,64 +16,73 @@
 
    An arrival rather than a direct fire from where the start failed, because the session substrate
    cannot reach the queue and because one cause failing five sessions is one thing to recover, not
-   five. Owed is DERIVED on every poll: a failure stops being owed when a recovery workstream for
-   its cause closes after it was kept — by the restore that brought everything back, or by a person
-   dismissing it. Nothing marks a failure as handled, so a recovery that dies leaves its failures
-   owed and the cause is fired again.
+   five. A recovery is one run of the recovery trigger, its records what that run did; recoveries
+   from before runs are workstreams, read and never written. Owed is DERIVED on every poll: a
+   failure stops being owed when a recovery run records it restored or withdrawn, or when a
+   recovery workstream closed having named it. Nothing else marks a failure as handled, so a
+   recovery that dies or gives up leaves its failures owed and the cause is fired again.
 
    PACED PER CAUSE, not braked per trigger. A breaker counts a trigger, so one cause whose recovery
    keeps failing would silence the recovery of every other; here a cause waits a delay that doubles
-   with each consecutive failed recovery on its open workstream, up to a declared ceiling, and the
+   with each consecutive recovery run that ended leaving it owed, up to a declared ceiling, and the
    other causes are untouched.
 
-   It never emits for a failure whose origin is a Run this source fired — a recovery whose own
-   session cannot start is not something another recovery could fix."
+   It never emits for a failure whose origin is a Run this source fired, from before runs — a
+   recovery whose own session cannot start is not something another recovery could fix."
   (Operation duration-ms "A declared duration — 90s, 2m, 1h, 1d — in milliseconds, or nil."
     {:signature [:=> [:catn [:s :string]] [:maybe :int]]})
   (Operation pacing
     "The pacing a :session-failure source config declares, in milliseconds, with the defaults."
     {:signature [:=> [:catn [:source-config [:maybe :map]]] :map] :delegates [duration-ms]})
-  (Operation failed-in-a-row "How many of a cause's recovery Runs failed at the end of the list."
+  (Operation failed-in-a-row
+    "How many of a cause's recovery runs ended leaving it owed — failed, or stopped for a person —
+     at the end of the list."
     {:signature [:=> [:catn [:runs [:vector :map]]] :int]})
+  (Operation pacing-runs
+    "The runs that pace a cause, oldest first: every recovery run of it, and those on an open
+     recovery workstream from before runs."
+    {:signature [:=> [:catn [:recoveries [:vector :map]] [:cause :string]] [:vector :map]]})
   (Operation due-at
     "When a cause may next be recovered — nil when it may be at any time. After k consecutive
      failures, the last one's end plus one poll interval doubled k-1 times, capped at the ceiling."
     {:signature [:=> [:catn [:runs [:vector :map]] [:pacing :map]] :any]
      :delegates [failed-in-a-row]})
   (Operation recoveries
-    "Every recovery workstream of a project as data: its cause, whether it closed, the failures
-     named on it, the outcomes restores recorded, its recovery runs and its sessions."
+    "Every recovery of a project as data — the workstreams from before runs, then one per recovery
+     run: its cause, whether it closed, the failures named on it and those it settled, its runs,
+     its sessions, and a run's records by kind."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]})
   (Operation owed
-    "The failures still owed a recovery: not named by a closed recovery workstream, and not the
-     start of a recovery Run."
+    "The failures still owed a recovery: not settled, and not the start of a recovery Run from
+     before runs."
     {:signature [:=> [:catn [:failures [:vector :map]] [:recoveries [:vector :map]]] [:vector :map]]})
   (Operation discharged-ids
-    "The ids of every failure a closed recovery workstream named — settled, known without
-     opening a record."
+    "The ids of every failure settled — recorded restored or withdrawn by a recovery run, or named
+     by a recovery workstream that closed — known without opening a record."
     {:signature [:=> [:catn [:recoveries [:vector :map]]] [:set :string]]})
   (Operation undischarged-failures
-    "Every kept failure no closed recovery named, read from disk; settled records stay unopened."
+    "Every kept failure not settled, read from disk; settled records stay unopened."
     {:signature [:=> [:catn [:recoveries [:vector :map]]] [:vector :map]]
      :delegates [discharged-ids]})
   (Operation owed-failures "The failures a project's recoveries still owe, read now."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [recoveries undischarged-failures owed]})
   (Operation in-flight?
-    "Whether a recovery of a cause is in flight: queued, preprocessing or running on any of its
-     workstreams, or parked on an open one."
+    "Whether a recovery of a cause is in flight: a recovery run of it starting or running, or one
+     from before runs parked on a workstream still open."
     {:signature [:=> [:catn [:recoveries [:vector :map]] [:cause :string]] :boolean]})
   (Operation due?
-    "Whether a cause may be recovered now, given its open workstream's recovery Runs: always when
-     none of the latest failed, else once the doubled delay since the last has passed."
+    "Whether a cause may be recovered now, given the runs that pace it: always when the latest did
+     not end leaving it owed, else once the doubled delay since the last has passed."
     {:signature [:=> [:catn [:runs [:vector :map]] [:now :any] [:pacing :map]] :boolean]
      :delegates [due-at]})
   (Operation recovery-events
-    "One event per cause among owed failures that is due, naming every owed failure of it, under a
-     ref keyed by the cause and its earliest owed failure — the key the fire gate dedups on."
+    "One event per cause among owed failures that is due, naming every owed failure of it, under an
+     id keyed by the cause, its earliest owed failure and how many recovery runs it has had — the
+     key a run is started under, so a re-emitted fire is answered and a retry is a new run."
     {:signature [:=> [:catn [:owed [:vector :map]] [:recoveries [:vector :map]] [:now :any] [:pacing :map]]
                  [:vector :map]]
-     :delegates [in-flight? due?]})
+     :delegates [in-flight? due? pacing-runs]})
   (Operation poll-once!
     "One iteration: derive the owed failures, emit the due causes' events, return the state to
      persist."

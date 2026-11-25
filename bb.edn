@@ -307,17 +307,17 @@
 
   nido:recovery:failures
   {:requires ([tasks.nido-recovery :as nido-recovery])
-   :doc "Kept session-start failures with their evidence: the ones owed a recovery, or all of them; for a cause, also the recovery workstreams that tried it. [:cause <key>] [:all true]"
+   :doc "Kept session-start failures with their evidence: the ones owed a recovery, or all of them; for a cause, also the recoveries that tried it — runs, and workstreams from before runs. [:cause <key>] [:all true]"
    :task (apply nido-recovery/failures *command-line-args*)}
 
   nido:recovery:restore
   {:requires ([tasks.nido-recovery :as nido-recovery])
-   :doc "Restore the owed failures of a recovery workstream's cause: start each session here, hand the daemon what it interrupted, record each outcome, close the workstream when all came back. Refuses without a :session-diagnosis. [:ws-id <id>] [:cwd <dir>]"
+   :doc "Restore the owed failures of a recovery run's cause: start each session a person was in here, withdraw a start made for a run or a reply, record each outcome on the run. Refuses without a recorded :session-diagnosis. [:run <run-id>, default the calling turn's run]"
    :task (apply nido-recovery/restore-cmd *command-line-args*)}
 
   nido:recovery:land
   {:requires ([tasks.nido-recovery :as nido-recovery])
-   :doc "Land a recovery's nido fix: refuses unless the diagnosis names a nido defect and bb nido:test and bb nido:land:check pass at the worktree's tip on origin's main; then fast-forwards main and records the :merged. [:cwd <dir>]"
+   :doc "Land a recovery's nido fix: refuses unless the diagnosis names a nido defect and bb nido:test and bb nido:land:check pass at the worktree's tip on origin's main; then fast-forwards main and records the :merged on the run. [:run <run-id>, default the calling turn's run] [:cwd <dir>]"
    :task (apply nido-recovery/land-cmd *command-line-args*)}
 
   nido:land:record

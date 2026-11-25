@@ -3,25 +3,23 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.record.workstream :as cws]
-   [nido.review.stages :as stages]
+   [nido.coordinator.record.records :as records]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.jj :as jj]
    [tasks.nido-recovery :as recovery]))
 
-(defn- land-in [{:keys [project diagnosis cwd-ws turn-ws] :or {cwd-ws [:nido "ws-r"]}}]
+(defn- land-in [{:keys [project diagnosis run] :or {run "recover-x"}}]
   (let [jj-calls (atom [])
+        read     (atom [])
         out      (with-out-str
                    (with-redefs [lifecycle/worktree-from-cwd (constantly "/wt")
                                  lifecycle/session-from-cwd  (constantly {:project project :session "recover-x"})
-                                 stages/project+ws-from-cwd  (constantly (or cwd-ws turn-ws))
-                                 cws/latest-entry            (fn [p ws kind]
-                                                               (when (and (= :session-diagnosis kind)
-                                                                          (= [:nido (or (second cwd-ws) (second turn-ws))] [p ws]))
-                                                                 diagnosis))
+                                 records/of                  (fn [k] (swap! read conj k)
+                                                               (when diagnosis
+                                                                 [(assoc diagnosis :kind :session-diagnosis)]))
                                  jj/jj!                      (fn [& args] (swap! jj-calls conj args) {:exit 1})]
-                     (is (= 1 (recovery/land ":cwd" "/wt")))))]
-    {:out out :jj-calls @jj-calls}))
+                     (is (= 1 (apply recovery/land (cond-> [":cwd" "/wt"] run (into [":run" run])))))))]
+    {:out out :jj-calls @jj-calls :read @read}))
 
 (deftest land-refuses-outside-nidos-own-repository
   (let [{:keys [out jj-calls]} (land-in {:project "brian" :diagnosis {:verdict :nido-defect}})]
@@ -30,17 +28,13 @@
 
 (deftest land-refuses-without-a-nido-defect-diagnosis
   (doseq [diagnosis [nil {:verdict :one-off} {:verdict :project-defect}]]
-    (let [{:keys [out jj-calls]} (land-in {:project "nido" :diagnosis diagnosis})]
+    (let [{:keys [out jj-calls read]} (land-in {:project "nido" :diagnosis diagnosis})]
       (is (str/includes? out "not a nido defect"))
+      (is (= ["run:nido/recover-x"] read) "the diagnosis read is the one the run recorded")
       (is (empty? jj-calls)))))
 
-;; The core provisions a recovery as a unit whose session no workstream record holds, so its
-;; worktree names no workstream; the verb refused every such recovery as "belongs to no
-;; workstream". The core turn names its workstream in its environment.
-
-(deftest land-reads-the-workstream-of-the-core-turn-it-runs-in
-  (let [{:keys [out]} (land-in {:project "nido" :cwd-ws nil :turn-ws [:nido "ws-core"]
-                                :diagnosis {:verdict :one-off}})]
-    (is (str/includes? out "not a nido defect") "the turn's workstream's diagnosis is the one read"))
-  (let [{:keys [out]} (land-in {:project "nido" :cwd-ws nil :turn-ws nil})]
-    (is (str/includes? out "belongs to no workstream"))))
+(deftest land-refuses-without-a-run
+  (when-not (System/getenv "NIDO_CORE_RUN")
+    (let [{:keys [out jj-calls]} (land-in {:project "nido" :run nil :diagnosis {:verdict :nido-defect}})]
+      (is (str/includes? out "no recovery run"))
+      (is (empty? jj-calls)))))

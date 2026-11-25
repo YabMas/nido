@@ -19,9 +19,9 @@ you do not relax.
 ## The rules that are not yours to relax
 
 1. **Diagnose before you act.** `bb nido:recovery:restore` and
-   `bb nido:recovery:land` refuse on a workstream with no `:session-diagnosis`,
-   and a recovery Run that ends without one of its own is failed whatever it
-   reports.
+   `bb nido:recovery:land` refuse for a run that has recorded no
+   `:session-diagnosis`, and a recovery run that ends without one is failed
+   whatever it reports.
 2. **You never push.** `bb nido:recovery:land` is the only way a nido fix
    reaches main: it runs `bb nido:test` and `bb nido:land:check` at the exact
    tip it pushes and refuses otherwise. `jj git push` is not yours to run.
@@ -36,21 +36,18 @@ you do not relax.
    discard uncommitted work anywhere. If restoring needs any of that, **park**
    (§6).
 5. **Paths.** Your cwd is a nido worktree. Write the status file and artifacts
-   to the absolute Run-directory paths in your system prompt — a relative
-   `_run-status.edn` or `artifacts/` lands in the worktree and gets committed.
+   to the absolute paths your instructions name — a relative `_run-status.edn`
+   or `artifacts/` lands in the worktree and gets committed.
 6. **Never `git`.** jj workspaces nest inside colocated repos; bare `git` binds
    to the parent. `jj st`, `jj log`, `jj diff`, `jj file show -r <rev> <path>`.
 
 ## 1. Say you have started
 
-Your system prompt names the Run directory: artifacts go under
-`<run-dir>/artifacts/`, the status file is `<run-dir>/_run-status.edn`. Write
-`{:phase :investigating :note "Reading the kept failures"}` there, and read your
-workstream id once — the ledger verbs below take it explicitly:
-
-```bash
-WS=$(bb -e '(:workstream-id (clojure.edn/read-string (slurp "<run-dir>/run.edn")))' | tr -d '"')
-```
+Your instructions name this run's status file and artifacts directory. Write
+`{:phase :investigating :note "Reading the kept failures"}` to the status file.
+This run has no workstream: what it does is recorded on the run itself, by
+`bb nido:run:record` and the recovery verbs, which find the run from the turn
+they are called in.
 
 ## 2. Read the evidence
 
@@ -67,8 +64,8 @@ one), and the log tails captured at the moment it failed. The instance's own
 logs may already be gone — a failed Run is torn down at once — which is why the
 record carries them.
 
-The same listing shows earlier recovery workstreams for this cause and what
-they concluded. Read those before deciding: a cause that was "a one-off" three
+The same listing shows earlier recoveries of this cause — runs, and workstreams
+from before runs — and what they concluded. Read those before deciding: a cause that was "a one-off" three
 times is not a one-off.
 
 ## 3. Find the cause
@@ -100,18 +97,16 @@ makes the session start, and file the other (§8).
 
 ```bash
 cat > <run-artifacts-dir>/diagnosis.edn <<'EDN'
-{:format   :session-diagnosis
- :failures ["<failure-id>" …]           ; every failure the payload named
+{:failures ["<failure-id>" …]           ; every failure the payload named
  :verdict  :nido-defect                 ; | :project-defect | :one-off
  :cause    "what went wrong, in a sentence a person reads cold"
  :evidence ["the log line, file:line or observation it rests on" …]
  :remedy   "what you are about to do about it"}
 EDN
-bb nido:workstream:entry:add :project nido :ws-id "$WS" :kind session-diagnosis \
-  :file <run-artifacts-dir>/diagnosis.edn
+bb nido:run:record :project nido :kind session-diagnosis :file <run-artifacts-dir>/diagnosis.edn
 ```
 
-A recovery Run that ends without appending one is failed whatever its status
+A recovery run that ends without recording one is failed whatever its status
 file says, and its cause is fired again after a delay.
 
 ## 5. Repair, by class
@@ -152,9 +147,9 @@ jj workspace add ../<project>-recover-<slug> -r main@origin
 
 Run the project's own focused tests, push a branch, and open a **ready** PR
 (`gh pr create -R <owner/repo>`) whose body leads with the failed starts it
-answers. Record it: `bb nido:workstream:ref:add :project nido :ws-id "$WS"
-:adapter github :id <owner/repo#n> :url <url> :title "…"`. Forget the jj
-workspace when done.
+answers. Record it: write `{:url "<url>" :title "…"}` to
+`<run-artifacts-dir>/pr.edn` and `bb nido:run:record :project nido :kind
+pr-opened :file <run-artifacts-dir>/pr.edn`. Forget the jj workspace when done.
 
 Then find a way the failed sessions can start without the fix merged, within
 rule 4 — typically moving a failed session off shared state onto its own
@@ -171,10 +166,12 @@ land.
 bb nido:recovery:restore
 ```
 
-It covers every still-owed failure of this cause, starts each session in its
-own process, hands the daemon whatever the failure interrupted — the Run, its
-successor, or the reply that was being resumed — and records one outcome per
-failure. It closes the workstream when every failure is restored or withdrawn.
+It covers every still-owed failure of this cause, starts each session a person
+was working in, here in its own process, withdraws a start that was made for a
+Run or a reply's turn (the core ended that turn failed; nothing is left to
+continue), and records one outcome per failure on this run. A failure recorded
+restored or withdrawn is settled; it says whether anything of the cause is still
+owed.
 
 A `not-restored` outcome names the new failure its attempt left. Read it (§2):
 either your repair was incomplete — repair and restore again — or restoring
@@ -182,26 +179,25 @@ needs something rule 4 forbids. Then **park**:
 
 ```bash
 cat > <run-artifacts-dir>/blocker.edn <<'EDN'
-{:format  :blocker
- :summary "what failed, what you found, what you did"
+{:summary "what failed, what you found, what you did"
  :needs   "the one thing a person must decide, as one question ending in ?"
  :recommendation "<the answer your reasoning supports, and why — omit unless you genuinely hold one>"
  :after   "<what happens once the person answers: what runs next, what waits>"
  :options [{:label "…" :summary "…" :consequence "…" :recommended? true}
            {:label "…" :summary "…"}]}
 EDN
-bb nido:workstream:entry:add :project nido :ws-id "$WS" :kind blocker :file <run-artifacts-dir>/blocker.edn
+bb nido:run:record :project nido :kind blocker :file <run-artifacts-dir>/blocker.edn
 ```
 
-and write `{:phase :awaiting-input :note "…"}` to the status path. Parked, this
-recovery holds its cause: no other recovery of it starts while you wait. The
-answer comes back as a reply to this session; restore again after acting on it.
+then write `{:phase :complete :note "parked: …"}` to the status path and stop.
+A run has no one to wait for: it ends there, the Operations page shows the
+cause as needing a person, with your blocker, and the cause is fired again only
+after the paced delay — a later recovery reads your blocker in §2.
 
 ## 7. Finish
 
 Write `{:phase :complete :note "<verdict> · <what you did> · <n> restored"}`.
-Never close the recovery workstream by hand while a failure is not restored —
-closing it tells nido those failures are settled.
+Nothing else settles a failure: only a restore's recorded outcome does.
 
 ## 8. File what you did not fix
 

@@ -17,17 +17,9 @@
   "The overview's owed failures, in-flight causes and next-due times are the recovery source's owed, in-flight? and due-at applied to the same records and the pacing the live recovery trigger declares."
   {:about [view-recoveries source-start-failures] :evidence "round"})
 
-(Claim one-row-one-state
-  "Each cause with an owed failure or an open recovery workstream is one row with exactly one state — needs-you when a recovery session of it is parked on an open workstream, else recovering when a recovery of it is in flight, else waiting when its next due time is after now, else owed — and a cause with neither is a row only when its latest recovery closed within the last seven days, restored when that closure was :done and dismissed otherwise."
-  {:about [view-recoveries] :evidence "round"})
-
 (Claim feed-is-the-records-in-order
   "The activity feed holds one event for each failure kept, recovery Run fired, recovery Run ended :done or :failed, :session-diagnosis, :session-restored, :blocker, :merged and :pr-opened entry and recovery closure there is, each at the time its own record carries, ordered newest first with equal times in a fixed order; a page of it is the at most eighty events that follow a position in that order, from the newest when there is none, and names the position of the next older page when events remain, so over the same records following older pages from the newest reaches every event exactly once."
   {:about [view-recoveries] :evidence "round"})
-
-(Claim due-at-answers-when
-  "due-at returns the moment a cause's open-workstream recovery Runs next let it be recovered, nil when the latest of them did not fail, and due? holds exactly when due-at is nil or not after the given time."
-  {:about [source-start-failures] :evidence "round"})
 
 (Claim operations-carries-recovery-in-one-poll
   "The recovery page (/operations/recovery) and its five-second poll render the recovery section from work/session-recovery, the poll as one SSE event patching #recovery; when recovery cannot be read the section says so, and the Operations home's recovery card says so too rather than counting zero."
