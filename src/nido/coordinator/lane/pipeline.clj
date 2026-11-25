@@ -324,9 +324,8 @@
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] [:maybe :keyword]]}
   stage-active
   "The spine stage something is running in right now, or nil: a claim-holding
-   round's own stage, or — for an agent session, or a turn the core runs — the
-   stage the position has the work in, since either is doing its next action. A
-   merge, or nothing running, names none.
+   round's own stage, or — for a turn the core runs — the stage the position has
+   the work in, since it is doing its next action. Nothing running names none.
 
    A separate answer from the position's `:stage`, never folded into it. A round
    appends its record only when it ends, so while it runs the position still
@@ -338,7 +337,6 @@
   [position doing]
   (case (:source doing)
     :claim   (get stage-of-claim (:kind doing))
-    :session (:stage position)
     :core    (:stage position)
     nil))
 

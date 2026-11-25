@@ -65,28 +65,15 @@
                    (drop from lines))
      :cursor (max from (count lines))}))
 
-(defonce ^:private !index (atom nil))
-
-(defn ^{:malli/schema [:=> [:cat [:maybe fn?]] :any]}
-  use-index!
-  "Answer which logs were written since a time from `f` — (fn [since-ms] ids-or-nil) — rather than
-   by listing the directory, or list it again given nil. The running coordinator's record of
-   live state installs one: with tens of thousands of logs, statting every one on every pass was
-   the cost, and that record already knows each one's time."
-  [f]
-  (reset! !index f)
-  nil)
-
 (defn- written-since
   "The conversation ids whose logs were written at or after `since-ms`."
   [since-ms]
-  (or (some-> @!index (apply [since-ms]))
-      (let [dir (fs/parent (cstate/session-events-path "_"))]
-        (if-not (fs/directory? dir)
-          []
-          (for [^java.io.File f (.listFiles (fs/file dir))
-                :when (and (str/ends-with? (.getName f) ".edn") (>= (.lastModified f) since-ms))]
-            (str/replace (.getName f) #"\.edn$" ""))))))
+  (let [dir (fs/parent (cstate/session-events-path "_"))]
+    (if-not (fs/directory? dir)
+      []
+      (for [^java.io.File f (.listFiles (fs/file dir))
+            :when (and (str/ends-with? (.getName f) ".edn") (>= (.lastModified f) since-ms))]
+        (str/replace (.getName f) #"\.edn$" "")))))
 
 (defn ^{:malli/schema [:=> [:cat :int] [:vector :map]]}
   prompts-since

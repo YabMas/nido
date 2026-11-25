@@ -468,39 +468,6 @@
         (is (= {:project :brian :session "live"} (work/open-target :brian (:id w)))
             "open lands in the session the core has ready, not one it still owes")))))
 
-(deftest a-denial-is-an-operational-notice-not-a-gate
-  ;; Nothing waits on a person here: a denial needs no answer, so it is listed for Operations
-  ;; and never puts the workstream in the inbox.
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w) {:name "s" :weight :light :autonomy nil})
-        (session/update-claude! :brian (:id w) "s"
-                                (constantly {:session-id "s-den" :bg-id "s-den" :origin :nido :driver :nido
-                                             :hold nil :pending nil :queued nil :own-work? false
-                                             :policy {:auto-respawn? false} :cursor 0
-                                             :driving-since "2026-01-01T00:00:00Z"
-                                             :announced-blocked? false :recovered-boot nil}))
-        (session-events/append! "s-den" {:event :permission-denied :at "2025-12-31T00:00:00Z"
-                                         :tool-name "Old"})
-        (session-events/append! "s-den" {:event :permission-denied :at "2026-01-02T00:00:00Z"
-                                         :tool-name "Bash" :tool-input "{\"command\":\"rm\"}"})
-        (is (empty? (filter #(= (:id w) (:ws-id %)) (work/gates :brian)))
-            "the workstream is not in the inbox")
-        (with-redefs [nido.platform.project/list-projects (constantly {:brian {}})
-                      work/live-session-names             (fn [_] #{})]
-          (try
-            (work/hold! {:sweep? false})
-            (is (empty? (filter #(= (:id w) (:ws-id %)) (work/gates :brian)))
-                "nor in the inbox a holding process reads")
-            (finally (work/release!))))
-        (with-redefs [nido.platform.project/list-projects (constantly {:brian {}})]
-          (is (= [{:project "brian" :ws-id (:id w)
-                   :denials [{:session "s" :at "2026-01-02T00:00:00Z" :tool-name "Bash"
-                              :tool-input "{\"command\":\"rm\"}"}]}]
-                 (map #(dissoc % :label) (work/all-denials)))
-              "it is listed for Operations, with the denial recorded since nido began driving it"))))))
-
 (deftest environment-is-the-last-open-units-ready-session
   (with-tmp
     (fn [_]
@@ -3345,8 +3312,6 @@
             "a ledger append")
         (is (moved? #(session/create! :brian (:id w) {:name "s1" :weight :light :autonomy nil}))
             "a new session")
-        (is (moved? #(session/update-substrate! :brian (:id w) "s1" (fn [_] {:dispatching nil :claude nil})))
-            "a session record rewritten in place of the old one")
         (is (moved? #(write-run! "run-1" (:id w) "s1" "sid"))
             "a run registered")
         (is (moved? #(runs/write-run! (assoc (runs/read-run "run-1") :state :done)))

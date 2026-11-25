@@ -528,12 +528,6 @@
   [pos]
   (update pos :history? not))
 
-(defn- denial-line
-  "One auto-mode denial a session nido drives recorded: when, in which session, which tool."
-  [{:keys [session at tool-name tool-input]}]
-  [:li [:span.meta at] " · " session " · " [:code (or tool-name "?")]
-   (when tool-input [:span.meta " " tool-input])])
-
 (defn- candidates-list
   "The release candidates, each opening its workstream's pane beside the list."
   [{:keys [candidates selection chats-unseen] :as screen}]
@@ -1880,7 +1874,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? denials gate pending? pause]
+  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? gate pending? pause]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -1920,9 +1914,7 @@
             (when (seq (:stages arc))
               (arc-block pos arc entries report in-stage? (state/round-label doing)))
             (when (seq holds) (holds-block holds))
-            (when (seq denials)
-              [:div.denials [:p.meta "Permission denials while nido drives it:"]
-               (into [:ul] (map denial-line) denials)])
+
             ;; What waits on the person comes after the context that orients them,
             ;; and above the log. The card owns the gate's error line and every
             ;; control, so the pane offers neither of its own beside it.
@@ -2531,18 +2523,6 @@
                      [:code ":dry-run true"] " to preview")
                (str/join ", " (map #(str (:project %) "/" (or (:session %) (:instance-id %))) casualties))]}))
 
-(defn- denials-notice
-  "Every workstream whose driven session recorded an auto-mode denial, each linking to the
-   workstream, whose pane lists them."
-  [denied]
-  (notice-card
-   {:title    "Permission denials"
-    :headline (str (reduce + (map (comp count :denials) denied)) " in "
-                   (count denied) (if (= 1 (count denied)) " workstream" " workstreams"))
-    :lines    (for [{:keys [project ws-id label denials]} denied]
-                [:a {:href (ws-page-href project ws-id)}
-                 (or label ws-id) " — latest: " (or (:tool-name (peek denials)) "?")])}))
-
 (defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]] [:maybe :map] :HostModel] :any]}
   operations-home-cards
   "The card for each operational concern, read from the same values their own
@@ -2550,12 +2530,12 @@
    A value that could not be read (nil) is said on its card rather than shown as
    zero, since zero is the reading that nothing needs anyone.
 
-   `notices` — {:casualties [..] :denials [..]} — are what nido wants a person to know that is no
+   `notices` — {:casualties [..]} — are what nido wants a person to know that is no
    workstream's question, so they are here and never in the needs-you list. Shown only when there
    is one: a notice of nothing is noise.
 
    `host` is `nido.coordinator.view.host/host-model`'s answer, `{:unreadable :host}` included."
-  [proposals recovery holds queues {:keys [casualties denials]} host]
+  [proposals recovery holds queues {:keys [casualties]} host]
   (let [{:keys [open queued waiting]} (group-by proposal-band proposals)
         stuck (count (filter #(#{:stuck :waiting-on-you} (:state %)) holds))
         {:keys [needs-you recovering waiting-rec]}
@@ -2592,8 +2572,7 @@
          (review-queue-card [{:stage nil}])
          (review-queue-card queues)))
      (host-card host)
-     (when (seq casualties) (casualties-notice casualties))
-     (when (seq denials) (denials-notice denials))]))
+     (when (seq casualties) (casualties-notice casualties))]))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :any]] :string]}
   operations-home-fragment

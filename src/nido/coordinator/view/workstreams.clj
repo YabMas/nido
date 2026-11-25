@@ -450,14 +450,12 @@
 
    An unrecognised kind prints its own name rather than vanishing — a claim
    written by a newer nido should degrade to something a person can act on."
-  [{:keys [source kind phase progress activity]}]
+  [{:keys [source kind progress activity]}]
   (case source
     :core    (get core-activity-labels activity (some-> activity name))
     :claim   (if progress
                (progress-label kind progress)
                (or (claim-labels kind) (some-> kind name)))
-    :merge   (str "merging" (when phase (str " · " (name phase))))
-    :session (str "agent" (when phase (str " · " (name phase))))
     nil))
 
 (defn ^{:malli/schema [:=> [:cat :any :map] :string]}

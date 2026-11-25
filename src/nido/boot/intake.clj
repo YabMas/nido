@@ -217,7 +217,7 @@
   (when (due? :attention now-ms (:attention-interval-ms defaults))
     (let [current (attention/items {:gates (work/all-gates) :halt (halt/read-halt-info)
                                     :breakers (breakers/auto-tripped-triggers)
-                                    :denials [] :casualties (:casualties (work/owed-revivals))})]
+                                    :casualties (:casualties (work/owed-revivals))})]
       (doseq [n (attention/coalesce (attention/arrivals @!attention-seen current))]
         (desk/request! (assoc n :kind :notify)))
       (reset! !attention-seen (set (keys current))))))

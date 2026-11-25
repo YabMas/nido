@@ -501,12 +501,8 @@
   (let [review {:source :claim :kind :diff-review}]
     (is (= :implementation (p/stage-active {:stage :design} review)))
     (is (= :baseline (p/stage-active {:stage :design} {:source :claim :kind :baseline-round})))
-    (is (= :design (p/stage-active {:stage :design} {:source :session :phase :running}))
-        "an agent session is doing the position's next action")
     (is (= :baseline (p/stage-active {:stage :baseline} {:source :core :activity :working :turn "t" :unit "u"}))
-        "so is a turn the core runs, a unit's or its conductor's")
-    (is (nil? (p/stage-active {:stage :design} {:source :merge :phase :queued}))
-        "a merge runs in no stage of the unit")
+        "a turn the core runs, a unit's or its conductor's, is doing the position's next action")
     (is (nil? (p/stage-active {:stage :design} nil)))
     (let [a (p/arc (kinds->entries [:intent :baseline :design :implementation-completed
                                     :review :design])

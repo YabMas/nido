@@ -29,22 +29,8 @@
     (is (= "some-future-round"
            (wsv/doing-label {:source :claim :kind :some-future-round})))))
 
-(deftest merge-and-session-carry-their-phase
-  (is (= "merging · driving" (wsv/doing-label {:source :merge :phase :driving})))
-  (is (= "agent · running" (wsv/doing-label {:source :session :phase :running})))
-  (testing "a phase-less source still reads"
-    (is (= "merging" (wsv/doing-label {:source :merge})))
-    (is (= "agent" (wsv/doing-label {:source :session})))))
-
 (deftest an-unknown-source-renders-nothing-rather-than-guessing
   (is (nil? (wsv/doing-label {:source :something-else :phase :x}))))
-
-(deftest the-merge-lanes-resting-state-has-a-phrase
-  (testing "the projection answers :queued for a shipment the lane has not
-            reached, and this layer's whole job is that it reads as something —
-            a row that rendered nothing there would be indistinguishable from
-            one with nothing happening"
-    (is (= "merging · queued" (wsv/doing-label {:source :merge :phase :queued})))))
 
 (def ^:private a-diff-review-report
   ;; The outline a running diff review persists: round 1 done, round 2 fixing

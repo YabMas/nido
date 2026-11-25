@@ -383,8 +383,7 @@
   ;; unreadable record costs its notice, never the page.
   (views/operations-home-cards (all-proposals) (session-recovery nil) (improvement-holds)
                                (review-queues)
-                               {:casualties (try (:casualties (work/shown-revivals)) (catch Throwable _ []))
-                                :denials    (try (work/all-denials) (catch Throwable _ []))}
+                               {:casualties (try (:casualties (work/shown-revivals)) (catch Throwable _ []))}
                                (host-model)))
 
 (defn- operations-home-fragment-response []

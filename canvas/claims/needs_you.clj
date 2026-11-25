@@ -30,7 +30,3 @@
 (Claim list-is-owed-moves
   "The needs-you list renders the gates and nothing else: no casualty card and no workstream whose only claim on the person is a recorded permission denial."
   {:about [needs-fragment ui-server] :evidence "round"})
-
-(Claim notices-on-operations
-  "Operations' home carries a card for the host casualties owed a revive, with the revive command, and a card for the workstreams with a permission denial recorded in a session nido drives, each linking to its workstream; a workstream's pane shows its recorded denials whether or not it is a gate."
-  {:about [operations-home-cards workstream-pane owed-revivals] :evidence "round"})

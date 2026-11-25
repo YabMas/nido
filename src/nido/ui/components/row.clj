@@ -58,9 +58,7 @@
                   {:keys [label tag needs-you open-findings position phase stage] :as row} :row} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
    [:div.gate-top
-    (status-slot (cond needs-you                      (state/needs-mark)
-                       (= :merge (:source (:doing row))) nil
-                       :else                          (state/state-mark (:status row) (:doing row))))
+    (status-slot (if needs-you (state/needs-mark) (state/state-mark (:status row) (:doing row))))
     [:span.lbl label]
     (when chat? chat-mark)
     (when (pos? (or open-findings 0))
@@ -68,11 +66,7 @@
    (tag-line tag)
    ;; Where the workstream stands, and one mark for whether anything is happening in it. The
    ;; next move, who owes it and what is running are the marks' titles, not words on the row.
-   ;; A :shipping row's merge phase comes through state-mark, which the projection folds
-   ;; ship-substate into, so it is never said twice.
    [:div.gate-sub [:span project] (state/position-chip position)
-    ;; A merge keeps its words (state-mark's doing badge) here: a blocked merge reads red.
-    (when (= :merge (:source (:doing row))) (state/state-mark (:status row) (:doing row)))
     (state/phase-chip phase)]
    ;; What the gate waits on, where the person owing it will look. The exit
    ;; criterion is the current phase's: its exit is the gate that opens the next.
@@ -91,7 +85,7 @@
    both at once."
   [{:keys [part] {:keys [href chat?]
                   {:keys [project stage label tag report ask session resume-error pending? error-msg
-                          doing denials selected?]} :gate} :props}]
+                          doing selected?]} :gate} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
    [:div.gate-top (status-slot (state/needs-mark)) [:span.lbl label] (when chat? chat-mark)]
    (tag-line tag)
@@ -110,10 +104,7 @@
    (when resume-error
      [:div.gate-err "⚠ resume failed: " (or (:message resume-error)
                                             (name (:reason resume-error)))])
-   (when error-msg [:div.gate-err "⚠ " error-msg])
-   (when (seq denials)
-     [:div.gate-err "⚠ " (count denials) " permission denial" (when (< 1 (count denials)) "s")
-      " — latest: " (or (:tool-name (peek denials)) "?")])])
+   (when error-msg [:div.gate-err "⚠ " error-msg])])
 
 (defn- render-candidate-row
   "One release candidate on Needs you: the workstream, linking to `:href` — its pane, where Land
@@ -263,13 +254,6 @@
                            :position {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}
                            :phase {:current 2 :of 3
                                    :exit {:criterion "the dashboard serves /_catalog on a daemon that has been up for an hour"}}))}
-     {:title "shipping, phased"
-      :note  "The merge phase arrives through the state mark, which the projection folds
-              ship-substate into — so it is never said twice on one row."
-      :props (board (assoc a-board-row :stage :shipping
-                           :position {:at :shipped :next {:stage :land :mode :human}}
-                           :phase {:current 3 :of 3}
-                           :doing {:source :merge :phase :blocked}))}
      {:title "a chat here has news"
       :note  "A chat pinned to this workstream finished a turn, or waits on a permission, since the
               person last had it open: the bubble after the title, until they open it."
@@ -305,10 +289,6 @@
      {:title "a resume that failed"
       :note  "The parked session could not be resumed, and the row says why."
       :props (gate (assoc a-gate :resume-error {:reason :no-session}))}
-     {:title "permission denials"
-      :note  "A session nido drives hit auto-mode denials. The row counts them and names the
-              latest tool."
-      :props (gate (assoc a-gate :denials [{:tool-name "Bash"} {:tool-name "WebFetch"}]))}
      {:title "no Ask, only a report"
       :note  "An older gate whose question was never written as an Ask. The preview falls back to
               the report's first prose line."

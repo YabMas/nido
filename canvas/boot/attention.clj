@@ -11,7 +11,7 @@
    when its key appears, and again only after it has left the set, so a gate sitting for a day is
    one banner, and a session that resumes and parks again is a new one."
   (Operation items
-    "Every gate, halt, auto-tripped breaker and newly recorded denial as {key notification}."
+    "Every gate, halt, auto-tripped breaker and boot owed a revive as {key notification}."
     {:signature [:=> [:catn [:inputs :map]] [:map-of :any :map]]})
   (Operation blocked-notifications
     "One notification per session that has just entered blocked — never folded, never summarised."

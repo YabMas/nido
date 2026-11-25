@@ -1,10 +1,9 @@
 (ns nido.boot.attention
   "What wants a person right now, and which of it is NEW since the last look.
 
-   Five things are items here: a gate (a workstream parked on a human — the same
+   Four things are items here: a gate (a workstream parked on a human — the same
    rows the gate inbox shows), a halted coordinator, a trigger whose breaker
-   tripped on its own, a permission auto mode denied in a session nido drives,
-   and a host boot whose casualties are still owed a revive. A session blocked on a person, and a
+   tripped on its own, and a host boot whose casualties are still owed a revive. A session blocked on a person, and a
    turn that ended on a workstream not activated, are announced apart from them, by
    blocked-notifications and turn-end-notifications. Each becomes one keyed notification; `arrivals` is the
    keys that were absent last time. Edge-triggered on purpose: a gate that sits
@@ -75,13 +74,6 @@
                       :sound    sound})))
         turn-ends))
 
-(defn- denial-item [{:keys [project session event]}]
-  [[:denial (name project) session (:at event)]
-   {:title    "nido · permission denied"
-    :subtitle (name project)
-    :message  (str session ": auto mode denied " (or (:tool-name event) "a tool call"))
-    :sound    sound}])
-
 (defn- casualty-item
   "One boot's casualties owed a revive as one item. It carries how many workstreams it holds,
    which the first look's summary names; a notifier reads only the notification's own keys."
@@ -99,16 +91,14 @@
   "Everything wanting a person, as {key notification}. `:gates` is
    `work/all-gates`, `:halt` is the halt info or nil, `:breakers` is
    `breakers/auto-tripped-triggers` — a trigger a person paused on purpose is
-   not news to them, so user-disabled breakers are not passed here. `:denials`
-   is the permission denials recorded since the last look, each its own item.
+   not news to them, so user-disabled breakers are not passed here.
    `:casualties` is `work/owed-revivals`'s casualties — one per workstream — one item per boot.
    A blocked session is not an item: see blocked-notifications."
-  [{:keys [gates halt breakers denials casualties]}]
+  [{:keys [gates halt breakers casualties]}]
   (into {}
         (concat (map gate-item gates)
                 (when halt [(halt-item halt)])
                 (map breaker-item breakers)
-                (map denial-item denials)
                 (map casualty-item (group-by :boot-id casualties)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:set :any]] :map] [:vector :map]]}

@@ -91,26 +91,10 @@
     "Flip a session to archived, recording when. Idempotent — archiving twice leaves one entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Session]
      :delegates [write! clock/now-iso]})
-  (Operation set-error!
-    "Record, or clear, why the last resume of an autonomous session failed."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:err [:maybe :map]]] Session]
-     :delegates [write!]})
   (Operation claude-facet
     "The Claude Code background session a record is about, and who drives it — nil for a
      conversation from before the substrate."
     {:signature [:=> [:catn [:s Session]] [:maybe :map]]})
-  (Operation update-substrate!
-    "Replace a session's :claude facet, :dispatching note and conversation read positions together,
-     under the record's lock; read positions an updater does not answer are kept."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:f [:=> [:cat :map] :map]]] Session]})
-  (Operation update-claude!
-    "Replace a session's :claude facet with what a function makes of it, under the record's lock."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:f [:=> [:cat [:maybe :map]] [:maybe :map]]]] Session]
-     :delegates [update-substrate!]})
-  (Operation set-claude-session-id!
-    "Persist the conversation id an autonomous session resumes from."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:id [:maybe :string]]] Session]
-     :delegates [write!]})
   (Operation notion-stage
     "Board stage for a Notion-driven workstream, from the ticket's live status and whether it
      has been triaged locally. Pure."

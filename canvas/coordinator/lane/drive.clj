@@ -102,14 +102,6 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] WorkstreamStatus]
      :delegates [of]}))
 
-(Module lane-review
-  "Settling runs whose verdict arrived through the ticket rather than through the run."
-  (Operation run-state-from-ticket "The run state a ticket status implies after a clean exit."
-    {:signature [:=> [:catn [:ticket-status :keyword]] [:maybe :keyword]]})
-  (Operation sweep-resolved! "Transition every awaiting-review run whose ticket has since settled."
-    {:signature [:=> [:catn] :any]
-     :delegates [runs/list-run-ids runs/read-run runs/transition! tickets/status]}))
-
 (Module lane-runs-clean
   "Deleting terminal runs, by plan and then by execution.
 

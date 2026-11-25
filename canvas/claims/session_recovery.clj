@@ -4,7 +4,6 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the modules
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.daemon.brakes :refer [daemon-anomaly]]
             [canvas.coordinator.lane.restore :refer [lane-restore]]
             [canvas.coordinator.record.runs :refer [teardown-session-for-run!]]
             [canvas.coordinator.source.start-failures :refer [source-start-failures]]

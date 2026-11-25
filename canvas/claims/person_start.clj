@@ -9,7 +9,6 @@
             [canvas.coordinator.executor :as c-coordinator-executor]
             [canvas.coordinator.lane.start :as c-coordinator-lane-start]
             [canvas.coordinator.lane.work :as c-coordinator-lane-work]
-            [canvas.coordinator.record.runs :as c-coordinator-record-runs]
             [canvas.coordinator.record.standing :as c-coordinator-record-standing]
             [canvas.coordinator.record.tickets :as c-coordinator-record-tickets]))
 
@@ -28,7 +27,3 @@
 (Claim planning-is-the-persons-choice
   "status-of reads a ticket :planning exactly when an :in-progress choice still holds as standing/chosen-stage reads it — a person's start, or nido's from a Notion status it syncs; no plan Run enters it. Its other readings — :investigating from an open triage Run among them — are as they were."
   {:about [c-coordinator-record-tickets/status-of] :evidence "round"})
-
-(Claim provisioned-session-outlives-its-run
-  "A Run of a handed-over skill (:plan-bug, :plan-github-issue) never has its session reclaimed: teardown-session-for-run! and stop-session-for-parked-run! leave such a Run's session as it is, so a session it handed to a person stays theirs across every reconcile, though no such Run is minted any more."
-  {:about [c-coordinator-record-runs/teardown-session-for-run! c-coordinator-record-runs/stop-session-for-parked-run!] :evidence "round"})

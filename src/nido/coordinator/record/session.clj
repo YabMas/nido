@@ -389,37 +389,6 @@
                 (if-let [o (when cwd (owner cwd))] (update m o (fnil conj #{}) id) m))
               {} conversations))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat :map] :map]] :Session]}
-  update-substrate!
-  "Replace a session's :claude facet, :dispatching note and :reading with what `(f {:claude
-   :dispatching :reading})` answers, read and written under the record's lock, so a facet written,
-   a note cleared and a read position moved are one step, and two updaters (a conduct pass and a
-   start) cannot lose each other's write. A :claude or :dispatching the answer leaves nil or out
-   is removed; a :reading it leaves out is kept, so no updater that is not reading the session's
-   conversations can drop where they were read to. Throws when the session does not exist or the
-   result is not valid, and writes nothing then."
-  [project ws-id session-name f]
-  (let [path (cstate/session-edn-path project ws-id session-name)]
-    (io/update-edn! path
-                    (fn [s]
-                      (when-not s
-                        (throw (ex-info "Session not found"
-                                        {:project project :ws-id ws-id :session session-name})))
-                      (let [r       (f (select-keys s [:claude :dispatching :reading]))
-                            reading (if (contains? r :reading) (:reading r) (:reading s))]
-                        (validate (shed (cond-> (-> s
-                                                    (assoc :claude (:claude r) :dispatching (:dispatching r))
-                                                    (dissoc :reading))
-                                          reading (assoc :reading reading)))))))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat [:maybe :map]] [:maybe :map]]] :Session]}
-  update-claude!
-  "Replace a session's :claude facet with `(f facet)` — nil to remove it — under the record's
-   lock, as update-substrate! does; the :dispatching note is left as it is."
-  [project ws-id session-name f]
-  (update-substrate! project ws-id session-name
-                     (fn [m] (update m :claude f))))
-
 (defn- load! [project ws-id session-name]
   (or (read-session project ws-id session-name)
       (throw (ex-info "Session not found"
@@ -437,30 +406,6 @@
                   (assoc :substrate :archived)
                   (update :substrate-history conj
                           {:at (clock/now-iso) :substrate :archived}))))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:maybe :map]] :Session]}
-  set-error!
-  "Set (nil clears) the last-resume error on an autonomous session's autonomy
-   facet. Throws if the session has no autonomy facet (a human session has none).
-   Returns the updated record."
-  [project ws-id session-name err]
-  (let [s (load! project ws-id session-name)]
-    (when-not (autonomous? s)
-      (throw (ex-info "Cannot set error on a human session"
-                      {:project project :ws-id ws-id :session session-name})))
-    (write! (assoc-in s [:autonomy :error] err))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:maybe :string]] :Session]}
-  set-claude-session-id!
-  "Persist the resumable claude conversation id onto an autonomous session's
-   autonomy facet (the run captures it mid-burst; mirroring it here makes the
-   session self-sufficient for resume). Throws on a human session. Idempotent."
-  [project ws-id session-name id]
-  (let [s (load! project ws-id session-name)]
-    (when-not (autonomous? s)
-      (throw (ex-info "Cannot set claude-session-id on a human session"
-                      {:project project :ws-id ws-id :session session-name})))
-    (write! (assoc-in s [:autonomy :claude-session-id] id))))
 
 (def lifecycle-stages
   "The stage keywords the board groups by. A stage choice — a :stage-set or :reopened entry —

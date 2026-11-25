@@ -1,7 +1,7 @@
 (ns canvas.coordinator.daemon.brakes
-  "Self-spec: the coordinator's safety brakes — `halt`, `pid`, `breakers`, `anomaly`.
+  "Self-spec: the coordinator's safety brakes — `halt`, `pid`, `breakers`.
 
-   Four modules and one subject: how the daemon is stopped, and how it notices it should be.
+   Three modules and one subject: how the daemon is stopped, and how it notices it should be.
    Each is a file whose PRESENCE or CONTENT is the fact — nothing is held in memory, so a
    crashed daemon comes back to the same brakes it left."
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
@@ -121,21 +121,3 @@
      a fault, and must not be able to mask a genuine new one."
     {:signature [:=> [:catn] [:vector :map]]
      :delegates [read-all]}))
-
-(Module daemon-anomaly
-  "Rate-based detection of a runaway: too many spawns in a window, or too many failures.
-
-   Pure over an in-memory detector — nothing here reads or writes, which is what lets the
-   thresholds be tested without spawning anything."
-  (Operation empty-detector
-    "A detector with nothing recorded yet."
-    {:signature [:=> [:catn] :map]})
-  (Operation record-spawn
-    "Note a spawn at an instant."
-    {:signature [:=> [:catn [:det :map] [:iso-ts :string]] :map]})
-  (Operation record-failure
-    "Note a failure at an instant."
-    {:signature [:=> [:catn [:det :map] [:iso-ts :string]] :map]})
-  (Operation check
-    "What, if anything, is running away — a spawn burst or a failure burst, and how many."
-    {:signature [:=> [:catn [:det :map] [:thresholds :map]] [:maybe :map]]}))

@@ -125,25 +125,6 @@
 (def ^:private owed-label
   {:person "you" :agent "agent" :machine "nido" :nobody "nobody"})
 
-(defn- doing-badge
-  "What a workstream is doing right now — nothing when nothing is. The ONE
-   rendering of current activity, so a shipping row says `merging · driving`
-   once rather than in two vocabularies.
-
-   Muted text, not a filled badge: the row's emphasis belongs to the position
-   chip lighting when the next move is a human's, and a lit slab here outshouts
-   it on rows that need nobody. The exception is a merge phase's severity class,
-   so a stuck merge still reads red on a board that is scanned rather than read.
-
-   It is often the last span of a `.gate-sub`, which flexes to fill the line —
-   a background here would paint that whole stretch."
-  [doing]
-  (when-let [d (wsv/doing-label doing)]
-    [:span {:class (str "doing-badge"
-                        (when-let [phase (and (= :merge (:source doing)) (:phase doing))]
-                          (str " ship-" (name phase))))}
-     d]))
-
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] :any]}
   state-mark
   "Whether anything is happening in a workstream, as one mark and no words: the breathing dot in
@@ -151,13 +132,11 @@
    the failed colour when it is stalled — an agent owes the move, nothing runs, no question was
    recorded and nobody paused it, which is a fault and never a resting state; nothing otherwise
    (a workstream waiting on a person says so by its lit position chip). What runs, and who owes
-   the next move, are the mark's title. A merge keeps its words (`doing-badge`), because a
-   blocked merge has to read red on a board that is scanned rather than read."
+   the next move, are the mark's title."
   [{:keys [owed-by live stalled paused]} doing]
   (let [what (wsv/doing-label doing)
         tip  (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))]
     (cond
-      (= :merge (:source doing)) (doing-badge doing)
       paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
       stalled                    [:span.st-mark.stalled {:title (str "stalled — nothing runs and nothing asks you"
                                                                      (when (seq tip) (str " · " tip)))} "⚠"]

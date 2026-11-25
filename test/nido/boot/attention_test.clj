@@ -61,13 +61,6 @@
     (is (= 6 (count ns)) "never folded into an overflow count, however many at once")
     (is (every? #(re-find #"blocked" (:message %)) ns))))
 
-(deftest a-denial-is-an-item-of-its-own
-  (let [current (attention/items {:gates [] :halt nil :breakers []
-                                  :denials [{:project :brian :session "kid"
-                                             :event {:at "t1" :tool-name "Bash"}}]})]
-    (is (= [[:denial "brian" "kid" "t1"]] (keys current)))
-    (is (re-find #"Bash" (:message (val (first current)))))))
-
 (deftest a-turn-end-no-conductor-reads-is-announced-to-the-person
   (let [end (fn [m] (merge {:project :brian :ws-id "w" :session "plain" :run nil :instruction nil
                             :activated? false :conductor? false :event {:last-message "  all\n done  "}}

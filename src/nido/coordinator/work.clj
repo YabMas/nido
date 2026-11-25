@@ -26,7 +26,6 @@
    [nido.coordinator.lane.drain :as drain-lane]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
-   [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.proposal :as proposal]
@@ -1375,7 +1374,7 @@
                  (and (< (:seq %) g) (phase-trail-kinds (:kind %))))
             entries)))
 
-(declare driven-denials gate pause-of)
+(declare gate pause-of)
 
 (defn- arc-at
   "The arc of stages `entries` travelled, read at `position`: the stage a person owes marked
@@ -1507,9 +1506,6 @@
         :environment  (environment project ws-id)
         ;; Whether :reply reaches anyone — a conductor's open escalation counts with a parked agent.
         :replyable?   (replyable? project ws-id)
-        ;; Shown on the workstream whether or not it is a gate: a denial needs no answer, so the
-        ;; inbox never carries it on its own, and this is where a reader of the work finds it.
-        :denials      (driven-denials project ws-id)
         :sessions     (mapv session-facet sessions)})
      ;; No workstream at this id. For a bare watched-view row the ws-id IS the
      ;; Notion page-id, so read-ws always misses and there are two live cases:
@@ -1539,21 +1535,6 @@
    person. What every surface offering Reply reads."
   [project ws-id]
   (boolean (seq (wcore/open-asks (core-of project ws-id)))))
-
-(defn- driven-denials
-  "Every auto-mode denial recorded in a session of the workstream while nido drives it — since it
-   last began driving it, by dispatch or adoption — oldest first, each naming its
-   session: {:session :at :tool-name :tool-input}."
-  [project ws-id]
-  (vec (for [s     (csession/list-sessions project ws-id)
-             :let  [{:keys [driver session-id driving-since]} (:claude s)]
-             :when (and (= :nido driver) session-id)
-             ev    (:events (session-events/events-since session-id nil))
-             :when (and (= :permission-denied (:event ev))
-                        (or (nil? driving-since) (nil? (:at ev))
-                            (not (.isBefore (java.time.Instant/parse (:at ev))
-                                            (java.time.Instant/parse driving-since)))))]
-         (assoc (select-keys ev [:at :tool-name :tool-input]) :session (:name s)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   asks-several?
@@ -1705,7 +1686,6 @@
        :ask          (core-ask-card a)
        :core-ask     (:id a)
        :session      nil
-       :denials      []
        :resume-error nil
        :working?     false})))
 
@@ -1777,9 +1757,7 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Gate]]}
   gates
   "A project's gates: workstreams that owe a person a move now (needs-you), each hydrated
-   with its report, its follow-actions and the question it asks. A denial recorded in a
-   session nido drives rides on a gate as :denials but never makes one: a denial needs no
-   answer, so it is an operational notice (`all-denials`), not a card. A PAUSED workstream is
+   with its report, its follow-actions and the question it asks. A PAUSED workstream is
    never a gate: a person's pause takes it off :needs-you until they lift it. A SETTLED (closed) workstream is never a gate,
    even if a stale stage-override still projects :needs-you.
    A DISMISSED row is never a gate either — and the filter is load-bearing, not
@@ -1876,43 +1854,6 @@
   []
   (:gates (read-gates)))
 
-(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
-  all-denials
-  "Every open workstream, across registered projects, with an auto-mode denial recorded in a session
-   nido drives: {:project <string> :ws-id :label :denials [{:session :at :tool-name :tool-input}]}.
-   An operational notice, not a gate — nothing in it is a move a person owes, so it is shown where
-   the daemon's health is, and on the workstream, never in the needs-you list. A project that can't
-   be read contributes nothing rather than failing the page."
-  []
-  (->> (project/list-projects)
-       (mapcat (fn [[pname _entry]]
-                 (try
-                   (->> (list-workstreams pname)
-                        (remove #(or (= :dismissed (:stage %)) (= :settled (:engagement %))))
-                        (keep (fn [row]
-                                (when-let [ds (not-empty (driven-denials pname (:ws-id row)))]
-                                  {:project (name pname) :ws-id (:ws-id row)
-                                   :label (:label row) :denials ds})))
-                        doall)
-                   (catch Throwable _ []))))
-       vec))
-
-
-;; ── The held model ──────────────────────────────────────────────────────────
-;;
-;; A process that renders the board over and over — the dashboard, the TUI — holds its rows
-;; instead of re-deriving every workstream on every render (`hold!`). Every reading above
-;; answers from what is held while a process holds, and reads the disk as it always has
-;; otherwise, so the CLI, the lanes and the tests see no change.
-;;
-;; What is held is derived and disposable: every part of it that came from a file can be
-;; recomputed from that file, the snapshot it is written to between processes is discarded
-;; whole whenever it is not exactly this source's (`read-snapshot`), and nothing that writes
-;; a ledger entry, session or run reads it. Only three things move it — a list refresh, a selection refresh
-;; and the sweep — and which renders make which is the surfaces' to say; a reading never
-;; refreshes. Settled workstreams the registry shows no live session for are the sweep's
-;; alone, which is what keeps closed history off the render path.
-
 (def sweep-period-ms
   "How often the sweep runs: how long, at most, a write that moves a row no render reaches waits
    to show — a proposal decided or a reopening on a workstream at rest."
@@ -1948,9 +1889,8 @@
    how the row hears both its progress and its end."
   ([project ws-id files e facts]
    (entry-stamp project ws-id files e facts (hash (:state (core-of project ws-id)))))
-  ([_project _ws-id files {:keys [driven page-id row]} facts core-hash]
+  ([_project _ws-id files {:keys [page-id row]} facts core-hash]
    [files
-    (mapv #(file-mtime (cstate/session-events-path %)) driven)
     (some-> (get-in row [:doing :report-path]) file-mtime)
     (get facts page-id)
     core-hash]))
@@ -1965,9 +1905,6 @@
           ;; it recorded a state the row never saw, and the row kept its stale reading.
           core-hash (hash (:state (core-of project ws-id)))
           sessions  (cws/sessions project ws-id)
-          ;; What the old driver's facets recorded of sessions it drove: no session the core
-          ;; provisions carries one.
-          records   (csession/list-sessions project ws-id)
           row       (with-status project (wsv/workstream-row project w facts))
           settled?  (= :settled (:engagement row))
           page-id   (:page-id (wsv/notion-ref w))
@@ -1984,14 +1921,6 @@
                      :page-id   page-id
                      :covers    (set (remove nil? [page-id (:id (wsv/ledger-ref w))]))
                      :sessions  (set (map :name sessions))
-                     :driven    (vec (keep #(let [{:keys [driver session-id]} (:claude %)]
-                                              (when (= :nido driver) session-id))
-                                           records))
-                     ;; The ids the agent listing names its sessions by: a facet's full id, and
-                     ;; a start still in flight by the :bg-id its note keeps.
-                     :listed    (into #{} (remove nil?)
-                                      (concat (keep #(get-in % [:claude :session-id]) records)
-                                              (keep #(get-in % [:dispatching :bg-id]) records)))
                      :settled?  settled?
                      ;; At rest: only the sweep reaches it — settled history, as the core's
                      ;; engagement or the ledger's own close says (the core keeps most closed
@@ -2118,8 +2047,6 @@
    [:page-id [:maybe :string]]
    [:covers [:set :string]]
    [:sessions [:set :string]]
-   [:driven [:vector :string]]
-   [:listed [:set :string]]
    [:settled? :boolean]
    [:at-rest? :boolean]
    [:gate [:maybe :map]]

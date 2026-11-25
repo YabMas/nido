@@ -48,7 +48,7 @@
                                                             :actions (vec actions)})))]
       (views/workstream-pane {:project project :ws-id ws-id :origin origin :stage (or stage :triage)
                               :label label :tag tag :links links :gate g :pending? pending?
-                              :error-msg error-msg :denials (:denials g)
+                              :error-msg error-msg
                               :report report :selected-seq (or (:seq report) 1)
                               :entries (if report
                                          [{:seq (or (:seq report) 1) :kind :report
@@ -1037,47 +1037,6 @@
 ;; Shipping badge — :blocked is loud in the board fragment
 ;; ---------------------------------------------------------------------------
 
-(deftest workstreams-fragment-shipping-row-blocked-shows-loud-badge
-  ;; A blocked merge must be loud in the board fragment, and must be said ONCE:
-  ;; the projection folds ship-substate into :doing, so the row carries the
-  ;; activity badge alone and it keeps the loud class the merge-lane badge it
-  ;; replaced carried (descendant selector safe — no > combinators).
-  (let [ship-row {:ws-id "ws-ship" :origin :notion :label "BR-99 · Checkout"
-                  :needs-you true :stage :shipping
-                  :doing {:source :merge :phase :blocked}}
-        html (views/workstreams-fragment
-              {:groups [{:project "brian"
-                         :grouped {:shipping [ship-row]
-                                   :triage {:in-flight [] :queued []}
-                                   :incoming [] :ready [] :in-progress []}}]
-               :selection nil :scope "all"})]
-    (is (str/includes? html "merging · blocked") "blocked merge renders on the row")
-    (is (str/includes? html "ship-blocked")      "loud CSS class is emitted")
-    (is (= 1 (count (re-seq #"blocked<" html)))  "said once, not once per vocabulary")
-    (is (str/includes? html "shipping")     "shipping section header is present")
-    (is (str/includes? html "sel=brian:ws-ship") "row selection carries the ws id")))
-
-(deftest workstreams-fragment-shipping-row-awaiting-its-session-reads-queued
-  ;; A :shipping workstream whose merge session has not started has nothing
-  ;; RUNNING, but it is queued behind a one-at-a-time lane — which is the only
-  ;; thing that row has to say. The PROJECTION answers that now, so the row
-  ;; arrives carrying it and this asserts the renderer does not drop it; the
-  ;; projection's own test is what pins that :queued is what it answers.
-  (let [ship-row {:ws-id "ws-ship" :origin :notion :label "BR-99 · Checkout"
-                  :stage :shipping :doing {:source :merge :phase :queued}}
-        html (views/workstreams-fragment
-              {:groups [{:project "brian"
-                         :grouped {:shipping [ship-row]
-                                   :triage {:in-flight [] :queued []}
-                                   :incoming [] :ready [] :in-progress []}}]
-               :selection nil :scope "all"})]
-    (is (str/includes? html "merging · queued") "the merge queue's resting state still renders")
-    (is (str/includes? html "ship-queued")      "and keeps the class it always had")))
-
-;; ---------------------------------------------------------------------------
-;; Generic stage action bar below the reader pane (current entry only)
-;; ---------------------------------------------------------------------------
-
 (deftest workstream-pane-renders-stage-actions-for-the-current-entry
   ;; sample-ws is :triage (origin :notion) with a parked "auto" session → Apply /
   ;; Dismiss / Reply, all POSTing to the pane-scoped resolve route (patches #ws-pane).
@@ -1535,7 +1494,7 @@
     (is (str/includes? html "title=\"waiting on you\""))
     (is (not (str/includes? html "arc-live")) "a stage waiting on a person is not running"))
   (let [html (views/workstream-pane
-              (assoc a-pane :doing {:source :merge :phase :queued} :arc an-arc) {})]
+              (assoc a-pane :doing {:source :core :activity :working} :arc an-arc) {})]
     (is (not (str/includes? html "doing-line")) "activity no stage carries draws no line")))
 
 (deftest a-stage-that-no-longer-stands-says-so
@@ -1728,20 +1687,6 @@
     (is (str/includes? html "a quiet week"))
     (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))))
 
-(deftest a-gate-shows-the-permission-denials-on-both-needs-you-surfaces
-  ;; Every auto-mode denial recorded while nido drives a session is shown in the gate inbox: the
-  ;; row says there are some, the pane lists each.
-  (let [g (assoc sample-gate :denials [{:session "auto" :at "2026-06-18T00:01:00Z" :tool-name "Write"}
-                                       {:session "auto" :at "2026-06-18T00:02:00Z" :tool-name "Bash"
-                                        :tool-input "{\"command\":\"rm -rf build\"}"}])]
-    (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
-                       "2 permission denials")
-        "the inbox row counts them")
-    (let [pane (gate-in-pane g)]
-      (is (str/includes? pane "Write"))
-      (is (str/includes? pane "Bash"))
-      (is (str/includes? pane "rm -rf build") "the pane lists each, with what was denied"))))
-
 (deftest an-answer-box-promises-no-resume
   (let [answer (str (h/html (#'views/ask-bar "brian" "ws-1"
                                               [{:id :reply :label "Answer" :kind :resume :style :default}]
@@ -1885,30 +1830,6 @@
   (let [pane (gate-in-pane (assoc oriented-gate :error-msg "it broke"))]
     (is (< (str/index-of pane "it broke") (str/index-of pane "Where should students")))))
 
-(deftest notices-are-on-operations-not-the-needs-you-list
-  (let [cards (str (views/operations-home-fragment
-                    (views/operations-home-cards [] nil [] [] {:casualties [{:project "brian" :session "s1"}]
-                                                               :denials [{:project "nido" :ws-id "ws-9" :label "Fix it"
-                                                                          :denials [{:session "s" :tool-name "Bash"}]}]}
-                                                               {:unreadable :host})))]
-    (is (str/includes? cards "nido session:revive"))
-    (is (str/includes? cards "brian/s1"))
-    (is (str/includes? cards "/workstreams/nido/ws-9") "a denial links to its workstream")
-    (is (str/includes? cards "latest: Bash")))
-  (is (not (str/includes? (str (views/operations-home-fragment (views/operations-home-cards [] nil [] [] {} {:unreadable :host})))
-                          "Permission denials"))
-      "no notice when there is nothing to know")
-  (is (str/includes? (views/needs-fragment {:gates [] :selection nil :scope "all" :casualties [{:project "brian"}]})
-                     "Nothing needs you right now.")
-      "a casualty is no card in the needs-you list"))
-
-(deftest the-workstream-pane-lists-its-denials
-  (let [html (views/workstream-pane (assoc sample-ws :denials [{:session "auto" :at "t" :tool-name "Write"
-                                                                :tool-input "/etc/hosts"}])
-                                    {})]
-    (is (str/includes? html "Permission denials while nido drives it"))
-    (is (str/includes? html "/etc/hosts"))))
-
 (deftest the-action-bar-never-accepts-a-questioned-verdict
   ;; Such a verdict is a gate, and a gate is answered on its card; the bar beside no card
   ;; offers neither the Accept nor the Defer, and no link elsewhere to find them.
@@ -1945,8 +1866,6 @@
   (let [pane (fn [doing]
                (views/workstream-pane
                 (assoc a-pane :doing doing :arc (assoc-in an-arc [:stages 3 :now] :running)) {}))]
-    (is (not (str/includes? (pane {:source :session :phase :answering :session "s"}) "class=\"arc-d\""))
-        "which agent runs, on what, is not overview")
     (is (str/includes? (pane {:source :claim :kind :diff-review}) "class=\"arc-d\"")
         "what a review round is doing is")))
 

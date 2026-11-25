@@ -260,7 +260,7 @@
      read from the same values its own page renders, so a card and its page cannot disagree.
      A concern that could not be read says so on its card rather than reading as zero; the
      review-queue card appears only where some project declares the grooming trigger. Beside
-     them, the operational notices — host casualties to revive, permission denials — each only
+     them, the operational notices — host casualties to revive — each only
      when there is one: what nido wants a person to know that is no workstream's question."
     {:signature [:=> [:catn [:proposals :any] [:recovery [:maybe :map]]
                   [:holds [:maybe [:vector :map]]] [:queues [:maybe [:vector :map]]]

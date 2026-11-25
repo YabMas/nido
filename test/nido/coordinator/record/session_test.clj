@@ -152,45 +152,6 @@
         (sess/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
         (is (= ["refshot"] (mapv :name (sess/list-sessions :brian (:id w)))))))))
 
-(deftest set-error-sets-and-clears-autonomy-error
-  (with-tmp
-    (fn [_]
-      (let [w (ws/create! :brian {:external-refs []})]
-        (sess/create! :brian (:id w)
-                      {:name "auto" :weight :heavy
-                       :autonomy {:skill :triage-bug :first-message "x" :agent :claude
-                                  :claude-session-id nil :trigger :triage-bug :limits {}
-                                  :priority 0 :uncapped? false :on-promote nil :phase :parked
-                                  :phase-history [] :error nil}})
-        (sess/set-error! :brian (:id w) "auto" {:reason :resume-failed :message "boom"})
-        (is (= :resume-failed (-> (first (sess/list-sessions :brian (:id w))) :autonomy :error :reason)))
-        (sess/set-error! :brian (:id w) "auto" nil)
-        (is (nil? (-> (first (sess/list-sessions :brian (:id w))) :autonomy :error)))))))
-
-(deftest set-error-throws-on-human-session
-  (with-tmp
-    (fn [_]
-      (let [w (ws/create! :brian {:external-refs []})]
-        (sess/create! :brian (:id w) {:name "me" :weight :light :autonomy nil})
-        (is (thrown? clojure.lang.ExceptionInfo
-                     (sess/set-error! :brian (:id w) "me" {:reason :x})))))))
-
-(deftest set-claude-session-id-writes-onto-autonomy
-  (with-tmp
-    (fn [_]
-      (sess/write! (assoc autonomous-session :workstream-id "ws-1"))
-      (sess/set-claude-session-id! :brian "ws-1" "run-triage-x" "sid-42")
-      (is (= "sid-42"
-             (get-in (sess/read-session :brian "ws-1" "run-triage-x")
-                     [:autonomy :claude-session-id]))))))
-
-(deftest set-claude-session-id-throws-on-human-session
-  (with-tmp
-    (fn [_]
-      (sess/write! human-session)
-      (is (thrown? Exception
-            (sess/set-claude-session-id! :brian "ws-1" "explore-firefox" "x"))))))
-
 (deftest workstream-id-for-finds-the-owning-ws
   (with-tmp
     (fn [_]
@@ -279,56 +240,3 @@
   {:session-id "c-1" :bg-id "c-1" :origin :person :driver :nobody :hold nil :pending nil
    :policy {:auto-respawn? false} :cursor 0 :driving-since nil :queued nil :own-work? false
    :announced-blocked? false :recovered-boot nil})
-
-(deftest update-claude-sets-and-replaces-the-facet-whoever-started-the-session
-  (with-tmp
-    (fn [_]
-      (sess/write! human-session)
-      (let [{:keys [project workstream-id name]} human-session
-            set1 (sess/update-claude! project workstream-id name (constantly a-facet))]
-        (is (= a-facet (sess/claude-facet set1)) "a person's session takes a facet too")
-        (is (= :nido (:driver (sess/claude-facet
-                               (sess/update-claude! project workstream-id name
-                                                    #(assoc % :driver :nido :driving-since "t"))))))
-        (is (= :nido (get-in (sess/read-session project workstream-id name) [:claude :driver]))
-            "written, not only returned")))))
-
-(deftest update-claude-writes-nothing-for-an-invalid-facet
-  (with-tmp
-    (fn [_]
-      (sess/write! human-session)
-      (let [{:keys [project workstream-id name]} human-session]
-        (is (thrown? Exception
-                     (sess/update-claude! project workstream-id name
-                                          (constantly (assoc a-facet :driver :somebody)))))
-        (is (nil? (:claude (sess/read-session project workstream-id name))))))))
-
-(deftest update-claude-refuses-a-session-that-does-not-exist
-  (with-tmp
-    (fn [_]
-      (is (thrown? Exception (sess/update-claude! :brian "ws-1" "nope" (constantly a-facet)))))))
-
-(deftest update-substrate-writes-the-facet-and-clears-the-note-as-one-step
-  (with-tmp
-    (fn [_]
-      (sess/write! human-session)
-      (let [{:keys [project workstream-id name]} human-session]
-        (sess/update-substrate! project workstream-id name
-                                (constantly {:claude nil :dispatching {:token "T" :at "t0"}}))
-        (is (= {:token "T" :at "t0"} (:dispatching (sess/read-session project workstream-id name))))
-        (sess/update-substrate! project workstream-id name
-                                (fn [{:keys [dispatching]}]
-                                  {:claude (assoc a-facet :pending {:token (:token dispatching) :at "t0"
-                                                                    :via :dispatch :seen? false})
-                                   :dispatching nil}))
-        (let [s (sess/read-session project workstream-id name)]
-          (is (nil? (:dispatching s)))
-          (is (= "T" (get-in s [:claude :pending :token]))))))))
-
-(deftest a-facet-always-names-its-session
-  (with-tmp
-    (fn [_]
-      (sess/write! human-session)
-      (let [{:keys [project workstream-id name]} human-session]
-        (is (thrown? Exception (sess/update-claude! project workstream-id name
-                                                    (constantly (assoc a-facet :session-id nil)))))))))

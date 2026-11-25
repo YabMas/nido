@@ -150,7 +150,7 @@
 
 (Band Daemon
   "The running coordinator: its scheduler, agent launcher, pid and heartbeat files, and the
-   brakes — circuit breakers, halt flag, anomaly detection, startup reconciliation."
+   brakes — circuit breakers, halt flag, startup reconciliation."
   {:prefix ["nido.coordinator.daemon."]
    :may-depend [Platform Integration Record Report]})
 

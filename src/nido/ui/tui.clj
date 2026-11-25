@@ -155,17 +155,9 @@
 
 (defn- doing-str
   "Whether a row is in progress, for a terminal: ● while anything runs on it, as the web
-   board's mark says it. A merge keeps its words in ‹›, marked ⚠ when blocked. The web board carries that emphasis in a CSS class, and a
-   terminal has no stylesheet — so the marker is where the warning lives here.
-   A stuck merge you have to read the words to notice is one you scroll past,
-   which is why the merge-lane tag this replaced spelled it ⚠ blocked.
-
-   nil when nothing is underway, so the caller appends nothing at all."
+   board's mark says it. nil when nothing is underway, so the caller appends nothing at all."
   [r]
-  (let [doing (:doing r)]
-    (if (= :merge (:source doing))
-      (str "  ‹" (when (= :blocked (:phase doing)) "⚠ ") (wsv/doing-label doing) "›")
-      (when doing "  ●"))))
+  (when (:doing r) "  ●"))
 
 (defn- phase-str
   "`  [phase 2/3]` for a phased row, nil for an unphased one — which landing of

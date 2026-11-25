@@ -114,13 +114,8 @@
     "Re-provision a reclaimed session home so a resume has somewhere to land."
     {:signature [:=> [:catn [:run Run] [:origin [:? :map]]] :any]
      :delegates [home-present? spawn-session-for-run!]})
-  (Operation set-before-teardown!
-    "Install what every teardown does to a session before removing anything of it — set by the
-     composition root, which alone reaches the substrate. A throw from it keeps the session whole."
-    {:signature [:=> [:catn [:f :any]] :any]})
   (Operation teardown-session-for-run!
-    "Reclaim the session a run spawned, once it has reached a resolved state — after the step
-     set-before-teardown! installed has cleared it, and never one that step could not clear."
+    "Reclaim the session a run spawned, once it has reached a resolved state."
     {:signature [:=> [:catn [:run Run]] :any]
      :delegates [session/archive!]})
   (Operation owns-session?
@@ -132,16 +127,6 @@
      answers false."
     {:signature [:=> [:catn [:run Run]] :boolean]
      :delegates [session/read-session list-run-ids read-run]})
-  (Operation stop-session-for-parked-run!
-    "Stop the services of the session a parked run spawned, keeping everything a reply or an open
-     needs to bring it back. A parked run waits on a human, and nothing obliges one to come — so
-     its JVM, left up, is held for as long as nobody does.
-
-     Stops only what it can show is safe: a session the run SPAWNED (a merge or drive run borrows
-     the human's own), never a provision-only run's, only with a service process running, and
-     only when the presence probe answers vacant — a probe that cannot answer keeps it up."
-    {:signature [:=> [:catn [:run Run]] :any]
-     :delegates [owns-session? fleet/occupancy lifecycle/down!]})
   (Operation launch-context
     "The worktree and injected context an agent for this run launches into."
     {:signature [:=> [:catn [:run Run]] :map]}))

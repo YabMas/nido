@@ -386,13 +386,7 @@
      .dot-halted { background:var(--failed); box-shadow:var(--glow-failed); }
      .dot-breaker { background:var(--warning); }
      .dot-down { background:var(--text-faint); }
-     .doing-badge { color:var(--working-dim); }
-     .doing-badge::before { content:'● '; }
      .badge-findings { color:var(--warning-dim); border:1px solid var(--warning-bg); border-radius:var(--radius-4); padding:var(--space-1) var(--space-6); font-size:var(--fs-xs); margin-left:var(--space-6); }
-     .doing-badge.ship-blocked { color:var(--failed); font-weight:600; }
-     .doing-badge.ship-driving { color:var(--working-dim); }
-     .doing-badge.ship-awaiting-merge { color:var(--text-faint); }
-     .doing-badge.ship-queued { color:var(--text-faint); }
      .ws-section { margin-top:var(--space-2); }
      .ws-fold-header { cursor:pointer; user-select:none; display:flex; align-items:center;
                        gap:var(--space-6); }

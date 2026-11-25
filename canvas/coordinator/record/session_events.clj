@@ -16,11 +16,6 @@
     "Record one event for a session. Never throws to its caller: a hook that cannot record must
      still let the session proceed."
     {:signature [:=> [:catn [:session-id :string] [:event :map]] :boolean]})
-  (Operation use-index!
-    "Answer which logs were written since an instant from a function given, rather than by
-     listing the directory; given nil, list it again. The running coordinator's record of live
-     state installs one, so tens of thousands of logs are not stat'ed on every pass."
-    {:signature [:=> [:catn [:f [:maybe fn?]]] :any]})
   (Operation events-since
     "A session's events after a cursor, oldest first, with the cursor to read from next."
     {:signature [:=> [:catn [:session-id :string] [:cursor [:maybe :int]]] :map]})
@@ -28,10 +23,10 @@
     "Every prompt recorded at or after an instant, in epoch milliseconds, in any conversation, with
      its time, directory and text, oldest first — read from the logs written to since then only."
     {:signature [:=> [:catn [:since-ms :int]] [:vector :map]]
-     :delegates [events-since use-index!]})
+     :delegates [events-since]})
   (Operation conversations
     "Every recorded conversation with the cwd and time of its last event that carried a cwd —
      what ties a conversation to the session it ran in — or, given an instant in epoch
      milliseconds, only those whose log was written to since then."
     {:signature [:=> [:catn [:since-ms [:? :int]]] [:vector :map]]
-     :delegates [events-since use-index!]}))
+     :delegates [events-since]}))

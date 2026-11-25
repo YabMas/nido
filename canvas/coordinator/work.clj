@@ -155,10 +155,6 @@
   (Operation all-gates
     "The gates read-gates reads: every project's the core answered for."
     {:signature [:=> [:catn] [:vector Gate]] :delegates [read-gates]})
-  (Operation all-denials
-    "Every open workstream with an auto-mode denial in a session nido drives, across projects —
-     an operational notice for the Operations page, never a gate."
-    {:signature [:=> [:catn] [:vector :map]] :delegates [list-workstreams]})
   (Operation default-target "Where a new or promote gesture lands by default."
     {:signature [:=> [:catn [:project ProjectName] [:action :keyword]] :keyword]})
   (Operation set-stage!

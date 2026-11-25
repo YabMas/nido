@@ -492,30 +492,6 @@
   [run]
   (not (handed-over-skills (:skill run))))
 
-(defonce ^:private !before-teardown
-  ;; Set by the composition root: what must happen to a session before its workspace goes — the
-  ;; background conversation running in it retired. Record cannot reach the substrate itself.
-  (atom nil))
-
-(defn ^{:malli/schema [:=> [:cat :any] :any]}
-  set-before-teardown!
-  "Install `f`, called with the Run before teardown-session-for-run! removes anything of its
-   session; a throw from `f` leaves the session untouched. nil uninstalls."
-  [f]
-  (reset! !before-teardown f))
-
-(defn- cleared-for-teardown?
-  "Run the installed before-teardown step for `run`; false, logged, when it throws."
-  [run]
-  (try (when-let [f @!before-teardown] (f run))
-       true
-       (catch Throwable t
-         (binding [*err* *err*]
-           (.println ^java.io.PrintWriter *err*
-                     (str "nido coordinator: kept the session of " (:session-name run)
-                          " — it could not be cleared for teardown: " (ex-message t))))
-         false)))
-
 (defn ^{:malli/schema [:=> [:cat :Run] :any]}
   teardown-session-for-run!
   "Reclaim the session a Run spawned, once the Run reaches a resolved-terminal
@@ -526,22 +502,17 @@
    session-home dir + the run's session-home link.
 
    Deliberately NOT called for :awaiting-review: a parked run can still be
-   resumed, so its worktree, its record and its home link must survive. Only its
-   services are stopped (stop-session-for-parked-run!). The run dir (artifacts,
+   resumed, so its worktree, its record and its home link must survive. The run dir (artifacts,
    agent.log, run.edn) under ~/.nido/runs is never touched, so a failed/done run
    stays inspectable.
 
    NO-OP for a handed-over Run (handed-over-skills): its session is a person's
    workspace, and reclaiming it would delete the worktree out from under them.
 
-   Every caller's teardown first runs the step set-before-teardown! installed — the
-   background conversation in the session retired — and a session that step cannot
-   clear is left whole: nothing is removed under a session still running in it.
-
    Best-effort: a missing/already-gone session logs and returns nil rather than
    throwing — teardown must never re-fail a run that already reached terminal."
   [run]
-  (when (and (reclaims-session? run) (cleared-for-teardown? run))
+  (when (reclaims-session? run)
    (let [{:keys [project session-name id workstream-id]} run]
     (try
       (session-lifecycle/destroy! session-name {:project project})
@@ -635,59 +606,6 @@
       (if (and (= :occupied v) (< attempt 3))
         (do (Thread/sleep park-settle-ms) (recur (inc attempt)))
         v))))
-
-(defn ^{:malli/schema [:=> [:cat :Run] :any]}
-  stop-session-for-parked-run!
-  "Stop the services of the session `run` spawned, now that it has parked for
-   review — and nothing else. The worktree, the coordinator session record (still
-   :live, still :parked) and the run's home link survive; stopping removes the
-   home, so `home-present?` turns false and the next reply or open re-provisions
-   the session at the same path through ensure-session-home!. The conversation
-   is keyed by that path, so it resumes where it stopped.
-
-   Without this a parked session held its JVM until a human acted on it, and
-   nothing obliged anyone to: brian's :smoke-new-reports parked every run
-   within fifteen minutes and left six full sessions up for days.
-
-   Stops only what it can show is safe to stop:
-     - a session this run spawned (owns-session?), never one it borrowed;
-     - not a handed-over Run's, which belongs to a person;
-     - one with a service process actually running — a :lite session has none,
-       so stopping it would free nothing and still drop its home;
-     - one fleet/occupancy finds :vacant. :occupied (someone is in it) and
-       :unknown (the probe could not answer) both keep it up.
-
-   Best-effort: logs and returns nil; never throws into a run's terminal path."
-  [run]
-  (let [{:keys [project session-name]} run]
-    (try
-      (when (and (reclaims-session? run) (owns-session? run))
-        (let [{:keys [worktree instance-id]} (run-worktree run)
-              states (vals (:service-states (some-> instance-id session-state/read-session)))
-              pids   (into #{} (comp (keep :pid) (filter proc/process-alive?)) states)]
-          (when (seq pids)
-            ;; :pid with :port is the repl JVM and only ever that: a private
-            ;; postgres records :pg-pid/:pg-port, so neither its pid nor its
-            ;; port can be read here as the session's own nREPL.
-            (let [verdict (settled-occupancy
-                           {:worktree   worktree
-                            :home       (session-state/session-home-dir (name project) session-name)
-                            :own-pids   pids
-                            :nrepl-port (some #(when (:pid %) (:port %)) states)})]
-              (if (= :vacant verdict)
-                (do (session-lifecycle/down! session-name {:project project})
-                    (println (str "nido coordinator: stopped parked session " session-name
-                                  " — a reply or an open brings it back up")))
-                (println (str "nido coordinator: kept parked session " session-name " up — "
-                              (if (= :unknown verdict)
-                                "the presence probe could not answer"
-                                "someone is working in it"))))))))
-      (catch Exception e
-        (binding [*err* *err*]
-          (.println ^java.io.PrintWriter *err*
-                    (str "nido coordinator: stopping parked session " session-name
-                         " failed — " (ex-message e))))))
-    nil))
 
 (defn ^{:malli/schema [:=> [:cat :Run] :map]}
   launch-context

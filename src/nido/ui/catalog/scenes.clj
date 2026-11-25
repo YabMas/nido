@@ -165,15 +165,7 @@
                               ["quiet" {:owed-by :person} nil]]
                              (fn [[_ st doing]]
                                (or (state/state-mark st doing)
-                                   [:span.scene-empty "nothing"])))}
-             {:title "a merge keeps its words"
-              :note "The one exception to no-words: a blocked merge has to read red on a board
-                     that is scanned rather than read."
-              :render #(rail first
-                             [["queued" {:source :merge :phase :queued}]
-                              ["driving" {:source :merge :phase :driving}]
-                              ["blocked" {:source :merge :phase :blocked}]]
-                             (fn [[_ d]] (state/state-mark {:owed-by :machine :live true} d)))}]}
+                                   [:span.scene-empty "nothing"])))}]}
    {:name "round-label"
     :note "The words beside a running arc stage — where a review round has got, and nothing for
            any other activity."
@@ -181,8 +173,7 @@
               :render #(rail first
                              [["claim" {:source :claim :kind :design
                                         :progress {:round 3 :phase :judging :findings 0}}]
-                              ["session" {:source :session :phase :implementing}]
-                              ["merge" {:source :merge :phase :driving}]]
+                              ["core" {:source :core :activity :working}]]
                              (fn [[_ d]] (if-let [l (state/round-label d)]
                                            [:span l]
                                            [:span.scene-empty "nothing"])))}]}
