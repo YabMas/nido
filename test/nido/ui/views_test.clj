@@ -1752,6 +1752,12 @@
     (is (str/includes? html "a quiet week"))
     (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))))
 
+(deftest the-pane-offers-land-only-while-its-activity-names-the-landing
+  (let [rc   {:at :release-candidate :next {:stage :land :mode :release}}
+        bar  #(str (h/html (#'views/pane-action-bar "nido" "ws-1" :notion :shipping [] nil rc nil nil %)))]
+    (is (not (str/includes? (bar nil) "/gate/land")) "a paused or unactivated candidate is offered no Land")
+    (is (str/includes? (bar :landing) "/gate/land"))))
+
 (deftest an-answer-box-promises-no-resume
   (let [answer (str (h/html (#'views/ask-bar "brian" "ws-1"
                                               [{:id :reply :label "Answer" :kind :resume :style :default}]

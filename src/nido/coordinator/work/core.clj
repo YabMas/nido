@@ -229,6 +229,14 @@
   (let [open (filter #(= :open (:status %)) (vals (:units state)))]
     (boolean (and (seq open) (every? :held? open)))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]}
+  failed-start
+  "The open unit of core state `state` nobody holds whose session failed to start — the first by
+   id — or nil: the one failed start a card describes and its Retry hands back to the core."
+  [state]
+  (first (filter #(and (= :open (:status %)) (not (:held? %)) (= :failed (get-in % [:session :status])))
+                 (sort-by :id (vals (:units state))))))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe [:enum :conductor-stopped :start-failed]]]}
   failure
   "The failure in held workstream `w` only the person clears, or nil: :conductor-stopped while
@@ -239,9 +247,7 @@
   [{:keys [state]}]
   (cond
     (:conductor-stopped? state) :conductor-stopped
-    (some #(and (= :open (:status %)) (not (:held? %)) (= :failed (get-in % [:session :status])))
-          (vals (:units state)))
-    :start-failed))
+    (failed-start state) :start-failed))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]} position
   "Where held workstream `w` stands by its coordination, for a workstream whose ledger records none

@@ -423,6 +423,64 @@
           (is (nil? (get-in row [:status :needs])))
           (is (empty? (work/gates :brian))))))))
 
+(deftest a-candidate-whose-land-the-core-holds-is-the-seat-s-move
+  ;; The grant placed the candidate :land-granted; who owes it and whether it is landing are read
+  ;; off that placed position, never the release candidate status read before placing it.
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}
+                        {:command :give-grant :grant :merge :by "person"}])
+      (with-redefs [pipeline/of (constantly {:at :release-candidate :next {:stage :land :mode :release}})
+                    nido.coordinator.record.standing/activated? (constantly true)]
+        (let [row (first (work/list-workstreams :brian))]
+          (is (= :land-granted (get-in row [:position :at])))
+          (is (= :agent (get-in row [:status :owed-by])))
+          (is (not (:needs-you row)))
+          (is (nil? (get-in row [:status :needs])))
+          (is (empty? (work/gates :brian))))))))
+
+(deftest a-ledger-owed-move-is-carded-with-its-ask-and-actions
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
+      (with-redefs [pipeline/of (constantly {:at :blocked :next {:stage :answer-blocker :mode :human}})
+                    nido.coordinator.record.standing/activated? (constantly true)]
+        (let [g (first (work/gates :brian))]
+          (is (= :ask (:needs g)))
+          (is (= :answer-blocker (:owes g)))
+          (is (string? (get-in g [:ask :question])) "it carries the Ask built for the owed move")
+          (is (seq (:actions g)) "and the actions that answer it"))))))
+
+(deftest a-slice-keeps-a-card-of-its-own
+  (is (= [{:ws-id "s"}]
+         (#'work/inbox-gates :brian [[{:ws-id "s" :origin :slice} {:ws-id "s"}] [{:ws-id "d" :origin :drain} nil]]))
+      "a slice's card is its own, never folded into its drain's"))
+
+(deftest the-pane-s-gate-is-the-held-card-too
+  (with-ws
+    (fn [_ ws-id]
+      (with-redefs [work/held-ledger-gates (fn [_ asked] (when-not (asked ws-id) [{:ws-id ws-id :needs :landing}]))]
+        (is (= {:ws-id ws-id :needs :landing} (work/gate :brian ws-id))
+            "the pane answers from the selection the list holds")))))
+
+(deftest retry-hands-back-the-failed-start-the-card-describes
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       (vec (concat
+                             (for [u ["a" "b"]
+                                   c [{:command :open-unit :unit u :project "brian" :goal "g"}
+                                      {:command :record-provision-attempt :unit u :attempt (str "p-" u) :want :up}
+                                      {:command :record-provision-outcome :unit u :attempt (str "p-" u)
+                                       :outcome :failed :detail {:message (str "unit " u " would not start")}}]]
+                               c)
+                             [{:command :hold-unit :unit "a"}])))
+      (is (= :retried (:decision (work/core-resolve! :brian ws-id :retry-start nil))))
+      (is (= :failed (get-in (core-state c ws-id) [:units "a" :session :status])) "the held unit is left as it is")
+      (is (= :none (get-in (core-state c ws-id) [:units "b" :session :status])) "the unheld one is retried"))))
+
 (deftest a-session-that-failed-to-start-needs-you-as-a-system-error
   (with-ws
     (fn [c ws-id]

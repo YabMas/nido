@@ -1790,7 +1790,8 @@
    its heading — and is here because one of the buttons is owed by a PERSON
    rather than by a parked agent (work/awaiting-human). `needs` is the category its
    activity needs the person in: a :system-error with no ask beside it — the pane renders
-   this bar only with no gate — is a failed start, offered Retry."
+   this bar only with no gate — is a failed start, offered Retry, and Land is offered only for
+   a :landing, never on the position alone."
   [project ws-id origin stage sessions report position plan replyable? needs]
   (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
@@ -1813,10 +1814,13 @@
                                     ;; A release candidate offers Land, the landing the person is
                                     ;; needed for; a failed start no ask carries offers Retry, the
                                     ;; system error only they clear — what the Needs you card offers.
-                                    :awaiting      (cond (= :system-error needs)          :retry-start
-                                                         (work/release-candidate? position) :land
-                                                         :else                          (work/awaiting-human position))
-                                    :landable?     (work/release-candidate? position)
+                                    :awaiting      (case needs
+                                                     :system-error :retry-start
+                                                     :landing      :land
+                                                     (work/awaiting-human position))
+                                    ;; Land only while the activity names the landing, as the
+                                    ;; Needs you card offers it: never on the position alone.
+                                    :landable?     (= :landing needs)
                                     :gate-criterion (get-in plan [:owed-gate :criterion])
                                     :seq           (:seq report)}))
                 session)))

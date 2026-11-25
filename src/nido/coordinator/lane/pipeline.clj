@@ -1381,6 +1381,13 @@
    but their Land moves it, so a board that read it as nobody's showed it stalled."
   {:human :person :release :person :mechanical :machine :authoring :agent :working-copy :agent})
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :keyword]} owed-by
+  "Who owes the next move of `position`, by its mode: :nobody when it names none."
+  [position]
+  (if-let [mode (get-in position [:next :mode])]
+    (owed-by-mode mode :nobody)
+    :nobody))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :WorkstreamStatus]}
   status
   "What a workstream's records say about where it stands and who owes it: its position, who owes
@@ -1397,8 +1404,6 @@
   (let [position (of project ws-id)
         w        (ws/read-ws project ws-id)]
     {:position   position
-     :owed-by    (if-let [mode (get-in position [:next :mode])]
-                   (owed-by-mode mode :nobody)
-                   :nobody)
+     :owed-by    (owed-by position)
      :activated? (boolean (some-> w standing/activated?))
      :paused     (boolean (some-> w standing/paused?))}))

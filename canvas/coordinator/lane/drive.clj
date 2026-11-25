@@ -96,11 +96,15 @@
   (Operation of "Where a workstream stands and what should happen to it next."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws intake-kind next-action baseline-verified? settled-in-notion]})
+  (Operation owed-by
+    "Who owes a position's next move, by its mode: what a row reads off the one position it is
+     placed at, which may not be the one `status` read."
+    {:signature [:=> [:catn [:position [:maybe :map]]] :keyword]})
   (Operation status
     "A workstream's position, who owes its next move, and whether a person's pause stands: the
      record facts every surface's activity is read beside the core's."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] WorkstreamStatus]
-     :delegates [of]}))
+     :delegates [of owed-by]}))
 
 (Module lane-runs-clean
   "Deleting terminal runs, by plan and then by execution.
