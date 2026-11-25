@@ -201,15 +201,24 @@
    directory and command, so the command runs on nido's host and never in a
    local shell. It runs under the host user's login shell, because the PATH a
    person's tools are on (~/.local/bin, runtime shims) is set up at login and a
-   bare ssh command never sees it. Other kinds are performed as they are."
+   bare ssh command never sees it. Other kinds are performed as they are.
+
+   The tab may open on nido's host after all: Warp opens a new tab from an
+   ssh session on the remote host, and there `ssh host` fails — a host rarely
+   reaches itself by the name the person's machine knows it by. So the command
+   first tries the directory where it stands, and ssh's only when it is absent."
   [host e]
   (if (= :terminal (:kind e))
-    (let [remote (str "cd " (sh-quote (:dir e)) " && "
-                      (if (str/blank? (:command e)) "exec $SHELL -l" (:command e)))]
+    (let [dir    (sh-quote (:dir e))
+          cmd    (:command e)
+          remote (str "cd " dir " && " (if (str/blank? cmd) "exec $SHELL -l" cmd))
+          ssh    (str "ssh -t " (sh-quote host) " "
+                      (sh-quote (str "exec $SHELL -lc " (sh-quote remote))))]
       (cond-> {:kind    :terminal
                :dir     (str (fs/home))
-               :command (str "ssh -t " (sh-quote host) " "
-                             (sh-quote (str "exec $SHELL -lc " (sh-quote remote))))}
+               :command (str "if cd " dir " 2>/dev/null; then "
+                             (if (str/blank? cmd) ":" cmd)
+                             "; else " ssh "; fi")}
         (:title e) (assoc :title (:title e))))
     e))
 

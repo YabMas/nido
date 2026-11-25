@@ -105,7 +105,7 @@
         cd    (first (str/split inner #" && "))]
     (is (= :terminal (:kind e)))
     (is (= (str (fs/home)) (:dir e)))
-    (is (str/starts-with? (:command e) "ssh -t 'devbox' "))
+    (is (str/includes? (:command e) "else ssh -t 'devbox' "))
     (is (str/starts-with? sent "exec $SHELL -lc "))
     (is (= "cd '/home/me/w it'\\''s' && claude --resume x" inner))
     (testing "the directory is one word to the remote cd"
@@ -114,6 +114,13 @@
     (let [cmd (:command (desk/localize "devbox" {:kind :terminal :dir "/w"}))]
       (is (= "exec $SHELL -lc 'cd '\\''/w'\\'' && exec $SHELL -l'"
              (sh-eval (str fake-ssh cmd))))))
+  (testing "a tab that opens on nido's host itself stays there instead of ssh'ing to it"
+    (let [d (str (fs/create-temp-dir))]
+      (try
+        (is (= (str d "\n")
+               (sh-eval (str fake-ssh (:command (desk/localize "devbox" {:kind :terminal :dir d :command "pwd"}))))))
+        (is (= "" (sh-eval (str fake-ssh (:command (desk/localize "devbox" {:kind :terminal :dir d}))))))
+        (finally (fs/delete-tree d)))))
   (testing "other kinds pass through"
     (is (= {:kind :url :url "http://localhost:8800"}
            (desk/localize "devbox" {:kind :url :url "http://localhost:8800"})))))
