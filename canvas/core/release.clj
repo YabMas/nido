@@ -20,10 +20,6 @@
   (Operation current-release
     "The directory of the release the live link points at, or nil."
     {:signature [:=> [:catn [:paths :map]] [:maybe :string]]})
-  (Operation alongside
-    "Why the core may not start beside the old coordinator, or nil: the cut-over has not run there,
-     or the old daemon's pid file names a live process."
-    {:signature [:=> [:catn [:paths :map]] [:maybe :keyword]]})
   (Operation fold-changed?
     "Whether release `b` folds events differently from release `a`: their domains differ."
     {:signature [:=> [:catn [:a [:maybe :string]] [:b :string]] :boolean]})

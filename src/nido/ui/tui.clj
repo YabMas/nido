@@ -1337,13 +1337,12 @@
 
 (defn- status-bar
   "Top-of-runs-screen line showing the coordinator daemon's reachability,
-   slots-in-use, executor in-flight/cap/queued, halt state, and breaker count.
+   slots-in-use, halt state, and breaker count.
    `:unreachable` and halted states render in warning-style (red). The breaker
    pill appears only when at least one trigger is tripped."
   []
-  (let [{:keys [status reachable? slots-in-use alerts executor]} (runs-view/read-coordinator-status)
-        {:keys [halted? halt-source halt-note breakers breakers-paused breakers-failing]} alerts
-        {:keys [in-flight cap queued]} executor]
+  (let [{:keys [status reachable? slots-in-use alerts]} (runs-view/read-coordinator-status)
+        {:keys [halted? halt-source halt-note breakers breakers-paused breakers-failing]} alerts]
     (str (style/render label-style "Coordinator: ")
          (style/render (if halted? warning-style
                          (if reachable? status-style warning-style))
@@ -1355,10 +1354,6 @@
          "  •  "
          (style/render label-style "Slots: ")
          (or slots-in-use 0)
-         "  •  "
-         (style/render label-style "in-flight: ")
-         (or in-flight 0) "/" (or cap 0)
-         " · queued: " (or queued 0)
          ;; Split the breaker pill: failures need attention (red ⚠), paused
          ;; triggers are deliberate (dim). Press `c` to see the per-trigger why.
          (when (pos? breakers)

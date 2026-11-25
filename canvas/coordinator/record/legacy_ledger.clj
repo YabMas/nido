@@ -27,13 +27,6 @@
      files that share a seq with another."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
      :delegates [state/workstream-edn-path state/workstream-dir]})
-  (Operation legacy-record
-    "A legacy workstream shaped as the ledger module shapes a record, for the cut-over's plan."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [read-legacy]})
-  (Operation closed?
-    "Whether a legacy record stands settled, read off its index."
-    {:signature [:=> [:catn [:w :map]] :boolean]})
   (Operation import!
     "Send one legacy ledger to the core whole, as a single keyed command; refused once the core
      holds it. A ledger whose files are not one to a seq is sent as no command: it is refused,

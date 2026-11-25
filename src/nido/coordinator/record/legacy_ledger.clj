@@ -114,22 +114,6 @@
                         (update :at #(or % (str (fs/last-modified-time path)))))
                :content (or text "")}))})))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
-  legacy-record
-  "Workstream `ws-id`'s legacy record as the ledger module shaped one — its identity, :id, and
-   its index rows as :entries — for the cut-over, which plans before any core holds it. Nil when
-   it has no workstream.edn."
-  [project ws-id]
-  (when-let [{:keys [identity entries]} (read-legacy project ws-id)]
-    (assoc identity :id ws-id :project project :entries (mapv :row entries))))
-
-(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
-  closed?
-  "Whether legacy record `w` stands settled: its newest :closed, :reopened or :phase-gate is a
-   :closed — the ledger's closure, read off the index alone."
-  [w]
-  (= :closed (:kind (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w))))))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   import!
   "Send workstream `ws-id`'s legacy ledger to the core whole, as one keyed :import-ledger command,

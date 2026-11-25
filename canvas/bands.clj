@@ -123,20 +123,6 @@
   {:prefix ["nido.coordinator.agent"]
    :may-depend [Platform Record]})
 
-(Band Executor
-  "`nido.coordinator.executor` — the slot-based scheduler with its priority queue.
-
-   Out of `Daemon` for the same reason `Agent` is, and found the same way: no Daemon namespace
-   reached it, it reached no Daemon namespace, and its callers are four lanes, a view and the
-   composition root. Grouping by theme put the scheduler with the daemon; the dependency graph
-   put it with the work the daemon schedules.
-
-   What the split buys is teeth rather than tidiness. Lane's only reason to reach Daemon was this
-   one namespace, so Lane no longer declares Daemon at all — and a lane pausing the coordinator or
-   installing a launchd plist is now a violation rather than a thing nobody thought to forbid."
-  {:prefix ["nido.coordinator.executor"]
-   :may-depend [Platform Record]})
-
 (Band Source
   "Where work arrives from: the source plugin registry, the Notion/Slack pollers, the manual
    envelope queue, and the routing and filtering that turns an arrival into a fire.
@@ -157,13 +143,13 @@
 (Band View
   "Pure read models over the records, for the surfaces to render. No writes."
   {:prefix ["nido.coordinator.view."]
-   :may-depend [Platform Record Source Daemon Report Executor]})
+   :may-depend [Platform Record Source Daemon Report]})
 
 (Band Lane
   "The verbs: pickup, promote, spawn, drive, ship, resume, intake, and the housekeeping
    reconciliations. Each lane advances a workstream from one state to the next."
   {:prefix ["nido.coordinator.lane."]
-   :may-depend [Platform Integration Session Record Source View Report Agent Executor]})
+   :may-depend [Platform Integration Session Record Source View Report Agent]})
 
 (Band Control
   "`nido.coordinator.control` — daemon control, as its callers ask for it: is the coordinator
@@ -210,7 +196,7 @@
    task supplies both. The declaration is what forced that."
   {:prefix ["nido.boot."]
    :may-depend [Platform Integration Session Review
-                Record Source Daemon Lane WorkPlane Report Control Agent Executor Core]})
+                Record Source Daemon Lane WorkPlane Report Control Agent Core]})
 
 (Band Surface
   "The long-lived surfaces a human looks at: the TUI, the web dashboard, the views behind them.
@@ -257,5 +243,5 @@
    `:correspondence/module-ambiguous` fails the check."
   {:prefix ["tasks."]
    :may-depend [Platform Integration Session Review Boot Design Surface
-                Record Source Daemon View Lane WorkPlane Report Control Agent Executor Core
+                Record Source Daemon View Lane WorkPlane Report Control Agent Core
                 Library]})

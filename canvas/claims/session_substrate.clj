@@ -5,7 +5,6 @@
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.agent :refer [launch!]]
-            [canvas.coordinator.executor :refer [coordinator-executor]]
             [canvas.coordinator.record.session :refer [record-session]]
             [canvas.coordinator.record.session-events :refer [record-session-events]]
             [canvas.tasks.nido-session-hook :refer [nido-session-hook]]

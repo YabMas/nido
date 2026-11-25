@@ -93,16 +93,6 @@
    :doc "Import every legacy ledger (workstream.edn and its entries) into the running core, reading the files only. A workstream the core already holds is left as it is, so a second run records nothing. Exits 1 when any ledger was refused."
    :task (nido-core/import-ledgers)}
 
-  nido:core:cutover
-  {:requires ([tasks.nido-core-cutover-cmd :as nido-core-cutover-cmd])
-   :doc "Move this nido home to the core, once: snapshot it, stop the old coordinator and every legacy agent session, import the ledgers read-only, hand over each unclosed workstream, and start the core."
-   :task (nido-core-cutover-cmd/cutover)}
-
-  nido:core:restore
-  {:requires ([tasks.nido-core-cutover-cmd :as nido-core-cutover-cmd])
-   :doc "Undo the cut-over until the core has started over the imported store: put the snapshot back and start the old coordinator."
-   :task (nido-core-cutover-cmd/restore)}
-
   nido:intake:run
   {:requires ([tasks.nido-intake :as nido-intake])
    :doc "Run the intake host in the foreground: the sources and triggers, each arrival turned into core commands [:poll-ms <n>]."

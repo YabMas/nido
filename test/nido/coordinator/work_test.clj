@@ -19,7 +19,6 @@
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
-   [nido.coordinator.executor :as executor]
    [nido.coordinator.source.state]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]

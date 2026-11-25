@@ -5,7 +5,6 @@
    [nido.platform.core :as core]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.executor :as executor]
    [nido.coordinator.daemon.halt :as halt]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.view.runs :as rv]
@@ -148,16 +147,6 @@
         (is (contains? s :alerts))
         (is (false? (-> s :alerts :halted?)))
         (is (= 0 (-> s :alerts :breakers)))))))
-
-(deftest read-coordinator-status-includes-executor-snapshot
-  (with-tmp-runs-dir
-    (fn []
-      (with-redefs [executor/snapshot
-                    (constantly {:cap 5 :in-flight 2 :queued 3 :queue ["a" "b" "c"]})]
-        (let [s (rv/read-coordinator-status)]
-          (is (= 5 (-> s :executor :cap)))
-          (is (= 2 (-> s :executor :in-flight)))
-          (is (= 3 (-> s :executor :queued))))))))
 
 (deftest breaker-reason-text
   (is (= "paused by you — new-reports paused"

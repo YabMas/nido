@@ -295,9 +295,8 @@
 
 (defn- by-severity
   "Highest priority (severity) first; ties broken by longest-waiting (oldest
-   activity at top). This mirrors the executor's pickup order — priority desc,
-   then FIFO (executor.clj) — so the list reads top-to-bottom in the order nido
-   actually works the triage queue, rather than by most-recently-touched."
+   activity at top), so the queue reads by who has waited longest rather than by
+   most-recently-touched."
   [rows]
   (vec (sort-by (juxt (comp - (fnil :priority 0)) #(or (:last-activity %) "")) rows)))
 

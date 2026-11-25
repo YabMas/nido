@@ -4,7 +4,6 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.executor :as executor]
             [canvas.coordinator.record.runs :as runs :refer [Run]]
             [canvas.coordinator.record.session :as session :refer [Session]]
             [canvas.coordinator.record.standing :as standing]

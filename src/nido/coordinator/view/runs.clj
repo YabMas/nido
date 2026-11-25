@@ -8,7 +8,6 @@
    [clojure.string :as str]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.executor :as executor]
    [nido.coordinator.daemon.halt :as halt]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]
@@ -188,9 +187,7 @@
    Returns:
      {:status <kw or :unreachable> :slots-in-use <int>
       :heartbeat-at <iso or nil> :reachable? <bool>
-      :alerts {:halted? <bool> :halt-source <kw or nil> :halt-note <str> :breakers <int>}
-      :executor {:cap <int> :in-flight <int> :queued <int> :queue [run-ids…]}}"
+      :alerts {:halted? <bool> :halt-source <kw or nil> :halt-note <str> :breakers <int>}}"
   []
   (-> (read-coordinator-status*)
-      (assoc :alerts (read-alerts))
-      (assoc :executor (executor/snapshot))))
+      (assoc :alerts (read-alerts))))

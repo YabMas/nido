@@ -6,7 +6,6 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.executor :as c-coordinator-executor]
             [canvas.coordinator.lane.start :as c-coordinator-lane-start]
             [canvas.coordinator.lane.work :as c-coordinator-lane-work]
             [canvas.coordinator.record.standing :as c-coordinator-record-standing]
