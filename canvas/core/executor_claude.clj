@@ -12,6 +12,10 @@
    turn whose run ended without an outcome is taken back as the outcome failed,
    never resumed. A first run whose spec names images is prompted on stdin, as one stream-json
    user message: the instructions, then one image block per image, read from the image store.
+   Every run is supervised, and the supervisor ends Claude and everything it started at the first
+   deferred call: Claude otherwise stays alive past a deferral while a background task of its runs,
+   and the task's end wakes the agent past its ask. A run woken past its ask anyway is still :asked,
+   and its resumption gives the resolution as a prompt, since no call is left to re-offer.
 
    HIDES everything Claude-specific: flags, the permission policy passed on every run, the stream format, session
    ids, and the hook protocol: its hooks report to it and to no other
@@ -21,4 +25,8 @@
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation hook-decision
     "The PreToolUse hook's answer: allow the resolved call with its resolution, defer any other."
-    {:signature [:=> [:catn [:run-dir :string] [:event :map]] :map]}))
+    {:signature [:=> [:catn [:run-dir :string] [:event :map]] :map]})
+  (Operation supervise
+    "Run a Claude command line with its output passed through, ending it and everything it started
+     at its first deferred call; answers the exit code."
+    {:signature [:=> [:catn [:argv [:sequential :string]]] :int]}))

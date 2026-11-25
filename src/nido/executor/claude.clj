@@ -10,6 +10,13 @@
      - any other call: defer it, which ends the run with the call pending
    The hook is this namespace's -main, run under bb, and reads only the run's own directory.
 
+   Claude does not always exit at a deferral: while a background task it started (a Monitor, a
+   backgrounded shell) is alive it waits, and that task's notification wakes the agent again with
+   the deferred call answered as an internal error. So every run is supervised (`supervise`), which
+   ends Claude and everything it started at the first deferred result in its output. Should a run
+   still go on past its deferred ask, the ask is its outcome all the same, and the resumption gives
+   the agent the resolution as a prompt, since no call is left pending to re-offer.
+
    Every run is passed the same permission policy, because `--resume` restores none: permissions
    skipped, nothing nobody could answer (AskUserQuestion, ScheduleWakeup), and only the user's and
    project's own settings beneath the run's. A read-only turn (`:read-only?` on its spec) has a
@@ -27,7 +34,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [nido.core.ask-tool :as ask-tool])
-  (:import [java.util UUID]))
+  (:import [java.lang ProcessHandle]
+           [java.util UUID]))
 
 (def ^:private ask-tool-name
   "The ask tool as Claude names it: server `nido`, tool `ask`."
@@ -79,6 +87,31 @@
                   (if (keyword? refused) (name refused) refused))
     :else    "No answer was given."))
 
+(declare result-events deferred-ask?)
+
+(defn- previous-run-dir
+  "The directory of the run before `run` of the turn in `turn-dir`. The layout is
+   `nido.core.turn/run-dir`'s, which this namespace does not load: the hook runs it under bb."
+  [turn-dir run]
+  (io/file turn-dir (str "run-" (dec run))))
+
+(defn- call-pending?
+  "Whether the run in `run-dir` ended at its deferral of call `call`, so that resuming re-offers it.
+   A run whose output is not there to read is taken to have ended so."
+  [run-dir call]
+  (let [results (result-events run-dir)]
+    (or (empty? results)
+        (let [r (last results)] (and (deferred-ask? r) (= call (get-in r [:deferred_tool_use :id])))))))
+
+(defn- resumption-prompt
+  "What a resumed run is told when the agent went on past its ask, which so has no call to
+   re-offer: that the ask reached the person all the same, and how it was resolved."
+  [resolved-call resolution]
+  (str "Your earlier ask (call " resolved-call ") did reach the person, whatever the ask tool "
+       "returned to you at the time: nido held it, and it has now been resolved.\n\n"
+       (resolution-text resolution)
+       "\n\nCarry on from there."))
+
 (defn- launch
   "What to start for `run`. See `nido.core.turn` for `run`."
   [{:keys [claude-bin bb-bin src add-dirs image] :or {claude-bin "claude" bb-bin "bb"}}
@@ -88,9 +121,13 @@
               (str (UUID/randomUUID))
               (str/trim (slurp (session-file turn-dir))))
         images (when (= 1 run) (seq (:images spec)))
+        prompt (when (and (< 1 run) resolution
+                          (not (call-pending? (previous-run-dir turn-dir run) resolved-call)))
+                 (resumption-prompt resolved-call resolution))
         settings (str (io/file run-dir "settings.json"))
         mcp      (str (io/file run-dir "mcp.json"))]
-    {:argv (cond-> [claude-bin "-p" "--verbose" "--output-format=stream-json"
+    {:argv (cond-> [bb-bin "--classpath" src "-m" "nido.executor.claude" "supervise"
+                    claude-bin "-p" "--verbose" "--output-format=stream-json"
                     "--setting-sources" "user,project"
                     "--dangerously-skip-permissions"
                     "--mcp-config" mcp
@@ -105,6 +142,7 @@
              images        (into ["--input-format" "stream-json"])
              ;; `--` keeps the prompt from being read as one more value of a variadic option.
              (and (= 1 run) (not images)) (into ["--" (:instructions spec)])
+             prompt        (into ["--" prompt])
              ;; The prompt with images is read from a file of the run's own: the shell redirects it
              ;; onto stdin, then execs Claude in its place.
              images        (->> (into ["/bin/sh" "-c" "f=$1; shift; exec \"$@\" < \"$f\"" "sh"
@@ -132,8 +170,9 @@
               resolution (assoc (str (resolution-file run-dir))
                                 (pr-str {:call resolved-call :text (resolution-text resolution)})))}))
 
-(defn- result-event
-  "The last `result` event in the run's stream-json output, or nil."
+(defn- result-events
+  "Every `result` event in the run's stream-json output, in order: one per time the agent stopped,
+   and Claude may wake it again after one."
   [run-dir]
   (let [f (io/file run-dir "out")]
     (when (.exists f)
@@ -141,25 +180,33 @@
         (->> (line-seq r)
              (keep #(try (let [o (json/read-str % :key-fn keyword)] (when (= "result" (:type o)) o))
                          (catch Exception _ nil)))
-             last)))))
+             vec)))))
+
+(defn- deferred-ask? [{:keys [stop_reason deferred_tool_use]}]
+  (and (= "tool_deferred" stop_reason) (= ask-tool-name (:name deferred_tool_use))))
 
 (defn- outcome
-  "The outcome a finished run's output carries, or nil when it carries none."
+  "The outcome a finished run's output carries, or nil when it carries none. A deferred ask is the
+   outcome wherever the run stopped at it, also when the agent was woken past it: the ask stands
+   until the person resolves it, and a run reading as anything else would leave it unseen."
   [run-dir]
-  (when-let [{:keys [stop_reason deferred_tool_use is_error subtype result]} (result-event run-dir)]
-    (cond
-      (and (= "tool_deferred" stop_reason) (= ask-tool-name (:name deferred_tool_use)))
-      {:outcome :asked
-       :call (assoc (ask-tool/content (:input deferred_tool_use)) :id (:id deferred_tool_use))}
+  (let [results (result-events run-dir)
+        ask (last (filter deferred-ask? results))]
+    (when-let [{:keys [stop_reason deferred_tool_use is_error subtype result]} (peek results)]
+      (cond
+        ask
+        {:outcome :asked
+         :call (assoc (ask-tool/content (get-in ask [:deferred_tool_use :input]))
+                      :id (get-in ask [:deferred_tool_use :id]))}
 
-      (str/starts-with? (str stop_reason) "tool_deferred")
-      {:outcome :failed :detail {:reason :deferred-another-tool :tool (:name deferred_tool_use)}}
+        (str/starts-with? (str stop_reason) "tool_deferred")
+        {:outcome :failed :detail {:reason :deferred-another-tool :tool (:name deferred_tool_use)}}
 
-      (or is_error (not= "success" subtype))
-      {:outcome :failed :detail {:reason :error :message (str result)}}
+        (or is_error (not= "success" subtype))
+        {:outcome :failed :detail {:reason :error :message (str result)}}
 
-      :else
-      {:outcome :completed :detail {:summary (str result)}})))
+        :else
+        {:outcome :completed :detail {:summary (str result)}}))))
 
 (defn- attach
   "What a person runs, in the turn's working directory, to enter its session."
@@ -214,13 +261,53 @@
                "may not change files in its working copy. Write what the recipe owes through nido's "
                "verbs instead.")}}))))
 
+;; ── the supervisor ───────────────────────────────────────────────────────────
+
+(defn- deferred-line?
+  "Whether `line` of Claude's output is a result that stopped at a deferred call."
+  [line]
+  (and (str/includes? line "tool_deferred")
+       (try (let [o (json/read-str line :key-fn keyword)]
+              (and (= "result" (:type o)) (str/starts-with? (str (:stop_reason o)) "tool_deferred")))
+            (catch Exception _ false))))
+
+(defn- end-tree!
+  "End process `ph` and everything it started. The descendants are read first, so none is orphaned
+   out of reach, and `ph` ends first, so none's ending can wake it."
+  [^ProcessHandle ph]
+  (let [ds (vec (iterator-seq (.iterator (.descendants ph))))]
+    (.destroyForcibly ph)
+    (doseq [^ProcessHandle d ds] (.destroyForcibly d))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :string]] :int]} supervise
+  "Run `argv` with its output passed through to this process's, line by line, and end it with
+   everything it started at its first result that stopped at a deferred call: Claude stays alive
+   past a deferral while a background task of its runs, and that task's end wakes the agent with
+   the deferred call answered as an error. Answers the exit code."
+  [argv]
+  (let [p (-> (ProcessBuilder. ^java.util.List (vec argv))
+              (.redirectInput java.lang.ProcessBuilder$Redirect/INHERIT)
+              (.redirectError java.lang.ProcessBuilder$Redirect/INHERIT)
+              .start)]
+    (with-open [r (io/reader (.getInputStream p))]
+      (loop []
+        (when-let [line (.readLine ^java.io.BufferedReader r)]
+          (println line)
+          (flush)
+          (if (deferred-line? line)
+            (end-tree! (.toHandle p))
+            (recur)))))
+    (.waitFor p)))
+
 (defn ^:export -main
   "`hook <run-dir>`: answer one PreToolUse event on stdin. `guard <cwd>`: refuse a file edit into
-   working copy `cwd`, for a read-only turn."
-  [& [cmd arg]]
+   working copy `cwd`, for a read-only turn. `supervise <argv…>`: run Claude, ending it at its
+   first deferral."
+  [& [cmd arg & more]]
   (case cmd
-    "hook"  (let [event (json/read-str (slurp *in*) :key-fn keyword)]
-              (println (json/write-str (hook-decision arg event))))
-    "guard" (when-let [d (guard-decision arg (json/read-str (slurp *in*) :key-fn keyword))]
-              (println (json/write-str d)))
+    "hook"      (let [event (json/read-str (slurp *in*) :key-fn keyword)]
+                  (println (json/write-str (hook-decision arg event))))
+    "guard"     (when-let [d (guard-decision arg (json/read-str (slurp *in*) :key-fn keyword))]
+                  (println (json/write-str d)))
+    "supervise" (System/exit (supervise (cons arg more)))
     nil))

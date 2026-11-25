@@ -4,6 +4,7 @@
    [babashka.fs :as fs]
    [clojure.data.json :as json]
    [clojure.edn :as edn]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.executor.claude :as claude]))
 
@@ -75,4 +76,78 @@
         (is (some? (guard "/w" {:cwd "/w" :tool_input {:file_path "src/a.clj"}})) "relative to the tool's cwd")
         (is (nil? (guard "/w" {:tool_input {:file_path "/tmp/report.edn"}})) "a report elsewhere is the skill's")
         (is (nil? (guard "/w" {:tool_input {:file_path "/wx/a"}}))))
+      (finally (fs/delete-tree dir)))))
+
+;; ── an ask the agent was woken past ──────────────────────────────────────────
+
+(defn- result-line [m] (json/write-str (merge {:type "result" :subtype "success"} m)))
+
+(def ^:private deferred-ask
+  (result-line {:stop_reason "tool_deferred"
+                :deferred_tool_use {:id "toolu_01EjtRm65T17YPeFTr218aSd" :name "mcp__nido__ask"
+                                    :input {:question "How should the stack handle it?"
+                                            :explored "The copy fails with 55P03." :recommendation "Accept it."}}}))
+
+(def ^:private woken-past-it
+  ;; ws-20261120-d22b85's run: a Monitor's notification woke the agent past its deferred ask, which
+  ;; Claude answered as an internal error, and the agent ended on end_turn.
+  [deferred-ask
+   (json/write-str {:type "system" :subtype "task_notification" :status "stopped"})
+   (json/write-str {:type "system" :subtype "init"})
+   (result-line {:stop_reason "end_turn" :result "The ask card may not have been posted."})])
+
+(defn- write-out! [dir lines]
+  (fs/create-dirs dir)
+  (spit (str (fs/path dir "out")) (str (str/join "\n" lines) "\n")))
+
+(deftest an-ask-the-agent-was-woken-past-is-still-the-runs-outcome
+  (let [dir (str (fs/create-temp-dir))
+        outcome (:outcome (claude/executor {:src "/src"}))]
+    (try
+      (write-out! dir woken-past-it)
+      (is (= {:outcome :asked
+              :call {:id "toolu_01EjtRm65T17YPeFTr218aSd" :question "How should the stack handle it?"
+                     :explored "The copy fails with 55P03." :recommendation "Accept it."}}
+             (outcome dir)))
+      (write-out! dir [deferred-ask])
+      (is (= :asked (:outcome (outcome dir))) "a run that stopped at its ask, as before")
+      (write-out! dir [(result-line {:stop_reason "end_turn" :result "done"})])
+      (is (= :completed (:outcome (outcome dir))))
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-resumption-re-offers-a-pending-ask-and-tells-one-that-is-not
+  (let [tdir (str (fs/create-temp-dir))
+        argv (fn []
+               (:argv ((:launch (claude/executor {:src "/src"}))
+                       {:turn-dir tdir :run-dir (str (fs/path tdir "run-2")) :run 2 :spec {}
+                        :resolution {:answered "Accept it and file a follow-up."}
+                        :resolved-call "toolu_01EjtRm65T17YPeFTr218aSd"})))
+        prompt (fn [a] (let [i (.indexOf ^java.util.List a "--")] (when (<= 0 i) (nth a (inc i)))))]
+    (try
+      (spit (str (fs/path tdir "claude-session-id")) "sid")
+      (write-out! (str (fs/path tdir "run-1")) [deferred-ask])
+      (is (nil? (prompt (argv))) "the call is pending: resuming re-offers it")
+      (write-out! (str (fs/path tdir "run-1")) woken-past-it)
+      (let [p (prompt (argv))]
+        (is (some? p) "no call is pending: the resolution goes in as a prompt")
+        (is (str/includes? p "Answer: Accept it and file a follow-up."))
+        (is (str/includes? p "toolu_01EjtRm65T17YPeFTr218aSd")))
+      (finally (fs/delete-tree tdir)))))
+
+(defn- alive? [pid] (zero? (.waitFor (.start (ProcessBuilder. ^java.util.List ["kill" "-0" (str pid)])))))
+
+(deftest a-run-ends-with-its-background-tasks-at-its-deferral
+  (let [dir (str (fs/create-temp-dir))
+        pid-file (str (fs/path dir "bg.pid"))
+        script (str "sleep 60 & echo $! > " pid-file "; echo '" deferred-ask "'; sleep 60; "
+                    "echo '{\"type\":\"result\",\"stop_reason\":\"end_turn\"}'")]
+    (try
+      (let [t0 (System/currentTimeMillis)
+            out (with-out-str (claude/supervise ["sh" "-c" script]))
+            bg (parse-long (str/trim (slurp pid-file)))]
+        (is (< (- (System/currentTimeMillis) t0) 20000) "it did not wait for the process to exit")
+        (is (str/includes? out "tool_deferred") "the output is passed through")
+        (is (not (str/includes? out "end_turn")) "nothing woke the agent past its ask")
+        (Thread/sleep 200)
+        (is (not (alive? bg)) "the background task it started is ended too"))
       (finally (fs/delete-tree dir)))))
