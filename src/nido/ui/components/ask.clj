@@ -46,9 +46,13 @@
 
 (defn- click
   "The expression giving action descriptor `d` through block action `k`."
-  [action project ws-id k {:keys [id] entry-seq :seq}]
+  [action project ws-id k {:keys [id ask-id] entry-seq :seq}]
   (action k {:params {:project project :ws-id ws-id :action id}
-             :query  (when entry-seq {:entry entry-seq})}))
+             ;; What the click answers: the ledger record (?entry=) or the core ask (?ask=) its
+             ;; card was built from, so the resolver acts on that source alone.
+             :query  (not-empty (cond-> {}
+                                  entry-seq (assoc :entry entry-seq)
+                                  ask-id    (assoc :ask ask-id)))}))
 
 ;; ---------------------------------------------------------------------------
 ;; The bar

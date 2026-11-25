@@ -99,6 +99,7 @@
       :scope   <project>|nil   — the focused project; see `focus`
       :selection {:project _ :ws-id _}|nil — from ?sel= or a deep-link path
       :entry   <long>|nil
+      :ask     <core ask id>|nil — the ask a gate click answers
       :rounds  #{<long>}|nil
       :stage   <arc-stage keyword>|nil
       :history? <boolean>}
@@ -113,6 +114,7 @@
      :scope     (focus ps sel headers)
      :selection sel
      :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)
+     :ask       (some (fn [[k v]] (when (= k "ask") (not-empty (decode v)))) ps)
      :rounds    (rounds ps)
      :stage     (stage ps)
      :history?  (history? ps)}))

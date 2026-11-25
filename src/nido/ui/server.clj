@@ -574,13 +574,18 @@
     (#{:answer-questions :apply} action-id)          [ask/card :submit]
     :else                                            [ask/card :click]))
 
+(declare click-payload*)
+
 (defn- click-payload
   "What a gate click carries besides its action id, from the fields `decoded` — the body read
    through the decoder of the block action that sent it — and the request's ?entry=: the reply's
    text for :reply, the evidence's for :assert-gate, and for every button that answers a ledger
    question the :seq of the report it was rendered from, the same reading position every other
    surface rides, so the resolver can refuse an answer whose question the ledger has since moved
-   past. nil for every other action: those resolve entirely nido-side.
+   past. An answer — an option, a reply, Send answers, Wake or Withdraw — also carries the source
+   its card was built from, ?entry= or the core ask's ?ask=, as {:seq :ask} beside its text or
+   answers, so it resolves on that source alone. nil for every other action: those resolve
+   entirely nido-side.
 
    Which buttons those are is asked of the descriptor, not listed here. Every
    position-carrying button is rendered by the same branch of `action-button`
@@ -589,12 +594,26 @@
    button rendered with its position but read back without one resolves as
    stale every time."
   [req action-id decoded]
+  (let [{:keys [entry ask]} (view-state/parse req)
+        ;; The source the answering card was built from — its core ask, or the ledger record —
+        ;; which the resolver acts on alone.
+        source (cond-> {} entry (assoc :seq entry) ask (assoc :ask ask))]
+    (cond
+      (= :reply action-id)
+      (if (seq source) (assoc source :text (:text decoded)) (:text decoded))
+      (= :assert-gate action-id)               (:text decoded)
+      ;; A card's questions are sent together, each as its letter, its note, both or neither.
+      (= :answer-questions action-id)
+      (assoc source :answers (card-picks decoded))
+      ;; An option, Wake or Withdraw on a core ask's card names that ask.
+      (and ask (or (work/option-action? action-id) (#{:wake :withdraw} action-id)))
+      source
+      :else (click-payload* req action-id decoded))))
+
+(defn- click-payload*
+  "`click-payload` for every click that names no core ask."
+  [req action-id decoded]
   (cond
-    (#{:reply :assert-gate} action-id)       (:text decoded)
-    ;; A card's questions are sent together, each as its letter, its note, both or neither.
-    (= :answer-questions action-id)
-    {:seq     (:entry (view-state/parse req))
-     :answers (card-picks decoded)}
     ;; An Accept that submits questions also carries the card's choices, one `q<i>` per
     ;; question, as the answers in order, a blank for a question left open. What each letter
     ;; means is the resolver's to read off the ledger; this only keeps the order. An Accept

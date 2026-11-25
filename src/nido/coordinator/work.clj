@@ -294,7 +294,8 @@
          answering?     (= :answer-blocker awaiting)
          ;; :answers says which resolver the words reach, so what the card says the button does is
          ;; what it does: here the ledger alone, nobody resumed.
-         answer-action  {:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}
+         answer-action  (cond-> {:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}
+                          entry-seq (assoc :seq entry-seq))
          ;; Reply reaches a parked agent, unless a conductor's escalation is owed the answer — then
          ;; resolve-gate! records it for the conductor's next pass and resumes nobody (`reply-to`).
          reply-action   (cond-> {:id :reply :label "Reply" :kind :resume :style :default}
@@ -1722,7 +1723,9 @@
     ;; a note field beside its options.
     (let [actions [{:id :answer-questions :label "Send answers" :kind :mutation :style :primary :notes? true}
                    {:id :reply :label "Answer" :kind :resume :style :default}
-                   {:id :withdraw :label "Withdraw" :kind :mutation :style :danger}]]
+                   {:id :withdraw :label "Withdraw" :kind :mutation :style :danger}]
+          ;; Every action names the ask it answers, so its click acts on that ask alone.
+          actions (mapv #(assoc % :ask-id (:id a)) actions)]
       {:ws-id        (:ws-id row)
        :project      (name project)
        :origin       (:origin row)
@@ -1854,7 +1857,7 @@
                    "Its conductor turns failed, so nothing wakes it.")
        :failures fs
        :core-ask (:id a)
-       :actions  [{:id :wake :label "Wake it again" :kind :mutation :style :primary
+       :actions  [{:id :wake :label "Wake it again" :kind :mutation :style :primary :ask-id (:id a)
                    :title "Its next turn hears everything it has yet to hear."}]})))
 
 (declare card)
@@ -3450,25 +3453,49 @@
     (wcore/admitted? (wcore/act! project ws-id {:command :close-workstream}
                                  {:key (str "merged/" k "/close/" landing)}))))
 
+(defn- click-ask
+  "The core ask a gate click names — the :ask its card's action carried — or nil."
+  [payload]
+  (when (map? payload) (:ask payload)))
+
+(defn- click-seq
+  "The ledger record a gate click names — the :seq its card's action carried — or nil."
+  [payload]
+  (cond (map? payload) (:seq payload) (integer? payload) payload))
+
+(defn- click-text
+  "The person's words a gate click carries, or nil."
+  [payload]
+  (cond (map? payload) (:text payload) (string? payload) payload))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] [:maybe :map]]}
   core-resolve!
   "Do what gate action `action-id` asks of the core, as the person's keyed command; nil when the
-   action is not one the core answers. An option answers the oldest open ask that is a question
-   (never a machine failure) with its option, a reply with the person's words, Send answers with
+   action is not one the core answers. An answer acts on the ask the click names (`click-ask`) —
+   a click naming one no longer open is refused as :option-stale — or, from a caller naming none,
+   the oldest open one. An option answers that ask, a question (never a machine failure), with its
+   option, a reply with the person's words, Send answers with
    the one string `questions-answer` renders from a pick per question — its option, the person's
    comment on it, both — a withdrawal takes it back; Wake answers the machine's stop,
    the one recovery an error offers; Land grants the landing; Promote is
    the person's start, opening the workstream's unit; Done and Drop retract its open units and
    close it."
   [project ws-id action-id payload]
-  (let [w    (wcore/state project ws-id)
-        open (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w))))
-        ask  (first (remove domain/machine-ask? open))
-        act! #(wcore/act! project ws-id %)
-        text (when-not (map? payload) (some-> payload str str/trim not-empty))]
+  (let [w     (wcore/state project ws-id)
+        open  (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w))))
+        named (click-ask payload)
+        ;; A click names the ask its card showed: only that one is acted on, and one no longer
+        ;; open is a stale click. A caller naming none (the CLI) acts on the oldest.
+        pick  (fn [asks] (if named (some #(when (= named (:id %)) %) asks) (first asks)))
+        ask   (pick (remove domain/machine-ask? open))
+        act!  #(wcore/act! project ws-id %)
+        text  (some-> (click-text payload) str str/trim not-empty)]
     (cond
+      (and named (not-any? #(= named (:id %)) open))
+      {:decision :option-stale}
+
       (= :wake action-id)
-      (if-let [stop (first (filter domain/machine-ask? open))]
+      (if-let [stop (pick (filter domain/machine-ask? open))]
         (core-decision (act! {:command :answer-operator-ask :ask (:id stop) :answer "Wake it" :by :person})
                        :woken)
         {:decision :core-refused :because "its conductor is not stopped"})
@@ -3625,15 +3652,15 @@
         n      (pipeline/owed-blocker p ws-id)
         {:keys [ledger entries]} (active-ledger p ws-id)
         report (report-at ledger entries n)
-        at     (if (map? payload) (:seq payload) payload)
+        at     (click-seq payload)
         chosen (chosen-options report action-id payload)
         answer (cond
-                 (= :reply action-id)            (some-> payload str str/trim not-empty)
+                 (= :reply action-id)            (some-> (click-text payload) str str/trim not-empty)
                  (option-action? action-id)      (some-> (first chosen) :label str str/trim not-empty)
                  (= :answer-questions action-id) (questions-answer {:questions (report/blocker-questions report)}
                                                                    (:answers payload)))]
     (cond
-      (and (not= :reply action-id) (not= at n)) {:decision :option-stale}
+      (and (or at (not= :reply action-id)) (not= at n)) {:decision :option-stale}
       (nil? answer) {:decision :core-refused :because "an answer needs a choice or words"}
       :else
       (do (cws/append-entry! p ws-id {:kind :blocker-answered}
@@ -3688,11 +3715,16 @@
 
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
 
-     ;; An answer to a blocker the ledger owes, with no question the core asks beside it, is a
-     ;; work record: the ledger's, whatever card offered it.
+     ;; An answer is resolved at the source its card was built from, which the click carries —
+     ;; a ledger record (here, `answer-blocker!`, which refuses one no longer owed) or a core
+     ;; ask's id (`core-resolve!`, which refuses one no longer open) — never redirected to the
+     ;; other. A click naming neither (the CLI) is a ledger answer while the ledger owes a
+     ;; blocker and the core asks nothing.
      (and (or (option-action? action-id) (#{:reply :answer-questions} action-id))
-          (not (core-asking? project ws-id))
-          (pipeline/owed-blocker (keyword (name project)) ws-id))
+          (not (click-ask payload))
+          (or (click-seq payload)
+              (and (not (core-asking? project ws-id))
+                   (pipeline/owed-blocker (keyword (name project)) ws-id))))
      (answer-blocker! project ws-id action-id payload)
 
      ;; A drain's acts, as the drains page makes them: approve its recipe, close it, land a slice.

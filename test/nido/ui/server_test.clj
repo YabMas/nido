@@ -848,3 +848,12 @@
                                               :query-string "sel=brian:ws-1"}))]
       (is (str/includes? body "Other-row") "the board keeps its pane beside the list")
       (is (str/includes? body "Page-label")))))
+
+(deftest a-gate-click-carries-the-source-its-card-was-built-from
+  (let [payload #(#'server/click-payload {:uri "/workstreams/brian/ws-1/gate/x" :query-string %1} %2 %3)]
+    (is (= {:ask "conductor stopped 7"} (payload "ask=conductor+stopped+7" :wake {}))
+        "a core ask's card names the ask")
+    (is (= {:ask "a1"} (payload "ask=a1" :option-a {})))
+    (is (= {:ask "a1" :text "yes"} (payload "ask=a1" :reply {:text "yes"})))
+    (is (= 7 (payload "entry=7" :option-a {})) "a ledger card names the record it answers")
+    (is (= {:seq 7 :text "left"} (payload "entry=7" :reply {:text "left"})))))

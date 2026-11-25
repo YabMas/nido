@@ -2865,10 +2865,10 @@
       "and when there is one, a note to it is still an answer"))
 
 (deftest a-blocker-raised-over-a-design-decision-is-answered-not-approved
-  (is (= [{:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}]
+  (is (= [{:id :reply :label "Answer" :kind :resume :style :default :answers :ledger :seq 7}]
          (work/gate-actions :in-progress false nil
                             {:report-format :design-decision :seq 7 :awaiting :answer-blocker}))
-      "the person's judgement reaches the next round as the blocker's answer"))
+      "the person's judgement reaches the next round as the blocker's answer, naming the record it answers"))
 
 ;; ── the improvement sweep's writes ──────────────────────────────────────────
 

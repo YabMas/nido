@@ -479,6 +479,29 @@
                (map #(select-keys % [:blocker-seq :summary]) (workstream/entries-of :brian ws-id :blocker-answered))))
         (is (nil? (pipeline/owed-blocker :brian ws-id)) "and the blocker is owed no longer")))))
 
+(deftest a-ledger-card-s-click-answers-its-blocker-whatever-the-core-asks-since
+  (with-ws
+    (fn [c ws-id]
+      (workstream/append-entry! :brian ws-id {:kind :blocker}
+                                (pr-str {:format :blocker :summary "stuck" :needs "Which way?" :after "it resumes"
+                                         :options [{:label "Left" :summary "go left"} {:label "Right" :summary "go right"}]}))
+      (let [n (pipeline/owed-blocker :brian ws-id)]
+        ;; The core opens a question after the ledger card was drawn.
+        (fake-core/seed! c :brian ws-id fake-core/asking)
+        (is (= {:decision :answered-unresumed} (work/resolve-gate! :brian ws-id :option-a n)))
+        (is (= :open (get-in (core-state c ws-id) [:operator-asks "a1" :status]))
+            "the core's question, which the card never showed, is left unanswered")
+        (is (nil? (pipeline/owed-blocker :brian ws-id)) "and the blocker the card showed is answered")))))
+
+(deftest a-core-card-s-click-acts-only-on-the-ask-it-names
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id fake-core/asking)
+      (is (= :answered (:decision (work/resolve-gate! :brian ws-id :option-a {:ask "a1"}))))
+      (is (= {:decision :option-stale} (work/resolve-gate! :brian ws-id :option-a {:ask "a1"}))
+          "a second click on an ask already answered is refused, never redirected")
+      (is (= {:decision :option-stale} (work/resolve-gate! :brian ws-id :reply {:ask "gone" :text "hi"}))))))
+
 (deftest a-several-question-answer-hands-on-the-grants-it-chose
   (with-ws
     (fn [c ws-id]

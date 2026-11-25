@@ -2056,3 +2056,10 @@
         "the base grid and each side-chat variant read the width")
     (is (= 1 (count (re-seq #"--side-w:" rules))) "one rule sets the column's width")
     (is (str/includes? rules "body:has(> .sidebar.open) { --side-w:var(--side-open-w); }"))))
+
+(deftest a-core-ask-s-button-posts-the-ask-it-answers
+  (let [html (str (h/html (#'views/ask-bar "brian" "ws-1"
+                                           [{:id :wake :label "Wake it again" :kind :mutation :style :primary
+                                             :ask-id "conductor stopped 7"}]
+                                           nil)))]
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/wake?ask=conductor+stopped+7"))))
