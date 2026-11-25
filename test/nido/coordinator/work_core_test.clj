@@ -152,6 +152,43 @@
         (is (nil? (workstream/closure (workstream/read-ws :brian ws-id))))
         (is (= :settled (:engagement (first (work/list-workstreams :brian #{})))))))))
 
+(defn- reads
+  "What each surface reads of the person's pause on `ws-id`: the pane, the board, and the core's
+   hold on the open unit the conductor's turns start under."
+  [c ws-id]
+  {:pane  (some? (:pause (work/workstream :brian ws-id)))
+   :board (boolean (get-in (first (work/list-workstreams :brian #{})) [:status :paused]))
+   :held  (boolean (get-in (core-state c ws-id) [:units ws-id :held?]))})
+
+(deftest pause-and-resume-move-every-surface-together
+  (with-ws
+    (fn [c ws-id]
+      (work/set-stage! :brian ws-id :in-progress)
+      (is (= {:pane false :board false :held false} (reads c ws-id)))
+      (testing "the pane's Pause is read by the pane, the board and the core"
+        (work/pause! :brian ws-id "after the demo")
+        (is (= {:pane true :board true :held true} (reads c ws-id)))
+        (is (= "after the demo" (:note (:pause (work/workstream :brian ws-id)))) "the note is kept"))
+      (testing "the pane's Resume lifts it everywhere"
+        (work/resume! :brian ws-id)
+        (is (= {:pane false :board false :held false} (reads c ws-id))))
+      (testing "a hold the core carries without a ledger pause still offers Resume on the pane"
+        (work/deactivate! :brian ws-id nil)
+        (is (= {:pane true :board true :held true} (reads c ws-id)))
+        (work/resume! :brian ws-id)
+        (is (= {:pane false :board false :held false} (reads c ws-id)))))))
+
+(deftest resume-lifts-a-ledger-only-pause
+  (with-ws
+    (fn [c ws-id]
+      (work/set-stage! :brian ws-id :in-progress)
+      ;; The older path: a :paused on the ledger, and no unit held in the core.
+      (workstream/pause! :brian ws-id nil)
+      (is (= {:pane true :board true :held false} (reads c ws-id)))
+      (work/resume! :brian ws-id)
+      (is (= {:pane false :board false :held false} (reads c ws-id)))
+      (is (nil? (workstream/pause (workstream/read-ws :brian ws-id)))))))
+
 (deftest a-persons-word-answers-what-is-asked-or-reaches-the-conductor
   (with-ws
     (fn [c ws-id]

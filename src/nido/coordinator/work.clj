@@ -1477,7 +1477,7 @@
         :status       (:status row)
         ;; The person's standing pause, with the note they gave — what the pane says beside
         ;; its Resume.
-        :pause        (pause-of project ws-id w)
+        :pause        (pause-of project ws-id w row)
         :project      project
         :origin       (classify-origin w)
         :stage        (:stage row)
@@ -3540,28 +3540,34 @@
      :instruction activation-preamble}))
 
 (defn- pause-of
-  "The standing pause on workstream `w` as {:at :note}, or nil when none stands."
-  [project ws-id w]
-  (when-let [p (cws/pause w)]
-    {:at (:at p) :note (:note (cws/entry-at-seq project ws-id (:seq p)))}))
+  "The person's pause the pane shows, or nil when none stands: the ledger's standing pause as
+   {:at :note}, else {} when the board row `row` reads paused all the same — the core holds every
+   open unit — so the pane offers Resume exactly when the board reads Paused."
+  [project ws-id w row]
+  (if-let [p (cws/pause w)]
+    {:at (:at p) :note (:note (cws/entry-at-seq project ws-id (:seq p)))}
+    (when (get-in row [:status :paused]) {})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   pause!
-  "Pause `ws-id` for a person — their choice not to push it forward for now: each open unit held
-   by their command to the core, so no turn starts on it and every surface reads it paused. The
-   note is not kept. Answers {:ws-id}."
-  [project ws-id _note]
+  "Pause `ws-id` for a person — their choice not to push it forward for now. Both records of it
+   are written together: the ledger's :paused, with `note`, which the pane and the pipeline read,
+   and each open unit held by their command to the core, so no turn starts on it. Answers {:ws-id}."
+  [project ws-id note]
+  (cws/pause! project ws-id note)
   (doseq [u (vals (:units (wcore/state project ws-id))) :when (= :open (:status u)) :when (not (:held? u))]
     (wcore/act! project ws-id {:command :hold-unit :unit (:id u)}))
   {:ws-id ws-id})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   resume!
-  "Lift the person's pause on `ws-id`: each held unit released by their command to the core.
-   Answers {:ws-id}."
+  "Lift the person's pause on `ws-id`, whichever record carries it: each held unit released by
+   their command to the core, and a standing ledger :paused answered with :resumed — including one
+   written before the core held anything. Answers {:ws-id}."
   [project ws-id]
   (doseq [u (vals (:units (wcore/state project ws-id))) :when (:held? u)]
     (wcore/act! project ws-id {:command :release-unit :unit (:id u)}))
+  (cws/resume! project ws-id)
   {:ws-id ws-id})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
