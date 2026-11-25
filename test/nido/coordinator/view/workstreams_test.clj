@@ -13,8 +13,8 @@
    [nido.test.units :as units]))
 
 (defn- one-off!
-  "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
-   `scratch/birth!` appends as it mints one."
+  "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry the
+   one-offs minted for a person's sessions carried."
   []
   (let [w (workstream/create! :brian {:external-refs []})]
     (workstream/append-entry! :brian (:id w) {:kind :scratch} (pr-str {:format :scratch}))

@@ -1,6 +1,5 @@
 (ns nido.coordinator.lane.start
-  "A person starting work: a session brought up on its workstream, and a ticket started at the
-   click.
+  "A person starting a ticket at the click.
 
    A person's start of a ticket is an ACT, carried out when they click, not a request nido
    fulfils later. This is its work-record half: what the ticket says and where it stands. The
@@ -12,37 +11,14 @@
    source the brief is read from, and the project's Notion properties a start writes."
   (:require
    [nido.coordinator.lane.brief :as brief]
-   [nido.coordinator.lane.scratch :as scratch]
-   [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]
    [nido.github.client :as gh]
    [nido.notion.client :as notion]
-   [nido.platform.config :as config]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.platform.config :as config]))
 
 (defn- warn [msg]
   (binding [*out* *err*] (println (str "nido start: " msg))))
-
-;; ── a session start ─────────────────────────────────────────────────────────
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :WorkstreamId]}
-  start-session!
-  "Bring the session `session-name` up on the workstream holding it — or, given `:ws-id`, on that
-   one; else on a minted one-off — and on that workstream's runtime. Heavy and slow: surfaces wrap
-   it in their own progress UI. Returns the ws-id.
-
-   `opts` are lifecycle/up!'s, plus `:ws-id`. The workstream is settled BEFORE up! so the session
-   comes up on its runtime at once, and its weight read back AFTER, from what up! really
-   provisioned. Callers check `scratch/joinable` first when a named workstream may refuse the
-   session."
-  [project session-name opts]
-  (let [p       (keyword (name project))
-        ws-id   (:ws-id opts)
-        up-opts (-> (dissoc opts :ws-id) (assoc :project (name project)))
-        held-by (scratch/birth! p session-name nil ws-id)]
-    (lifecycle/up! session-name (assoc up-opts :runtime-key held-by))
-    (scratch/birth! p session-name (lifecycle/session-weight session-name up-opts) held-by)))
 
 ;; ── the ticket a workstream carries ─────────────────────────────────────────
 

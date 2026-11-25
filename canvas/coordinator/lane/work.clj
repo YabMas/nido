@@ -1,6 +1,6 @@
 (ns canvas.coordinator.lane.work
   "Self-spec: the lanes that act on a workstream — brief, facets, findings, intake, pickup,
-   promote, resume, scratch.
+   promote, resume.
 
    Each lane is a verb: it reads the records, decides, acts, and appends what it did. None of
    them holds state, and that is what lets the driver run them in any order it likes."
@@ -76,49 +76,3 @@
      settled between phases, and refused on blank evidence."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]
      :delegates [workstream/read-ws standing/governing-design workstream/open-phase!]}))
-
-(Module lane-scratch
-  "Which workstream a session a person started by hand belongs to: the one the start names, or
-   else a one-off minted for it — the home of work that began from an idea rather than a ticket.
-
-   Naming one is how a unit that has no ticket to spawn from, a forked child above all, gets a
-   session at all. It is also the only way a person chooses a session's workstream, and the choice
-   is made once: a session is never moved afterwards.
-
-   Disposability is MARKED, not inferred. A one-off carries the `:scratch` stage `birth!` writes,
-   and that marker is what says it may be discarded with its session. Ref-lessness used to stand
-   in for the marker, which held only while nothing else minted a ref-less workstream — the
-   described-intent leg does, so the inference and the marker stopped agreeing and the marker is
-   the one that was always authored."
-  (Operation bare?
-    "Whether a workstream holds nothing but its own :scratch birth and what its conductor decided —
-     its :conduct-decision entries and the blockers they parked — so discarding it loses nothing."
-    {:signature [:=> [:catn [:w Workstream]] :boolean]})
-  (Operation scratch? "Whether a workstream is marked a one-off."
-    {:signature [:=> [:catn [:w Workstream]] :boolean]})
-  (Operation joinable
-    "Why a start naming this workstream may not join it — missing, closed, or its session name held
-     by another workstream — or nil when it may."
-    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [workstream/read-ws]})
-  (Operation birth!
-    "Ensure a workstream owns a named human session: the one named, or else whichever already holds
-     the name, or else a minted one-off. Given a workstream, it is called before the session is
-     provisioned, so the record claims the name before any worktree exists. A one-off minted for a
-     name another start took first is deleted, its conductor retired before it is."
-    {:signature [:function
-                 [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]]] :any]
-                 [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]] [:ws-id [:maybe WorkstreamId]]] :any]]
-     :delegates [joinable workstream/create! workstream/list-ids workstream/delete!]})
-  (Operation settle-runtimes!
-    "Move each live session onto the runtime it belongs on: its workstream's, or — for one no
-     workstream holds — its own, keyed by its whole name. Returns the names it moved."
-    {:signature [:=> [:catn [:project ProjectName] [:live [:set SessionName]]] [:vector SessionName]]})
-  (Operation reap!
-    "Delete the one-off workstream owning a session — sparing every unmarked one, and every
-     marked one that has since acquired an external ref. Two facts, not one: the marker says
-     it was born disposable, the absent ref says nothing outside has claimed it since. Neither its
-     conductor's record nor what its conductor decided keeps it, and the conductor is retired before
-     it is deleted."
-    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [scratch? workstream/project-records workstream/delete!]}))

@@ -577,40 +577,18 @@
 ;; `:fn` holds the VAR (not the fn value) so the call is late-bound — invoking a
 ;; var resolves its current root, which keeps the table mockable and avoids
 ;; stale captures.
-;; `:after` is the scratch-workstream hook (fn [project-str session-name]) run
-;; after a successful lifecycle call, so the TUI's up/add/destroy stay in sync
-;; with the loose-workstream model the bb task layer maintains (spec line 82):
-;; up births the loose workstream (idempotent — no-ops when the session already
-;; belongs to one), destroy reaps it (spares ref-carrying workstreams).
-;; `:add` uses create-workstream! which delegates to work/new! (already bundles
-;; lifecycle/up! + scratch/birth!) — no :after needed for that verb.
-(defn- reap-scratch!    [p sn] (work/session-destroyed! p sn))
-
-(defn- create-workstream!
-  "Birth a scratch workstream and bring its session up. Delegates to
-   work/new! which already composes lifecycle/up! + scratch/birth!."
-  [p sn]
-  (work/new! p sn))
-
-(defn- create-workstream-action!
-  "Adapter from action-defs calling convention [sn {:project p}] to
-   create-workstream! [p sn]."
-  [sn {:keys [project]}]
-  (create-workstream! project sn))
-
 (defn- start-session-action!
-  "Adapter from action-defs calling convention [sn {:project p}] to work/start!, which settles the
-   session's workstream before the start so it comes up on that workstream's runtime. Returns once
-   the session can be entered, its services still booting — the board shows it starting until
-   they are up."
+  "Adapter from action-defs calling convention [sn {:project p}] to work/start!: a person's own
+   session, no workstream's. Returns once the session can be entered, its services still booting —
+   the board shows it starting until they are up."
   [sn {:keys [project] :as opts}]
   (work/start! project sn (assoc opts :wait false)))
 
 (def ^:private action-defs
   {:up      {:fn #'start-session-action!                            :gerund "Starting"   :past "Started"   :failed "start"}
    :down    {:fn #'lifecycle/down!                                  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
-   :destroy {:fn #'destroy-session!           :after reap-scratch!  :gerund "Destroying" :past "Destroyed" :failed "destroy"}
-   :add     {:fn #'create-workstream-action!                        :gerund "Creating"   :past "Created"   :failed "create"}
+   :destroy {:fn #'destroy-session!                                 :gerund "Destroying" :past "Destroyed" :failed "destroy"}
+   :add     {:fn #'start-session-action!                            :gerund "Creating"   :past "Created"   :failed "create"}
    ;; :rehydrate has no :fn — it runs work/ensure-open! via rehydrate-and-enter,
    ;; not run-session-action!. The labels feed the spinner + failure panel.
    :rehydrate {                                                      :gerund "Re-hydrating" :past "Re-hydrated" :failed "re-hydrate"}
@@ -620,16 +598,9 @@
    :bring-down {                                                     :gerund "Bringing down" :past "Brought down" :failed "bring down"}})
 
 (defn- run-session-action!
-  "Run `verb`'s lifecycle fn for session `sn` in project `p`, then its `:after`
-   scratch-workstream hook (birth/reap) when present. Sequential and in the same
-   captured-output context as the lifecycle call (see start-session-action), so a
-   hook throw surfaces as the action's failure — matching the bb task layer's
-   `(lifecycle/up! …) (scratch/birth! …)` ordering."
+  "Run `verb`'s lifecycle fn for session `sn` in project `p`."
   [verb p sn]
-  (let [{action-fn :fn after :after} (get action-defs verb)
-        v (action-fn sn {:project p})]
-    (when after (after p sn))
-    v))
+  ((:fn (get action-defs verb)) sn {:project p}))
 
 (defn- with-spinner
   "Common scaffold for an in-app action: a fresh spinner, `:busy` state carrying

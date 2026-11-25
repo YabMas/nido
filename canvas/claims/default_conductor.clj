@@ -7,7 +7,6 @@
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.lane.drive :refer [lane-pipeline]]
-            [canvas.coordinator.lane.work :refer [lane-scratch]]
             [canvas.coordinator.record.seats :refer [record-seats]]
             [canvas.session.commit-gate :refer [session-commit-gate]]))
 

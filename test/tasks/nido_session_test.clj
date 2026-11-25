@@ -4,7 +4,6 @@
    [clojure.test :refer [deftest is]]
    [babashka.fs :as fs]
    [nido.coordinator.record.workstream]
-   [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.work :as work]
    [nido.coordinator.record.session-events :as session-events]
    [nido.session.casualties :as casualties]
@@ -12,54 +11,6 @@
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]
    [tasks.nido-session :as task]))
-
-(deftest up-births-a-loose-workstream-for-the-session
-  (let [calls (atom [])]
-    (with-redefs [lifecycle/up!            (fn [s o] (swap! calls conj [:up s o]))
-                  state/session-home-dir   (fn [_ _] "/tmp/home")
-                  lifecycle/session-weight (fn [s _] (swap! calls conj [:weight s]) :heavy)
-                  scratch/birth!           (fn [p s w & _] (swap! calls conj [:birth p s w]) "ws-loose")]
-      (task/up ":project" "brian" "refshot")
-      (is (some #(= "refshot" (second %)) (filter #(= :up (first %)) @calls)) "lifecycle up still runs")
-      (is (some #(= [:birth :brian "refshot" :heavy] %) @calls)
-          "loose workstream born carrying the provisioned weight")
-      (is (< (.indexOf @calls [:up "refshot" {:project "brian" :wait false :runtime-key "ws-loose"}])
-             (.indexOf @calls [:weight "refshot"]))
-          "weight is read AFTER up! — up! is what persists the profile it reads"))))
-
-(deftest up-with-a-workstream-claims-the-name-before-provisioning
-  (let [calls (atom [])]
-    (with-redefs [lifecycle/up!            (fn [s o] (swap! calls conj [:up s o]))
-                  state/session-home-dir   (fn [_ _] "/tmp/home")
-                  lifecycle/session-weight (fn [_ _] :heavy)
-                  scratch/joinable         (fn [& _] nil)
-                  scratch/birth!           (fn [p s w ws] (swap! calls conj [:birth p s w ws]) ws)]
-      (task/up ":project" "brian" "child-work" ":ws-id" "ws-child")
-      (is (= [[:birth :brian "child-work" nil "ws-child"]
-              [:up "child-work" {:project "brian" :wait false :runtime-key "ws-child"}]
-              [:birth :brian "child-work" :heavy "ws-child"]]
-             @calls)
-          "the record is written on the named workstream first, up! comes up on that workstream's runtime rather than seeing :ws-id, and the weight is reconciled after"))))
-
-(deftest up-refuses-an-unjoinable-workstream-before-anything-starts
-  (let [calls (atom [])]
-    (with-redefs [lifecycle/up!    (fn [s o] (swap! calls conj [:up s o]))
-                  scratch/joinable (fn [& _] {:reason :closed :ws-id "ws-child"})
-                  scratch/birth!   (fn [& a] (swap! calls conj (into [:birth] a)))]
-      (let [out (with-out-str
-                  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exit 1"
-                                        (with-redefs [task/exit! (fn [c] (throw (ex-info (str "exit " c) {})))]
-                                          (task/up ":project" "brian" "child-work" ":ws-id" "ws-child")))))]
-        (is (str/includes? out "closed"))
-        (is (= [] @calls) "no record, no provisioning")))))
-
-(deftest destroy-reaps-the-loose-workstream
-  (let [calls (atom [])]
-    (with-redefs [lifecycle/destroy! (fn [s o] (swap! calls conj [:destroy s o]))
-                  scratch/reap!      (fn [p s] (swap! calls conj [:reap p s]))]
-      (task/destroy ":project" "brian" "refshot")
-      (is (some #(= "refshot" (second %)) (filter #(= :destroy (first %)) @calls)) "lifecycle destroy still runs")
-      (is (some #(= [:reap :brian "refshot"] %) @calls) "loose workstream reaped"))))
 
 ;; ---------------------------------------------------------------------------
 ;; Fleet budget pre-flight
@@ -88,6 +39,31 @@
       (let [r (binding [*out* out] (f))]
         [r (str out)]))))
 
+(deftest up-brings-a-persons-own-session-up-as-no-work
+  (let [calls (atom [])]
+    (with-redefs [lifecycle/up!          (fn [s o] (swap! calls conj [:up s o]))
+                  state/session-home-dir (fn [_ _] "/tmp/home")]
+      (binding [*out* (java.io.StringWriter.)]
+        (task/up ":project" "brian" "refshot"))
+      (is (= [[:up "refshot" {:project "brian" :wait false}]] @calls)
+          "up! alone: no workstream, no runtime key but the one it is up under or its own name"))))
+
+(deftest up-refuses-a-workstream-and-names-the-activation
+  (let [calls (atom [])]
+    (with-redefs [lifecycle/up! (fn [s o] (swap! calls conj [:up s o]))]
+      (let [out (with-out-str
+                  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exit 1"
+                                        (with-redefs [task/exit! (fn [c] (throw (ex-info (str "exit " c) {})))]
+                                          (task/up ":project" "brian" "child-work" ":ws-id" "ws-child")))))]
+        (is (str/includes? out "bb nido:activate :project brian :ws ws-child"))
+        (is (= [] @calls) "nothing is provisioned")))))
+
+(deftest destroy-touches-no-workstream
+  (let [calls (atom [])]
+    (with-redefs [lifecycle/destroy! (fn [s o] (swap! calls conj [:destroy s o]))]
+      (task/destroy ":project" "brian" "refshot")
+      (is (= 1 (count @calls)) "lifecycle destroy, and nothing else"))))
+
 (deftest declining-the-budget-question-starts-nothing
   (let [started (atom [])]
     (with-redefs [lifecycle/up! (fn [s o] (swap! started conj [s o]))]
@@ -102,8 +78,7 @@
   (let [started (atom [])]
     (with-redefs [lifecycle/up!            (fn [s o] (swap! started conj [s o]))
                   state/session-home-dir   (fn [_ _] "/tmp/home")
-                  lifecycle/session-weight (fn [_ _] :heavy)
-                  scratch/birth!           (fn [& _] nil)]
+                  lifecycle/session-weight (fn [_ _] :heavy)]
       (let [[_ out] (with-fleet {:in-use (* 34 gb) :machine (* 48 gb) :answer true}
                                 #(task/up ":project" "brian" "another"))]
         (is (= 1 (count @started)) "yes boots it")
@@ -115,7 +90,6 @@
     (with-redefs [lifecycle/up!            (fn [s o] (swap! started conj [s o]))
                   state/session-home-dir   (fn [_ _] "/tmp/home")
                   lifecycle/session-weight (fn [_ _] :heavy)
-                  scratch/birth!           (fn [& _] nil)
                   fleet/snapshot           (fn [] busy-fleet)
                   fleet/in-use-bytes       (fn [] (* 12 gb))
                   fleet/machine-bytes      (fn [] (* 48 gb))
@@ -134,7 +108,6 @@
     (with-redefs [lifecycle/up!            (fn [_ _] nil)
                   state/session-home-dir   (fn [_ _] "/tmp/home")
                   lifecycle/session-weight (fn [_ _] :heavy)
-                  scratch/birth!           (fn [& _] nil)
                   fleet/snapshot           (fn [] busy-fleet)
                   fleet/in-use-bytes       (fn [] (* 40 gb))
                   fleet/machine-bytes      (fn [] (* 48 gb))

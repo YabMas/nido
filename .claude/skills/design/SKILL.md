@@ -809,12 +809,12 @@ baseline, by id, less every claim the design declares broken. Verify that
 baseline with the ordinary round instead of surveying again. Nothing is written
 on the parent.
 
-The rounds find their workstream through the session they run in, and the
-session you forked from stays on the parent. Work the child from a session of
-its own:
+The rounds find their workstream through the core turn they run in, and the
+turn you forked from works on the parent. Hand the child to the core, which
+provisions its session and runs its turns:
 
 ```bash
-bb nido:session:up <name> :project <p> :ws-id <child>
+bb nido:activate :project <p> :ws <child>
 ```
 
 Design the child like any unit. A design states only what it changes: an id it

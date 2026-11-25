@@ -8,7 +8,6 @@
    [nido.platform.core :as core]
    [nido.coordinator.control]
    [nido.coordinator.work :as work]
-   [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as workstream]
    [nido.notion.client :as client]
@@ -25,42 +24,16 @@
   (is (= :scratch (#'tui/step-origin :all -1)) "wraps back"))
 
 ;; ---------------------------------------------------------------------------
-;; TUI up/add/destroy stay in sync with the scratch-workstream model
-;; (same birth/reap the bb task layer does — spec line 82).
+;; TUI up/add/destroy act on a person's own session, which is no workstream's
 ;; ---------------------------------------------------------------------------
 
-(deftest add-births-a-scratch-workstream
-  (let [calls (atom [])]
-    (with-redefs [lifecycle/up!            (fn [sn opts] (swap! calls conj [:up sn opts]))
-                  lifecycle/session-weight (constantly :heavy)
-                  scratch/birth!           (fn [p sn w & [ws]]
-                                             (swap! calls conj [:birth p sn w])
-                                             (or ws "ws-1"))]
-      (#'tui/run-session-action! :add "brian" "refshot")
-      (is (= [[:birth :brian "refshot" nil]
-              [:up "refshot" {:project "brian" :wait false :runtime-key "ws-1"}]
-              [:birth :brian "refshot" :heavy]] @calls)
-          "the workstream is settled first, up! comes up on its runtime, and birth! then carries the provisioned weight"))))
-
-(deftest up-births-a-scratch-workstream
-  (let [calls (atom [])]
-    (with-redefs [lifecycle/up!            (fn [sn opts] (swap! calls conj [:up sn opts]))
-                  lifecycle/session-weight (constantly :heavy)
-                  scratch/birth!           (fn [p sn w & [ws]]
-                                             (swap! calls conj [:birth p sn w])
-                                             (or ws "ws-1"))]
-      (#'tui/run-session-action! :up "brian" "refshot")
-      (is (= [[:birth :brian "refshot" nil]
-              [:up "refshot" {:project "brian" :wait false :runtime-key "ws-1"}]
-              [:birth :brian "refshot" :heavy]] @calls)))))
-
-(deftest destroy-reaps-the-scratch-workstream
-  (let [calls (atom [])]
-    (with-redefs [tui/destroy-session! (fn [sn opts] (swap! calls conj [:destroy sn opts]))
-                  scratch/reap!        (fn [p sn] (swap! calls conj [:reap p sn]))]
-      (#'tui/run-session-action! :destroy "brian" "refshot")
-      (is (= [[:destroy "refshot" {:project "brian"}] [:reap :brian "refshot"]] @calls)
-          "destroy! first, then a keyword-project reap!"))))
+(deftest add-and-up-bring-a-persons-own-session-up
+  (doseq [verb [:add :up]]
+    (let [calls (atom [])]
+      (with-redefs [lifecycle/up! (fn [sn opts] (swap! calls conj [:up sn opts]))]
+        (#'tui/run-session-action! verb "brian" "refshot")
+        (is (= [[:up "refshot" {:project "brian" :wait false}]] @calls)
+            "up! alone — the session is no workstream's")))))
 
 (deftest board-footer-has-work-verbs
   ;; The unified spine board surfaces the work verbs in one footer (no per-source
@@ -78,14 +51,13 @@
   (is (= (#'tui/footer {:screen :board :origin :all})
          (#'tui/footer {:screen :board :origin :notion}))))
 
-(deftest down-touches-no-workstream
+(deftest down-and-destroy-touch-no-workstream
   (let [calls (atom [])]
-    (with-redefs [lifecycle/down! (fn [sn opts] (swap! calls conj [:down sn opts]))
-                  scratch/birth!  (fn [_ _ _] (swap! calls conj :birth))
-                  scratch/reap!   (fn [_ _] (swap! calls conj :reap))]
+    (with-redefs [lifecycle/down!      (fn [sn opts] (swap! calls conj [:down sn opts]))
+                  tui/destroy-session! (fn [sn opts] (swap! calls conj [:destroy sn opts]))]
       (#'tui/run-session-action! :down "brian" "refshot")
-      (is (= [[:down "refshot" {:project "brian"}]] @calls)
-          "down has no birth/reap hook"))))
+      (#'tui/run-session-action! :destroy "brian" "refshot")
+      (is (= [[:down "refshot" {:project "brian"}] [:destroy "refshot" {:project "brian"}]] @calls)))))
 
 (deftest origin-badge-tags-each-source
   (is (= "N" (#'tui/origin-badge :notion)))
@@ -599,16 +571,6 @@
                   (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
       (#'nido.ui.tui/dev-start! "brian" "ws-1" "impl-br-1")
       (is (= [["brian" "ws-1" "impl-br-1" "start"]] @calls)))))
-
-;; ---------------------------------------------------------------------------
-;; Task 4.5: TUI new verb routes through work/new! (de-leak)
-;; ---------------------------------------------------------------------------
-
-(deftest new-verb-routes-through-work-new
-  (let [calls (atom [])]
-    (with-redefs [nido.coordinator.work/new! (fn [p s] (swap! calls conj [p s]) "ws-9")]
-      (#'nido.ui.tui/create-workstream! "brian" "scratch-foo")
-      (is (= [["brian" "scratch-foo"]] @calls)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Task 3 (pickup design): TUI pickup input box — drive a Notion ticket by

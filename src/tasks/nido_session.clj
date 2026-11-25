@@ -36,7 +36,6 @@
    [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.string :as str]
-   [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.work :as work]
@@ -182,40 +181,23 @@
 
 
 (defn- up*
-  "Bring `session` up on `ws-id` (nil: the name's holder, else a minted
-   one-off) and print where it lives. Returns {:home}, or nil when the person declined at the
-   budget question. Exits 1 — before anything is provisioned — when the session cannot join
-   `ws-id`."
-  [project session ws-id opts]
-  (let [p (keyword project)]
-    (when-let [why (and ws-id (scratch/joinable p session ws-id))]
-      (println (str "Refused — " session " cannot start on " ws-id ": "
-                    (case (:reason why)
-                      :no-such-workstream "no such workstream"
-                      :closed             "that workstream is closed"
-                      :name-held          (str "the name already belongs to workstream " (:holder why)))))
-      (exit! 1))
-    (if-not (budget-ok? project session opts)
-      ;; Declining is an ordinary outcome, not a failure — it prints one line
-      ;; and stops, rather than throwing a task error at someone who said no.
-      (do (println "Aborted — no session started.") nil)
-      (do
-        ;; The workstream is settled BEFORE up!, so the session comes up on its runtime at once.
-        ;; Weight is read back AFTER up! — up! persists the resolved profile, so
-        ;; the record describes what was really provisioned, not what was asked for.
-        (let [held-by (scratch/birth! p session nil ws-id)
-              _       (lifecycle/up! session (assoc opts :runtime-key held-by))
-              _       (scratch/birth! p session (lifecycle/session-weight session opts) held-by)
-              home    (state/session-home-dir project session)]
-          (println)
-          (println (str "Session ready: " project "/" session
-                        (when ws-id (str " on workstream " ws-id))))
-          (when (false? (:wait opts))
-            (println (str "  services are starting in the background — "
-                          "bb nido:session:status :project " project " " session)))
-          (println (str "  cd " home))
-          (println (str "  bb nido:session:enter :project " project " " session))
-          {:home home})))))
+  "Bring `session` up and print where it lives. Returns {:home}, or nil when the person declined
+   at the budget question."
+  [project session opts]
+  (if-not (budget-ok? project session opts)
+    ;; Declining is an ordinary outcome, not a failure — it prints one line
+    ;; and stops, rather than throwing a task error at someone who said no.
+    (do (println "Aborted — no session started.") nil)
+    (let [_    (lifecycle/up! session opts)
+          home (state/session-home-dir project session)]
+      (println)
+      (println (str "Session ready: " project "/" session))
+      (when (false? (:wait opts))
+        (println (str "  services are starting in the background — "
+                      "bb nido:session:status :project " project " " session)))
+      (println (str "  cd " home))
+      (println (str "  bb nido:session:enter :project " project " " session))
+      {:home home})))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   up
@@ -227,11 +209,8 @@
    restart services. Kwargs like :base, :branch, :session-profile, :jvm-heap-max
    flow into `up!`.
 
-   `:ws-id <id>` puts the session on that existing workstream — how a forked
-   child gets a session — instead of on a minted one-off. A workstream the
-   session cannot join (missing, closed, or the name already another's) is
-   refused and exits 1 before anything is provisioned; otherwise the session
-   record is written first, so the name is claimed before the worktree exists.
+   The session is a person's own and no workstream's: it records nothing as work. A workstream's
+   session is the core's to provision, so `:ws-id` is refused with the activation that does it.
 
    Reports what the live fleet already costs before starting anything, and asks
    first when this session is projected to push the machine past the budget.
@@ -240,8 +219,11 @@
   (let [[pos opts] (task-args/split-args args)
         project (require-project opts)
         session (require-session-name pos)]
-    (up* project session (some-> (:ws-id opts) str)
-         (-> (dissoc opts :ws-id) (update :wait #(if (nil? %) false %))))
+    (when-let [ws-id (:ws-id opts)]
+      (println (str "Refused — a workstream's session is the core's to provision: bb nido:activate :project "
+                    project " :ws " ws-id))
+      (exit! 1))
+    (up* project session (update opts :wait #(if (nil? %) false %)))
     nil))
 
 ;; ── revive: bring back what died with the host ──────────────────────────────
@@ -506,15 +488,12 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   destroy
   "Bring the named session down and remove its worktree.
-   Pass :delete-branch? true to also drop the git branch.
-   Reaps the session's loose (scratch) workstream when it never grew a ref or
-   ledger entry; a Notion/GitHub workstream (carrying a ref) is left intact."
+   Pass :delete-branch? true to also drop the git branch."
   [& args]
   (let [[pos opts] (task-args/split-args args)
         project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/destroy! session opts)
-    (scratch/reap! (keyword project) session)))
+    (lifecycle/destroy! session opts)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   enter

@@ -20,8 +20,7 @@
      bb nido:followup:check
 
    Cwd resolution lives here rather than in nido.notion.followups: the notion
-   namespace stays a pure config+API layer, and the session lookup is wiring —
-   the same reason nido.coordinator.lane.scratch keeps its wiring at the task layer."
+   namespace stays a pure config+API layer, and the session lookup is wiring."
   (:require
    [clojure.string :as str]
    [nido.coordinator.record.state :as cstate]

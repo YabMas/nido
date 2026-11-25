@@ -195,9 +195,6 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
      :delegates [set-stage!]})
-  (Operation new! "Birth a scratch workstream and bring its session up."
-    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [lanes/birth! lifecycle/up!]})
   (Operation open-target "Where opening a workstream lands — on a unit's session the core has ready, an open unit's first."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
      :delegates [workstream/sessions]})
@@ -226,8 +223,6 @@
   (Operation bring-down! "Down every live session of a workstream's units."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
      :delegates [workstream/sessions lifecycle/down!]})
-  (Operation orphan-live-sessions "The live sessions no workstream owns. Pure."
-    {:signature [:=> [:catn [:live :any] [:owned :any]] :any]})
   (Operation activate!
     "Hand `ws-id` to the core for a person: their :activated entry on its ledger, then their
      command opening its unit — named `:unit`, else for
@@ -259,20 +254,10 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] :map]
      :delegates [workstream/deactivate! standing/activated?]})
   (Operation start!
-    "Bring a session up on the workstream holding it — a fresh one-off when none does — and on that
-     workstream's runtime. The workstream is settled first so the session comes up on its runtime
-     at once. Idempotent on a live session. A session this start first recorded is carried once it
-     is up. Returns the ws-id."
+    "Bring a person's own session up: no workstream's, recorded as no work — a workstream's session
+     is the core's to provision. Idempotent on a live session."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:opts :map]] :any]
-     :delegates [start/start-session!]})
-  (Operation adopt-orphans!
-    "Enforce the invariant that every live session is reachable from a workstream — an orphan is
-     a session doing work the board cannot show — and report every session name two workstreams
-     hold that it cannot settle by yielding a bare one-off, naming the holders. A yielded one-off
-     is counted past its conductor's record, and its conductor retired before it is deleted."
-    {:signature [:=> [:catn [:project ProjectName]] :any]
-     :delegates [orphan-live-sessions live-session-names lanes/birth!
-                 workstream/delete!]})
+     :delegates [lifecycle/up!]})
   (Operation machine-rows "Machine facts for every worktree of one project."
     {:signature [:=> [:catn [:project-name ProjectName] [:project-dir Path]] [:vector :map]]})
   (Operation machine-facts "Machine facts for named sessions, keyed by name."
@@ -425,13 +410,6 @@
      will not open is an answer — {:decision :phase-refused :because …} — not a thrown failure."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:evidence [:maybe :string]]] :map]
      :delegates [lanes/advance!]})
-  (Operation session-started! "Tell the work plane a session came up."
-    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [lanes/birth! lifecycle/session-weight]})
-  (Operation session-destroyed! "Tell the work plane a session was destroyed."
-    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [lanes/reap!]})
-
   (Operation record-plan!
     "Append one day's plan of the owed proposals into claims, or refuse it.
 

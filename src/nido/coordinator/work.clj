@@ -10,7 +10,6 @@
    today's storage — no migration."
   (:require
    [babashka.fs :as fs]
-   [clojure.set :as set]
    [clojure.string :as str]
    [cognitect.transit :as transit]
    [malli.core :as m]
@@ -26,7 +25,6 @@
    [nido.coordinator.report.ask :as ask]
    [nido.coordinator.lane.drain :as drain-lane]
    [nido.coordinator.record.runs :as runs]
-   [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.lane.start :as start]
@@ -3512,22 +3510,12 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :any]}
   start!
-  "Bring the session `session-name` up on the workstream holding it — a fresh one-off when none
-   does — and on that workstream's runtime. Heavy and slow: surfaces wrap it in their own progress
-   UI. The workstream is settled first so the session comes up on its runtime at once; its weight
-   is read back after, from what was provisioned, and a session this start first recorded is
-   carried on a person's start. Idempotent on a live session. Returns the ws-id. `project` may be
-   a keyword or string; `opts` are lifecycle/up!'s."
+  "Bring a person's own session `session-name` up: no workstream's, and recorded as no work — a
+   workstream's session is the core's to provision. Heavy and slow: surfaces wrap it in their own
+   progress UI. Idempotent on a live session. `project` may be a keyword or string; `opts` are
+   lifecycle/up!'s."
   [project session-name opts]
-  (start/start-session! project session-name (dissoc opts :ws-id :carry? :brief :model :given-by)))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
-  new!
-  "Birth a scratch workstream and bring its session up — `start!` with `:wait false`, so it
-   returns once the session can be entered and leaves a cold runtime booting in the background.
-   Idempotent on an existing session name. Returns the ws-id. `project` may be a keyword or string."
-  [project session-name]
-  (start! project session-name {:wait false}))
+  (lifecycle/up! session-name (assoc opts :project (name project))))
 
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
@@ -3796,83 +3784,6 @@
       (lifecycle/down! n {:project (name project)}))
     {:downed names}))
 
-(defn- owned-session-names
-  "Session names owned by ANY workstream of `project` — open or closed. Closed
-   owners keep their sessions out of adoption (they are winding-down leftovers)."
-  [project]
-  (->> (cws/project-records project)
-       (mapcat #(csession/list-sessions project (:id %)))
-       (map :name)
-       set))
-
-(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
-  orphan-live-sessions
-  "Pure: the live sessions no workstream owns."
-  [live owned]
-  (set/difference (set live) (set owned)))
-
-(defn- yield-duplicate-scratch!
-  "Adopted-then-claimed: delete any BARE scratch workstream (no refs, no ledger
-   entries, exactly one session) whose session is also owned by another OPEN
-   workstream — the newest real owner wins. Returns the deleted ws-ids."
-  [project]
-  (let [open (->> (cws/project-records project)
-                  (remove cws/closure))
-        owners-of (fn [n]
-                    (filter (fn [w] (some #(= n (:name %))
-                                          (csession/list-sessions project (:id w))))
-                            open))
-        ;; A one-off is counted past its conductor's record: the conductor is no session it owns.
-        working   #(remove :conductor (csession/list-sessions project %))]
-    (->> open
-         (filter (fn [w] (and (scratch/scratch? w)
-                              (empty? (:external-refs w))
-                              (scratch/bare? w))))
-         (keep (fn [w]
-                 (let [sess (working (:id w))]
-                   (when (and (= 1 (count sess))
-                              (some #(not= (:id w) (:id %))
-                                    (owners-of (:name (first sess)))))
-                     (cws/delete! project (:id w))
-                     (:id w)))))
-         vec)))
-
-(defn- held-twice
-  "Every session name more than one workstream of `project` holds, with its holders."
-  [project]
-  (->> (cws/project-records project)
-       (mapcat (fn [{ws-id :id}] (map #(vector (:name %) ws-id) (csession/list-sessions project ws-id))))
-       (group-by first)
-       (keep (fn [[n pairs]] (when (< 1 (count pairs)) {:session n :holders (mapv second pairs)})))
-       (sort-by :session)
-       vec))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
-  adopt-orphans!
-  "Enforce the invariant: every live session is reachable from a workstream.
-   Births a scratch workstream for each live orphan (idempotent — birth! no-ops
-   on an owned name), then yields bare scratch duplicates to real owners.
-
-   A name still held twice after that is reported under :held-twice, naming its
-   holders, and left alone: record-session refuses every write that would make
-   one, so any found is a record from before that rule and needs a person to
-   say which holder is right.
-
-   Then every live session is moved onto its workstream's runtime when it is on another — the
-   sessions that were up before workstreams owned runtimes, chiefly. Returns {:adopted [names]
-   :yielded [ws-ids] :held-twice [{:session :holders}] :moved [names]}."
-  [project]
-  (let [p       (keyword (name project))
-        live    (live-session-names project)
-        orphans (sort (orphan-live-sessions live (owned-session-names project)))]
-    (doseq [n orphans]
-      (scratch/birth! p n (lifecycle/session-weight n {:project (name project)})))
-    (let [yielded (yield-duplicate-scratch! project)]
-      {:adopted    (vec orphans)
-       :yielded    yielded
-       :held-twice (held-twice project)
-       :moved      (scratch/settle-runtimes! p live)})))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :Path] [:vector :map]]}
   machine-rows
   "Machine facts for every worktree of one project: registry entry, liveness as `sstate/session-live?` reads it,
@@ -4111,9 +4022,9 @@
 
 ;; ── the acts a surface performs on the work plane ────────────────────────────
 ;;
-;; The TUI and the dashboard reached `lane.pickup`, `lane.findings` and `lane.scratch` directly
-;; for these. Each one IS work-plane vocabulary — resolve a pasted ref into a workstream, file a
-;; findings round on one, tell the plane a session came up — so it belongs at this altitude
+;; The TUI and the dashboard reached `lane.pickup` and `lane.findings` directly for these. Each
+;; one IS work-plane vocabulary — resolve a pasted ref into a workstream, file a findings round on
+;; one — so it belongs at this altitude
 ;; rather than behind a require of the lane that happens to implement it today.
 
 (def arc-stages
@@ -4182,24 +4093,6 @@
       (wcore/act! project ws-id {:command :reopen-workstream})
       (core-resolve! project ws-id :promote nil))
     r))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
-  session-started!
-  "Tell the work plane a session came up: births its loose workstream, idempotently — a no-op
-   when the session already belongs to one.
-
-   The weight lookup rode in the TUI before, which meant the surface knew both that a scratch
-   workstream exists and how a session is weighed. It needs to know neither."
-  [project session-name]
-  (scratch/birth! (keyword project) session-name
-                  (lifecycle/session-weight session-name {:project project})))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
-  session-destroyed!
-  "Tell the work plane a session was destroyed: reaps its loose workstream, sparing one that
-   carries a ref."
-  [project session-name]
-  (scratch/reap! (keyword project) session-name))
 
 ;; ── What the improvement sweep writes ───────────────────────────────────────
 

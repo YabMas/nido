@@ -23,11 +23,6 @@
    transcription recorded — whatever else the ledger holds. The Notion properties a start writes
    are the project's configuration, not a trigger's, and best-effort: a failed write never stops
    the session coming up."
-  (Operation start-session!
-    "Bring a named session up on the workstream holding it — or on the one `:ws-id` names, or a
-     minted one-off — on that workstream's runtime. Returns the ws-id."
-    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:opts :map]] WorkstreamId]
-     :delegates [lanes/birth! lifecycle/up!]})
   (Operation start-ticket!
     "A person starts a ticket's workstream: transcribe the ticket when nothing has been, record the
      person's :in-progress choice unless the ticket is already planning or being worked, and write

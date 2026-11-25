@@ -7,7 +7,6 @@
             [canvas.coordinator.lane.drive :refer [intake-kind lane-pipeline of status]]
             [canvas.coordinator.lane.github-issue-intake :refer [poll-and-reconcile!]]
             [canvas.coordinator.lane.notion-sync :refer [lane-notion-sync]]
-            [canvas.coordinator.lane.work :refer [birth! reap! scratch?]]
             [canvas.coordinator.record.activity :refer [read-live]]
             [canvas.coordinator.record.runs :refer [live? record-runs]]
             [canvas.coordinator.record.session :refer [record-session]]
@@ -17,7 +16,7 @@
             [canvas.coordinator.report :refer [coordinator-report]]
             [canvas.coordinator.view.activity :as activity]
             [canvas.coordinator.view.workstreams :refer [workstream-row ws-source]]
-            [canvas.coordinator.work :refer [adopt-orphans! list-workstreams]]))
+            [canvas.coordinator.work :refer [list-workstreams]]))
 
 (Claim one-status
   "Every surface's position for a workstream comes from status, and its owed-by and live from the one activity `of` reads over status's facts and the core's state of the workstream; no row, pane or TUI line decides any of the three from session phase, ticket status, a stored :stage or a cached Notion status."

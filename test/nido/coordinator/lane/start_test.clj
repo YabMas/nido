@@ -3,7 +3,6 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.lane.brief :as brief]
-   [nido.coordinator.lane.scratch :as scratch]
    [nido.session.lifecycle :as lifecycle]
    [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.standing :as standing]
@@ -23,38 +22,24 @@
 (defn- kinds [ws-id] (mapv :kind (:entries (ws/read-ws :brian ws-id))))
 
 (defn- with-start
-  "Call `f` with the heavy and external legs of a start stubbed, given {:ups :briefs}: the
-   session bring-up records its call in :ups, and the Notion brief transcription appends a
-   :ticket entry and records its call in :briefs."
+  "Call `f` with the external legs of a start stubbed, given {:briefs}: the Notion brief
+   transcription appends a :ticket entry and records its call in :briefs."
   [f]
-  (let [ups (atom []) briefs (atom [])]
-    (with-redefs [start/start-session!           (fn [p s o] (swap! ups conj [p s o]) (:ws-id o))
-                  brief/ensure-ticket-brief!     (fn [p id ref _tok]
+  (let [briefs (atom [])]
+    (with-redefs [brief/ensure-ticket-brief!     (fn [p id ref _tok]
                                                    (swap! briefs conj [id ref])
                                                    (ws/append-entry! p id {:kind :ticket} "words"))
                   notion/keychain-token          (constantly "tok")
                   notion/update-page-properties! (fn [& _] {:ok true})
                   config/read-projects           (constantly {})]
-      (f {:ups ups :briefs briefs}))))
-
-;; ── start-session! ──────────────────────────────────────────────────────────
-
-(deftest a-session-start-settles-its-workstream-then-brings-it-up
-  (let [calls (atom [])]
-    (with-redefs [scratch/birth!           (fn [_ s w h] (swap! calls conj [:birth s w h]) "ws-1")
-                  lifecycle/up!            (fn [s o] (swap! calls conj [:up s (:runtime-key o)]) nil)
-                  lifecycle/session-weight (constantly :heavy)]
-      (is (= "ws-1" (start/start-session! :brian "impl-br-1" {:ws-id "ws-1"})))
-      (is (= [[:birth "impl-br-1" nil "ws-1"] [:up "impl-br-1" "ws-1"] [:birth "impl-br-1" :heavy "ws-1"]]
-             @calls)
-          "settled before up!, so it comes up on its workstream's runtime; weighed after"))))
+      (f {:briefs briefs}))))
 
 ;; ── start-ticket! ───────────────────────────────────────────────────────────
 
 (deftest a-start-writes-the-tickets-records-and-brings-nothing-up
   (with-tmp
     (fn []
-      (with-start (fn [{:keys [ups briefs]}]
+      (with-start (fn [{:keys [briefs]}]
         (let [w   (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-7" :page-id "PG7"
                                                        :title "Firefox loading"}]})
               res (start/start-ticket! :brian {:ws-id (:id w)})
@@ -62,7 +47,6 @@
           (is (= {:decision :started :ws-id (:id w)} res))
           (is (= :in-progress (standing/chosen-stage :brian (:id w) w')))
           (is (some? (standing/person-started-at w')) "the start is a person's")
-          (is (empty? @ups) "the core provisions the session once the caller opens the unit")
           (is (empty? (fs/list-dir (cstate/runs-dir))) "no Run is minted")
           (is (= 1 (count @briefs)))
           (is (= :ticket (first (kinds (:id w))))
@@ -80,7 +64,7 @@
 (deftest refusals-write-nothing
   (with-tmp
     (fn []
-      (with-start (fn [{:keys [ups]}]
+      (with-start (fn [_]
         (testing "no such workstream"
           (is (= {:decision :no-such-workstream} (start/start-ticket! :brian {:ws-id "ws-nope"}))))
         (testing "closed"
@@ -94,8 +78,7 @@
         (testing "an unreadable GitHub issue whose words are owed"
           (with-redefs [gh/view-issue (constantly {:error :not-found})]
             (let [w (ws/create! :nido {:external-refs [{:adapter :github-issue :id "o/r#4"}]})]
-              (is (= {:decision :ticket-unreadable} (start/start-ticket! :nido {:ws-id (:id w)}))))))
-        (is (empty? @ups)))))))
+              (is (= {:decision :ticket-unreadable} (start/start-ticket! :nido {:ws-id (:id w)})))))))))))
 
 (deftest a-start-by-ref-mints-and-fills-the-page-id-from-the-caller
   (with-tmp

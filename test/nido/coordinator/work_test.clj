@@ -53,8 +53,8 @@
    (runs/register! id)))
 
 (defn- one-off!
-  "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
-   `scratch/birth!` appends as it mints one."
+  "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry the
+   one-offs minted for a person's sessions carried."
   []
   (let [w (workstream/create! :brian {:external-refs []})]
     (workstream/append-entry! :brian (:id w) {:kind :scratch} (pr-str {:format :scratch}))
@@ -450,19 +450,14 @@
         (is (= {:decision :advanced} (work/set-stage! :brian (:id w) :ready)))
         (is (= :ready (:stage (workstream/newest-choice (workstream/read-ws :brian (:id w))))))))))
 
-(deftest new!-births-a-scratch-workstream-with-its-session
+(deftest start!-brings-a-persons-own-session-up-as-no-work
   (with-tmp
     (fn [_]
       (let [ups (atom [])]
         (with-redefs [nido.session.lifecycle/up! (fn [n opts] (swap! ups conj [n opts]) nil)]
-          (let [ws-id (work/new! :brian "spike-thing")]
-            (is (string? ws-id))
-            (is (= [["spike-thing" {:project "brian" :wait false :runtime-key ws-id}]] @ups)
-                "session brought up via lifecycle, on its workstream's runtime")
-            (let [w (workstream/read-ws :brian ws-id)]
-              (is (= :scratch (work/classify-origin w)) "ref-less scratch workstream")
-              (is (= ["spike-thing"]
-                     (map :name (session/list-sessions :brian ws-id)))))))))))
+          (work/start! :brian "spike-thing" {:wait false})
+          (is (= [["spike-thing" {:project "brian" :wait false}]] @ups))
+          (is (empty? (workstream/project-records :brian)) "no workstream is minted for it"))))))
 
 (deftest open-target-prefers-a-ready-session
   (with-tmp
@@ -2326,68 +2321,6 @@
         rows     (work/all-machine-rows rows-fn projects)]
     (is (= [["brian" "b-up" true] ["foo" "f-up" true] ["brian" "b-down" false]]
            (map (juxt :project :name :live?) rows)))))
-
-(deftest orphan-live-sessions-is-the-set-difference
-  (is (= #{"a"} (work/orphan-live-sessions #{"a" "b"} #{"b" "c"}))))
-
-(deftest adopt-orphans!-births-scratch-for-live-orphans-idempotently
-  (with-tmp
-    (fn [_]
-      (with-redefs [work/live-session-names (constantly #{"one-off"})]
-        (is (= ["one-off"] (:adopted (work/adopt-orphans! :p))))
-        ;; the born scratch ws owns the session now → second pass adopts nothing
-        (is (= [] (:adopted (work/adopt-orphans! :p))))
-        (let [ws (map #(workstream/read-ws :p %) (workstream/list-ids :p))]
-          (is (= 1 (count ws)))
-          (is (empty? (:external-refs (first ws)))))))))
-
-(deftest adopt-orphans!-skips-closed-owned-sessions
-  ;; A session under a CLOSED ws is a winding-down leftover, not an orphan.
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :p {:external-refs []})]
-        (session/create! :p (:id w) {:name "left" :weight :light :autonomy nil})
-        (workstream/close! :p (:id w) :done)
-        (with-redefs [work/live-session-names (constantly #{"left"})]
-          (is (= [] (:adopted (work/adopt-orphans! :p)))))))))
-
-(defn- write-behind-the-rule!
-  "A session record put straight on its path, the way a second holder of a name could exist from
-   before record-session refused one — session/create! would refuse it now."
-  [project ws-id session-name]
-  (nido-io/write-edn! (cstate/session-edn-path project ws-id session-name)
-                      {:name session-name :workstream-id ws-id :project project :weight :light
-                       :substrate :live :substrate-history [] :autonomy nil
-                       :created-at "2026-06-05T09:00:00Z"}))
-
-(deftest adopt-orphans!-yields-a-bare-scratch-double-owner
-  ;; A name held twice from before the rule: the bare scratch holder is deleted
-  ;; in favour of the real open owner.
-  (with-tmp
-    (fn [_]
-      (with-redefs [work/live-session-names (constantly #{"claimed"})]
-        (work/adopt-orphans! :p)                              ; births scratch owner
-        (let [real (workstream/create! :p {:external-refs [{:adapter :notion :id "BR-1"}]})]
-          (write-behind-the-rule! :p (:id real) "claimed")
-          (let [{:keys [yielded held-twice]} (work/adopt-orphans! :p)]
-            (is (= 1 (count yielded)))
-            (is (= [] held-twice))
-            (is (= [(:id real)]
-                   (map :id (keep #(workstream/read-ws :p %) (workstream/list-ids :p)))))))))))
-
-(deftest adopt-orphans!-reports-a-name-it-cannot-yield
-  ;; Two real holders — neither a bare scratch one-off — so nothing can be yielded;
-  ;; the sweep names both rather than choosing.
-  (with-tmp
-    (fn [_]
-      (with-redefs [work/live-session-names (constantly #{})]
-        (let [a (workstream/create! :p {:external-refs [{:adapter :notion :id "BR-1"}]})
-              b (workstream/create! :p {:external-refs [{:adapter :notion :id "BR-2"}]})]
-          (write-behind-the-rule! :p (:id a) "both")
-          (write-behind-the-rule! :p (:id b) "both")
-          (let [{:keys [held-twice]} (work/adopt-orphans! :p)]
-            (is (= [{:session "both" :holders (vec (sort [(:id a) (:id b)]))}]
-                   (mapv #(update % :holders (comp vec sort)) held-twice)))))))))
 
 (deftest prune-dead-registry-drops-only-dead-and-old-entries
   (let [now     1000000000000

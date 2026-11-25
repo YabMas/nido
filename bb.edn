@@ -115,7 +115,7 @@
 
   nido:session:up
   {:requires ([tasks.nido-session :as nido-session])
-   :doc "Bring a session up: :project <p> <session> [:ws-id <existing workstream>] [:wait true] — returns once the worktree and session home exist, services boot in the background (:wait true waits for them); prints session-home path. :ws-id puts the session on that workstream (a fork child, say) instead of minting a one-off; refused before provisioning when it cannot join."
+   :doc "Bring a session of your own up — no workstream's; a workstream's session is the core's to provision: :project <p> <session> [:wait true] — returns once the worktree and session home exist, services boot in the background (:wait true waits for them); prints session-home path. :ws-id puts the session on that workstream (a fork child, say) instead of minting a one-off; refused before provisioning when it cannot join."
    :task (apply nido-session/up *command-line-args*)}
 
   nido:session:revive
@@ -137,11 +137,6 @@
   {:requires ([tasks.nido-session :as nido-session])
    :doc "Destroy a session: :project <p> <session> — down + remove worktree"
    :task (apply nido-session/destroy *command-line-args*)}
-
-  nido:scratch:backfill
-  {:requires ([tasks.nido-scratch :as nido-scratch])
-   :doc "Backfill a loose workstream for every existing session: :project <p> (idempotent)"
-   :task (apply nido-scratch/backfill *command-line-args*)}
 
   nido:session:isolate
   {:requires ([tasks.nido-session :as nido-session])
@@ -622,7 +617,7 @@
 
   nido:workstream:fork
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Fork a unit into a child workstream, from a parent whose newest design stands. :project <p> (:ws-id <parent> | :ref <BR-####>) :goal <str> :done-when <edn vector of str> [:context <str>]. Prints the child's id; writes nothing on the parent. Work on the child from a session started with nido:session:up :ws-id <child>."
+   :doc "Fork a unit into a child workstream, from a parent whose newest design stands. :project <p> (:ws-id <parent> | :ref <BR-####>) :goal <str> :done-when <edn vector of str> [:context <str>]. Prints the child's id; writes nothing on the parent. Hand the child to the core with nido:activate :project <p> :ws <child>."
    :task (apply nido-workstream/fork-cmd *command-line-args*)}
 
   nido:workstream:merge
