@@ -5,20 +5,18 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.activity :as claims]
-            [canvas.coordinator.record.runs :as runs]
-            [canvas.coordinator.record.session :as session]
             [canvas.coordinator.record.state :refer [WorkstreamId]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Kind Activity
   "Every facet of what is happening in a workstream: what is underway, whether anything runs,
-   who owes the next move, whether a person's pause stands, whether it has stalled and why,
-   whether the core asks the person, and its engagement.
+   who owes the next move, whether a person's pause stands, whether it has stalled, whether the
+   core asks the person, and its engagement.
 
    ONE ANSWER, so no two facets can disagree: each is a field of `of` over one observation.
-   Underway implies live, save a merge waiting its turn; stalled implies nothing live and an
-   agent owing the move; needs-you implies the person owes it."
+   Underway is live; stalled implies nothing underway and an open unit of the core's that nobody
+   holds; needs-you implies the person owes it."
   [:map {:closed true}
    [:doing [:maybe :map]]
    [:live :boolean]
@@ -26,37 +24,21 @@
    [:paused :boolean]
    [:stalled :boolean]
    [:needs-you :boolean]
-   [:engagement [:enum :settled :parked-at-gate :active :stalled :queued :idle]]
-   ;; Present exactly when :stalled is true — held by the claim stall-carries-why.
-   [:why {:optional true}
-    [:or
-     [:map {:closed true}
-      [:turn-end [:enum :recorded]]
-      [:session :string]
-      [:ended-at :string]
-      [:owes [:maybe :keyword]]
-      [:said {:optional true} :string]]
-     [:map {:closed true}
-      [:turn-end [:enum :none]]
-      [:owes [:maybe :keyword]]]]]])
+   [:engagement [:enum :settled :parked-at-gate :active :stalled :queued :idle]]])
 
 (Module view-activity
-  "A workstream's activity: one pure function over one observation, and the read that makes the
-   observation's live evidence. Pure read model — NO WRITES."
+  "A workstream's activity: one pure function over one observation, and the read of the claim that
+   says what a running turn is doing. Pure read model — NO WRITES."
   {:child [Activity]}
   (Operation of
     "Every facet of a workstream's activity, from its observation alone: the record facts status
-     gives, the live evidence observed now and the core's activity. Reads nothing."
+     gives, the core's state of it and the claim its running turn holds. Reads nothing."
     {:signature [:=> [:catn [:obs :map]] Activity]})
   (Operation observe
-    "The live evidence of a workstream's observation, as its records hold it now: the claim and
-     whether it is held, each run with whether its agent holds its lock, each session with whether
-     it is up and mid-turn. Which sessions are up and which are mid-turn are the caller's to
-     observe."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
-                            [:up [:maybe [:set :string]]] [:mid-turn [:maybe [:set :string]]]]
-                 :map]
-     :delegates [claims/read-live claims/held? runs/live-runs runs/runs-of session/list-sessions round-progress]})
+    "The activity claim held on a workstream now, with its round's progress — what a turn the core
+     runs is doing. Never evidence that anything runs."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [claims/read-live round-progress]})
   (Operation round-progress
     "How far a running round has got — its number, the phase running, what its judging
      raised — read off the report it keeps as it goes."

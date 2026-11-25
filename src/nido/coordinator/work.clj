@@ -26,7 +26,6 @@
    [nido.coordinator.report.ask :as ask]
    [nido.coordinator.lane.drain :as drain-lane]
    [nido.coordinator.record.runs :as runs]
-   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.session-events :as session-events]
@@ -498,7 +497,7 @@
     (when (= :human mode) stage)))
 
 (def ^:private ^:dynamic *rows-memo*
-  "Atom memoizing `list-workstreams` by [project live-names] for the extent of one
+  "Atom memoizing `list-workstreams` by project for the extent of one
    `with-shared-rows` call, or nil when nothing is sharing.
 
    Scoped, never global. The rows are a projection of the ledger on disk, so a
@@ -521,7 +520,7 @@
   [f]
   (binding [*rows-memo* (atom {})] (f)))
 
-(declare live-session-names resuming? replyable? held-project winding-down* gates* board-stamp*)
+(declare live-session-names replyable? held-project winding-down* gates* board-stamp*)
 
 (defn- band-of
   "The board band of an OPEN workstream, read off its ledger: :drained for a drain or a slice,
@@ -585,27 +584,28 @@
 
 ;; What a row says about its coordination — its band, who owes it, whether anything runs, whether
 ;; it needs the person — is one reading: `act/of` over the row's observation, built here because
-;; this is the band that reaches every source it takes (records, the session substrate, the core).
+;; this is the band that reaches every source it takes (records and the core).
 
 (defn- observation
   "Workstream `ws-id`'s `act/Observation`: the record facts `facts` (`pipeline/status`, or nil for
-   a settled row nobody reads it for), its closure and band, the evidence `act/observe` reads now,
-   and the core's activity on held entry `cw` (nil when the core holds none)."
-  [project ws-id live-names cw closed? band facts]
-  (merge (act/observe project ws-id live-names #{})
-         {:closed?   (boolean closed?)
-          :band      band
-          :owed-by   (:owed-by facts)
-          :paused?   (boolean (or (:paused facts) (wcore/held-units? cw)))
-          :resting?  (boolean (:resting? facts))
-          :stall-why (:stall-why facts)
-          :core      (wcore/activity cw)}))
+   a settled row nobody reads it for), whether it is settled, and the core's state of it in held
+   entry `cw` (nil when the core holds none) — its activity, whether it holds an open unit nobody
+   holds, and the claim its turn holds while that turn is :working."
+  [project ws-id cw closed? facts]
+  (let [core (wcore/activity cw)]
+    {:closed?  (boolean closed?)
+     :owed-by  (:owed-by facts)
+     :paused?  (boolean (or (:paused facts) (wcore/held-units? cw)))
+     :core     core
+     :movable? (boolean (some #(and (= :open (:status %)) (not (:held? %)))
+                              (vals (get-in cw [:state :units]))))
+     :claim    (when (and (not closed?) (= :working (:kind core))) (act/observe project ws-id))}))
 
 (defn- coordination
   "The row fields `act/of`'s answer `a` sets: :status as the marks read it, :needs-you,
    :engagement and :doing — one answer, so no two of them can disagree."
   [a]
-  {:status     (select-keys a [:owed-by :live :stalled :paused :why])
+  {:status     (select-keys a [:owed-by :live :stalled :paused])
    :needs-you  (:needs-you a)
    :engagement (:engagement a)
    :doing      (:doing a)})
@@ -622,10 +622,9 @@
    A row the ledger settled takes its band from its closure and reads no status — ~1000
    workstreams sit on a board and nearly all are settled and drawn nowhere, so skipping it is
    what keeps a refresh to the rows a person can see. It is still SHOWN, with status's position,
-   when it is dismissed, when something still runs under it (`act/of`'s :live), or when a pane
-   is open on it (`whole?`), so a process still running under it is not hidden."
-  ([project live-names row] (with-status project live-names row false))
-  ([project live-names row whole?]
+   when it is dismissed or a pane is open on it (`whole?`)."
+  ([project row] (with-status project row false))
+  ([project row whole?]
    (if (:bare? row)
      (to-spine row)
      (let [ws-id   (:ws-id row)
@@ -634,13 +633,13 @@
            outcome (:outcome closed)
            spine   (to-spine row)
            cw      (core-of project ws-id)
-           obs     #(act/of (observation project ws-id live-names cw %1 %2 %3))]
+           obs     #(act/of (observation project ws-id cw %1 %2))]
        (if (and closed (not= :between-phases outcome))
          (let [stage  (if (= :dismissed outcome) :dismissed :done)
-               shown? (or whole? (= :dismissed outcome) (:live (obs true stage nil)))
+               shown? (or whole? (= :dismissed outcome))
                st     (when shown? (pipeline/status project ws-id))]
            (cond-> (merge (assoc spine :stage stage :dismissed? (= :dismissed outcome))
-                          (coordination (obs true stage st)))
+                          (coordination (obs true st)))
              (not st) (dissoc :status)
              st       (assoc :position (:position st))))
          (let [st       (pipeline/status project ws-id)
@@ -664,7 +663,7 @@
                                  :position   (cond-> (or core-at pos)
                                                landing? (assoc :at :land-granted
                                                                :next {:stage :land :mode :working-copy})))
-                          (coordination (obs (= :done band) band st)))
+                          (coordination (obs (= :done band) st)))
              (not (contains? unrendered-bands band))
              (assoc :phase (wsv/phase-progress project ws-id)))))))))
 
@@ -682,35 +681,29 @@
 (defn- read-rows
   "`list-workstreams` without the memo — one full read of a project's workstreams, in one request
    to the core, which every fold of the read answers from."
-  [project live-names]
+  [project]
   (cws/over-project project
-                    (fn [_] (par-mapv #(with-status project live-names %)
+                    (fn [_] (par-mapv #(with-status project %)
                                       (wsv/workstream-rows project)))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   list-workstreams
-  "All of a project's workstreams as enriched rows on the single spine. `live-names`
-   (the set of session names actually holding ports; read from `live-session-names` when
-   omitted) is threaded into status, whose liveness of a person's session is that set.
+  "All of a project's workstreams as enriched rows on the single spine.
 
    Each rendered row carries :position — where the pipeline says it is and what
    would happen next. The board used to show only which BAND a workstream was in,
    so everything between authoring an intent and opening a draft PR looked
    identical: forty rows reading :in-progress, saying nothing about which of them
    was waiting on a baseline and which on a human."
-  ([project] (if-let [p (held-project project)]
-                (:rows p)
-                (list-workstreams project (live-session-names project))))
-  ([project live-names]
-   (if-let [memo *rows-memo*]
-     (let [k [project live-names]]
-       (or (some-> (held-project project) :rows)
-           (get @memo k)
-           (let [rows (read-rows project live-names)]
-             (swap! memo assoc k rows)
-             rows)))
-     (or (some-> (held-project project) :rows)
-         (read-rows project live-names)))))
+  [project]
+  (if-let [memo *rows-memo*]
+    (or (some-> (held-project project) :rows)
+        (get @memo project)
+        (let [rows (read-rows project)]
+          (swap! memo assoc project rows)
+          rows))
+    (or (some-> (held-project project) :rows)
+        (read-rows project))))
 
 (def ^:private board-stages
   "The stages `wsv/grouped-by-stage` draws a band for."
@@ -802,7 +795,7 @@
   ([project live-names]
    (if-let [p (held-project project)]
      (held-grouped p)
-     (let [rows (list-workstreams project live-names)]
+     (let [rows (list-workstreams project)]
        (assoc (wsv/grouped-by-stage rows)
               ;; rows, not just the records: a Notion-driven row can be finished
               ;; without nido ever writing :closed (see winding-down).
@@ -849,10 +842,9 @@
    it, and directory mtimes for the files in them, which every session and run writer creates or
    renames into place (`ws-files-stamp`), and
    the session registry and the Notion page facts are compared as values, because their files
-   are rewritten on every poll whether or not anything changed. NOT covered, by construction:
-   a lock released by a process exiting (an activity claim, a run's agent), a session port
-   that stops answering, and claude's own agent listing. None of them touches disk, so a
-   caller that must show them has to rebuild on a clock as well."
+   are rewritten on every poll whether or not anything changed. NOT covered, by construction: a
+   session port that stops answering, which the winding-down band reads; it touches no disk, so
+   a caller that must show it has to rebuild on a clock as well."
   [project]
   (if-let [p (held-project project)]
     ;; Holding, the rows are what the board reads and only a refresh moves them, so their
@@ -1069,7 +1061,7 @@
              :when open?
              :let  [w        (cws/read-ws pk ws-id)
                     sessions (filter csession/work-session? (csession/list-sessions pk ws-id))
-                    state    (hold-state (with-status pk (live-session-names pk)
+                    state    (hold-state (with-status pk
                                                       (wsv/workstream-row pk w) true))]]
          (cond-> {:project    pname
                   :ws-id      ws-id
@@ -1439,7 +1431,7 @@
      (let [sessions (csession/list-sessions project ws-id)
            ;; The same row the board list builds, with the same status over it, so the pane and
            ;; the list cannot place one workstream two ways.
-           row      (with-status project (live-session-names project)
+           row      (with-status project
                                  (wsv/workstream-row project w (notion-cache/project-page-facts project))
                                  true)
            {:keys [ledger entries]} (active-ledger project ws-id)
@@ -1572,19 +1564,6 @@
    person. What every surface offering Reply reads."
   [project ws-id]
   (boolean (seq (wcore/open-asks (core-of project ws-id)))))
-
-(defn- resuming?
-  "True iff a one-shot agent nido launched is running against the workstream right now, observed
-   as a run whose agent holds its launch lock. Keeps 'Apply → working…' honest: the gate stays
-   visible but offers no actions until the agent exits. A background session is not such an
-   agent: its liveness is the substrate's listing, and a reply given to it is a pending
-   instruction, which no gate offers a second reply over.
-
-   The lock, never a session phase: a phase outlives the process it describes, and a
-   failed-but-unarchived session left at a phase stranded a permanent 'working…' that hid the
-   gate's own actions."
-  [project ws-id]
-  (boolean (seq (runs/live-runs project ws-id))))
 
 (defn- driven-denials
   "Every auto-mode denial recorded in a session of the workstream while nido drives it — since it
@@ -1797,7 +1776,7 @@
                   :tag    (if w (wsv/tag w sessions) ws-id)
                   :links  (if w (wsv/ref-links w) [])
                   ;; What still runs beside the ask, as every row reads it.
-                  :doing  (:doing (act/of (observation project ws-id #{} held false :awaiting-gate nil)))}]
+                  :doing  (:doing (act/of (observation project ws-id held false nil)))}]
     {:row      row
      :slice-of (when (= :slice origin) (rdrain/drain-of w))
      :gate     (when-not dismissed? (gate-of-asks project row (:awaiting held)))}))
@@ -1820,7 +1799,7 @@
           built)))
 
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :Gate]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Gate]]}
   gates
   "A project's gates: workstreams that owe a person a move now (needs-you), each hydrated
    with its report, its follow-actions and the question it asks. A denial recorded in a
@@ -1831,16 +1810,11 @@
    A DISMISSED row is never a gate either — and the filter is load-bearing, not
    cosmetic: Notion-driven rows ignore nido :closed for engagement, and the parked
    session is torn down asynchronously by review/sweep-resolved!, so without this a
-   just-dismissed row keeps its :needs-you until the daemon next ticks.
-   `live-names` threads into status (read from `live-session-names` when omitted), so a
-   person's session that is up reads live."
-  ([project] (if-let [p (held-project project)]
-                (:gates p)
-                (gates project (live-session-names project))))
-  ([project live-names]
-   (if-let [p (held-project project)]
-     (:gates p)
-     (gates* project live-names))))
+   just-dismissed row keeps its :needs-you until the daemon next ticks."
+  [project]
+  (if-let [p (held-project project)]
+    (:gates p)
+    (gates* project)))
 
 (defn- raised-by-slices
   "Drain ws-id -> the ws-ids of its slices among `slice-gates` (slice rows that owe a person a
@@ -1873,14 +1847,14 @@
           pairs)))
 
 (defn- gates*
-  [project live-names]
+  [project]
   (let [owes? (fn [r] (and (:needs-you r)
                            ;; Between phases is closed, so it reads :settled — and is still owed
                            ;; a person's :assert-gate, which only a gate carries.
                            (not (and (= :settled (:engagement r))
                                      (not= :awaiting-gate (:stage r))))))]
     (inbox-gates project
-                 (for [r (remove #(= :dismissed (:stage %)) (list-workstreams project live-names))]
+                 (for [r (remove #(= :dismissed (:stage %)) (list-workstreams project))]
                    [r (when (owes? r) (core-gate project r))]))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
@@ -1964,22 +1938,9 @@
 ;; refreshes. Settled workstreams the registry shows no live session for are the sweep's
 ;; alone, which is what keeps closed history off the render path.
 
-(def ^:private listing-lifetime-ms
-  "How old claude's agent listing may already be when a row reads it — the substrate caches
-   it this long. A row's liveness is counted from the listing's read, not from the row's."
-  5000)
-
-(def liveness-interval-ms
-  "The oldest a row's liveness observations may be while it is shown: an activity claim or a
-   run lock released by a process exiting, a session port gone dead, claude's agent listing,
-   none of which touches a file a stamp sees. Longer than the listing's cache lifetime, and no
-   longer than the TUI board's 30s backstop."
-  20000)
-
 (def sweep-period-ms
-  "How often the sweep runs. At most the liveness interval less the listing's lifetime, so a
-   row whose observations come due before the next run, refreshed now against a listing as old
-   as it may be, is still inside its interval when that run comes."
+  "How often the sweep runs: how long, at most, a write that moves a row no render reaches waits
+   to show — a proposal decided or a reopening on a workstream at rest."
   10000)
 
 (defonce ^:private model
@@ -2002,40 +1963,34 @@
 
 (defn- entry-stamp
   "Everything a held row is derived from, as a value: the workstream's own files, the event logs
-   of the sessions nido drives under it, which of its sessions the registry shows live, the
-   Notion facts of its own page, and its committed state in the core, by hash. `files` is the
-   files half, taken before the row was read, so a write landing during the read moves it next
-   time. The core's half is what puts an ask, a turn or a closure on the row: a commit there
-   writes no file, so a stamp without it kept the row as it was when the feed delivered one."
-  ([project ws-id files e facts live-names]
-   (entry-stamp project ws-id files e facts live-names (hash (:state (core-of project ws-id)))))
-  ([_project _ws-id files {:keys [driven sessions page-id]} facts live-names core-hash]
+   of the sessions nido drives under it, the report of the review its running turn holds the
+   claim for, the Notion facts of its own page, and its committed state in the core, by hash.
+   `files` is the files half, taken before the row was read, so a write landing during the read
+   moves it next time. The core's half is what puts an ask, a turn or a closure on the row: a
+   commit there writes no file, so a stamp without it kept the row as it was when the feed
+   delivered one. A claim taken renames its payload into the workstream's directory, which
+   `files` sees; its review rewrites the report on every event, its last among them, which is
+   how the row hears both its progress and its end."
+  ([project ws-id files e facts]
+   (entry-stamp project ws-id files e facts (hash (:state (core-of project ws-id)))))
+  ([_project _ws-id files {:keys [driven page-id row]} facts core-hash]
    [files
     (mapv #(file-mtime (cstate/session-events-path %)) driven)
-    (set (filter live-names sessions))
+    (some-> (get-in row [:doing :report-path]) file-mtime)
     (get facts page-id)
     core-hash]))
-
-(defn- liveness-probe
-  "A row's liveness as status observes it, read without reading the workstream's records: a
-   claim held under it, and a run whose agent holds its lock. The registry's half is in the
-   row's stamp; what turns run is the core's, which the row's overlay reads."
-  [project ws-id _entry]
-  [(boolean (activity/held? project ws-id))
-   (resuming? project ws-id)])
 
 (defn- compute-entry
   "One held row for `ws-id`, read whole from its records, or nil when it no longer exists.
    Carries what the refreshes compare it by and what the passes answer from."
-  [project ws-id files facts live-names]
+  [project ws-id files facts]
   (when-let [w (cws/read-ws project ws-id)]
-    (let [t0        (System/currentTimeMillis)
-          ;; The core's half of the stamp, like the files', is taken BEFORE the row reads it: a
+    (let [;; The core's half of the stamp, like the files', is taken BEFORE the row reads it: a
           ;; commit the feed applies during the read then moves the stamp next time. Taken after,
           ;; it recorded a state the row never saw, and the row kept its stale reading.
           core-hash (hash (:state (core-of project ws-id)))
           sessions  (csession/list-sessions project ws-id)
-          row       (with-status project live-names (wsv/workstream-row project w facts))
+          row       (with-status project (wsv/workstream-row project w facts))
           settled?  (= :settled (:engagement row))
           page-id   (:page-id (wsv/notion-ref w))
           ;; The rule gates* applies: a denial alone makes no gate (all-denials notices it).
@@ -2076,31 +2031,21 @@
                                    :origin  (classify-origin w)
                                    :label   (wsv/label w sessions)
                                    :outcome (or (:outcome closed) :done)
-                                   :workers (mapv :name (remove :conductor sessions))})
-                     :observed-at (- t0 listing-lifetime-ms)}]
-      (assoc e
-             :stamp (entry-stamp project ws-id files e facts live-names core-hash)
-             :probe (liveness-probe project ws-id e)))))
+                                   :workers (mapv :name (remove :conductor sessions))})}]
+      (assoc e :stamp (entry-stamp project ws-id files e facts core-hash)))))
 
 (defn- refresh-entry
   "`e`, the held row for `ws-id`, as a refresh that reaches it leaves it: recomputed when its
-   stamp moved, or when its liveness is `due?` and `liveness-probe` finds it changed; kept
-   otherwise, a probe that found nothing renewing its liveness from the listing's read. nil
-   when the workstream is gone: the core no longer holds it."
-  [project ws-id e facts live-names due?]
+   stamp moved, kept otherwise. Everything a row is derived from is in its stamp, so a kept row
+   is what recomputing it would answer. nil when the workstream is gone: the core no longer
+   holds it."
+  [project ws-id e facts]
   (let [wd    (java.io.File. (str (cstate/workstream-dir project ws-id)))
-        files (ws-files-stamp project wd)
-        now   (System/currentTimeMillis)]
-    (cond
-      (nil? (second files))                                    nil
-      (or (nil? e)
-          (not= (:stamp e) (entry-stamp project ws-id files e facts live-names))) (compute-entry project ws-id files facts live-names)
-      (not (due? e now))                                       e
-      (= (:probe e) (liveness-probe project ws-id e))
-      (assoc e :observed-at (- now listing-lifetime-ms))
-      :else (compute-entry project ws-id files facts live-names))))
-
-(defn- deadline [e] (+ (:observed-at e) liveness-interval-ms))
+        files (ws-files-stamp project wd)]
+    (if (and e (some? (second files)) (= (:stamp e) (entry-stamp project ws-id files e facts)))
+      e
+      (when (some? (second files))
+        (compute-entry project ws-id files facts)))))
 
 (defn- index-project
   "The selections the passes answer from, over `p`'s entries and the bare rows its page facts
@@ -2128,9 +2073,9 @@
 
 (defn- refresh-project
   "`p`, a project's held value (nil for none), refreshed as `mode` says:
-     :list   every row not :at-rest?, every one at rest the registry shows a live session for, and
-             the rows whose own page's facts moved, plus a workstream new to the core;
-     :sweep  those, and every row whose liveness deadline falls before the next run.
+     :list   every row not :at-rest? and the rows whose own page's facts moved, plus a workstream
+             new to the core;
+     :sweep  every row.
    Both take the project's membership and every state from one request to the core
    (`cws/over-project`), which every row's fold answers from — so one the core newly holds is
    reached at once — and the project's page facts as a value."
@@ -2142,17 +2087,14 @@
   (let [facts      (notion-cache/project-page-facts project)
         live       (live-session-names project)
         old-facts  (:facts p)
-        horizon    (if (= :sweep mode) sweep-period-ms 0)
-        due?       (fn [e now] (< (deadline e) (+ now horizon)))
         reach?     (fn [e]
                      (or (nil? e)
+                         (= :sweep mode)
                          (not (:at-rest? e))
-                         (some live (:sessions e))
-                         (not= (get facts (:page-id e)) (get old-facts (:page-id e)))
-                         (and (= :sweep mode) (due? e (System/currentTimeMillis)))))
+                         (not= (get facts (:page-id e)) (get old-facts (:page-id e)))))
         entries    (reduce (fn [m id]
                              (let [e (get (:entries p) id)]
-                               (if-let [e' (if (reach? e) (refresh-entry project id e facts live due?) e)]
+                               (if-let [e' (if (reach? e) (refresh-entry project id e facts) e)]
                                  (assoc m id e')
                                  m)))
                            {} order)]
@@ -2165,13 +2107,10 @@
    list refresh or the sweep moves."
   [project p ws-id]
   (let [facts (notion-cache/project-page-facts project)
-        live  (live-session-names project)
-        e     (get (:entries p) ws-id)
-        due?  (fn [e now] (<= (deadline e) now))]
+        e     (get (:entries p) ws-id)]
     (if (or e (cws/ledger-stamp project ws-id))
       (let [e' (refresh-entry project ws-id e (cond-> (:facts p)
-                                                (:page-id e) (assoc (:page-id e) (get facts (:page-id e))))
-                              live due?)]
+                                                (:page-id e) (assoc (:page-id e) (get facts (:page-id e)))))]
         (index-project project
                        (cond-> (assoc p :entries (if e' (assoc (:entries p) ws-id e') (dissoc (:entries p) ws-id)))
                          (and e' (not (some #{ws-id} (:order p)))) (update :order conj ws-id))))
@@ -2207,9 +2146,7 @@
    [:at-rest? :boolean]
    [:gate [:maybe :map]]
    [:wind [:maybe :map]]
-   [:observed-at :int]
-   [:stamp [:vector :any]]
-   [:probe [:vector :any]]])
+   [:stamp [:vector :any]]])
 
 (def HeldSnapshot
   "A project's held rows as `write-snapshot!` writes them. Nothing in it is a record: every part
@@ -2246,8 +2183,8 @@
 (def ^:private snapshot-keys [:order :facts :live :entries])
 
 (defn- write-snapshot!
-  "Write `p`, `project`'s held value, as its snapshot: the rows as they were observed, their
-   liveness times unrenewed. Written whole to a temporary file and renamed into place, so a
+  "Write `p`, `project`'s held value, as its snapshot: the rows as they were last computed.
+   Written whole to a temporary file and renamed into place, so a
    reader sees one snapshot or the previous one, never a torn one. Answers whether it was
    written; a value transit cannot carry is a snapshot not written, never an error."
   [project p]
@@ -2269,8 +2206,8 @@
 (defn- read-snapshot
   "`project`'s held value seeded from its snapshot, or nil when there is none usable: one
    that does not parse, does not conform to `HeldSnapshot`, or was written by another nido
-   source revision is discarded whole. A seeded row keeps the times its liveness was
-   observed at, so one whose deadline has passed is reached by the first refresh."
+   source revision is discarded whole. A seeded row is kept until a refresh that reaches it
+   finds its stamp moved."
   [project]
   (let [path (snapshot-path project)]
     (when (fs/exists? path)
@@ -2314,9 +2251,8 @@
   refresh-list!
   "The list refresh, for `project` or every registered project: what the gate inbox, the
    Workstreams overview without a selection and the TUI board make before they render. Reaches
-   every workstream not at rest, every one at rest with a live session, the rows whose own page's
-   Notion facts moved and any workstream new to the core, and recomputes the ones whose
-   stamp moved or whose liveness came due. At rest is settled history and finished review-loop
+   every workstream not at rest, the rows whose own page's Notion facts moved and any workstream
+   new to the core, and recomputes the ones whose stamp moved. At rest is settled history and finished review-loop
    analyses; only the sweep reaches those. A no-op when this process holds nothing.
 
    A core that cannot be reached leaves the held rows as they were: it is down for seconds on

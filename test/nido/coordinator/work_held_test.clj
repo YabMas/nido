@@ -117,8 +117,8 @@
             (is (contains? reads a) "the open workstream whose stamp moved is recomputed")
             (is (not (contains? reads b)) "the settled one is the sweep's alone"))
           (reset! live #{"b-s"})
-          (is (contains? (set (reads-of #(work/refresh-list! :p))) b)
-              "a settled workstream with a live session is reached by a list refresh"))))))
+          (is (not (contains? (set (reads-of #(work/refresh-list! :p))) b))
+              "nor while a session of it is up: a row reads nothing of which sessions are up"))))))
 
 (deftest a-list-refresh-keeps-a-row-whose-stamp-did-not-move
   (let [live (atom #{})]
@@ -169,22 +169,20 @@
           (work/refresh-list! :p)
           (is (= :done (:stage (first (filter #(= b (:ws-id %)) (work/list-workstreams :p)))))
               "a list refresh does not reach the settled row")
-          ;; Every row comes due: the sweep reaches each, and recomputes the one whose stamp moved.
-          (with-redefs [work/liveness-interval-ms 0]
-            (work/sweep!))
+          ;; The sweep reaches every row, and recomputes the one whose stamp moved.
+          (work/sweep!)
           (is (not= :done (:stage (first (filter #(= b (:ws-id %)) (work/list-workstreams :p)))))
               "the sweep found it reopened; list refreshes reach it from now on"))))))
 
-(deftest a-settled-row-that-came-due-is-probed-not-reread
+(deftest the-sweep-keeps-a-settled-row-whose-stamp-did-not-move
   (let [live (atom #{})]
     (with-store live
       (fn []
         (let [b (settled-one! "b")]
           (work/hold! {:sweep? false})
           (work/grouped :p)
-          (with-redefs [work/liveness-interval-ms 0]
-            (is (not-any? #{b} (reads-of #(work/sweep!)))
-                "its stamp and its probe are unchanged, so its records are not read")))))))
+          (is (not-any? #{b} (reads-of #(work/sweep!)))
+              "its stamp is unchanged, so its records are not read"))))))
 
 (deftest board-stamp-moves-only-when-a-row-did
   (let [live (atom #{})]
@@ -223,19 +221,17 @@
           (is (empty? (:in-progress (work/grouped :p)))
               "a process that does not hold sees every write at once, as before"))))))
 
-(deftest an-open-row-that-came-due-is-reread-only-when-its-probe-moved
+(deftest a-claim-alone-moves-no-row
   (let [live (atom #{})]
     (with-store live
       (fn []
         (let [a (open-one! "a")]
           (work/hold! {:sweep? false})
           (work/grouped :p)
-          (with-redefs [work/liveness-interval-ms 0]
+          (with-redefs [activity/held?    (fn [_ id] (= id a))
+                        activity/read-live (fn [_ id] (when (= id a) {:kind :diff-review}))]
             (is (empty? (reads-of #(work/refresh-list! :p)))
-                "due, but nothing a file records moved and nothing it observes changed")
-            (with-redefs [activity/held? (fn [_ id] (= id a))]
-              (is (= [a] (distinct (reads-of #(work/refresh-list! :p))))
-                  "a claim taken under it is a change only liveness sees: the row is read again"))))))))
+                "a claim is a lock a process holds, and the row reads it only while the core works")))))))
 
 ;; ── phase 2: the snapshot a cold start seeds from ───────────────────────────
 
@@ -257,20 +253,6 @@
                 "a cold start seeds from the snapshot without reading a workstream")
             (is (= rows (set (work/list-workstreams :p))) "and holds the same rows")
             (is (some #(= a (:ws-id %)) (:in-progress (work/grouped :p))))))))))
-
-(deftest seeding-keeps-when-liveness-was-observed
-  (let [live (atom #{})]
-    (with-store live
-      (fn []
-        (open-one! "a")
-        (work/hold! {:sweep? false})
-        (work/sweep!)
-        (let [observed (->> (get-in @@#'work/model [:projects "p" :entries]) vals (map :observed-at) set)]
-          (work/release!)
-          (work/hold! {:sweep? false})
-          (work/grouped :p)
-          (is (= observed (->> (get-in @@#'work/model [:projects "p" :entries]) vals (map :observed-at) set))
-              "neither writing nor seeding renews a row's liveness"))))))
 
 (deftest a-seeded-row-whose-stamp-moved-is-recomputed
   (let [live (atom #{})]
@@ -332,8 +314,8 @@
           (is (not (contains? (set (reads-of #(work/refresh-list! :p))) x))
               "its stamp moved, but only the sweep reaches it")
           (reset! live #{"x-s"})
-          (is (contains? (set (reads-of #(work/refresh-list! :p))) x)
-              "one with a live session is reached by a list refresh"))))))
+          (is (not (contains? (set (reads-of #(work/refresh-list! :p))) x))
+              "nor while a session of it is up"))))))
 
 (deftest the-sweep-shows-a-decision-written-into-a-finished-analysis
   (let [live (atom #{})]
@@ -347,8 +329,7 @@
             (workstream/append-entry! :p x {:kind :note} (pr-str {:format :note :text "decision"}))
             (work/refresh-list! :p)
             (is (= stamp (:stamp (held-entry x))) "a list refresh leaves it")
-            (with-redefs [work/liveness-interval-ms 0]
-              (work/sweep!))
+            (work/sweep!)
             (is (not= stamp (:stamp (held-entry x))) "the sweep recomputes it")))))))
 
 (deftest a-workstream-the-core-newly-holds-reaches-the-board-at-once

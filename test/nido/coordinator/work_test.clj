@@ -1,5 +1,6 @@
 (ns nido.coordinator.work-test
   (:require
+   [nido.test.fake-core :as fake-core]
    [nido.coordinator.record.history :as history]
  [babashka.fs :as fs]
    [clojure.set :as set]
@@ -254,7 +255,7 @@
     (fn [_]
       (let [w (one-off!)]
         (session/create! :brian (:id w) {:name "poke" :weight :light :autonomy nil}))
-      (let [row (first (work/list-workstreams :brian #{"poke"}))]
+      (let [row (first (work/list-workstreams :brian))]
         (is (= :scratch (:origin row)) "origin preserved")
         (is (= :in-progress (:stage row)) "scratch enters the spine at in-progress")
         (is (nil? (:source row)) ":source is renamed to :origin")))))
@@ -2274,44 +2275,24 @@
     (is (not (contains? (work/live-session-names "p") "down"))
         "a session the registry holds no entry for is down")))
 
-(deftest a-row-is-live-on-any-evidence-and-stalled-on-none
+(deftest nothing-but-the-core-says-a-row-runs
   (with-tmp
     (fn [_]
       (let [w   (workstream/create! :brian {:external-refs []})
             id  (:id w)
-            row (fn [& [up]] (first (filter #(= id (:ws-id %)) (work/list-workstreams :brian (or up #{})))))]
-        (testing "an agent owes it and nothing is working on it"
-          (is (= {:owed-by :agent :live false :stalled true}
-                 (select-keys (:status (row)) [:owed-by :live :stalled])))
-          (is (= :stalled (:engagement (row)))))
-        (testing "a live run is live"
-          (with-redefs [runs/live-runs (constantly ["r1"])]
-            (is (true? (get-in (row) [:status :live])))
-            (is (= :active (:engagement (row))))))
-        (testing "a held claim is live before its payload is published"
-          (with-redefs [nido.coordinator.record.activity/held?     (constantly true)
-                        nido.coordinator.record.activity/read-live (constantly nil)]
-            (is (true? (get-in (row) [:status :live])))
-            (is (nil? (:doing (row))) "nothing yet says what is underway")))
-        (testing "a person's session is live when its ports answer"
+            row #(first (filter (fn [r] (= id (:ws-id r))) (work/list-workstreams :brian)))
+            quiet {:owed-by :agent :live false :stalled false :paused false}]
+        (testing "an agent owes it and the core holds no unit of it: nothing is the core's to move"
+          (is (= quiet (:status (row))))
+          (is (= :idle (:engagement (row)))))
+        (testing "a run's lock, a claim and a session up are processes, not what runs"
           (session/create! :brian id {:name "human-1" :weight :light :autonomy nil})
-          (is (false? (get-in (row) [:status :live])))
-          (is (true? (get-in (row #{"human-1"}) [:status :live])))
-          (is (= :active (:engagement (row #{"human-1"})))))))))
-
-(deftest a-lite-session-up-reads-live
-  ;; A lite session holds no port, so the board's probe reads it up while its entry stands, and a
-  ;; row read without a live set of its own is answered by that probe.
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :p {:external-refs []})]
-        (session/create! :p (:id w) {:name "lite" :weight :light :autonomy nil})
-        (with-redefs [nido.session.lifecycle/list-all-data
-                      (fn [_] {:sessions [{:name "lite" :worktree "/w/lite"}]})
-                      nido.session.state/read-registry (constantly {"/w/lite" {:instance-id "i5"}})
-                      nido.platform.process/tcp-open? (constantly false)]
-          (is (= (work/live-session-names "p") #{"lite"}))
-          (is (true? (get-in (first (work/list-workstreams :p)) [:status :live]))))))))
+          (with-redefs [runs/live-runs                             (constantly ["r1"])
+                        nido.coordinator.record.activity/held?     (constantly true)
+                        nido.coordinator.record.activity/read-live (constantly {:kind :diff-review})
+                        work/live-session-names                    (constantly #{"human-1"})]
+            (is (= quiet (:status (row))))
+            (is (nil? (:doing (row))))))))))
 
 (deftest entry-phase-reads-the-kind-of-entry
   (is (= :serving (nido.session.state/entry-phase {:instance-id "i" :app-port 4000})))
@@ -3172,13 +3153,18 @@
                 _      (workstream/create! :nido {:external-refs []})
                 _      (improvement-ws! :other "ws-q/1#0")]
             (session/create! :nido held {:name "s" :weight :light :autonomy nil})
-            ;; An agent holding its run's lock against the held workstream: live as status means it.
-            (with-redefs [runs/live-runs (fn [_ ws-id] (if (= held ws-id) ["r-1"] []))]
-              (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: ws-p/1#0"
-                       :state :working
-                       :started-at (:created-at (workstream/read-ws :nido held))}]
-                     (work/improvement-holds))
-                  "only the open one, only where a sweep is declared, and a live agent is working"))))))))
+            (fake-core/with-fake-core
+              (fn [c]
+                ;; The core running a unit's turn on the held workstream.
+                (fake-core/seed! c :nido held
+                                 [{:command :open-unit :unit "u" :project "nido" :goal "g" :session-cwd "/w"}
+                                  {:command :start-turn :turn "u1" :unit "u"
+                                   :spec {:executor :fake :instructions "i"}}])
+                (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: ws-p/1#0"
+                         :state :working
+                         :started-at (:created-at (workstream/read-ws :nido held))}]
+                       (work/improvement-holds))
+                    "only the open one, only where a sweep is declared, and a turn running is working")))))))))
 
 (deftest a-hold-no-live-session-works-on-is-stuck
   ;; The wedge this exists for: a claim session ended its turn without closing
@@ -3432,16 +3418,15 @@
           (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
         (is (not= :shipping (:stage (row))) "work past the shipment still moves it on")))))
 
-(deftest a-closed-row-under-a-live-run-reads-status
+(deftest a-settled-row-skips-status
   (with-tmp
     (fn [_]
       (let [w    (workstream/create! :brian {:external-refs []})
             _    (workstream/close! :brian (:id w) :done)
-            row  #(#'work/with-status :brian #{} (wsv/workstream-row :brian (workstream/read-ws :brian (:id w))))]
-        (is (nil? (:status (row))) "nothing live: a settled row skips status")
+            row  #(#'work/with-status :brian (wsv/workstream-row :brian (workstream/read-ws :brian (:id w))))]
+        (is (nil? (:status (row))) "settled: nothing reads its status")
         (with-redefs [runs/live-runs (constantly [{:run-id "r"}])]
-          (is (true? (get-in (row) [:status :live]))
-              "an agent still holding its run lock is shown, not hidden"))))))
+          (is (nil? (:status (row))) "a run's lock under it is a process, not something running on it"))))))
 
 ;; The TUI skips a board rebuild while this holds, so a write it misses is a
 ;; board that never shows the write. Sleeps keep the writes in distinct mtime

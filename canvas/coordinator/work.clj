@@ -80,7 +80,7 @@
      questions of the same rows, and this is what makes them one read rather than two."
     {:signature [:=> [:catn [:f :any]] :any]})
   (Operation list-workstreams "Every workstream of a project, as enriched rows on the spine."
-    {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector :map]]
+    {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [view/workstream-rows]})
   (Operation winding-down
     "Workstreams that are FINISHED and still holding a live session — the ones costing memory
@@ -93,8 +93,8 @@
     "A value equal across two calls exactly when what `grouped` answers cannot have changed
      between them. While the process holds its rows, their version, moved only by a refresh.
      Otherwise read off the disk — directory mtimes for the ledger, session and run records, the
-     registry and Notion page facts as values — and blind to what never touches disk: a lock
-     released by an exiting process, a session port gone dead, claude's agent listing."
+     registry and Notion page facts as values — and blind to what never touches disk: a session
+     port gone dead."
     {:signature [:=> [:catn [:project ProjectName]] :any]})
   (Operation hold!
     "Make this process hold its rows and start the sweep that keeps them: the surfaces that
@@ -107,17 +107,17 @@
   (Operation holding? "Whether this process holds its rows."
     {:signature [:=> [:catn] :boolean]})
   (Operation refresh-list!
-    "The list refresh a list render makes first: every unsettled workstream, every settled one
-     with a live session, the rows whose own Notion page moved and any new workstream, each
-     recomputed only when its stamp moved or its liveness came due. Never closed history."
+    "The list refresh a list render makes first: every unsettled workstream, the rows whose own
+     Notion page moved and any new workstream, each recomputed only when its stamp moved. Never
+     closed history."
     {:signature [:=> [:catn [:project [:? ProjectName]]] :any]})
   (Operation refresh-selected!
     "The selection refresh a render selecting one workstream makes first: that workstream's row
      alone; every other row is drawn as held."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})
   (Operation sweep!
-    "One run of the sweep: every row whose liveness comes due before the next run, closed
-     history included, probed and recomputed if it moved; the held casualty reading recomputed."
+    "One run of the sweep: every row, closed history included, recomputed if its stamp moved;
+     the held casualty reading recomputed."
     {:signature [:=> [:catn] :any]})
   (Operation shown-revivals
     "The casualties a render shows: the sweep's held copy while the process holds its rows,
@@ -138,7 +138,7 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:selected-seq [:? :any]]] :map]
      :delegates [classify-origin holds latest-report environment workstream/read-ws]})
   (Operation gates "The workstreams of a project that want a person now."
-    {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector Gate]]
+    {:signature [:=> [:catn [:project ProjectName]] [:vector Gate]]
      :delegates [list-workstreams gate-actions]})
   (Operation replyable?
     "Whether a reply has someone to reach on a workstream: a session waiting on a person's reply,
@@ -280,7 +280,8 @@
     "What holds each project's improvement sweep, and whether anyone is working on it. The
      open :improvement workstreams are the hold itself — the sweep polls on nothing else — so
      this reads them rather than the copy the poll writes to its state file, and pairs each with
-     what its sessions say: a hold no live session works on is one nothing will ever release."
+     what the core says of it: a hold the core runs no turn on and asks nothing about is one
+     nothing will ever release."
     {:signature [:=> [:catn] [:vector :map]]
      :delegates [triggers/load-for-project workstream/project-records
                  session/list-sessions]})

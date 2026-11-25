@@ -37,7 +37,7 @@
         (workstream/append-entry! :brian ws-id {:kind :blocker}
                                   (pr-str {:format :blocker :summary "stuck" :needs "what now?" :after "the round resumes"}))
         (is (empty? (work/gates :brian)))
-        (is (not (:needs-you (first (work/list-workstreams :brian #{}))))))
+        (is (not (:needs-you (first (work/list-workstreams :brian))))))
       (fake-core/seed! c :brian ws-id fake-core/asking)
       (let [[g & more] (work/gates :brian)]
         (is (nil? more))
@@ -47,7 +47,7 @@
         (is (= [["A" "Yes" :option-a] ["B" "No" :option-b]]
                (map (juxt :letter :label :action) (get-in g [:ask :questions 0 :options]))))
         (is (= [:option-a :option-b :reply :withdraw] (map :id (:actions g)))))
-      (is (:needs-you (first (work/list-workstreams :brian #{})))))))
+      (is (:needs-you (first (work/list-workstreams :brian)))))))
 
 (deftest a-letter-answers-the-ask-with-its-option
   (with-ws
@@ -143,21 +143,21 @@
       (testing "pause holds each open unit, and resume releases it"
         (work/pause! :brian ws-id "later")
         (is (get-in (core-state c ws-id) [:units ws-id :held?]))
-        (is (get-in (first (work/list-workstreams :brian #{})) [:status :paused]))
+        (is (get-in (first (work/list-workstreams :brian)) [:status :paused]))
         (work/resume! :brian ws-id)
         (is (not (get-in (core-state c ws-id) [:units ws-id :held?]))))
       (testing "done retracts the open unit and closes the workstream, in the core only"
         (is (= {:decision :done} (work/set-stage! :brian ws-id :done)))
         (is (:closed? (core-state c ws-id)))
         (is (nil? (workstream/closure (workstream/read-ws :brian ws-id))))
-        (is (= :settled (:engagement (first (work/list-workstreams :brian #{})))))))))
+        (is (= :settled (:engagement (first (work/list-workstreams :brian)))))))))
 
 (defn- reads
   "What each surface reads of the person's pause on `ws-id`: the pane, the board, and the core's
    hold on the open unit the conductor's turns start under."
   [c ws-id]
   {:pane  (some? (:pause (work/workstream :brian ws-id)))
-   :board (boolean (get-in (first (work/list-workstreams :brian #{})) [:status :paused]))
+   :board (boolean (get-in (first (work/list-workstreams :brian)) [:status :paused]))
    :held  (boolean (get-in (core-state c ws-id) [:units ws-id :held?]))})
 
 (deftest pause-and-resume-move-every-surface-together
@@ -213,7 +213,7 @@
 (deftest a-workstream-the-core-works-unrecorded-reads-as-its-core-state
   (with-ws
     (fn [c ws-id]
-      (let [row #(first (work/list-workstreams :brian #{}))]
+      (let [row #(first (work/list-workstreams :brian))]
         (is (= :intake (get-in (row) [:position :at])) "nothing done anywhere: not started")
         (fake-core/seed! c :brian ws-id fake-core/asking)
         (is (= {:at :core-asking :next {:stage :answer-ask :mode :human}} (:position (row)))
@@ -223,65 +223,72 @@
                          [{:command :start-turn :turn "u1" :unit "u" :spec {:executor :fake :instructions "i"}}])
         (is (= :core-under-way (get-in (row) [:position :at])) "a unit's turn ran: under way")))))
 
-(deftest a-workstream-the-core-moves-is-never-read-as-stalled
-  ;; An agent owes the move and no claim, run or person's session runs: a stall — until the core
-  ;; has the move, which is activity too.
+(deftest what-runs-is-read-from-the-core
   (with-ws
     (fn [c ws-id]
-      (let [status pipeline/status
-            row    #(first (work/list-workstreams :brian #{}))]
-        (with-redefs [pipeline/status (fn [& args]
-                                        (assoc (apply status args)
-                                               :owed-by :agent :resting? false))]
-          (is (get-in (row) [:status :stalled]) "the core holds nothing: the stall stands")
-          (fake-core/seed! c :brian ws-id
-                           [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}
-                            {:command :start-turn :turn "u1" :unit "u" :spec {:executor :fake :instructions "i"}}])
-          (testing "a turn the core runs is live, not stalled"
-            (is (= {:owed-by :agent :live true :stalled false}
-                   (select-keys (:status (row)) [:owed-by :live :stalled :why]))))
-          (fake-core/seed! c :brian ws-id
-                           [{:command :record-outcome :turn "u1" :run 1 :outcome :completed}
-                            {:command :start-turn :turn "c1" :unit nil :spec {:executor :fake :instructions "i"}}
-                            {:command :record-outcome :turn "c1" :run 1 :outcome :asked
-                             :call {:id "call-1" :question "Ship it?" :explored "x" :options ["Yes" "No"]
-                                    :recommendation "Yes"}}
-                            {:command :raise-operator-ask :ask "a1" :binds #{"c1"}
-                             :content {:question "Ship it?" :explored "x" :options ["Yes" "No"]
-                                       :recommendation "Yes"}}])
-          (testing "an ask the core holds owes the person, and nothing is stalled"
-            (is (= {:owed-by :person :live false :stalled false}
-                   (select-keys (:status (row)) [:owed-by :live :stalled :why])))))))))
+      (let [row    #(first (work/list-workstreams :brian))
+            status #(select-keys (:status (row)) [:owed-by :live :stalled :paused])]
+        (is (= {:live false :stalled false :paused false} (dissoc (status) :owed-by))
+            "the core holds no unit: nothing of it is the core's to move, so nothing is stalled")
+        (fake-core/seed! c :brian ws-id
+                         [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
+        (testing "an open unit the core does nothing on and is owed nothing for is stalled"
+          (is (= {:live false :stalled true :paused false} (dissoc (status) :owed-by)))
+          (is (= :stalled (:engagement (row)))))
+        (fake-core/seed! c :brian ws-id
+                         [{:command :start-turn :turn "u1" :unit "u" :spec {:executor :fake :instructions "i"}}])
+        (testing "a turn the core runs is live, and is what is underway"
+          (is (= {:live true :stalled false :paused false} (dissoc (status) :owed-by)))
+          (is (= {:source :core :activity :working :turn "u1" :unit "u"} (:doing (row))))
+          (is (= :active (:engagement (row)))))
+        (testing "a review's claim beside the running turn says what it is doing"
+          (let [claim {:kind :design-round :run-id "r1"}]
+            (with-redefs [act/observe (fn [& _] claim)]
+              (is (= (assoc claim :source :claim) (:doing (row))))
+              (is (= (assoc claim :source :claim) (:doing (work/workstream :brian ws-id)))
+                  "and the pane says what the row says"))))
+        (fake-core/seed! c :brian ws-id
+                         [{:command :record-outcome :turn "u1" :run 1 :outcome :completed}
+                          {:command :start-turn :turn "c1" :unit nil :spec {:executor :fake :instructions "i"}}
+                          {:command :record-outcome :turn "c1" :run 1 :outcome :asked
+                           :call {:id "call-1" :question "Ship it?" :explored "x" :options ["Yes" "No"]
+                                  :recommendation "Yes"}}
+                          {:command :raise-operator-ask :ask "a1" :binds #{"c1"}
+                           :content {:question "Ship it?" :explored "x" :options ["Yes" "No"]
+                                     :recommendation "Yes"}}])
+        (testing "an ask the core holds owes the person; it is neither live nor stalled"
+          (is (= {:owed-by :person :live false :stalled false :paused false} (status)))
+          (is (:needs-you (row))))))))
 
-(deftest what-status-sees-running-still-runs-while-the-core-does-nothing
-  ;; A person's session or a review claim is no core turn: with the core idle, the row's
-  ;; engagement and :doing must say what its live mark says, on the list and the pane alike.
+(deftest a-held-unit-is-paused-not-stalled
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}
+                        {:command :hold-unit :unit "u"}])
+      (is (= {:live false :stalled false :paused true}
+             (select-keys (:status (first (work/list-workstreams :brian))) [:live :stalled :paused]))))))
+
+(deftest a-claim-with-the-core-idle-runs-nothing
   (with-ws
     (fn [c ws-id]
       (fake-core/seed! c :brian ws-id
                        [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
-      (let [status pipeline/status
-            claim  {:kind :design-round :run-id "r1"}
-            row    #(first (work/list-workstreams :brian #{}))]
-        (is (nil? (wcore/activity (wcore/held-ws (wcore/held) :brian ws-id))) "the core does nothing")
-        (testing "nothing runs anywhere: the engagement is status's, stall and all"
-          (is (get-in (row) [:status :stalled]))
-          (is (= :stalled (:engagement (row))))
-          (is (nil? (:doing (row)))))
-        (with-redefs [pipeline/status (fn [& args] (assoc (apply status args) :owed-by :agent))
-                      act/observe     (fn [& _] {:claim claim :runs [] :sessions []})]
-          (testing "a claim status sees is underway, and the row is active beside its live mark"
-            (is (= (assoc claim :source :claim) (:doing (row))))
-            (is (= :active (:engagement (row))))
-            (is (get-in (row) [:status :live])))
-          (testing "the pane says what the row says"
-            (let [p (work/workstream :brian ws-id)]
-              (is (= (assoc claim :source :claim) (:doing p)))
-              (is (get-in p [:status :live])))))
+      (with-redefs [nido.coordinator.record.activity/read-live (fn [& _] {:kind :design-round :run-id "r1"})]
+        (let [row (first (work/list-workstreams :brian))]
+          (is (nil? (:doing row)))
+          (is (false? (get-in row [:status :live])))
+          (is (true? (get-in row [:status :stalled]))
+              "a review the core did not start is no turn: the unit is left unmoved"))))))
+
+(deftest a-ledger-owing-the-person-parks-nothing-the-core-does-not-ask
+  (with-ws
+    (fn [_ _]
+      (let [status pipeline/status]
         (with-redefs [pipeline/status (fn [& args] (assoc (apply status args) :owed-by :person))]
-          (testing "a ledger owing the person parks nothing the core does not ask"
-            (is (false? (:needs-you (row))))
-            (is (not= :parked-at-gate (:engagement (row))))))))))
+          (let [row (first (work/list-workstreams :brian))]
+            (is (false? (:needs-you row)))
+            (is (not= :parked-at-gate (:engagement row)))))))))
 
 (deftest a-catch-up-is-applied-whole-before-anything-refreshes
   (with-redefs [wcore/mirror (atom {:pos 0 :ws {} :following? true :caught-up (promise)})]
@@ -332,14 +339,14 @@
       (work/hold! {:sweep? false})
       (try
         (work/refresh-list! :brian)
-        (let [before (work/list-workstreams :brian #{})]
+        (let [before (work/list-workstreams :brian)]
           ;; what nido.core.client throws when the socket is gone, from the read that reaches the
           ;; core — tests run an in-process core, which never touches the socket
           (with-redefs-fn {#'work/held-project
                            (fn [_] (throw (ex-info "the core daemon is not running"
                                                    {:core :unreachable :socket "/x"})))}
             #(is (nil? (work/refresh-list! :brian)) "a core restarting is not a failure of the refresh"))
-          (is (= (map :ws-id before) (map :ws-id (work/list-workstreams :brian #{})))
+          (is (= (map :ws-id before) (map :ws-id (work/list-workstreams :brian)))
               "the rows held before the core went away are still held")
           (is (some #{ws-id} (map :ws-id before)))
           (with-redefs-fn {#'work/held-project (fn [_] (throw (ex-info "other" {:core :refused})))}

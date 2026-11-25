@@ -1,49 +1,45 @@
 (ns nido.coordinator.view.activity-test
-  "Every facet of a workstream's activity is read off one observation, so no two can disagree."
+  "Every facet of a workstream's activity is read off one observation, so no two can disagree;
+   what runs is the core's to say."
   (:require
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.view.activity :as act]))
 
-(def ^:private quiet {:closed? false :owed-by :agent :runs [] :sessions []})
+(def ^:private quiet {:closed? false :owed-by :agent})
 
-(deftest what-runs-is-live-and-active-whichever-source-says-so
-  (doseq [[why obs] [["a claim"           {:claim {:kind :diff-review :run-id "r"}}]
-                     ["a core turn"       {:core {:kind :working :turn "t" :unit "u"}}]
-                     ["a run's lock"      {:runs [{:id "r" :state :running :live? true :session-name "s"}]}]
-                     ["a person's session" {:sessions [{:name "s" :up? true}]}]]]
-    (testing why
-      (let [a (act/of (merge quiet obs))]
-        (is (:live a))
-        (is (= :active (:engagement a)))
-        (is (not (:stalled a)))))))
+(def ^:private claim {:kind :diff-review :run-id "r" :report-path "/r.json" :progress {:round 2}})
 
-(deftest doing-is-always-live
-  (doseq [obs [{:claim {:kind :design-round :run-id "r"}}
-               {:core {:kind :deciding}}
-               {:runs [{:id "r" :state :running :live? true}]}
-               {:sessions [{:name "s" :up? true :claude {:queued "go"}}]}
-               {:sessions [{:name "s" :mid-turn? true :claude {}}]}]]
-    (let [a (act/of (merge quiet obs))]
-      (is (some? (:doing a)) (pr-str obs))
-      (is (:live a) (pr-str obs)))))
+(deftest what-the-core-does-is-live-and-underway
+  (doseq [k [:working :deciding :starting]]
+    (let [a (act/of (assoc quiet :core {:kind k :unit "u"}))]
+      (is (= {:source :core :activity k :unit "u"} (:doing a)) (str k))
+      (is (:live a))
+      (is (= :active (:engagement a)))
+      (is (not (:stalled a))))))
 
-(deftest a-person-session-up-is-live-without-being-underway
-  (let [a (act/of (assoc quiet :sessions [{:name "s" :up? true}]))]
-    (is (nil? (:doing a)))
-    (is (:live a))
-    (is (= :active (:engagement a))))
-  (testing "a session nido drives being up is not evidence: its services stay up between turns"
-    (is (not (:live (act/of (assoc quiet :sessions [{:name "s" :up? true :claude {:session-id "x"}}])))))))
+(deftest a-claim-says-what-a-working-turn-is-doing-and-nothing-more
+  (testing "beside a :working turn it describes the turn, with its round's progress"
+    (let [a (act/of (assoc quiet :core {:kind :working :turn "t"} :claim claim))]
+      (is (= {:source :claim :kind :diff-review :run-id "r" :report-path "/r.json" :progress {:round 2}}
+             (:doing a)))
+      (is (:live a))))
+  (testing "with nothing the core does, a claim is a process holding a lock: nothing runs"
+    (let [a (act/of (assoc quiet :claim claim))]
+      (is (nil? (:doing a)))
+      (is (not (:live a)))))
+  (testing "an ask waits on the person whatever a claim says"
+    (is (nil? (:doing (act/of (assoc quiet :core {:kind :asking} :claim claim)))))))
 
-(deftest nothing-running-with-an-agent-owing-is-a-stall
-  (let [a (act/of (assoc quiet :stall-why {:turn-end :none}))]
+(deftest a-stall-is-the-cores-open-unit-left-unmoved
+  (let [a (act/of (assoc quiet :movable? true))]
     (is (:stalled a))
-    (is (= :stalled (:engagement a)))
-    (is (= {:turn-end :none} (:why a))))
-  (testing "unless something excuses it"
-    (is (not (:stalled (act/of (assoc quiet :paused? true)))) "a person paused it")
-    (is (not (:stalled (act/of (assoc quiet :resting? true)))) "the conversation is the person's own")
-    (is (not (:stalled (act/of (assoc quiet :owed-by :machine)))) "the machine owes it")))
+    (is (= :stalled (:engagement a))))
+  (testing "nothing stalls"
+    (is (not (:stalled (act/of quiet))) "with no open unit nobody holds: nothing is the core's to move")
+    (is (not (:stalled (act/of (assoc quiet :movable? true :paused? true)))) "while a pause stands")
+    (is (not (:stalled (act/of (assoc quiet :movable? true :core {:kind :deciding})))) "while the core is owed a move")
+    (is (not (:stalled (act/of (assoc quiet :movable? true :core {:kind :asking})))) "while it asks the person")
+    (is (not (:stalled (act/of (assoc quiet :movable? true :closed? true)))) "once settled")))
 
 (deftest only-a-core-ask-needs-the-person
   (let [a (act/of (assoc quiet :core {:kind :asking}))]
@@ -56,16 +52,13 @@
     (is (not (:needs-you a)) "a ledger that says the person owes a move asks nothing")
     (is (not= :parked-at-gate (:engagement a)))))
 
-(deftest a-merge-waiting-its-turn-is-underway-but-nothing-runs
-  (let [a (act/of (assoc quiet :band :shipping :owed-by :machine))]
-    (is (= {:source :merge :phase :queued} (:doing a)))
-    (is (not (:live a)))
-    (is (= :queued (:engagement a)))))
+(deftest the-machine-owing-a-move-is-queued
+  (is (= :queued (:engagement (act/of (assoc quiet :owed-by :machine))))))
 
-(deftest settled-is-settled-but-what-still-runs-is-seen
-  (let [a (act/of (assoc quiet :closed? true :runs [{:id "r" :live? true}] :core {:kind :asking}))]
+(deftest settled-is-settled
+  (let [a (act/of (assoc quiet :closed? true :core {:kind :asking} :claim claim))]
     (is (= :settled (:engagement a)))
     (is (nil? (:doing a)))
+    (is (not (:live a)))
     (is (not (:needs-you a)))
-    (is (not (:stalled a)))
-    (is (:live a) "a process still running under it is not hidden")))
+    (is (not (:stalled a)))))

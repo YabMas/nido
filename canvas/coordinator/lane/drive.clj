@@ -17,28 +17,15 @@
 
 (Kind WorkstreamStatus
   "What a workstream's records say about where it stands and who owes it: its position, who owes
-   its next move, whether a person's pause stands, whether its conversation is a person's own at
-   rest, and why the work stopped if it has.
+   its next move, and whether a person's pause stands.
 
    RECORD FACTS ONLY. Position is the fold over the ledger; owed-by is read off the mode the
-   position's next stage runs in. Whether anything runs is observed, never a record fact, and
-   `view-activity/of` reads these facts with that observation as one answer."
+   position's next stage runs in. Whether anything runs is the core's, never a record fact, and
+   `view-activity/of` reads these facts beside it as one answer."
   [:map {:closed true}
    [:position :map]
    [:owed-by [:enum :person :agent :machine :nobody]]
-   [:paused :boolean]
-   [:resting? :boolean]
-   [:stall-why
-    [:or
-     [:map {:closed true}
-      [:turn-end [:enum :recorded]]
-      [:session :string]
-      [:ended-at :string]
-      [:owes [:maybe :keyword]]
-      [:said {:optional true} :string]]
-     [:map {:closed true}
-      [:turn-end [:enum :none]]
-      [:owes [:maybe :keyword]]]]]])
+   [:paused :boolean]])
 
 (Module lane-pipeline
   "Where a workstream is in its life, read from its own ledger.
@@ -110,10 +97,8 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws intake-kind next-action baseline-verified? settled-in-notion]})
   (Operation status
-    "A workstream's position, who owes its next move, whether a person's pause stands, whether its
-     conversation is a person's own at rest — a turn that answered only a person's own prompt, on
-     a workstream not activated — and why the work stopped: the record facts every surface's
-     activity is read from."
+    "A workstream's position, who owes its next move, and whether a person's pause stands: the
+     record facts every surface's activity is read beside the core's."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] WorkstreamStatus]
      :delegates [of]}))
 

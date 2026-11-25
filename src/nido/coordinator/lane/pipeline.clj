@@ -1382,57 +1382,20 @@
   "Who owes a move, by the mode it runs in."
   {:human :person :mechanical :machine :authoring :agent :working-copy :agent})
 
-(defn- latest-stop
-  "The session among `sessions` whose driven conversation recorded the newest Stop, with that Stop
-   as its facet keeps it, as {:session <name> :stop <last-stop>}, or nil when none recorded one."
-  [sessions]
-  (->> sessions
-       (keep (fn [s] (when-let [st (get-in s [:claude :last-stop])] {:session (:name s) :stop st})))
-       (sort-by (comp :at :stop))
-       last))
-
-(defn- stall-why
-  "Why a stalled workstream stopped: the session whose turn ended last, when, the move owed, and
-   what the turn last said — or, when no session recorded a turn end, that none did. :turn-end,
-   :recorded or :none, says which."
-  [position latest]
-  (let [owes (get-in position [:next :stage])]
-    (if latest
-      (cond-> {:turn-end :recorded :session (:session latest) :ended-at (get-in latest [:stop :at])
-               :owes owes}
-        (get-in latest [:stop :message]) (assoc :said (get-in latest [:stop :message])))
-      {:turn-end :none :owes owes})))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :WorkstreamStatus]}
   status
   "What a workstream's records say about where it stands and who owes it: its position, who owes
-   the next move, whether a person's pause stands, whether its conversation is a person's own at
-   rest, and why it stopped if it has stalled. Whether anything runs is not here: that is
-   observed, and `nido.coordinator.view.activity/of` reads these facts and the observation as
-   one value.
+   the next move, and whether a person's pause stands. Whether anything runs is not here: that is
+   the core's, and `nido.coordinator.view.activity/of` reads these facts beside it as one value.
 
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :paused is a person's standing pause — their choice not to push
-   the workstream forward.
-
-   :resting? is what keeps one stop from being a stall: on a workstream not activated — a scratch
-   session a person started by hand, since a session nido starts on a brief is activated at
-   birth — a turn that ended answering only that person's own prompt leaves the conversation
-   theirs. :stall-why says why the work stopped (`stall-why`), whether or not it has stalled:
-   only the activity knows whether it has."
+   the workstream forward."
   [project ws-id]
-  (let [position (of project ws-id)
-        owed-by  (if-let [mode (get-in position [:next :mode])]
-                   (owed-by-mode mode :nobody)
-                   :nobody)
-        ;; Past the conductor's record and the chat's: neither is a turn of the work ending.
-        sessions (remove #(or (:conductor %) (:chat %)) (csession/list-sessions project ws-id))
-        w        (ws/read-ws project ws-id)
-        latest   (latest-stop sessions)]
-    {:position  position
-     :owed-by   owed-by
-     :paused    (boolean (some-> w standing/paused?))
-     :resting?  (boolean (and latest (false? (get-in latest [:stop :nido?]))
-                              (not (some-> w standing/activated?))))
-     :stall-why (stall-why position latest)}))
+  (let [position (of project ws-id)]
+    {:position position
+     :owed-by  (if-let [mode (get-in position [:next :mode])]
+                 (owed-by-mode mode :nobody)
+                 :nobody)
+     :paused   (boolean (some-> (ws/read-ws project ws-id) standing/paused?))}))

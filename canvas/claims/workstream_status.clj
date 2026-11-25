@@ -20,11 +20,11 @@
             [canvas.coordinator.work :refer [adopt-orphans! list-workstreams]]))
 
 (Claim one-status
-  "Every surface's position for a workstream comes from status, and its owed-by and live from the one activity `of` reads over status's facts and the live evidence; no row, pane or TUI line decides any of the three from session phase, ticket status, a stored :stage or a cached Notion status."
+  "Every surface's position for a workstream comes from status, and its owed-by and live from the one activity `of` reads over status's facts and the core's state of the workstream; no row, pane or TUI line decides any of the three from session phase, ticket status, a stored :stage or a cached Notion status."
   {:about [status activity/of workstream-row] :evidence "round"})
 
 (Claim owed-by-from-mode
-  "Owed-by is read off the mode of the next move status names, the action of's answer carries as :next, and off nothing else: :person when that move runs in :human mode — :published among the positions owing one, whose next move is landing — :machine for :mechanical, :agent for :authoring or :working-copy, :nobody when the position is terminal and no move is owed. Stalled is owed-by :agent with nothing live."
+  "Owed-by is read off the mode of the next move status names, the action of's answer carries as :next, and off nothing else: :person when that move runs in :human mode — :published among the positions owing one, whose next move is landing — :machine for :mechanical, :agent for :authoring or :working-copy, :nobody when the position is terminal and no move is owed."
   {:about [status] :evidence "round"})
 
 (Claim answers-are-recorded

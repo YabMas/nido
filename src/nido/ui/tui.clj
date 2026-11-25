@@ -462,9 +462,7 @@
 ;; The board is rebuilt on a tick only when `work/board-stamp` has moved, or this
 ;; long after its last rebuild. The TUI holds its rows (`work/hold!`), so the tick
 ;; makes a list refresh and the stamp is the rows' version: it moves when a refresh
-;; changed a row, and liveness that no file records — a lock released by a process
-;; exiting, a session port gone dead, claude's agent listing — comes due within
-;; `work/liveness-interval-ms`. The clock is the backstop behind both.
+;; changed a row. The clock is the backstop behind it.
 (def ^:private board-backstop-ms 30000)
 
 (defn- tick-rows
