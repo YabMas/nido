@@ -162,27 +162,10 @@
 
 (deftest board-open-routes-through-open-target
   (with-redefs [nido.coordinator.work/open-target (fn [_ _] {:project :brian :session "live"})
-                nido.coordinator.work/reclaimed? (fn [_ _ _] false)
                 nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1"})
                 nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "o"))]
       (is (= "live" (::opened s')) "open resolves the session via work/open-target"))))
-
-(deftest board-open-rehydrates-a-reclaimed-session
-  (with-redefs [nido.coordinator.work/open-target (fn [_ _] {:project :brian :session "run-x"})
-                nido.coordinator.work/reclaimed? (fn [_ _ _] true)
-                nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1"})]
-    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "o"))]
-      (is (= :rehydrate (-> s' :busy :verb))
-          "a reclaimed home opens via an async re-hydrate spinner, not a hard error")
-      (is (= "run-x" (-> s' :busy :subject))))))
-
-(deftest rehydrated-message-enters-the-session
-  (with-redefs [nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
-    (let [state (assoc (board-state :all) :busy {:verb :rehydrate :subject "run-x"})
-          [s' _] (#'tui/update-fn state {:type :nido.ui.tui/rehydrated :project :brian :session "run-x"})]
-      (is (= "run-x" (::opened s')) "::rehydrated chains into enter-session once the home is back")
-      (is (nil? (:busy s')) "and clears the busy spinner"))))
 
 (deftest board-offers-no-intake-gestures
   ;; p (promote) and x (dismiss) were intake gestures; the board no longer binds them.
@@ -265,21 +248,10 @@
 
 (deftest workstream-enter-opens-the-environment-chat
   (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                nido.coordinator.work/reclaimed? (fn [_ _ _] false)
                 nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
     (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
           [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
       (is (= "impl-br-1" (::opened s')) "enter opens the resolved environment's chat"))))
-
-(deftest workstream-enter-rehydrates-a-reclaimed-environment
-  (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                nido.coordinator.work/reclaimed? (fn [_ _ _] true)
-                nido.ui.tui/rehydrate-and-enter (fn [s _ _ sn] [(assoc s ::rehydrated sn) nil])
-                nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::direct sn) nil])]
-    (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
-          [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
-      (is (= "impl-br-1" (::rehydrated s')) "a reclaimed env is rehydrated, not entered directly")
-      (is (nil? (::direct s'))))))
 
 (deftest workstream-o-opens-browser-when-running
   (let [opened (atom nil)]

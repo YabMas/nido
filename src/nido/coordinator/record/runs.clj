@@ -448,38 +448,6 @@
     (fs/create-sym-link link-path session-home)
     result)))
 
-(defn ^{:malli/schema [:=> [:cat :Run] :boolean]}
-  home-present?
-  "Does `run`'s session-home runtime still exist? The home is ephemeral — the
-   reclaimer can delete it while the run, transcript and claude-session-id
-   survive on disk. `fs/exists?` follows the symlink, so a dangling/reclaimed
-   home (or one never spawned) reads absent."
-  [run]
-  (fs/exists? (cstate/run-session-home-link (:id run))))
-
-(defn ^{:malli/schema [:=> [:cat :Run [:? :map]] :any]}
-  ensure-session-home!
-  "Re-provision `run`'s session-home if it was reclaimed, so a caller can land
-   in it again. The transcript survives keyed by the home path, so spawning at
-   the same path re-anchors it (`spawn-session-for-run!` is idempotent). Returns
-   true if it re-provisioned, false if the home was already present. A
-   re-provision failure is re-thrown tagged `:rehydrate-failed`, carrying the
-   kept failure's :session-failure/id. Shared by the headless resume turn and the
-   interactive TUI open; a resume passes its reply as the `origin`, so a restore
-   can deliver the reply the failure stopped."
-  ([run] (ensure-session-home! run (run-origin run)))
-  ([run origin]
-   (if (home-present? run)
-     false
-     (do (try (spawn-session-for-run! run origin)
-              (catch Throwable t
-                (throw (ex-info "Re-hydration failed"
-                                (cond-> {:reason :rehydrate-failed}
-                                  (:session-failure/id (ex-data t))
-                                  (assoc :session-failure/id (:session-failure/id (ex-data t))))
-                                t))))
-         true))))
-
 (def ^:private handed-over-skills
   "Skills whose Runs handed their session to a person: once provisioned it was theirs, so no Run
    lifecycle event may stop or reclaim it. No Run of these is minted any more — a person's start

@@ -581,9 +581,6 @@
    :down    {:fn #'lifecycle/down!                                  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
    :destroy {:fn #'destroy-session!                                 :gerund "Destroying" :past "Destroyed" :failed "destroy"}
    :add     {:fn #'start-session-action!                            :gerund "Creating"   :past "Created"   :failed "create"}
-   ;; :rehydrate has no :fn — it runs work/ensure-open! via rehydrate-and-enter,
-   ;; not run-session-action!. The labels feed the spinner + failure panel.
-   :rehydrate {                                                      :gerund "Re-hydrating" :past "Re-hydrated" :failed "re-hydrate"}
    ;; :bring-down has no :fn either — it runs work/bring-down! directly from
    ;; update-board's `d` arm (see the winding-down band above), not via
    ;; run-session-action!'s [name {:project}] calling convention.
@@ -896,31 +893,12 @@
 
     :else (picker-route state msg)))
 
-(defn- rehydrate-and-enter
-  "Re-provision a reclaimed, Run-owned session-home off the render thread (it
-   brings the session back up), then land in it. On success a ::rehydrated
-   message chains into enter-session; on failure the captured output surfaces in
-   the standard action-error panel (verb :rehydrate)."
-  [state p ws-id session]
-  (with-spinner state :rehydrate session
-    (captured-cmd
-     (fn [] (work/ensure-open! p ws-id session))
-     (fn [{:keys [ok? error output]}]
-       (if ok?
-         {:type ::rehydrated :project p :session session}
-         {:type ::action-failed :verb :rehydrate :subject session :error error :output output})))))
-
 (defn- open-selected
-  "Open the highlighted workstream's session/chat via work/open-target. A parked
-   Run-owned session whose ephemeral home was reclaimed is re-hydrated first
-   (async) so opening a parked review just works rather than erroring with 'No
-   session home'."
+  "Open the highlighted workstream's session/chat via work/open-target."
   [state]
   (if-let [ws (selected-workstream state)]
     (if-let [{:keys [session]} (work/open-target (:project state) (:ws-id ws))]
-      (if (work/reclaimed? (:project state) (:ws-id ws) session)
-        (rehydrate-and-enter state (:project state) (:ws-id ws) session)
-        (enter-session state (:project state) session :home))
+      (enter-session state (:project state) session :home)
       [(assoc state :status "(no session to open yet)") nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
@@ -1137,10 +1115,7 @@
     (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
     (msg/key-match? msg "enter")
     (with-environment state
-      (fn [s p ws-id sn]
-        (if (work/reclaimed? p ws-id sn)
-          (rehydrate-and-enter s p ws-id sn)
-          (enter-session s p sn :home))))
+      (fn [s p _ sn] (enter-session s p sn :home)))
     (msg/key-match? msg "w")
     (with-environment state (fn [s p _ sn] (enter-session s p sn :worktree)))
     (msg/key-match? msg "o")
@@ -1250,12 +1225,6 @@
 
     (#{::action-done ::action-failed} (msg/msg-type msg))
     (finish-action state msg)
-
-    ;; A re-hydrated session-home is back — clear :busy and land in it (the same
-    ;; enter-session every other open path uses). Precedes the busy-guard since
-    ;; it arrives while the re-hydrate spinner is still :busy.
-    (= ::rehydrated (msg/msg-type msg))
-    (enter-session (dissoc state :busy) (:project msg) (:session msg) :home)
 
     ;; Live-refresh tick. Re-read the active screen's rows and splice them in
     ;; with set-items (cursor preserved). Skip the refresh while a modal OR a

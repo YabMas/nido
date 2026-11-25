@@ -46,7 +46,6 @@
     (with-redefs [nido.session.lifecycle/session-coords
                   (fn [s o] {:wt-path (str "/wt/" s) :instance-id (str "p--" (or (:runtime-key o) s))})
                   nido.session.engine/read-profile-for-session     (constantly nil)
-                  nido.coordinator.work/ensure-open!                (fn [& _] nil)
                   nido.session.lifecycle/up!                        (fn [_ o] (reset! up o))
                   dev/app-port-for-instance                         (fn [iid] (when (= "p--ws-1" iid) 4100))
                   nido.platform.process/tcp-open?                   (constantly true)]

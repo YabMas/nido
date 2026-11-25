@@ -105,15 +105,6 @@
      keeps is the run's own unless the caller starts it for something else — a reply, a restore."
     {:signature [:=> [:catn [:run Run] [:origin [:? :map]]] :any]
      :delegates [run-origin]})
-  (Operation home-present?
-    "Whether the run's session home still exists. It is ephemeral and may be reclaimed under a
-     run that is still going, which is why nothing assumes it."
-    {:signature [:=> [:catn [:run Run]] :boolean]
-     :delegates [state/run-session-home-link]})
-  (Operation ensure-session-home!
-    "Re-provision a reclaimed session home so a resume has somewhere to land."
-    {:signature [:=> [:catn [:run Run] [:origin [:? :map]]] :any]
-     :delegates [home-present? spawn-session-for-run!]})
   (Operation teardown-session-for-run!
     "Reclaim the session a run spawned, once it has reached a resolved state."
     {:signature [:=> [:catn [:run Run]] :any]

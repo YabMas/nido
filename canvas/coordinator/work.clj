@@ -209,10 +209,6 @@
   (Operation open-target "Where opening a workstream lands — on a unit's session the core has ready, an open unit's first."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
      :delegates [workstream/sessions]})
-  (Operation reclaimed? "Whether a session's substrate was reclaimed under it."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session :any]] :boolean]})
-  (Operation ensure-open! "Make a session landable, re-provisioning it if it was reclaimed."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session :any]] :any]})
   (Operation facet-dimensions "The facet keys available for a source in a project."
     {:signature [:=> [:catn [:project ProjectName] [:source [:? :any]]] :any]})
   (Operation grouped-rows "Every row in a grouped map, flat."

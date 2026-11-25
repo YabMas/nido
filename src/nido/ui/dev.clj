@@ -184,9 +184,8 @@
   dev-action!
   "Run a DEV-ENVIRONMENT lifecycle action for one session on a background
    thread, tracking optimistic state in app-states (keyed by the canonical
-   instance-id). `start` re-hydrates a reclaimed session-home via
-   work/ensure-open! before up!, and reuses the session's persisted profile
-   (so a :lite session doesn't get all services). `stop` brings it down."
+   instance-id). `start` reuses the session's persisted profile (so a :lite
+   session doesn't get all services). `stop` brings it down."
   [project ws-id session action]
   (let [{:keys [instance-id]} (coords project session ws-id)
         profile (engine/read-profile-for-session (name project) session)
@@ -197,8 +196,7 @@
       (try
         (case action
           "start"
-          (do (work/ensure-open! project ws-id session)
-              (lifecycle/up! session opts)
+          (do (lifecycle/up! session opts)
               ;; Probe the runtime the start put it on, which the board now reads too.
               (let [on   (:instance-id (coords project session ws-id))
                     port (app-port-for-instance on)]

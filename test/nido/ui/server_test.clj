@@ -486,7 +486,6 @@
     (with-redefs [nido.session.lifecycle/session-coords
                   (fn [s _] {:wt-path (str "/wt/" s) :instance-id (str "brian--" s)})
                   nido.session.engine/read-profile-for-session (fn [_ _] {:services []})
-                  nido.coordinator.work/ensure-open! (fn [& _] false)
                   nido.session.lifecycle/up! (fn [s opts] (swap! calls conj [:up s (:profile opts)]))
                   nido.platform.process/tcp-open? (fn [_] true)
                   nido.ui.dev/app-port-for-instance (fn [_] 4096)
