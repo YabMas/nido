@@ -44,6 +44,7 @@
    [nido.coordinator.view.activity :as act]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.work.core :as wcore]
+   [nido.core.client :as core-client]
    [nido.core.domain :as domain]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
@@ -3141,6 +3142,43 @@
        (cws/create! project (assoc base :external-refs []))))))
 
 (declare core-open?)
+
+(defn- run-briefing
+  "What a run's turn is told of where it stands: its run, and where its status and artifacts go."
+  [run-id]
+  (str "This is nido run " run-id ". It has no workstream: write to no ledger. Its status file is "
+       (cstate/run-status-path run-id) " and its artifacts directory " (cstate/run-artifacts-dir run-id)
+       "; whatever this run leaves for others to read goes there."))
+
+(defn ^{:malli/schema [:=> [:cat :map] :keyword]}
+  start-run!
+  "Start the run a fire `routed` ({:project :trigger :payload}) of a `:run?` trigger asks for: its
+   id the trigger's session-name prefix (else its name) and a fresh suffix, its artifacts
+   directory made, and `:start-run` sent to the core keyed by the trigger and the payload's id, so
+   a fire re-emitted is answered rather than run twice. Its turn runs the trigger's skill on the
+   rendered payload, offered no ask tool, in a session of the trigger's profile. Answers :opened or
+   :refused."
+  [{:keys [project trigger payload]}]
+  (let [tname (name (:name trigger))
+        id    (str (or (:session-name-prefix trigger) (str tname "-")) (subs (str (random-uuid)) 0 8))
+        goal  (str/trim (str (name (:skill trigger)) " " (or (:title payload) (:id payload) "")))]
+    (fs/create-dirs (cstate/run-artifacts-dir id))
+    (if (wcore/admitted?
+         (wcore/request!
+          {:op      :command
+           :ws      (core-client/run-key project id)
+           :key     (str "run/" (name project) "/" tname "/" (or (:id payload) id))
+           :command {:command :start-run
+           :run     (cond-> {:id id :project (name project) :trigger tname :goal goal
+                             :payload payload :fired-at (str (java.time.Instant/now))}
+                      (:session-profile trigger) (assoc :profile (:session-profile trigger)))
+           :spec    {:executor     (or (:agent trigger) :claude)
+                     :ask?         false
+                     :instructions (str "/" (name (:skill trigger)) " "
+                                        (triggers/render-payload (:payload trigger) payload)
+                                        "\n\n" (run-briefing id))}}}))
+      :opened
+      :refused)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :keyword]}
   open-fire!

@@ -79,7 +79,8 @@
 
 (defn- route-fire!
   "One routed fire: dropped with a word when its breaker is open or it is a dry run, penned when
-   its trigger queues, skipped when its ticket is settled, else opened in the core."
+   its trigger queues, skipped when its ticket is settled, else started in the core — as a run
+   when its trigger is a `:run?` one, as a workstream's unit otherwise."
   [routed]
   (let [tname (-> routed :trigger :name)
         label (str (name (:project routed)) "/" (name tname))]
@@ -91,6 +92,8 @@
       (and (= :triage-bug (-> routed :trigger :skill))
            (some->> (-> routed :payload :id) (tickets/gate-decision (:project routed)) (not= :spawn)))
       (println "nido intake: triage gate skip —" label (-> routed :payload :id))
+      (-> routed :trigger :run?)
+      (println "nido intake:" label "run" (name (work/start-run! routed)) (or (-> routed :payload :id) ""))
       :else (let [r (work/open-fire! routed)]
               (when (#{:opened :running} r)
                 (println "nido intake:" label (name r) (or (-> routed :payload :id) "")))))))

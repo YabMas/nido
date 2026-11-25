@@ -54,7 +54,10 @@ The page logs each grooming with who decided it.
 
 ## 1. Say you have started
 
-The session briefing names the run's status file and artifacts dir. Write:
+The end of your instructions names your run, its status file and its artifacts
+directory (`~/.nido/runs/<run-id>/…`). A run has no workstream: write to no
+ledger, and you have no ask tool — anything a person must decide goes in the
+plan. Write:
 
 ```bash
 cat > <run-status-path> <<'EDN'

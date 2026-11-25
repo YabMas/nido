@@ -48,7 +48,7 @@
       (str (.toLocalDate local)))))
 
 (defn- nightly? [run]
-  (= "true" (str (get-in run [:event-payload :nightly]))))
+  (= "true" (str (get-in run [:payload :nightly]))))
 
 (defn- plan-id [day] (str "nightly-" day))
 

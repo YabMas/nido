@@ -400,6 +400,12 @@
      the fire so a re-emit is answered rather than repeated. Answers :opened, :running, :settled or
      :refused."
     {:signature [:=> [:catn [:routed :map]] :keyword]})
+  (Operation start-run!
+    "Start the run a fire of a `:run?` trigger asks for: no workstream, one turn of the trigger's
+     skill with no ask tool, in a session of the trigger's profile, told where its artifacts go;
+     keyed by the trigger and payload so a re-emit starts no second run. Answers :opened or
+     :refused."
+    {:signature [:=> [:catn [:routed :map]] :keyword]})
   (Operation enqueue-inbox!
     "Pen a queue-mode fire for the person, deduped on its ref and placed at :incoming. The core is
      told nothing until the person promotes it."

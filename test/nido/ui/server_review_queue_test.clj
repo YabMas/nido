@@ -8,7 +8,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.control :as control]
    [nido.coordinator.record.review-queue :as rq]
-   [nido.coordinator.record.runs :as runs]
+   [nido.test.runs :as runs]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.view.review-queue :as rqv]
@@ -49,13 +49,9 @@
                     project/list-projects       (constantly {"brian" {}})
                     triggers/load-for-project   (fn [p] (if (= :brian p) [plan-trigger] []))
                     control/fire!               (fn [p t payload & [k]] (swap! fired conj [p t payload k]))]
-        (let [run (runs/create-run! {:project :brian :trigger plan-trigger :payload {:id "x"}
-                                     :session-profile :lite}
-                                    {:fired-at "t" :fired-by "test"})]
-          (runs/transition! (:id run) :running)
-          (runs/transition! (:id run) :done)
-          (io/write-edn! (rq/plan-path (:id run)) plan)
-          (f (:id run) fired)))
+        (let [id (runs/run! :brian :review-queue {:id "x"} :done)]
+          (io/write-edn! (rq/plan-path id) plan)
+          (f id fired)))
       (finally (fs/delete-tree tmp)))))
 
 (defn- get-body [uri]
@@ -194,16 +190,16 @@
 
 (deftest stage-follows-the-runs-and-the-decisions
   (is (= :none (rqv/stage {})))
-  (is (= :planning (rqv/stage {:plan-run {:state :running}})))
-  (is (= :failed (rqv/stage {:plan-run {:state :done}})) "a finished run with no plan")
-  (is (= :deciding (rqv/stage {:plan-run {:state :done} :plan plan :decisions {:decisions {}}})))
-  (is (= :applying (rqv/stage {:plan-run {:state :done} :plan plan
+  (is (= :planning (rqv/stage {:plan-run {:status :running}})))
+  (is (= :failed (rqv/stage {:plan-run {:status :done}})) "a finished run with no plan")
+  (is (= :deciding (rqv/stage {:plan-run {:status :done} :plan plan :decisions {:decisions {}}})))
+  (is (= :applying (rqv/stage {:plan-run {:status :done} :plan plan
                                :decisions {:applying {:at "t" :fired-at "t"}}}))
       "queued, and the apply run not created yet")
-  (is (= :unfired (rqv/stage {:plan-run {:state :done} :plan plan :decisions {:applying {:at "t"}}}))
+  (is (= :unfired (rqv/stage {:plan-run {:status :done} :plan plan :decisions {:applying {:at "t"}}}))
       "frozen, and the fire never recorded")
-  (is (= :applied (rqv/stage {:plan-run {:state :done} :plan plan :decisions {:applying {:at "t"}}
-                              :apply-run {:state :done}}))))
+  (is (= :applied (rqv/stage {:plan-run {:status :done} :plan plan :decisions {:applying {:at "t"}}
+                              :apply-run {:status :done}}))))
 
 (deftest tickets-are-shown-by-priority-bucket-release-blockers-first
   ;; The bucket is the order; the Priority a ticket carried in development is not.

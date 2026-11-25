@@ -9,7 +9,6 @@
    [nido.coordinator.control :as control]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.review-queue :as rq]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.source.queue :as queue]
@@ -18,6 +17,7 @@
    [nido.platform.core :as core]
    [nido.platform.io :as io]
    [nido.platform.project :as project]
+   [nido.test.runs :as runs]
    [nido.ui.views :as views]))
 
 (def ^:private config
@@ -54,15 +54,12 @@
     (nightly/poll-once! config)))
 
 (defn- plan-run!
-  "A plan run fired with `payload`, in `state`, holding `plan` when given."
-  [payload state & [p]]
-  (let [run (runs/create-run! {:project :brian :trigger plan-trigger :payload payload
-                               :session-profile :lite}
-                              {:fired-at "t" :fired-by "test"})]
-    (runs/transition! (:id run) :running)
-    (when (not= :running state) (runs/transition! (:id run) state))
-    (when p (io/write-edn! (rq/plan-path (:id run)) p))
-    (:id run)))
+  "A plan run fired with `payload`, at `status`, holding `plan` when given."
+  [payload status & [p]]
+  (Thread/sleep 2) ; runs are told apart by when they were fired
+  (let [id (runs/run! :brian :review-queue payload status)]
+    (when p (io/write-edn! (rq/plan-path id) p))
+    id))
 
 (defn- drained-triggers [] (mapv #(get-in % [:target :trigger]) (queue/drain!)))
 

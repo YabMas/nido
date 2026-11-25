@@ -84,3 +84,30 @@
       (work/open-fire! (fire triage {:id "BR-9" :title "Crash"}))
       (let [[u] (vals (:units (get @(:states c) (str "brian/" (:id (the-ws))))))]
         (is (not (:background? u)) "it runs nido's recipe, which a person follows")))))
+
+(deftest a-fire-of-a-run-trigger-starts-a-run-and-no-workstream
+  (with-home
+    (fn [c]
+      (let [groom {:name :review-queue :skill :review-queue :payload "Groom ({{event/id}})."
+                   :source {:type :manual} :run? true :session-profile :lite
+                   :session-name-prefix "review-queue-"}]
+        (#'intake/route-fire! (fire groom {:id "nightly-2026-11-25" :nightly "true"}))
+        (let [[[k st] & more] (seq @(:states c))
+              id (get-in st [:run :id])
+              u  (get-in st [:units id])]
+          (is (nil? more) "one stream, and it is the run's")
+          (is (= (str "run:brian/" id) k))
+          (is (re-matches #"review-queue-[0-9a-f]{8}" id))
+          (is (= {:trigger "review-queue" :profile :lite :payload {:id "nightly-2026-11-25" :nightly "true"}}
+                 (select-keys (:run st) [:trigger :profile :payload])))
+          (is (= :lite (:profile u)) "its session is made with the trigger's profile")
+          (is (false? (get-in u [:first-turn :spec :ask?])) "it has nobody to ask")
+          (is (.startsWith ^String (get-in u [:first-turn :spec :instructions]) "/review-queue Groom (nightly-2026-11-25)."))
+          (is (.contains ^String (get-in u [:first-turn :spec :instructions])
+                         (cstate/run-artifacts-dir id))
+              "its turn is told where its artifacts go")
+          (is (fs/directory? (cstate/run-artifacts-dir id)))
+          (is (nil? (ws/find-by-ref :brian :notion "nightly-2026-11-25")) "no workstream is made for it"))
+        (testing "the same fire again starts no second run"
+          (#'intake/route-fire! (fire groom {:id "nightly-2026-11-25" :nightly "true"}))
+          (is (= 1 (count @(:states c)))))))))

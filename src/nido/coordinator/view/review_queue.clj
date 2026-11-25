@@ -6,7 +6,10 @@
    results, and the apply run if one was fired. No reads here; the work plane
    gathers them.")
 
-(defn- run-state [run] (some-> run :state))
+(defn- run-status
+  "Where a run stands, as the core says (`nido.core.domain/run-status`)."
+  [run]
+  (some-> run :status))
 
 (defn ^{:malli/schema [:=> [:cat :map] :keyword]}
   stage
@@ -24,21 +27,21 @@
    An apply queued whose run has not been created yet reads `:applying` — the
    envelope is on the queue, and offering Apply again would queue another."
   [{:keys [plan-run plan decisions apply-run]}]
-  (let [ps (run-state plan-run)]
+  (let [ps (run-status plan-run)]
     (cond
       (nil? plan-run)                                   :none
       (:applying decisions)
-      (cond (#{:done :failed :halted} (run-state apply-run)) :applied
+      (cond (#{:done :failed :cancelled} (run-status apply-run)) :applied
             (or apply-run (get-in decisions [:applying :fired-at])) :applying
             :else                                         :unfired)
       plan                                              :deciding
-      (#{:queued :preprocessing :running} ps)           :planning
+      (#{:starting :running} ps)                        :planning
       :else                                             :failed)))
 
 (defn- nightly?
   "Whether the nightly source fired this plan run — it marks the payload it queues."
   [plan-run]
-  (= "true" (str (get-in plan-run [:event-payload :nightly]))))
+  (= "true" (str (get-in plan-run [:payload :nightly]))))
 
 (defn- decided-by
   "Who decided a frozen grooming: :nightly or :person, nil while nothing is frozen. A plan
@@ -82,7 +85,7 @@
      :nightly?   (nightly? plan-run)
      :decided-by (decided-by decisions)
      :run-id     (:id plan-run)
-     :started-at (some-> plan-run :state-history first :at)
+     :started-at (:fired-at plan-run)
      :apply-run  (:id apply-run)
      :tickets    tickets
      :general    (vec (get by-br nil))

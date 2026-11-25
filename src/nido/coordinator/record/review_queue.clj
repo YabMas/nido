@@ -15,13 +15,12 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]
+   [nido.core.client :as client]
    [nido.platform.io :as io]))
 
 (def plan-trigger
-  "The trigger whose runs draft a plan. Its runs are found by id: a run id carries
-   its trigger's name (`<date>-<project>-review-queue-<suffix>`)."
+  "The trigger whose runs draft a plan."
   :review-queue)
 
 (def apply-trigger
@@ -146,42 +145,40 @@
                {:decision :begun :approved approved}))))))))
 
 (defn- runs-of
-  "The runs of `trigger` for `project`, newest first, found by id rather than by
-   reading every run record: an id is `<date>-<project>-<trigger>-<suffix>` and the
-   suffix is eight characters, so the trigger is what sits between them."
+  "The runs of `trigger` for `project` the core holds, newest first, each its identity
+   (`nido.core.domain/summary`'s :run — :id :payload :fired-at …) with its :status and :detail.
+   Throws when the core cannot be read, so a page says so rather than showing no grooming."
   [project trigger]
-  (let [prefix-free (str "-" (name project) "-" (name trigger) "-")]
-    (->> (runs/list-run-ids)
-         (filter #(let [i (str/index-of % prefix-free)]
-                    (and i (= (+ i (count prefix-free) 8) (count %)))))
-         (keep #(try (runs/read-run %) (catch Exception _ nil)))
-         (sort-by (fn [r] (some-> r :state-history first :at)) #(compare %2 %1))
-         vec)))
+  (->> (vals (client/value! (client/runs project) :runs))
+       (filter #(= (name trigger) (get-in % [:run :trigger])))
+       (map (fn [sm] (assoc (:run sm) :status (:status sm) :detail (:detail sm))))
+       (sort-by :fired-at #(compare %2 %1))
+       vec))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Run]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   plan-runs
   "Every plan run for `project`, newest first."
   [project]
   (runs-of project plan-trigger))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :Run]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
   latest-plan-run
   "The newest plan run for `project`, or nil when it has never been groomed."
   [project]
   (first (plan-runs project)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:map-of :RunId :Run]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:map-of :RunId :map]]}
   apply-runs-by-plan
   "The newest apply run fired for each plan run of `project`, keyed by the plan run's id."
   [project]
-  (reduce (fn [m r] (let [k (get-in r [:event-payload :plan-run])]
+  (reduce (fn [m r] (let [k (get-in r [:payload :plan-run])]
                       (cond-> m (and k (not (contains? m k))) (assoc k r))))
           {} (runs-of project apply-trigger)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :RunId] [:maybe :Run]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :RunId] [:maybe :map]]}
   apply-run-for
   "The newest apply run fired for plan run `plan-run-id`, or nil."
   [project plan-run-id]
   (->> (runs-of project apply-trigger)
-       (filter #(= plan-run-id (get-in % [:event-payload :plan-run])))
+       (filter #(= plan-run-id (get-in % [:payload :plan-run])))
        first))
