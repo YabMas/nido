@@ -564,22 +564,6 @@
   ;; Failing closed: a landing is what gets recorded on the strength of this.
   (is (= :rejected (:outcome (lifecycle/classify-push {:exit 0 :out "???" :err ""})))))
 
-(deftest stage-kickoff-starts-nido-work-named-on-the-prompt
-  (let [home (str (fs/create-temp-dir))
-        wt   "/wt/it's"]
-    (with-redefs [lifecycle/resolve-cd-target   (fn [_ o] (if (= :home (:cd o)) home wt))
-                  nido.platform.core/nido-source-dir (fn [] "/opt/nido")]
-      (let [by-hand (lifecycle/stage-kickoff! "kid" {:project "nido" :agent-name "kid" :prompt "Go.\n"
-                                                     :model "claude-opus-5-5"})
-            script  (slurp (str (fs/path home @#'lifecycle/kickoff-file)))]
-        (is (str/includes? script "cd '/wt/it'\\''s' || exit 1") "the worktree, quoted for the shell")
-        (is (str/includes? script "bb --config '/opt/nido/bb.edn' nido:work :name 'kid' :prompt-file "))
-        (is (str/includes? script " :model 'claude-opus-5-5'"))
-        (is (not (str/includes? script ":permission-mode"))
-            "a kickoff never overrides the worktree's launch baseline")
-        (is (= "Go.\n" (slurp (str (fs/path home ".nido-kickoff-prompt.md")))))
-        (is (= (str "cd '" home "' && sh " @#'lifecycle/kickoff-file) by-hand))))))
-
 ;; destroy! used to delete the instance state dir whatever its stop left behind,
 ;; so a REPL that survived the stop, or could not be shown to be the session's,
 ;; lost the pid file that was its only record.

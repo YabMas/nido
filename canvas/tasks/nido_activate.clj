@@ -8,14 +8,11 @@
             [fukan.common.typing.malli]))
 
 (Module nido-activate
-  "The person's one act that hands a plain session's workstream to nido's recipe.
-
-   Run from inside the session, its output is the instruction to the agent that ran it: nido
-   drives no conversation of a plain session, so the verb's own output is how the activation
-   reaches the conversation that holds the understanding the records are written from."
+  "The person's one act that hands a workstream to the core from a terminal: its unit opened, in a
+   session the core provisions. It adopts no session — not even the one it runs in."
   (Operation activate-cmd*
-    "Activate the recipe on the workstream the cwd resolves to, or the one named, and print the
-     instruction for the session's agent. Exits 1 when none resolves or it is closed."
+    "Hand the workstream the cwd resolves to, or the one named, to the core. Exits 1 when none
+     resolves or the core refuses."
     {:signature [:=> [:catn [:opts :map]] :any]
      :delegates [work/activate!]})
   (Operation activate-cmd

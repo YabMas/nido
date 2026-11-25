@@ -158,11 +158,6 @@
    :doc "Write session-home path to ~/.nido/.last-cd: :project <p> <session> [:cd home|worktree] (pair with the `nido` shell wrapper)"
    :task (apply nido-session/enter *command-line-args*)}
 
-  nido:session:spawn
-  {:requires ([tasks.nido-session :as nido-session])
-   :doc "Spawn a child session from inside a parent one: :project <p> <child> :parent-agent <your agent name> :brief-file <path> [:ws-id <id>] [up opts] — up, link both ways, hand its workstream to the core with the brief as its unit's first turn, and open a Warp tab on it. See the spawn-session skill."
-   :task (apply nido-session/spawn *command-line-args*)}
-
   nido:session:sync
   {:requires ([tasks.nido-session :as nido-session])
    :doc "Bring your runtime's checkout up to date with every member's working copy — run from your worktree"
@@ -689,7 +684,7 @@
 
   nido:workstream:start
   {:requires ([tasks.nido-session :as nido-session])
-   :doc "Start work on a goal from anywhere: a new session on a new, activated workstream, the brief its unit's first turn in the core. :project <p> <session> (:brief-file <path> | :brief \"…\") [up opts]. Prints the workstream's id."
+   :doc "Start work on a goal from anywhere: a new workstream handed to the core, whose unit's session — named <session> — the core provisions and whose first turn is the brief. How an exploration becomes nido's work. :project <p> <session> (:brief-file <path> | :brief \"…\"). Prints the workstream's id."
    :task (apply nido-session/start *command-line-args*)}
 
   nido:workstream:tell
@@ -870,7 +865,7 @@
 
   nido:activate
   {:requires ([tasks.nido-activate :as nido-activate])
-   :doc "Hand this session's workstream to nido's recipe: append its :activated entry and print what the session's agent is to do now — write the owed records from what it already understands. Until then a session is a plain one: no conductor, nothing owed. [:cwd <dir>] or :project <p> :ws <ws-id>"
+   :doc "Hand a workstream to the core: its unit opened, in a session the core provisions — never the one this runs in. [:cwd <dir>] or :project <p> :ws <ws-id>"
    :task (apply nido-activate/activate-cmd *command-line-args*)}
 
   nido:deactivate

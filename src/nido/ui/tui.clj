@@ -986,7 +986,7 @@
   [state]
   (if-let [ws (selected-workstream state)]
     (let [label (or (:br-id ws) (:ws-id ws))
-          msg   (try (if (:already? (work/activate! (:project state) (:ws-id ws) nil))
+          msg   (try (if (:already? (work/activate! (:project state) (:ws-id ws)))
                        (str label " was already activated")
                        (str "activated " label " — the core holds its unit"))
                      (catch clojure.lang.ExceptionInfo e (str "not activated — " (ex-message e))))]

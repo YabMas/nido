@@ -159,22 +159,6 @@ _nido_tab_title() {
 add-zsh-hook precmd _nido_tab_title
 ```
 
-### Spawned sessions start their own agent
-
-`bb nido:session:spawn` (driven by the `spawn-session` skill) opens a tab on a
-child session through a one-shot Warp **tab config** (`~/.warp/tab_configs/`,
-opened as `warp://tab_config/<id>`) whose command runs the kickoff staged in the
-child's session home, so the child's agent is already on its brief when the tab
-appears. The config deletes itself as its command starts. Outside Warp no tab
-opens and spawn prints the command to run instead.
-
-**The command must be typed, not hooked.** Warp hands the keyboard only to a
-program started from its prompt; one a shell hook starts (an earlier version
-ran the kickoff from a zsh `precmd` hook) runs with a live terminal but takes
-no input — the agent starts and you cannot type in it. A `_nido_kickoff` hook
-left in `~/.zshrc` is inert now (the kickoff is `.nido-kickoff.zsh`, a name it
-does not look for) and can be deleted.
-
 ### Notion token in the agent's environment
 
 A project's `bb notion:*` tasks read `NOTION_TOKEN`, and projects load it with

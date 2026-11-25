@@ -1,6 +1,6 @@
 ;; src/tasks/nido_activate.clj
 (ns tasks.nido-activate
-  "bb-task entrypoint: activate nido's recipe on the workstream a person is working in."
+  "bb-task entrypoint: hand a workstream to the core."
   (:require
    [nido.coordinator.work :as work]
    [nido.platform.task-args :as task-args]
@@ -9,30 +9,27 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   activate-cmd*
-  "Activate the recipe on the workstream `:cwd` (default: the process's) resolves to, or on
-   `:project`/`:ws` when both are given, and print the instruction for the agent of the session
-   it was run from. Exits 1 when no workstream resolves or it is closed."
+  "Hand the workstream `:cwd` (default: the process's) resolves to, or `:project`/`:ws` when both
+   are given, to the core: its unit opened, in a session the core provisions — never the session
+   this runs in. Exits 1 when no workstream resolves or the core refuses."
   [{:keys [cwd project ws]}]
   (let [given   (or cwd (System/getProperty "user.dir"))
         here    (or (lifecycle/worktree-from-cwd given) given)
         [p id]  (if (and project ws)
                   [(keyword (name project)) (str ws)]
-                  (stages/project+ws-from-cwd here))
-        session (:session (lifecycle/session-from-cwd here))]
+                  (stages/project+ws-from-cwd here))]
     (if-not id
       (do (println (str given " resolves to no workstream — pass :project <p> :ws <ws-id>"))
           (System/exit 1))
-      (let [{:keys [already? instruction]}
-            (try (work/activate! p id session {:cwd (when session here)})
+      (let [{:keys [already?]}
+            (try (work/activate! p id)
                  (catch clojure.lang.ExceptionInfo e
                    (println (str "Refused — " (ex-message e)))
                    (System/exit 1)))]
         (println (if already?
                    (str id " was already activated.")
-                   (str "Activated nido's recipe on " id ": the core holds its unit"
-                        (when session (str ", in this session's working copy")) ".")))
-        (println)
-        (println instruction)))))
+                   (str "Activated " id ": the core holds its unit and provisions its session; "
+                        "its conductor decides what it is for once that session is ready.")))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   activate-cmd [& args]

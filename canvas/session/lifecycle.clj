@@ -121,12 +121,6 @@
      typed at its prompt; given none, the tab is a bare shell."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [resolve-cd-target desk/request!]})
-  (Operation stage-kickoff!
-    "Leave a one-shot kickoff in a session's home that starts its agent with a name and a first
-     prompt, through `nido work` in the worktree, and return the command that runs it — what a
-     spawned tab runs, and what a person runs outside Warp. The kickoff's file name is this
-     module's alone."
-    {:signature [:=> [:catn [:name :string] [:opts :map]] :string] :delegates [resolve-cd-target]})
   (Operation list-all-data "Every session for a project, as data."
     {:signature [:=> [:catn [:opts :map]] :map] :delegates [resolve-project sstate/read-registry]})
   (Operation list-all "Every session for a project, printed."

@@ -6,9 +6,9 @@
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.lane.drive :refer [status]]
             [canvas.coordinator.record.session :refer [record-session]]
-            [canvas.coordinator.work :refer [coordinator-work list-workstreams]]
+            [canvas.coordinator.work :refer [coordinator-work list-workstreams start-goal!]]
             [canvas.session.chat :refer [session-chat]]
-            [canvas.tasks.nido-session :refer [start up]]
+            [canvas.tasks.nido-session :refer [start]]
             [canvas.tasks.nido-workstream :refer [list-cmd]]
             [canvas.ui.chat-host :refer [ui-chat-host]]
             [canvas.ui.side-chat :refer [ui-side-chat]]
@@ -19,8 +19,8 @@
   {:about [list-cmd list-workstreams] :evidence "round"})
 
 (Claim goal-start-is-a-persons-start
-  "start reaches a session only through the path up takes, so the session is up when the command returns and nothing is queued for the daemon; it needs no session to run in, activates the workstream it minted before the session is carried, and gives that session as its first instruction to record the brief's goal as the workstream's intent, followed by the brief verbatim."
-  {:about [start up] :evidence "round"})
+  "start writes nothing when a session of the name it is given already exists; otherwise it mints a workstream and opens its unit in the core, named for the session, with a first turn that records the brief's goal as the workstream's intent and then works the brief verbatim. It brings no session up itself: the core provisions the unit's session under that name, and no session already up becomes the unit's."
+  {:about [start start-goal!] :evidence "round"})
 
 (Claim chat-session-is-not-work
   "A workstream's status passes over a session record marked the chat's when it reads whether the workstream is live, as it passes over the conductor's: a chat's session being up never makes its workstream live."

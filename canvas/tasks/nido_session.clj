@@ -46,19 +46,12 @@
   (Operation enter
     "Hand off a cwd to the parent shell via `~/.nido/.last-cd`. Paired with"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation kickoff-prompt
-    "A spawned child agent's first turn: whom it answers to, when to write, then the brief."
-    {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation start
-    "Start work on a goal from outside any session: bring a new session up as `up` does on a
-     workstream minted for it, and activate that workstream with the brief as its unit's first
-     turn. Names no parent and links nothing."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation spawn
-    "Bring a child session up as `up` does, its first turn the brief addressed back to the parent's
-     agent, run by the core. Record it and the session spawning it as each other's :session link,
-     and open a tab at the child's home. `:ws-id` is passed to `up` and nothing else."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+    "Start work on a goal from anywhere: a workstream minted for it and handed to the core, whose
+     unit's session the core provisions under the given name and whose first turn is the brief.
+     Adopts no session; refuses a name a session already has."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]
+     :delegates [work/start-goal!]})
   (Operation status
     "Print status for the named session."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

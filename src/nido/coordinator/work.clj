@@ -3447,33 +3447,38 @@
        :assert-gate  (advance-phase! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
-(def ^:private activation-preamble
-  (str "nido's recipe is now active on this workstream. Write the records it owes — intent, "
-       "baseline, design — from your understanding of this session so far, as /design says; the "
-       "review loops exist to check that understanding, so do not re-derive it from scratch."))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string] [:? [:map [:cwd {:optional true} [:maybe :string]]]]] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:map [:brief {:optional true} [:maybe :string]]
+                                                                   [:unit {:optional true} :string]]]] :map]}
   activate!
-  "Hand `ws-id` to the core for a person: their command opening its unit, in `session`'s working
-   copy `:cwd` when they gave it from one — that session is then the unit's, recorded ready, and
-   its turns run there — else in a session the core provisions; given `:brief`, that is the unit's
-   first turn, run once its session is ready. Activating twice changes nothing. Answers {:ws-id
-   :already? :instruction}, the instruction being what the session's agent is to do now — the
-   surface delivers it; throws when the core refuses."
-  [project ws-id _session & [{:keys [cwd brief]}]]
+  "Hand `ws-id` to the core for a person: their command opening its unit — named `:unit`, else for
+   the workstream — whose session the core provisions, named for the unit, never one already up.
+   Given `:brief`, that is
+   the unit's first turn, run once its session is ready; without one the conductor hears the
+   session ready and decides what it is for. Activating twice changes nothing. Answers {:ws-id
+   :already?}; throws when the core refuses."
+  [project ws-id & [{:keys [brief unit] :or {unit ws-id}}]]
   (let [p        (keyword (name project))
-        already? (contains? (:units (wcore/state p ws-id)) ws-id)
+        already? (contains? (:units (wcore/state p ws-id)) unit)
         o        (when-not already?
-                   (wcore/act! p ws-id (cond-> {:command :open-unit :unit ws-id :project (name p)
+                   (wcore/act! p ws-id (cond-> {:command :open-unit :unit unit :project (name p)
                                                 :goal (intent-goal p ws-id)}
-                                         cwd   (assoc :session-cwd cwd)
                                          brief (assoc :first-turn {:spec {:executor :claude :instructions brief}}))))]
     (when (and o (not (wcore/admitted? o)))
       (throw (ex-info (str "the core refused — " (or (some-> (get-in o [:refused :reason]) name) (:error o)))
                       {:ws-id ws-id :outcome o})))
-    {:ws-id       ws-id
-     :already?    already?
-     :instruction activation-preamble}))
+    {:ws-id ws-id :already? already?}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :string] :WorkstreamId]}
+  start-goal!
+  "Start work on a goal: a workstream minted for it, handed to the core with `brief` as its unit's
+   first turn, in a session named `session` that the core provisions. The way an exploration
+   becomes nido's work — its findings go in the brief, never a session already up. Answers the
+   workstream's id; throws when the core refuses, leaving the minted workstream behind."
+  [project session brief]
+  (let [p  (keyword (name project))
+        id (:id (cws/create! p {:external-refs []}))]
+    (activate! p id {:brief brief :unit session})
+    id))
 
 (defn- pause-of
   "The person's pause the pane shows, or nil when none stands: the ledger's standing pause as

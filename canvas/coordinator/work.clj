@@ -229,13 +229,19 @@
   (Operation orphan-live-sessions "The live sessions no workstream owns. Pure."
     {:signature [:=> [:catn [:live :any] [:owned :any]] :any]})
   (Operation activate!
-    "Hand `ws-id` to the core for a person: their command opening its unit, in the working copy
-     `:cwd` names when given — that session is then the unit's — else in a session the core
-     provisions; given `:brief`, that is the unit's first turn. Activating twice changes nothing.
-     Answers {:ws-id :already? :instruction}, the instruction being what the session's agent is to
-     do now; throws when the core refuses."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]
-                       [:opts [:? [:map [:cwd {:optional true} [:maybe :string]]]]]] :map]})
+    "Hand `ws-id` to the core for a person: their command opening its unit — named `:unit`, else for
+     the workstream — whose session the core provisions, never one already up; given `:brief`,
+     that is the unit's first turn. Activating
+     twice changes nothing. Answers {:ws-id :already?}; throws when the core refuses."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
+                       [:opts [:? [:map [:brief {:optional true} [:maybe :string]]
+                                        [:unit {:optional true} :string]]]]] :map]})
+  (Operation start-goal!
+    "Start work on a goal: a workstream minted for it and handed to the core, the brief its unit's
+     first turn, in a session the core provisions under the given name. Answers the workstream's
+     id."
+    {:signature [:=> [:catn [:project ProjectName] [:session SessionName] [:brief :string]] WorkstreamId]
+     :delegates [activate! workstream/create!]})
   (Operation pause!
     "Pause a workstream for a person, with their note: no conductor drives it while the pause
      stands, and every surface reads it paused rather than stalled."

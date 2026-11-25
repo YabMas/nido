@@ -153,126 +153,46 @@
         "the honest answer when concurrency, not neglect, is the constraint")
     (is (not-any? #(str/includes? % "down one to make room") lines))))
 
-(defn- spawn-calls
-  "Run spawn with every effect recorded instead of performed. Returns [calls printed-output]."
-  [{:keys [joinable warp?] :or {warp? true}} & args]
-  (let [calls (atom [])
-        brief (str (babashka.fs/create-temp-file))]
-    (spit brief "Build the widget.")
-    (with-redefs [lifecycle/session-from-cwd            (fn [] {:project "nido" :session "parent"})
-                  lifecycle/warp?                       (fn [] warp?)
-                  lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
-                  lifecycle/session-weight              (fn [_ _] :heavy)
-                  lifecycle/link-add!                   (fn [s o] (swap! calls conj [:link s (select-keys o [:project :type :url :title])]))
-                  work/activate!                        (fn [p w s & [o]] (swap! calls conj [:activate p w s (:brief o)]) {})
-                  csession/workstream-id-for            (fn [_ _] (when (some #(= :birth (first %)) @calls) "ws-child"))
-                  lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o) (:command o)]))
-                  state/session-home-dir                (fn [_ _] "/tmp/home")
-                  scratch/joinable                      (or joinable (fn [& _] nil))
-                  scratch/birth!                        (fn [p s _w ws] (swap! calls conj [:birth p s ws]) ws)
-                  task/exit!                            (fn [c] (throw (ex-info (str "exit " c) {})))]
-      (let [out (with-out-str
-                  (try (apply task/spawn (concat [":project" "nido" "kid" ":parent-agent" "parent-a1"
-                                                  ":brief-file" brief]
-                                                 args))
-                       (catch clojure.lang.ExceptionInfo _ nil)))]
-        [@calls out]))))
-
-(deftest spawn-goes-through-up-and-hands-it-the-workstream
-  (let [[calls _] (spawn-calls {} ":ws-id" "ws-child")]
-    (is (= [[:birth :nido "kid" "ws-child"] [:up "kid"] [:birth :nido "kid" "ws-child"]]
-           (filterv #(#{:birth :up} (first %)) calls))
-        ":ws-id reaches the workstream claim exactly as up passes it, and nowhere else")))
-
-(deftest spawn-refused-by-up-links-and-stages-nothing
-  (let [[calls out] (spawn-calls {:joinable (fn [& _] {:reason :closed})} ":ws-id" "ws-child")]
-    (is (str/includes? out "closed"))
-    (is (= [] calls))))
-
-(deftest spawn-links-both-sessions-to-each-other
-  (let [[calls _] (spawn-calls {})]
-    (is (= #{[:link "parent" {:project "nido" :type :session :url "nido://session/nido/kid"
-                              :title "child · agent kid"}]
-             [:link "kid" {:project "nido" :type :session :url "nido://session/nido/parent"
-                           :title "parent · agent parent-a1"}]}
-           (set (filter #(= :link (first %)) calls))))))
-
-(deftest spawn-hands-the-child-to-the-core-on-a-brief-addressed-back-to-the-parent
-  (let [[calls _] (spawn-calls {} ":ws-id" "ws-child")
-        [_ p w s b] (first (filter #(= :activate (first %)) calls))]
-    (is (= [:nido "ws-child" "kid"] [p w s]))
-    (is (str/includes? b "SendMessage to `parent-a1`"))
-    (is (str/ends-with? b "Build the widget.\n") "the brief verbatim, last")
-    (is (some #(= [:tab "kid" :home nil] %) calls) "its tab opens on its home")))
-
-(deftest spawn-outside-warp-opens-no-tab
-  (let [[calls out] (spawn-calls {:warp? false})]
-    (is (not-any? #(= :tab (first %)) calls))
-    (is (str/includes? out "nido:session:enter :project nido kid"))))
-
-(deftest spawn-never-asks-the-budget-question
-  (let [asked (atom 0)]
-    (with-redefs [task/interactive? (fn [] true)
-                  task/confirm?     (fn [] (swap! asked inc) false)
-                  fleet/snapshot    (fn [] (throw (ex-info "probed" {})))]
-      (let [[calls out] (spawn-calls {})]
-        (is (zero? @asked))
-        (is (not (str/includes? out "Aborted")))
-        (is (some #(= [:up "kid"] %) calls))))))
-
 (defn- start-calls
-  "Run start with every effect recorded instead of performed, in a directory that is no session's.
-   `held` is the workstream already holding the name, if any. Returns [calls printed-output]."
-  [{:keys [held]} & args]
+  "Run start with every effect recorded instead of performed. `held` is the workstream already
+   holding the name, `wt?` whether the name's worktree exists. Returns [calls printed-output]."
+  [{:keys [held wt?]} & args]
   (let [calls (atom [])]
-    (with-redefs [lifecycle/session-from-cwd            (fn [] nil)
-                  lifecycle/session-home-coords-from-cwd (fn [& _] nil)
+    (with-redefs [lifecycle/session-coords              (fn [s _] {:wt-path (str "/nonexistent-wt/" s)})
+                  babashka.fs/exists?                   (fn [p & _] (boolean (and wt? (str/starts-with? (str p) "/nonexistent-wt/"))))
                   lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
-                  lifecycle/session-weight              (fn [_ _] :heavy)
-                  lifecycle/link-add!                   (fn [s _] (swap! calls conj [:link s]))
-                  lifecycle/spawn-tab!                  (fn [s _] (swap! calls conj [:tab s]))
-                  work/activate!                        (fn [p w s & [o]] (swap! calls conj [:activate p w s (:brief o)]) {})
-                  csession/workstream-id-for            (fn [_ _] (or held
-                                                                      (when (some #(= :birth (first %)) @calls) "ws-new")))
-                  state/session-home-dir                (fn [_ _] "/tmp/home")
-                  scratch/joinable                      (fn [& _] nil)
-                  scratch/birth!                        (fn [p s _w ws] (swap! calls conj [:birth p s ws]) (or ws "ws-new"))
+                  work/start-goal!                      (fn [p s b] (swap! calls conj [:start-goal p s b]) "ws-new")
+                  csession/workstream-id-for            (fn [_ _] held)
                   task/exit!                            (fn [c] (throw (ex-info (str "exit " c) {:exit c})))]
       (let [out (with-out-str
                   (try (apply task/start (concat [":project" "nido" "goal"] args))
                        (catch clojure.lang.ExceptionInfo e (println (ex-message e)))))]
         [@calls out]))))
 
-(deftest start-brings-a-session-up-on-a-minted-activated-workstream
-  (let [[calls out] (start-calls {} ":brief" "Make the widget; done when it renders.")]
-    (is (= [[:birth :nido "goal" nil] [:up "goal"] [:birth :nido "goal" "ws-new"]
-            [:activate :nido "ws-new" "goal"]]
-           (mapv #(if (= :activate (first %)) (vec (take 4 %)) %) calls))
-        "up's path with no workstream named, then handed to the core")
-    (is (str/includes? out "Started workstream ws-new"))))
+(defn- the-brief [calls] (nth (first (filter #(= :start-goal (first %)) calls)) 3))
 
-(deftest start-needs-no-session-to-run-in
-  (let [[calls out] (start-calls {} ":brief" "Goal.")]
-    (is (some #(= [:up "goal"] %) calls))
-    (is (not-any? #(#{:link :tab} (first %)) calls) "it has no parent to link and opens no tab")
-    (is (not (str/includes? out "must run inside")))))
+(deftest start-hands-a-minted-workstream-to-the-core-and-brings-nothing-up-itself
+  (let [[calls out] (start-calls {} ":brief" "Make the widget; done when it renders.")]
+    (is (= [[:start-goal :nido "goal"]] (mapv #(vec (take 3 %)) calls))
+        "the core provisions the session: start brings none up and adopts none")
+    (is (str/includes? out "Started workstream ws-new"))))
 
 (deftest start-reads-its-brief-from-a-file
   (let [f (str (babashka.fs/create-temp-file))]
     (spit f "From a file.")
-    (is (str/ends-with?
-         (nth (first (filter #(= :activate (first %)) (first (start-calls {} ":brief-file" f)))) 4)
-         "\n\nFrom a file."))))
+    (is (str/ends-with? (the-brief (first (start-calls {} ":brief-file" f))) "\n\nFrom a file."))))
 
-(deftest start-tells-the-session-to-record-the-goal-before-working-it
-  (let [b (nth (first (filter #(= :activate (first %)) (first (start-calls {} ":brief" "Ship the widget.")))) 4)]
+(deftest start-tells-the-turn-to-record-the-goal-before-working-it
+  (let [b (the-brief (first (start-calls {} ":brief" "Ship the widget.")))]
     (is (str/includes? b ":intent"))
     (is (str/ends-with? b "\n\nShip the widget.") "the brief verbatim, last")))
 
-(deftest start-refuses-a-name-a-workstream-already-holds
-  (let [[calls out] (start-calls {:held "ws-old"} ":brief" "Goal.")]
-    (is (= [] calls) "refused before anything is provisioned")
-    (is (str/includes? out "ws-old"))))
+(deftest start-refuses-a-name-a-session-already-has
+  (doseq [[why opts] [["a workstream holds it" {:held "ws-old"}]
+                      ["its worktree exists"   {:wt? true}]]]
+    (let [[calls out] (start-calls opts ":brief" "Goal.")]
+      (is (= [] calls) (str why ": refused before anything is written"))
+      (is (str/includes? out "already exists") why))))
 
 (deftest start-without-a-brief-starts-nothing
   (let [[calls out] (start-calls {})]

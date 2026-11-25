@@ -1263,9 +1263,6 @@
   []
   (desk/opens-terminals?))
 
-(defn- sh-quote [s]
-  (str "'" (str/replace (str s) "'" "'\\''") "'"))
-
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   spawn-tab!
   "Ask the person's desk for a new tab at the session's `:enter` cwd and return
@@ -1285,42 +1282,6 @@
     (desk/request! (cond-> {:kind :terminal :dir path}
                      command (assoc :command command)))
     path))
-
-(def ^:private kickoff-file
-  "Name of the staged kickoff in a session-home. It is not `.nido-kickoff`, the
-   name the retired zsh precmd hook consumes, so a hook left in a `~/.zshrc`
-   cannot start the agent deaf before the tab runs it."
-  ".nido-kickoff.zsh")
-
-(defn ^{:malli/schema [:=> [:cat :string :map] :string]}
-  stage-kickoff!
-  "Leave a kickoff in the session-home that starts its agent through
-   `nido work` in the worktree, named `:agent-name`, given `:prompt` as its
-   first turn, and run on `:model` when given — with permissions skipped, as
-   nido work starts every session; a kickoff passes no permission mode of its own.
-   Returns the command that runs it — what spawn's tab runs, and what a
-   person runs outside Warp. The prompt is kept beside it rather than
-   inlined, because a brief of any length survives a file where it would not
-   survive quoting.
-
-   Staging again replaces the earlier kickoff; nothing queues."
-  [name {:keys [agent-name prompt model] :as opts}]
-  (let [home     (resolve-cd-target name (assoc opts :cd :home))
-        worktree (resolve-cd-target name (assoc opts :cd :worktree))
-        prompt-f (str (fs/path home ".nido-kickoff-prompt.md"))
-        script   (str "cd " (sh-quote worktree) " || exit 1\n"
-                      "bb --config " (sh-quote (str (fs/path (core/nido-source-dir) "bb.edn")))
-                      " nido:work :name " (sh-quote agent-name)
-                      " :prompt-file " (sh-quote prompt-f)
-                      (when model (str " :model " (sh-quote model)))
-                      "\n")]
-    (spit prompt-f prompt)
-    ;; Written aside and renamed in, so nothing ever runs a half-written file.
-    (let [tmp (str (fs/path home (str kickoff-file ".tmp")))]
-      (spit tmp script)
-      (fs/move tmp (fs/path home kickoff-file) {:replace-existing true :atomic-move true}))
-    ;; `sh`, not the person's shell: the script is POSIX, and nido's host need not have zsh.
-    (str "cd " (sh-quote home) " && sh " kickoff-file)))
 
 (defn- worktree-dir?
   "True if `dir` is a session worktree root. A git worktree's root has a

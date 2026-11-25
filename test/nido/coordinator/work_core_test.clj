@@ -199,16 +199,34 @@
       (is (= {:answered "a1" :posted false :granted [:merge] :refused []}
              (work/person-says! :brian ws-id "yes" [:merge]))))))
 
-(deftest activation-hands-a-session-to-the-core-as-its-unit
+(deftest activation-opens-a-unit-whose-session-the-core-provisions
   (with-ws
     (fn [c ws-id]
-      (let [r (work/activate! :brian ws-id "s1" {:cwd "/wt/s1"})]
+      (let [r (work/activate! :brian ws-id)]
         (is (false? (:already? r)))
-        (is (= {:status :ready :cwd "/wt/s1"}
-               (select-keys (get-in (core-state c ws-id) [:units ws-id :session]) [:status :cwd]))))
-      (is (:already? (work/activate! :brian ws-id "s1" {:cwd "/wt/s1"})))
+        (is (= {:status :none} (get-in (core-state c ws-id) [:units ws-id :session]))
+            "no session already up is adopted: the core owes the unit one"))
+      (is (:already? (work/activate! :brian ws-id)))
       (is (:was? (work/deactivate! :brian ws-id nil)))
       (is (get-in (core-state c ws-id) [:units ws-id :held?])))))
+
+(deftest activation-given-a-brief-makes-it-the-first-turn
+  (with-ws
+    (fn [c ws-id]
+      (work/activate! :brian ws-id {:brief "do the thing"})
+      (is (= {:spec {:executor :claude :instructions "do the thing"}}
+             (get-in (core-state c ws-id) [:units ws-id :first-turn]))))))
+
+(deftest a-goal-start-opens-a-unit-named-for-its-session-with-the-brief-first
+  (with-ws
+    (fn [c _]
+      (let [id (work/start-goal! :brian "widget" "Build the widget.")
+            u  (get-in (core-state c id) [:units "widget"])]
+        (is (not= id nil))
+        (is (= {:status :none} (:session u)) "its session is the core's to provision")
+        (is (= "Build the widget." (get-in u [:first-turn :spec :instructions])))
+        (is (= [] (:entries (workstream/read-ws :brian id)))
+            "minted bare: no :scratch mark, so no reaper takes it for a one-off")))))
 
 (deftest a-workstream-the-core-works-unrecorded-reads-as-its-core-state
   (with-ws

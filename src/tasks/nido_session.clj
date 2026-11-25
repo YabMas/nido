@@ -183,11 +183,10 @@
 
 (defn- up*
   "Bring `session` up on `ws-id` (nil: the name's holder, else a minted
-   one-off) and print where it lives. With `first-instruction`'s :activate? its workstream is
-   handed to the core over this session, :brief its unit's first turn. Returns {:home :activated?},
-   or nil when the person declined at the budget question. Exits 1
-   — before anything is provisioned — when the session cannot join `ws-id`."
-  [project session ws-id opts first-instruction]
+   one-off) and print where it lives. Returns {:home}, or nil when the person declined at the
+   budget question. Exits 1 — before anything is provisioned — when the session cannot join
+   `ws-id`."
+  [project session ws-id opts]
   (let [p (keyword project)]
     (when-let [why (and ws-id (scratch/joinable p session ws-id))]
       (println (str "Refused — " session " cannot start on " ws-id ": "
@@ -206,12 +205,7 @@
         ;; the record describes what was really provisioned, not what was asked for.
         (let [held-by (scratch/birth! p session nil ws-id)
               _       (lifecycle/up! session (assoc opts :runtime-key held-by))
-              held-by (scratch/birth! p session (lifecycle/session-weight session opts) held-by)
-              active? (when (:activate? first-instruction)
-                        (work/activate! p held-by session
-                                        {:cwd   (str (:wt-path (lifecycle/session-coords session opts)))
-                                         :brief (:brief first-instruction)})
-                        true)
+              _       (scratch/birth! p session (lifecycle/session-weight session opts) held-by)
               home    (state/session-home-dir project session)]
           (println)
           (println (str "Session ready: " project "/" session
@@ -219,11 +213,9 @@
           (when (false? (:wait opts))
             (println (str "  services are starting in the background — "
                           "bb nido:session:status :project " project " " session)))
-          (when active?
-            (println (str "  handed to the core: its brief runs as the unit's first turn")))
           (println (str "  cd " home))
           (println (str "  bb nido:session:enter :project " project " " session))
-          {:home home :activated? active?})))))
+          {:home home})))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   up
@@ -249,8 +241,7 @@
         project (require-project opts)
         session (require-session-name pos)]
     (up* project session (some-> (:ws-id opts) str)
-         (-> (dissoc opts :ws-id) (update :wait #(if (nil? %) false %)))
-         nil)
+         (-> (dissoc opts :ws-id) (update :wait #(if (nil? %) false %))))
     nil))
 
 ;; ── revive: bring back what died with the host ──────────────────────────────
@@ -433,116 +424,6 @@
                   (println (str "    " s ": could not be brought up — " (ex-message e))))))))))
     nil))
 
-;; ── spawn: a child session with an agent already on its brief ────────────────
-
-(defn- session-uri
-  "The :session link URL naming a session. A URI rather than a web URL because
-   a session has none; it only has to be unique and stable for link dedupe."
-  [project session]
-  (str "nido://session/" project "/" session))
-
-(defn ^{:malli/schema [:=> [:cat :map] :string]}
-  kickoff-prompt
-  "The child agent's first turn: who it answers to, when to write, then the
-   brief verbatim. Only the child's half of the protocol lives here; the
-   parent's half is in the spawn-session skill, which is what chooses to spawn."
-  [{:keys [parent-agent parent-project parent-session child brief]}]
-  (str "You are the agent of a child nido session, `" child "`, spawned by the agent `"
-       parent-agent "` (session " parent-project "/" parent-session ") to work on the brief "
-       "below in its own focus area.\n"
-       "\n"
-       "## Talking to your parent\n"
-       "\n"
-       "Your parent is reachable with SendMessage to `" parent-agent "`; it reaches you as `"
-       child "`. Message it:\n"
-       "\n"
-       "- when the brief is done — what landed, where, and anything you left open;\n"
-       "- when you are blocked on a decision that is the parent's or the person's to make;\n"
-       "- when you find something that changes the brief's premise or touches another part "
-       "of the parent's arc.\n"
-       "\n"
-       "Not for progress narration. Each message must stand on its own — it may be read "
-       "long after you send it. A message from your parent is direction on this work; the "
-       "person at this terminal outranks you both.\n"
-       "\n"
-       "## Brief\n"
-       "\n"
-       brief "\n"))
-
-(defn- parent-coords!
-  "[project session] of the session this command runs inside — the parent."
-  []
-  (or (when-let [s (lifecycle/session-from-cwd)] [(:project s) (:session s)])
-      (lifecycle/session-home-coords-from-cwd)
-      (throw (ex-info "spawn must run inside the parent session — its worktree or session home"
-                      {:cwd (System/getProperty "user.dir")}))))
-
-(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  spawn
-  "Bring a child session up and start its agent on a brief, in a new Warp tab
-   beside the caller. Run from inside the parent session.
-
-     bb nido:session:spawn :project <p> <child> :parent-agent <name> :brief-file <path>
-                           [:ws-id <id>] [any up option]
-
-   `:parent-agent` is the caller's own agent name, the one SendMessage reaches
-   it by. The child goes through exactly what `up` does — `:ws-id` included,
-   which is how a forked child is spawned — then each session gets a :session
-   link naming the other, a kickoff is staged, and a tab opens on the child.
-   The child's agent answers to the child's session name.
-
-   The child is passed no permission mode: like every session nido starts, it
-   runs with permissions skipped, the class the parent's session runs in too, so
-   messages between the two are in one permission class and wait for nobody.
-
-   The child's workstream is activated before its agent starts: a session nido
-   starts to work a brief is the recipe's from birth. Only a session a person
-   starts by hand stays plain until they activate it.
-
-   The child is a driven background session on the kickoff, and the tab
-   attaches to it rather than starting a conversation of its own. It is carried
-   as `up` carries a session — occupying its workstream's whole seat when that
-   seat is free — and otherwise driven occupying no seat.
-
-   In Warp the tab runs its command as though typed at its prompt. Outside Warp
-   no tab opens, and the printed command is run by hand."
-  [& args]
-  (let [[pos opts]   (task-args/split-args args #{:parent-agent :brief-file})
-        project      (require-project opts)
-        child        (require-session-name pos)
-        parent-agent (or (:parent-agent opts)
-                         (throw (ex-info "Missing :parent-agent <your agent name>"
-                                         {:hint "Your own name as other sessions message you — ListAgents prints it."})))
-        brief-file   (or (:brief-file opts)
-                         (throw (ex-info "Missing :brief-file <path>" {})))
-        brief        (slurp brief-file)
-        [pp ps]      (parent-coords!)]
-    (when (and (= pp project) (= ps child))
-      (throw (ex-info "A session cannot spawn itself" {:session child})))
-    ;; :yes — spawn is one command whoever issues it, so it never stops at the
-    ;; budget question a person running it by hand would otherwise be asked.
-    (when-let [{:keys [home]}
-               (up* project child (some-> (:ws-id opts) str)
-                    (-> (dissoc opts :ws-id :parent-agent :brief-file)
-                        (assoc :yes true))
-                    {:brief (kickoff-prompt {:parent-agent parent-agent :parent-project pp
-                                             :parent-session ps :child child :brief brief})
-                     :activate? true})]
-      (lifecycle/link-add! ps {:project pp :type :session :url (session-uri project child)
-                               :title (str "child · agent " child)})
-      (lifecycle/link-add! child {:project project :type :session :url (session-uri pp ps)
-                                  :title (str "parent · agent " parent-agent)})
-      (let [by-hand (str "bb nido:session:enter :project " project " " child)
-            tab?    (lifecycle/warp?)]
-        (when tab? (lifecycle/spawn-tab! child {:project project :cd :home}))
-        (println)
-        (println (str "Spawned " project "/" child " — its agent answers to `" child "`."))
-        (println "  The core runs its brief as its unit's first turn.")
-        (if tab?
-          (println "  Its tab is open.")
-          (println (str "  Not in Warp: open a terminal and run  " by-hand)))
-        home))))
-
 (defn- goal-instruction
   "The first instruction of a session started on a goal: the brief verbatim, after the one thing
    the brief cannot say for itself — that the goal is recorded on the workstream before work
@@ -556,16 +437,17 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   start
-  "Start work on a goal: bring the new session `<session>` up on a workstream minted for it,
-   activate that workstream, and drive the session on the brief as its first instruction. Run
-   from anywhere — it names no parent, links nothing and opens no tab.
+  "Start work on a goal: a workstream minted for it and handed to the core, whose unit's session —
+   named `<session>` — the core provisions and whose first turn is the brief. Run from anywhere:
+   it adopts no session, the one it runs in included. How an exploration becomes nido's work is
+   this, with its findings written into the brief.
 
      bb nido:workstream:start :project <p> <session> (:brief-file <path> | :brief \"…\")
 
-   The session's agent is first told to record the brief's goal as the workstream's :intent,
-   then given the brief verbatim, so the brief states the goal and what done looks like. Prints the workstream's id. Exits 1, before anything is provisioned, when a
-   workstream already holds the name: a start that joined existing work would hand its brief to
-   nobody. Exits 1 with the session up when it could not be driven on the brief."
+   The turn is first told to record the brief's goal as the workstream's :intent, then given the
+   brief verbatim. Prints the workstream's id. Exits 1, before anything is written, when a session
+   of that name already exists — a start that joined it would hand its brief to a working copy
+   it did not make."
   [& args]
   (let [[pos opts] (task-args/split-args args #{:brief-file :brief})
         project    (require-project opts)
@@ -576,17 +458,14 @@
                          :else (throw (ex-info "Missing :brief-file <path> or :brief <text>" {})))]
     (when (str/blank? brief)
       (throw (ex-info "The brief is empty" {})))
-    (when-let [holder (csession/workstream-id-for p session)]
-      (println (str "Refused — workstream " holder " already holds a session named " session "."))
+    (when (or (csession/workstream-id-for p session)
+              (fs/exists? (:wt-path (lifecycle/session-coords session {:project project}))))
+      (println (str "Refused — a session named " session " already exists."))
       (exit! 1))
-    ;; :yes — one command whoever issues it, as spawn is.
-    (when (up* project session nil
-               (-> (dissoc opts :brief-file :brief) (assoc :yes true))
-               {:brief (goal-instruction brief) :activate? true})
-      (let [ws-id (csession/workstream-id-for p session)]
-        (println)
-        (println (str "Started workstream " ws-id " — session " project "/" session "."))
-        ws-id))))
+    (let [ws-id (work/start-goal! p session (goal-instruction brief))]
+      (println (str "Started workstream " ws-id " — the core provisions " project "/" session
+                    " and runs the brief as its first turn."))
+      ws-id)))
 
 (defn- on-its-workstream
   "`opts` naming, as the runtime key, the workstream holding `session` — so a verb that starts its
