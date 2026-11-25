@@ -29,7 +29,9 @@
    up while the unit is open, stopped once it merged or its goal was retracted (its working copy
    kept on disk), destroyed once the workstream closed. What it is changes only by a recorded
    provisioning attempt and that attempt's recorded outcome, so a provisioner killed between the
-   two leaves an attempt pending that a start finds and makes again.
+   two leaves an attempt pending that a start finds and makes again. A session recorded ready that
+   is known to be down — the host it ran on booted since — is recorded lost: it reads as never
+   brought up, its worktree kept, so what it should be is owed again.
 
    A run is the other kind of stream: one fire of a trigger, with no ledger, conductor, inbox, chat
    or operator ask. `:start-run` opens it with exactly one unit, named by the run's id, whose first
@@ -365,6 +367,10 @@
       (and (not (:run state)) (= :failed outcome)) (hear-later {:kind :session-failed :unit unit :want want :detail detail})
       (and (not (:run state)) unit-ready?)         (hear-later {:kind :unit-ready :unit unit}))))
 
+(defmethod evolve :session-lost [state {:keys [unit]}]
+  ;; Its worktree is kept: bringing the session up again is bringing up the same one.
+  (update-in state [:units unit :session] #(-> % (assoc :status :none) (dissoc :detail))))
+
 (defmethod evolve :provision-retried [state {:keys [unit]}]
   (update-in state [:units unit :session] #(-> % (assoc :status :none) (dissoc :detail))))
 
@@ -626,6 +632,13 @@
                            (not (get-in state [:units unit :first-turn]))
                            (not-any? #(= unit (:unit %)) (vals (:turns state))))
                       (assoc :unit-ready? true))))))
+
+(defmethod decide :record-session-lost [state {:keys [unit]}]
+  (cond
+    (not= :ready (get-in state [:units unit :session :status])) (refuse :session-not-ready :unit unit)
+    ;; A turn running is running in it: its end is reported first, and the session is lost after.
+    (some #(= :running (:status %)) (active-turns state unit))  (refuse :turn-running :unit unit)
+    :else (accept {:event :session-lost :unit unit})))
 
 (defmethod decide :retry-provision [state {:keys [unit]}]
   (if (= :failed (get-in state [:units unit :session :status]))
@@ -1014,7 +1027,8 @@
 
 (def run-commands
   "The commands a run admits: its one unit's mechanics. Every other command is a workstream's."
-  #{:record-provision-attempt :record-provision-outcome :start-turn :record-outcome})
+  #{:record-provision-attempt :record-provision-outcome :record-session-lost :start-turn
+    :record-outcome})
 
 (defn- not-on-a-run
   "Why `command` is refused on run state `state`, or nil when a run admits it."

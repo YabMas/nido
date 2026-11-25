@@ -20,6 +20,11 @@
   (Operation current-release
     "The directory of the release the live link points at, or nil."
     {:signature [:=> [:catn [:paths :map]] [:maybe :string]]})
+  (Operation sessions-lost
+    "The keyed commands that record lost, at a host boot, the ready session of every open unit —
+     what a start owes once the host booted since the last one, so a session the core records
+     ready is one that is up."
+    {:signature [:=> [:catn [:boot-id :string] [:wss [:sequential :map]]] [:sequential :map]]})
   (Operation fold-changed?
     "Whether release `b` folds events differently from release `a`: their domains differ."
     {:signature [:=> [:catn [:a [:maybe :string]] [:b :string]] :boolean]})

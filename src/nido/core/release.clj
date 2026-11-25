@@ -97,6 +97,47 @@
   [wss]
   (filter (fn [{:keys [state]}] (some #(= :running (:status %)) (vals (:turns state)))) wss))
 
+(defn- host-boot-id
+  "This host boot's id as the kernel gives it — Linux's /proc/sys/kernel/random/boot_id, macOS's
+   kern.bootsessionuuid — or nil when it cannot be read. `nido.platform.process/host-boot` reads
+   the same under bb; this JVM has no babashka to load it with. The id, never the boot time: macOS
+   moves kern.boottime when it corrects the clock, within one boot."
+  []
+  (try
+    (let [f (io/file "/proc/sys/kernel/random/boot_id")
+          raw (if (.exists f)
+                (slurp f)
+                (let [p (.start (ProcessBuilder. ^java.util.List ["/usr/sbin/sysctl" "-n" "kern.bootsessionuuid"]))]
+                  (slurp (.getInputStream p))))]
+      (not-empty (str/trim raw)))
+    (catch Exception _ nil)))
+
+(defn ^{:malli/schema [:=> [:cat :string [:sequential :map]] [:sequential :map]]} sessions-lost
+  "The keyed commands recording lost, at host boot `boot-id`, the session of every open unit
+   `wss` ([{:ws :state}]) records ready: nothing a host ran survives its boot. Keyed by the boot,
+   so a daemon started again within it records nothing twice."
+  [boot-id wss]
+  (for [{:keys [ws state]} wss
+        :when (not (:closed? state))
+        u (sort-by :id (vals (:units state)))
+        :when (and (= :open (:status u)) (= :ready (get-in u [:session :status])))]
+    {:key (str "boot/" boot-id "/" ws "/" (:id u)) :ws ws
+     :command {:command :record-session-lost :unit (:id u)}}))
+
+(defn- account-for-boot!
+  "Record lost every ready session of an open unit when the host booted since the boot recorded
+   in `boot-file`, then record this one. The boot is recorded only once those commands are
+   answered, so a daemon killed before then records them at its next start. A home with no boot
+   recorded yet assumes nothing: it records this boot and loses no session."
+  [boot-file submit wss]
+  (when-let [boot (host-boot-id)]
+    (let [was (try (:id (edn/read-string (slurp boot-file))) (catch Exception _ nil))]
+      (when (and was (not= was boot))
+        (let [cs (sessions-lost boot wss)]
+          (log "host booted since the last start: recording" (count cs) "sessions lost")
+          (doseq [p (mapv submit cs)] (deref p 60000 nil))))
+      (spit boot-file (pr-str {:id boot})))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]} run!
   "Run the core daemon until the process is killed. Options:
      :home       the nido home (default `nido-home`)
@@ -161,6 +202,9 @@
       ;; workstream as a commit would: what they owed at a kill is issued again, keyed.
       (doseq [{:keys [ws state]} (with-running-turns all-wss)]
         ((req 'nido.core.turn/take-back!) runner ws state))
+      ;; After the take-back, so a turn that died with the host is recorded ended before the
+      ;; session it ran in is recorded lost.
+      (account-for-boot! (io/file (:core ps) "host-boot.edn") submit all-wss)
       ((req 'nido.core.buffer/changed!) buffer open-wss)
       ((req 'nido.core.provision/changed!) prov open-wss)
       ((req 'nido.core.api/serve!) {:socket (:socket ps) :submit submit

@@ -565,3 +565,17 @@
                          {:command :start-turn :turn "review-queue-ab12 first" :unit "review-queue-ab12"
                           :spec (assoc spec :ask? false)}])]
     (is (= s (d/fold events)))))
+
+;; ── a session lost with its host ─────────────────────────────────────────────
+
+(deftest a-lost-session-is-owed-again-on-its-worktree
+  (let [[s] (run [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w/u"}])
+        [s2] (d/step s {:command :record-session-lost :unit "u"})]
+    (is (= {:status :none :cwd "/w/u"} (get-in s2 [:units "u" :session])))
+    (is (= [{:unit "u" :want :up}] (d/sessions-owed s2)) "an open unit's session is owed up again")
+    (is (empty? (d/violations s2)))
+    (testing "only a session recorded ready is lost"
+      (is (= :session-not-ready (refusal s2 {:command :record-session-lost :unit "u"}))))
+    (testing "never under a turn still running in it"
+      (let [[s3] (d/step s {:command :start-turn :turn "t" :unit "u" :spec spec})]
+        (is (= :turn-running (refusal s3 {:command :record-session-lost :unit "u"})))))))
