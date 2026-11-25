@@ -4,6 +4,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as cws]
    [nido.design.check :as design]
@@ -22,12 +23,15 @@
 (defn- run
   "Drive the gate with both halves stubbed. `structure` defaults to nil = the cwd belongs to no
    registered project, which is what every standing-only case wants."
-  [{:keys [session? design standing structure elements base]}]
+  [{:keys [session? design standing structure elements base activation owed]}]
   (let [out (java.io.StringWriter.)]
     (binding [*out* out]
       (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
                     stages/project+ws-from-cwd (fn [_] (when session? [:nido "ws-1"]))
                     cws/latest-entry (fn [& _] design)
+                    ;; `activation` is the ledger's newest :activated/:deactivated, nil for neither
+                    cws/read-ws (fn [& _] {:entries (if activation [{:kind activation}] [])})
+                    pipeline/of (fn [& _] {:next {:stage owed}})
                     standing/governing-design (fn [& _] design)
                     standing/of-design (constantly standing)
                     nido-design/coords (fn [_] (when structure [:nido "/wt"]))
@@ -172,6 +176,17 @@
         "the workstream's design RECORD, named as a record — the project's declared
          design is the other subject on this gate and used to be called a structure
          only so the two lines could not be confused")))
+
+(deftest an-activated-workstream-with-no-design-is-refused
+  ;; It runs nido's recipe, so it owes a design; landing it without one is the skip this refuses.
+  (let [[code out] (run {:session? true :design nil :activation :activated :owed :write-baseline})]
+    (is (= 1 code))
+    (is (str/includes? out "REFUSED · no-design"))
+    (is (str/includes? out "owed write-baseline") "names the stage the ledger owes, not a guess"))
+  (testing "a deactivated one is waived, as a person said"
+    (let [[code out] (run {:session? true :design nil :activation :deactivated})]
+      (is (zero? code))
+      (is (str/includes? out "deactivated")))))
 
 (deftest a-cwd-that-is-no-session-lands
   (let [[code _] (run {:session? false})]

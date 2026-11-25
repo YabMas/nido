@@ -3430,14 +3430,18 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:map [:brief {:optional true} [:maybe :string]]
                                                                    [:unit {:optional true} :string]]]] :map]}
   activate!
-  "Hand `ws-id` to the core for a person: their command opening its unit — named `:unit`, else for
-   the workstream — whose session the core provisions, named for the unit, never one already up.
-   Given `:brief`, that is
-   the unit's first turn, run once its session is ready; without one the conductor hears the
-   session ready and decides what it is for. Activating twice changes nothing. Answers {:ws-id
-   :already?}; throws when the core refuses."
+  "Hand `ws-id` to the core for a person: their :activated entry on its ledger — the grant every
+   recipe gate reads (the core's code hold, the conductor's recipe lines, nido:owed, review,
+   land:check) — then their command opening its unit — named `:unit`, else for the workstream —
+   whose session the core provisions, named for the unit, never one already up. Given `:brief`,
+   that is the unit's first turn, run once its session is ready; without one the conductor hears
+   the session ready and decides what it is for. The entry is written first, so that first turn
+   already starts under the recipe's hold. Activating twice changes nothing, but records the
+   grant when an earlier activation left the ledger without it. Answers {:ws-id :already?};
+   throws when the workstream is closed or the core refuses."
   [project ws-id & [{:keys [brief unit] :or {unit ws-id}}]]
   (let [p        (keyword (name project))
+        _        (cws/activate! p ws-id nil)
         already? (contains? (:units (wcore/state p ws-id)) unit)
         o        (when-not already?
                    (wcore/act! p ws-id (cond-> {:command :open-unit :unit unit :project (name p)
@@ -3493,10 +3497,12 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
   deactivate!
-  "Hold `ws-id`'s open units for a person, by their command to the core: no turn starts on a held
-   unit until they release it (`resume!`). Answers {:ws-id :was?}, :was? false when no open unit
-   was running free."
-  [project ws-id _session]
+  "Take nido's recipe off `ws-id` for a person: their :deactivated entry on its ledger — so its
+   designs stop gating its landing and nothing is owed on it — and each open unit held by their
+   command to the core, so no turn starts on it until they release it (`resume!`). Answers {:ws-id
+   :was?}, :was? false when no open unit was running free."
+  [project ws-id session]
+  (cws/deactivate! project ws-id session)
   (let [open (filter #(and (= :open (:status %)) (not (:held? %)))
                      (vals (:units (wcore/state project ws-id))))]
     (doseq [u open] (wcore/act! project ws-id {:command :hold-unit :unit (:id u)}))

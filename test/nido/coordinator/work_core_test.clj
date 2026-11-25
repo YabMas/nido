@@ -5,6 +5,8 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.standing :as standing]
+   [nido.core.domain :as d]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.view.activity :as act]
@@ -225,8 +227,44 @@
         (is (not= id nil))
         (is (= {:status :none} (:session u)) "its session is the core's to provision")
         (is (= "Build the widget." (get-in u [:first-turn :spec :instructions])))
-        (is (= [] (:entries (workstream/read-ws :brian id)))
-            "minted bare: no :scratch mark, so no reaper takes it for a one-off")))))
+        (is (= [:activated] (map :kind (:entries (workstream/read-ws :brian id))))
+            "minted with only the person's grant: the recipe runs on it, and no :scratch mark, so no reaper takes it for a one-off")))))
+
+(deftest activation-records-the-grant-on-the-ledger
+  (with-ws
+    (fn [_c ws-id]
+      (let [w          #(workstream/read-ws :brian ws-id)
+            activated? #(standing/activated? (w))
+            ;; what the core's code hold reads: the ledger's index rows
+            held       #(d/code-held {:ledger (:entries (w))})
+            at-open    (atom nil)
+            act!       wcore/act!]
+        (is (not (activated?)) "a one-off starts plain")
+        (with-redefs [wcore/act! (fn [p id cmd & more]
+                                   (when (= :open-unit (:command cmd)) (reset! at-open (activated?)))
+                                   (apply act! p id cmd more))]
+          (work/activate! :brian ws-id {:brief "Build it."}))
+        (testing "activating writes the person's grant every recipe gate reads"
+          (is (activated?))
+          (is (= :design-not-cleared (held)) "so the unit's turns hold the code until a design is cleared"))
+        (is (true? @at-open) "the grant is on the ledger before the unit — and its first turn — exists")
+        (testing "re-activating records nothing twice"
+          (let [n #(count (filter (comp #{:activated} :kind) (:entries (w))))
+                before (n)]
+            (work/activate! :brian ws-id)
+            (is (= before (n)))))
+        (testing "deactivating takes the grant back off the ledger"
+          (work/deactivate! :brian ws-id nil)
+          (is (standing/deactivated? (w)))
+          (is (nil? (held))))))))
+
+(deftest a-unit-opened-before-the-grant-was-recorded-gets-it-on-reactivation
+  ;; Every activation between the core cut-over and this fix opened a unit and wrote no grant.
+  (with-ws
+    (fn [_c ws-id]
+      (wcore/act! :brian ws-id {:command :open-unit :unit ws-id :project "brian" :goal "g"})
+      (is (:already? (work/activate! :brian ws-id)))
+      (is (standing/activated? (workstream/read-ws :brian ws-id))))))
 
 (deftest a-workstream-the-core-works-unrecorded-reads-as-its-core-state
   (with-ws

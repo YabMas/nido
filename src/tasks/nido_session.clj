@@ -425,14 +425,18 @@
     nil))
 
 (defn- goal-instruction
-  "The first instruction of a session started on a goal: the brief verbatim, after the one thing
-   the brief cannot say for itself — that the goal is recorded on the workstream before work
-   begins, so the workstream states what it is for to everyone who reads it later."
+  "The first instruction of a session started on a goal: the brief verbatim, after what the brief
+   cannot say for itself — that the workstream runs nido's recipe, so the goal is recorded as its
+   intent, then surveyed and designed, before any code. The workstream then states what it is for
+   and what it commits to, to everyone who reads it later, and the core holds the turn's code
+   until a design is cleared."
   [brief]
-  (str "This workstream was started for the goal below, and nothing is recorded on it yet. "
-       "First record that goal as the workstream's :intent, with a falsifiable :done-when "
-       "(the /design skill, §7, has the form); if the goal cannot carry one, halt on a :blocker "
-       "saying what is missing instead of inventing it. Then work the goal.\n\n"
+  (str "This workstream was started for the goal below, runs nido's recipe, and nothing is "
+       "recorded on it yet. Write what the recipe owes before any code, in order (the /design "
+       "skill, §7, has each form): first record the goal as the workstream's :intent, with a "
+       "falsifiable :done-when — if the goal cannot carry one, halt on a :blocker saying what is "
+       "missing instead of inventing it; then the :baseline, judged by `bb nido:review:baseline`; "
+       "then the :design, cleared by `bb nido:review:design`. Only then build the goal.\n\n"
        brief))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
@@ -444,8 +448,8 @@
 
      bb nido:workstream:start :project <p> <session> (:brief-file <path> | :brief \"…\")
 
-   The turn is first told to record the brief's goal as the workstream's :intent, then given the
-   brief verbatim. Prints the workstream's id. Exits 1, before anything is written, when a session
+   The turn is first told to write what the recipe owes — the brief's goal as the workstream's
+   :intent, then its baseline and design — before any code, then given the brief verbatim. Prints the workstream's id. Exits 1, before anything is written, when a session
    of that name already exists — a start that joined it would hand its brief to a working copy
    it did not make."
   [& args]

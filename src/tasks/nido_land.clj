@@ -14,6 +14,7 @@
    [babashka.process :as p]
    [clojure.string :as str]
    [nido.coordinator.record.phase :as phase]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.standing :as standing]
    [nido.design.check :as design]
    [tasks.nido-design :as nido-design]
@@ -146,10 +147,12 @@
    cites still live. `:cleared?`, the answer the arc asks, and not `:decided?`,
    which only a grant answers.
 
-   A workstream with NO design passes. Most do not have one — scratch
+   A PLAIN workstream with NO design passes. Most do not have one — scratch
    workstreams, pickups mid-flight — and a gate that demanded a design of every
    branch would stop the work that has not reached one yet, which is not what
-   this is for."
+   this is for. An ACTIVATED one with none is refused: it runs nido's recipe, so
+   it owes a design, and landing it would skip that silently. The stage it owes
+   is asked of `pipeline/of` rather than guessed, as review's refusal does."
   [_files cwd]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (landing-design project ws-id)]
@@ -168,10 +171,26 @@
             (println "\nHow to clear it:")
             (println (way-out b))
             1)))
-      (do (println (if (some-> (cws/read-ws project ws-id) standing/deactivated?)
-                     "land:check ok · nido's recipe is deactivated here — no design gates the landing"
-                     "land:check ok · this workstream's design record holds nothing to stand on"))
-          0))
+      (let [w (cws/read-ws project ws-id)]
+        (cond
+          (some-> w standing/deactivated?)
+          (do (println "land:check ok · nido's recipe is deactivated here — no design gates the landing")
+              0)
+
+          (some-> w standing/activated?)
+          (let [due (:stage (:next (pipeline/of project ws-id)))]
+            (println "land:check REFUSED · no-design")
+            (println "  nido's recipe runs on this workstream, and it holds no design record.")
+            (println "\nHow to clear it:")
+            (println (str "  This workstream is owed " (if due (name due) "a design")
+                          " — write what it owes (the /design skill), let"))
+            (println "  bb nido:review:design clear the design, then land. If the recipe should not")
+            (println "  govern this work, a person takes it off with bb nido:deactivate.")
+            1)
+
+          :else
+          (do (println "land:check ok · this workstream's design record holds nothing to stand on")
+              0))))
     (do (println (str "land:check ok · " cwd " is no nido session — nothing to stand on"))
         0)))
 

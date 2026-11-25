@@ -182,9 +182,11 @@
     (spit f "From a file.")
     (is (str/ends-with? (the-brief (first (start-calls {} ":brief-file" f))) "\n\nFrom a file."))))
 
-(deftest start-tells-the-turn-to-record-the-goal-before-working-it
-  (let [b (the-brief (first (start-calls {} ":brief" "Ship the widget.")))]
-    (is (str/includes? b ":intent"))
+(deftest start-tells-the-session-to-write-the-recipe-before-code
+  (let [b  (the-brief (first (start-calls {} ":brief" "Ship the widget.")))
+        at #(str/index-of b %)]
+    (is (every? at [":intent" ":baseline" ":design"]) "every record the recipe owes is named")
+    (is (< (at ":intent") (at ":baseline") (at ":design") (at "Only then build")) "in the recipe's order, code last")
     (is (str/ends-with? b "\n\nShip the widget.") "the brief verbatim, last")))
 
 (deftest start-refuses-a-name-a-session-already-has
