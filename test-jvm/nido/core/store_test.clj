@@ -206,3 +206,26 @@
 (deftest every-command-keeps-its-summary-equal-to-the-fold
   (let [r (tc/quick-check 60 every-summary-equals-the-fold)]
     (is (:pass? r) (pr-str (select-keys r [:shrunk])))))
+
+(deftest a-project-is-read-whole-in-one-pass
+  (with-store [s]
+    (commit-command! s "nido/a" "c-a" {:command :create-workstream :identity identity*})
+    (commit-command! s "nido/a" "a1" {:command :append-entry :after 0 :row (row :closed "t1") :content "{:format :closed :outcome :done}"})
+    (commit-command! s "nido/a" "a2" {:command :append-entry :after 1 :row (row :note "t2") :content "after"})
+    (commit-command! s "nido/b" "c-b" {:command :create-workstream :identity identity*})
+    (commit-command! s "nido/c" "c-c" {:command :create-workstream :identity identity*})
+    (commit-command! s "nido/c" "close" {:command :close-workstream})
+    (commit-command! s "brian/d" "c-d" {:command :create-workstream :identity (assoc identity* :project :brian)})
+    (testing "every workstream of the project, and no other's"
+      (let [r (store/project-states s "nido" {})]
+        (is (= #{"nido/a" "nido/b" "nido/c"} (set (keys (:states r)))))
+        (is (= (store/state s "nido/a") (get-in r [:states "nido/a"])))
+        (is (not (contains? r :summaries)))
+        (is (not (contains? r :contents)))))
+    (testing "open only, read off the summary"
+      (is (= #{"nido/a" "nido/b"} (set (keys (:states (store/project-states s "nido" {:open? true})))))))
+    (testing "the summaries beside the states"
+      (is (= (store/summaries s "nido") (:summaries (store/project-states s "nido" {:summaries? true})))))
+    (testing "the newest entry of the named kinds, for those that hold one"
+      (is (= {"nido/a" {1 "{:format :closed :outcome :done}"}}
+             (:contents (store/project-states s "nido" {:newest-of [:closed :reopened]})))))))

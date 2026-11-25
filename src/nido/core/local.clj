@@ -57,6 +57,21 @@
                                             :when (and (str/starts-with? k (str (:project req) "/"))
                                                        (:asking? (d/summary st)))]
                                         [k st]))}
+      :project-states
+      (let [kinds (set (:newest-of req))
+            rows  (for [[k st] (sort-by key (:states (c)))
+                        :when (str/starts-with? k (str (:project req) "/"))
+                        :let [sm (d/summary st)]
+                        :when (not (and (:open? req) (or (:closed? sm) (:discarded? sm))))]
+                    [k st sm])]
+        (cond-> {:states (into {} (map (fn [[k st]] [k st])) rows)}
+          (:summaries? req) (assoc :summaries (into {} (map (fn [[k _ sm]] [k sm])) rows))
+          (seq kinds) (assoc :contents
+                             (into {} (for [[k st] rows
+                                            :let [row (last (filter #(kinds (:kind %)) (:ledger st)))
+                                                  t   (when row (get-in (c) [:entries [k (:seq row)]]))]
+                                            :when t]
+                                        [k {(:seq row) t}])))))
       :workstreams {:workstreams (vec (sort (keys (:states (c)))))}
       {:error :unknown-op :op (:op req)})))
 

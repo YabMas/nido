@@ -63,6 +63,10 @@
    [:entries     [:map [:op [:= :entries]] [:ws :string] [:seqs [:vector :int]]]]
    [:summaries   [:map [:op [:= :summaries]] [:project :string]]]
    [:asking      [:map [:op [:= :asking]] [:project :string]]]
+   [:project-states [:map [:op [:= :project-states]] [:project :string]
+                     [:open? {:optional true} :boolean]
+                     [:summaries? {:optional true} :boolean]
+                     [:newest-of {:optional true} [:vector :keyword]]]]
    [:workstreams [:map [:op [:= :workstreams]]]]])
 
 (def Unavailable
@@ -83,6 +87,9 @@
        [:map [:entries [:map-of :int :string]]]
        [:map [:summaries [:map-of :string :map]]]
        [:map [:asking [:map-of :string :map]]]
+       [:map [:states [:map-of :string :map]]
+        [:summaries {:optional true} [:map-of :string :map]]
+        [:contents {:optional true} [:map-of :string [:map-of :int :string]]]]
        [:map [:workstreams [:vector :string]]]
        [:map [:error :any]]
        Unavailable])
@@ -147,6 +154,17 @@
   [project]
   (let [r (request! {:op :asking :project (name project)})]
     (if (unavailable? r) r (update r :asking #(or % {})))))
+
+(defn ^{:malli/schema [:=> [:cat :any :map] ReadReply]} project-states
+  "Every workstream of `project` in one request, as `nido.core.store/project-states` reads it —
+   {:states {key state}}, with `opts` `:summaries? true` {:summaries {key summary}}, with
+   `:open? true` only those neither closed nor discarded, with `:newest-of [kind …]`
+   {:contents {key {seq content}}} — or `Unavailable`."
+  [project opts]
+  (let [r (request! (merge {:op :project-states :project (name project)}
+                           (select-keys opts [:open? :summaries? :newest-of])
+                           (when (:newest-of opts) {:newest-of (vec (:newest-of opts))})))]
+    (if (unavailable? r) r (update r :states #(or % {})))))
 
 (defn ^{:malli/schema [:=> [:cat :string [:sequential :int]] ReadReply]} entry-contents
   "{:entries {seq content}} for each entry of workstream `k` named in `seqs`, or `Unavailable`."

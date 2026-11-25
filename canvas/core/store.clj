@@ -64,6 +64,12 @@
     "The committed state of every workstream of a project a person owes a move now — an open ask
      on a workstream not closed — by key, found through the summaries' index."
     {:signature [:=> [:catn [:store :map] [:project :string]] [:map-of :string :map]]})
+  (Operation project-states
+    "Every workstream of a project in one read over the summaries' index: the states, optionally
+     their summaries, optionally only the open ones (read off the summary), and optionally the
+     content of each one's newest ledger entry of named kinds."
+    {:signature [:=> [:catn [:store :map] [:project :string] [:opts :map]] :map]
+     :delegates [entry-contents]})
   (Operation entry-contents
     "The content of each named entry of a workstream's ledger, by seq; an entry is kept once, by the commit that appends it, and never rewritten."
     {:signature [:=> [:catn [:store :map] [:ws :string] [:seqs [:sequential :int]]] [:map-of :int :string]]}))

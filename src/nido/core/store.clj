@@ -125,7 +125,7 @@
       data    TEXT NOT NULL)"
    "CREATE INDEX IF NOT EXISTS summaries_by_project ON summaries(project, asking)"])
 
-(declare backfill-summaries!)
+(declare backfill-summaries! entry-contents)
 
 (defn- exec! [^Connection c sql] (with-open [st (.createStatement c)] (.execute st sql)))
 
@@ -311,6 +311,34 @@
         (jdbc/execute! (:conn store) ["SELECT w.ws, w.state FROM summaries s JOIN workstreams w ON w.ws = s.ws
                                        WHERE s.project = ? AND s.asking = 1 ORDER BY w.ws" project]
                        {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn ^{:malli/schema [:=> [:cat :map :string :map] :map]} project-states
+  "Every workstream of `project`, read in one pass over the summaries' index:
+   {:states {key state}}, and with `:summaries? true` {:summaries {key summary}} beside it. With
+   `:open? true` only those whose summary is neither closed nor discarded, read off the summary so
+   no other state is parsed. With `:newest-of [kind …]`, {:contents {key {seq content}}}: the
+   content of each returned workstream's newest ledger entry of one of those kinds, for a reader
+   whose fold reads that entry of every workstream."
+  [store project {:keys [open? summaries? newest-of]}]
+  (let [kinds (set newest-of)
+        rows  (into []
+                    (keep (fn [{:keys [ws state data]}]
+                            (let [sm (edn/read-string data)]
+                              (when-not (and open? (or (:closed? sm) (:discarded? sm)))
+                                [ws (edn/read-string state) sm]))))
+                    (jdbc/execute! (:conn store)
+                                   ["SELECT w.ws, w.state, s.data FROM summaries s JOIN workstreams w ON w.ws = s.ws
+                                     WHERE s.project = ? ORDER BY w.ws" project]
+                                   {:builder-fn rs/as-unqualified-lower-maps}))]
+    (cond-> {:states (into {} (map (fn [[ws st]] [ws st])) rows)}
+      summaries?  (assoc :summaries (into {} (map (fn [[ws _ sm]] [ws sm])) rows))
+      (seq kinds) (assoc :contents
+                         (into {}
+                               (keep (fn [[ws st]]
+                                       (when-let [row (last (filter #(kinds (:kind %)) (:ledger st)))]
+                                         (let [c (entry-contents store ws [(:seq row)])]
+                                           (when (seq c) [ws c])))))
+                               rows)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :string [:sequential :int]] [:map-of :int :string]]} entry-contents
   "The content of each entry of workstream `ws` named in `seqs`, by seq; a seq the ledger does not

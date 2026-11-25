@@ -11,6 +11,10 @@
                                        summarised (`nido.core.domain/summary`)
      {:op :asking :project p}      -> {:asking {ws state}}, the states of project p's workstreams
                                        a person owes a move now
+     {:op :project-states :project p [:open? b :summaries? b :newest-of [kind]]}
+                                    -> {:states {ws state} [:summaries {ws summary}]
+                                        [:contents {ws {seq content}}]}, project p's workstreams in
+                                       one read (`nido.core.store/project-states`)
      {:op :workstreams}             -> {:workstreams [...]}
      {:op :subscribe :from pos}     -> a stream of feed messages, one per line: the catch-up,
                                        then {:caught-up true :pos p}, then live, ending in
@@ -21,6 +25,7 @@
      :submit        (fn [envelope]) -> a promise of the outcome (`nido.core.writer/submit!`)
      :open-session  (fn []) -> {:state (fn [ws]) :states (fn [prefix]) :entries (fn [ws seqs])
                      :summaries (fn [project]) :asking (fn [project])
+                     :project-states (fn [project opts])
                      :workstreams (fn []) :subscribe (fn [from]) :close (fn [])}, one per connection, opened on its first read; :subscribe
                      answers {:next (fn [timeout-ms]) -> message, nil or a cut-off; :close (fn [])}
    Reads never go through the writer: a session reads committed state through a read-only handle
@@ -79,6 +84,10 @@
     :asking      (if (string? (:project req))
                    {:asking ((:asking @session) (:project req))}
                    {:error :project-missing})
+    :project-states (if (string? (:project req))
+                      ((:project-states @session) (:project req)
+                       (select-keys req [:open? :summaries? :newest-of]))
+                      {:error :project-missing})
     :workstreams {:workstreams ((:workstreams @session))}
     {:error :unknown-op :op (:op req)}))
 

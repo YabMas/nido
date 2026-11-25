@@ -10,7 +10,7 @@
 (Kind CoreRequest
   "A request the core answers: a keyed command, or a read of one state, the states under a key
    prefix, entry contents by seq, a project's summaries, the states of a project's workstreams a
-   person owes a move, or the workstreams held."
+   person owes a move, a project's workstreams in one read, or the workstreams held."
   [:multi {:dispatch :op}
    [:command     [:map [:op [:= :command]] [:key :string] [:ws :string] [:command :map]
                   [:input? {:optional true} :boolean]]]
@@ -19,6 +19,10 @@
    [:entries     [:map [:op [:= :entries]] [:ws :string] [:seqs [:vector :int]]]]
    [:summaries   [:map [:op [:= :summaries]] [:project :string]]]
    [:asking      [:map [:op [:= :asking]] [:project :string]]]
+   [:project-states [:map [:op [:= :project-states]] [:project :string]
+                     [:open? {:optional true} :boolean]
+                     [:summaries? {:optional true} :boolean]
+                     [:newest-of {:optional true} [:vector :keyword]]]]
    [:workstreams [:map [:op [:= :workstreams]]]]])
 
 (Kind Unavailable
@@ -41,6 +45,9 @@
        [:map [:entries [:map-of :int :string]]]
        [:map [:summaries [:map-of :string :map]]]
        [:map [:asking [:map-of :string :map]]]
+       [:map [:states [:map-of :string :map]]
+        [:summaries {:optional true} [:map-of :string :map]]
+        [:contents {:optional true} [:map-of :string [:map-of :int :string]]]]
        [:map [:workstreams [:vector :string]]]
        [:map [:error :any]]
        Unavailable])
@@ -90,6 +97,12 @@
     "The committed state of every workstream of a project a person owes a move now — an open ask
      on a workstream not closed — by key, as a ReadReply."
     {:signature [:=> [:catn [:project :any]] ReadReply]
+     :delegates [request!]})
+  (Operation project-states
+    "Every workstream of a project in one request — states, optionally their summaries, optionally
+     only the open ones, optionally the content of each one's newest entry of named kinds — as a
+     ReadReply."
+    {:signature [:=> [:catn [:project :any] [:opts :map]] ReadReply]
      :delegates [request!]})
   (Operation entry-contents
     "The content of named entries of a workstream's ledger, by seq, as a ReadReply."

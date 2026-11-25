@@ -96,6 +96,7 @@
      :states      #(store/states reader %)
      :summaries   #(store/summaries reader %)
      :asking      #(store/asking reader %)
+     :project-states #(store/project-states reader %1 %2)
      :entries     #(store/entry-contents reader %1 %2)
      :workstreams #(store/workstreams reader)
      :subscribe   (fn [from]
