@@ -60,10 +60,6 @@
    [:dry-run?       {:optional true} boolean?]
    [:enabled?       {:optional true} boolean?]
    [:uncapped?      {:optional true} boolean?]
-   ;; The trigger's skill carries a gated recipe of its own — it lands what it builds through
-   ;; nido's verbs (implement-improvement, recover-session) — so the workstream a fire mints is
-   ;; born without nido's recipe, which would hold its code until a design it never writes.
-   [:own-recipe?    {:optional true} boolean?]
    ;; A fire of this trigger is a run, not a workstream: one turn of the skill in a session of
    ;; its own, which writes only its run's artifacts and is over when the turn ends. For a skill
    ;; that keeps no record on a ledger — a run has none.

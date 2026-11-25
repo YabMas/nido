@@ -449,34 +449,16 @@
                   {:command :give-grant :grant :intent :by "person"}])]
     (is (not-any? #(= :landing-granted (:kind %)) (vals (:inbox s))) "a grant of another kind wakes nothing")))
 
-(deftest a-background-run-ends-when-its-turn-completes
-  (let [open  {:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"
-               :background? true}
-        [s]   (run [open {:command :start-turn :turn "t" :unit "u" :spec spec}])
-        done  {:command :record-outcome :turn "t" :outcome :completed}]
-    (is (d/background-run? s))
-    (testing "completed: the unit finishes and the workstream closes, owing its conductor nothing"
-      (let [[s2] (d/step s done)]
-        (is (:closed? s2))
-        (is (= :finished (get-in s2 [:units "u" :status])))
-        (is (empty? (:inbox s2)))
-        (is (empty? (d/violations s2)))
-        (is (= :destroyed (d/session-want s2 (get-in s2 [:units "u"]))))))
-    (testing "failed: the conductor hears it, as any unit's failure"
-      (let [[s2] (d/step s {:command :record-outcome :turn "t" :outcome :failed})]
-        (is (not (:closed? s2)))
-        (is (seq (:inbox s2)))))
-    (testing "a unit nobody marked background leaves its workstream open"
-      (let [[s'] (run [(dissoc open :background?) {:command :start-turn :turn "t" :unit "u" :spec spec}])
-            [s2] (d/step s' done)]
-        (is (not (d/background-run? s')))
-        (is (not (:closed? s2)))))
-    (testing "nor does one beside another open unit"
-      (let [[s'] (run [open (assoc open :unit "v")
-                       {:command :start-turn :turn "t" :unit "u" :spec spec}])
-            [s2] (d/step s' done)]
-        (is (not (:closed? s2)))
-        (is (= :open (get-in s2 [:units "u" :status])))))))
+(deftest a-completed-turn-leaves-its-workstream-open
+  ;; Work that is over when its turn completes is a run (`:start-run`), never a unit: a unit's
+  ;; turn completing finishes nothing, whatever the command opening it carried.
+  (let [[s]  (run [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"
+                    :background? true}
+                   {:command :start-turn :turn "t" :unit "u" :spec spec}])
+        [s2] (d/step s {:command :record-outcome :turn "t" :outcome :completed})]
+    (is (not (:closed? s2)))
+    (is (= :open (get-in s2 [:units "u" :status])))
+    (is (not (contains? (get-in s2 [:units "u"]) :background?)) "the flag is not kept")))
 
 (deftest a-stopped-conductor-asks-as-a-failure
   (let [stop  {:command :raise-conductor-stop :ask "stop" :content ready}

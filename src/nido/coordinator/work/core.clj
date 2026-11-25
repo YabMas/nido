@@ -223,11 +223,6 @@
   [{:keys [state]}]
   (some-> state d/activity))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]} background?
-  "Whether held workstream `w` is a background run (`nido.core.domain/background-run?`)."
-  [{:keys [state]}]
-  (boolean (some-> state d/background-run?)))
-
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]} held-units?
   "Whether a person holds every open unit of held workstream `w`, and it has one."
   [{:keys [state]}]

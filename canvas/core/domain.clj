@@ -61,10 +61,6 @@
     "Where a run stands — :starting, :running, :done, :failed or :cancelled — or nil on a
      workstream."
     {:signature [:=> [:catn [:state :map]] [:maybe :keyword]]})
-  (Operation background-run?
-    "Whether a workstream is a background run: every unit a trigger opened as background work. A
-     background run closes when its turn completes; the board does not list it."
-    {:signature [:=> [:catn [:state :map]] :boolean]})
   (Operation activity
     "What the core is doing on a workstream, or nothing: an ask awaiting the person — :failed? when
      one is a machine failure, :failure-only? when every one is — a unit's turn working, the

@@ -387,9 +387,8 @@
     {:signature [:=> [:catn [:payload :map]] [:maybe :map]]})
   (Operation ensure-workstream!
     "The workstream an arrival's payload is for: the one its ref already names, or a new one
-     stamped with the payload's facets, born running nido's recipe unless the arrival's skill
-     carries its own."
-    {:signature [:=> [:catn [:project ProjectName] [:payload :map] [:own-recipe? [:? :boolean]]] Workstream]})
+     stamped with the payload's facets, born running nido's recipe."
+    {:signature [:=> [:catn [:project ProjectName] [:payload :map]] Workstream]})
   (Operation fire-unit
     "The :open-unit command a trigger's fire opens as `unit` toward `goal`: its first turn is the
      trigger's skill on the rendered payload, run once the unit's session is up."

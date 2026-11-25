@@ -454,9 +454,8 @@
    is not work at all — a workstream holding a review-loop analysis has no arc
    to advance and belongs to the operations surface, whose unit is the proposal
    inside it rather than the workstream around it; :drained is every drain and slice, whose own
-   page is /drains; :background is a background run (`wcore/background?`), a trigger's skill
-   working behind the scenes, which reaches the person only through an ask."
-  #{:done :dismissed :analysed :drained :background})
+   page is /drains."
+  #{:done :dismissed :analysed :drained})
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   release-candidate?
@@ -617,8 +616,7 @@
    The band and position are the work records'. The core moves them too: the ledger reads
    :intake when it records none of the work — so does a workstream nobody activated, whose units
    the core ran all the same — and then the core's coordination says where it stands, and a
-   workstream under way is out of the triage pen; a background run sits in :background; a
-   workstream the core closed is :done.
+   workstream under way is out of the triage pen; a workstream the core closed is :done.
 
    A row the ledger settled takes its band from its closure and reads no status — ~1000
    workstreams sit on a board and nearly all are settled and drawn nowhere, so skipping it is
@@ -654,7 +652,6 @@
                              (#{:release-candidate :published} (:at pos)))
                band     (cond
                           core-closed?                           :done
-                          (wcore/background? cw)                 :background
                           closed                                 :awaiting-gate
                           :else (let [b (band-of project ws-id (:origin spine) pos)]
                                   (if (and core-at (#{:triage :ready} b)) :in-progress b)))]
@@ -3152,19 +3149,18 @@
         (:url payload)     (assoc :url (:url payload))
         (:page-id payload) (assoc :page-id (:page-id payload))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :map [:? :boolean]] :Workstream]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :Workstream]}
   ensure-workstream!
   "The workstream an arrival's `payload` is for: the one its ref already names, or a new one
-   stamped with the payload's facets, born running nido's recipe unless `own-recipe?` says the
-   arrival's skill carries its own. Not atomic: arrivals are dispatched one at a time."
-  ([project payload] (ensure-workstream! project payload false))
-  ([project payload own-recipe?]
-   (let [facets (facets/select-facets (views/facet-properties project) payload)
-         base   {:facets facets :activated? (not own-recipe?)}]
-     (if-let [ref (external-ref payload)]
-       (or (cws/find-by-ref project (:adapter ref) (:id ref))
-           (cws/create! project (assoc base :external-refs [ref])))
-       (cws/create! project (assoc base :external-refs []))))))
+   stamped with the payload's facets, born running nido's recipe. Not atomic: arrivals are
+   dispatched one at a time."
+  [project payload]
+  (let [facets (facets/select-facets (views/facet-properties project) payload)
+        base   {:facets facets :activated? true}]
+    (if-let [ref (external-ref payload)]
+      (or (cws/find-by-ref project (:adapter ref) (:id ref))
+          (cws/create! project (assoc base :external-refs [ref])))
+      (cws/create! project (assoc base :external-refs [])))))
 
 (declare core-open?)
 
@@ -3222,21 +3218,17 @@
       (and pre (true? (:once-per-ref? (:payload routed)))) :settled
       (and pre (some #(and (= :open (:status %)) (= tname (:trigger %))) (units (:id pre)))) :running
       :else
-      (let [own? (true? (-> routed :trigger :own-recipe?))
-            w    (or pre (ensure-workstream! project (:payload routed) own?))
-            ;; A skill carrying its own procedure, on a workstream nobody put on the recipe, is
-            ;; background work: off the board, and over when its turn completes.
-            bg?  (and own? (not= :activated (cws/activation (cws/read-ws project (:id w)))))
+      (let [w    (or pre (ensure-workstream! project (:payload routed)))
             unit (str tname "-" (subs (str (random-uuid)) 0 8))
             goal (str/trim (str (name (-> routed :trigger :skill)) " "
                                 (or (-> routed :payload :title) (-> routed :payload :id) "")))
             k    (str "fire/" (wcore/ws-key project (:id w)) "/" tname "/"
                       (or (:id ref) (random-uuid)) "/" (count (units (:id w))))]
-        ;; A run that finished closed its workstream; a later fire on the same ref reopens it.
+        ;; A later fire on the ref of a workstream the core closed reopens it.
         (when (:closed? (wcore/state project (:id w)))
           (wcore/act! project (:id w) {:command :reopen-workstream} {:key (str k "/reopen")}))
         (if (wcore/admitted? (wcore/act! project (:id w)
-                                         (cond-> (fire-unit routed unit goal) bg? (assoc :background? true))
+                                         (fire-unit routed unit goal)
                                          {:key k}))
           :opened
           :refused)))))
