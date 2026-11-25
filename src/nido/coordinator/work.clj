@@ -1624,13 +1624,13 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   core-ask-card
-  "The question card for operator ask `a`, in the Ask shape every card renders. One decision is
-   answered by its lettered options, each given by the :option-<letter> action, beside a free
-   answer and a withdrawal. Several are asked one at a time and sent together by
-   :answer-questions, each as a choice, the person's words or left open."
+  "The question card for operator ask `a`, in the Ask shape every card renders. Whatever its
+   number of questions, the person chooses within each and sends them together by
+   :answer-questions — each question its choice, a comment of their own on it, both, or left
+   open — beside a free answer and a withdrawal. No option answers by itself, so a comment
+   written after choosing is never lost to a click that already sent."
   [{:keys [content]}]
   (let [qs     (core-questions content)
-        multi? (several? content)
         after  (some-> (:after content) str str/trim not-empty)
         head   (or (some-> (:question content) str str/trim not-empty) (:question (first qs)))
         card-q (fn [i {:keys [question context options recommendation]}]
@@ -1641,44 +1641,29 @@
                                             (cond-> {:letter  (report/option-letter j)
                                                      :label   option
                                                      :summary (or consequence "")}
-                                              (not multi?)  (assoc :action (nth option-action-ids j))
                                               recommended? (assoc :recommended? true)))
                                           options))}
                    recommendation                           (assoc :recommendation recommendation)
-                   (and after (= i (dec (count qs))))       (assoc :after after)))
-        opts   (:options (first qs))]
-    (cond-> {:kind        :operator-ask
-             :question    head
-             :questions   (vec (map-indexed card-q qs))
-             :answer-does (vec (concat
-                                (if multi?
-                                  [{:action :answer-questions :label "Send answers"
-                                    :does "Sends your answer to each question — a choice, your words, or left open; the conductor hears them."}]
-                                  (map-indexed (fn [i {:keys [option]}]
-                                                 {:action (nth option-action-ids i) :label (report/option-letter i)
-                                                  :does (str "Answers \"" option "\"; the conductor hears it.")})
-                                               opts))
-                                [{:action :reply :label "Answer" :does "Sends your words as the answer; the conductor hears them."}
-                                 {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]))}
-      multi? (assoc :submit :answer-questions))))
+                   (and after (= i (dec (count qs))))       (assoc :after after)))]
+    {:kind        :operator-ask
+     :question    head
+     :questions   (vec (map-indexed card-q qs))
+     :submit      :answer-questions
+     :answer-does [{:action :answer-questions :label "Send answers"
+                    :does "Sends what you chose and wrote for each question — a choice, a comment, both, or left open; the conductor hears them."}
+                   {:action :reply :label "Answer" :does "Sends your words as the answer; the conductor hears them."}
+                   {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]}))
 
 (defn- gate-of-asks
   "The gate of spine row `row` whose asks awaiting the person are `awaiting`: the oldest of them,
    offered for answer. nil when there are none."
   [project row awaiting]
   (when-let [a (first (sort-by :id awaiting))]
-    (let [content (:content a)
-          actions (vec (concat
-                        (if (several? content)
-                          ;; :words? — a question may be answered in words, so the card offers a field.
-                          [{:id :answer-questions :label "Send answers" :kind :mutation :style :primary :words? true}]
-                          (map-indexed (fn [i {:keys [option recommended?]}]
-                                         {:id (nth option-action-ids i) :label (report/option-letter i)
-                                          :title option :kind :mutation
-                                          :style (if recommended? :primary :default)})
-                                       (take (count option-action-ids) (ask-options (:options content)))))
-                        [{:id :reply :label "Answer" :kind :resume :style :default}
-                         {:id :withdraw :label "Withdraw" :kind :mutation :style :danger}]))]
+    ;; :notes? — the resolver records a comment per question, so the card offers every question
+    ;; a note field beside its options.
+    (let [actions [{:id :answer-questions :label "Send answers" :kind :mutation :style :primary :notes? true}
+                   {:id :reply :label "Answer" :kind :resume :style :default}
+                   {:id :withdraw :label "Withdraw" :kind :mutation :style :danger}]]
       {:ws-id        (:ws-id row)
        :project      (name project)
        :origin       (:origin row)

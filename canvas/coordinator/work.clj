@@ -356,11 +356,13 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]})
   (Operation core-ask-card
     "The question card for an operator ask, in the Ask shape every card renders: its options
-     lettered, each given by an :option-<letter> action, beside a free answer and a withdrawal."
+     lettered and chosen, then sent with a comment per question by Send answers, beside a free
+     answer and a withdrawal."
     {:signature [:=> [:catn [:ask :map]] :map]})
   (Operation core-resolve!
     "Do what a gate action asks of the core, as the person's keyed command; nil when the action is
-     not one the core answers. An option or a reply answers the oldest open ask, a withdrawal takes
+     not one the core answers. An option, a reply or Send answers — a choice and a comment per
+     question, rendered to one string — answers the oldest open ask, a withdrawal takes
      it back, Land grants the landing, Promote opens the workstream's unit, Done and Drop retract
      its open units and close it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any] [:payload [:? :any]]]

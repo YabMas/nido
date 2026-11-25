@@ -46,9 +46,12 @@
         (is (= ws-id (:ws-id g)))
         (is (= "a1" (:core-ask g)))
         (is (= "Ship it?" (get-in g [:ask :question])))
-        (is (= [["A" "Yes" :option-a] ["B" "No" :option-b]]
-               (map (juxt :letter :label :action) (get-in g [:ask :questions 0 :options]))))
-        (is (= [:option-a :option-b :reply :withdraw] (map :id (:actions g)))))
+        (is (= [["A" "Yes" nil] ["B" "No" nil]]
+               (map (juxt :letter :label :action) (get-in g [:ask :questions 0 :options])))
+            "one question is chosen, then sent: no option answers by itself")
+        (is (= :answer-questions (get-in g [:ask :submit])))
+        (is (= [:answer-questions :reply :withdraw] (map :id (:actions g))))
+        (is (:notes? (first (:actions g))) "Send answers records a comment per question"))
       (is (:needs-you (first (work/list-workstreams :brian)))))))
 
 (deftest a-letter-answers-the-ask-with-its-option
@@ -163,7 +166,8 @@
                                         :options ["Yes" {:option "No" :recommended true}]}}))
       (let [[g] (work/gates :brian)]
         (is (= [nil true] (map :recommended? (get-in g [:ask :questions 0 :options]))))
-        (is (= [:default :primary] (map :style (take 2 (:actions g)))))))))
+        (is (= [:primary :default] (map :style (take 2 (:actions g))))
+            "Send answers is the one primary; the recommendation is marked on its option")))))
 
 (deftest a-reply-answers-in-words-and-a-withdrawal-takes-the-ask-back
   (with-ws

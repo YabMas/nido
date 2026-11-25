@@ -163,9 +163,11 @@
 
 (defn- question-section
   "Question `i` of `n`: its line, then its context, recommendation and what follows the answer as
-   body text, then its options — or, for a question with none on a card whose submit records
-   words, a field for the answer in words. Every piece of it is agent prose and renders as
-   Markdown. Only the shown one is visible when there are several."
+   body text, then its options. On a card whose submit records notes, a field for the person's
+   comment on this question follows its options — every question has one, with options or
+   without; otherwise, for a question with no options on a card whose submit records words, a
+   field for the answer in words. Every piece of it is agent prose and renders as Markdown. Only
+   the shown one is visible when there are several."
   [{:keys [signal] :as ctx} i n {:keys [question context recommendation after options]}]
   [:section (cond-> {:class "qc-question"} (> n 1) (assoc "data-show" (str (step-signal signal) " === " i)))
    [:div.qc-q (md/render question)]
@@ -174,29 +176,37 @@
    (when-not (str/blank? after) [:div.qc-after [:div.qc-k "Once answered"] (md/render after)])
    (when (seq options)
      (into [:div.qc-opts] (map #(option-choice ctx i %)) options))
-   (when (and (:words? ctx) (empty? options) (not (:pending? ctx)))
+   (cond
+     (:pending? ctx) nil
+     (:notes? ctx)
+     [:textarea.qc-words {"data-bind" (signal [:notes (q-key i)])
+                          :aria-label (str "Your comment on question " (inc i))
+                          :placeholder (if (seq options)
+                                         "A comment on this question — with a choice or instead of one: what it misses, or why no option fits…"
+                                         "Your answer to this question, in your words…")}]
+     (and (:words? ctx) (empty? options))
      [:textarea.qc-words {"data-bind" (signal [:words (q-key i)])
                           :placeholder "Your answer to this question, in your words…"}])])
 
 (defn- answered-expr
-  "Whether question `i` has an answer: a letter chosen, or — on a card that takes words — words
-   written."
-  [signal i words?]
+  "Whether question `i` has an answer: a letter chosen, or — on a card that takes them — words or
+   a note written. `field` names the text field the card's questions have, or is nil."
+  [signal i field]
   (str (answer-signal signal i) " !== ''"
-       (when words? (str " || ($" (signal [:words (q-key i)]) " || '') !== ''"))))
+       (when field (str " || ($" (signal [field (q-key i)]) " || '').trim() !== ''"))))
 
 (defn- stepper-nav
   "Where the reader is among `n` questions: which is shown, one marker per question saying whether
    it is answered (● answered, ○ open — the glyph says it, not only the colour), and a jump to each."
-  [signal n words?]
+  [signal n field]
   (into [:div.qc-nav
          [:span "Question " [:span {"data-text" (str (step-signal signal) " + 1")} "1"] " of " n]]
         (for [i (range n)]
           [:button {:type "button" :class "qc-mark"
                     :aria-label (str "Question " (inc i))
-                    "data-class:answered" (answered-expr signal i words?)
+                    "data-class:answered" (answered-expr signal i field)
                     "data-class:current" (str (step-signal signal) " === " i)
-                    "data-text" (str "(" (answered-expr signal i words?) ") ? '●' : '○'")
+                    "data-text" (str "(" (answered-expr signal i field) ") ? '●' : '○'")
                     "data-on:click" (str (step-signal signal) " = " i)}
            "○"])))
 
@@ -206,15 +216,17 @@
 (defn- card-signals
   "The card's page state, seeded only when missing so a pane poll re-renders it without
    resetting the reader's step or choices: the step, one blank answer per question, and one
-   blank word field per question when the submit records words. Nothing for a card with one
-   question and no submit — it has no state to keep."
+   blank note per question when the submit records notes, else one blank word field per question
+   when it records words. Nothing for a card with one question and no submit — it has no state
+   to keep."
   [{:keys [ask actions]}]
   (let [n      (count (:questions ask))
-        words? (boolean (:words? (submit-of ask actions)))
+        d      (submit-of ask actions)
         blanks (into {} (map (fn [i] [(q-key i) ""])) (range n))]
     (when (or (:submit ask) (> n 1))
       (cond-> {:step 0 :answers blanks}
-        words? (assoc :words blanks)))))
+        (:notes? d)                        (assoc :notes blanks)
+        (and (:words? d) (not (:notes? d))) (assoc :words blanks)))))
 
 (declare bar)
 
@@ -238,10 +250,13 @@
         boxes     (filter #(or (= :evidence (:kind %))
                                (and (= :resume (:kind %)) (not (:input %))))
                           actions)
-        ;; Only a submit whose resolver records words (`:words?` on its descriptor) gets a words
-        ;; field: words typed on a card whose submit ignores them would be dropped unseen.
-        words?    (boolean (:words? submit-d))
-        qctx      {:project project :ws-id ws-id :by-id by-id :words? words? :action action
+        ;; Only a submit whose resolver records notes (`:notes?` on its descriptor) gets a note
+        ;; field per question, and only one that records words (`:words?`) a words field: text
+        ;; typed on a card whose submit ignores it would be dropped unseen.
+        notes?    (boolean (:notes? submit-d))
+        words?    (and (not notes?) (boolean (:words? submit-d)))
+        field     (cond notes? :notes words? :words)
+        qctx      {:project project :ws-id ws-id :by-id by-id :words? words? :notes? notes? :action action
                    :signal signal :pending? pending? :primary-option? primary-option?}
         row       (fn [k d style]
                     [:div.ans-row
@@ -251,7 +266,7 @@
      (when (and error-msg (not pending?)) [:div.action-err "⚠ " error-msg])
      (when (and (> n 1) (not= question (:question (first questions))))
        [:div.qc-head (md/render question)])
-     (when (> n 1) (stepper-nav signal n words?))
+     (when (> n 1) (stepper-nav signal n field))
      (map-indexed #(question-section qctx %1 n %2) questions)
      (when (> n 1)
        [:div.qc-step
@@ -338,6 +353,26 @@
        "well, given that each one reads a different ledger record's shape and "
        "would need a sample of that record to have a scene at all, or is that a "
        "different reading job from the blocks a person actually iterates on?"))
+
+(def ^:private operator-ask
+  {:kind :operator-ask
+   :question "Should the release wait for the migration?"
+   :questions [{:question "Should the release wait for the migration?"
+                :context ["The migration rewrites one table; it ran for four minutes on the copy."]
+                :recommendation "Wait — the rewrite locks the table."
+                :options [{:letter "A" :label "Wait for it" :summary "The release goes out tomorrow."
+                           :recommended? true}
+                          {:letter "B" :label "Release now" :summary "The migration follows on its own."}]}]
+   :submit :answer-questions
+   :answer-does [{:action :answer-questions :label "Send answers"
+                  :does "Sends what you chose and wrote for each question — a choice, a comment, both, or left open; the conductor hears them."}
+                 {:action :reply :label "Answer" :does "Sends your words as the answer; the conductor hears them."}
+                 {:action :withdraw :label "Withdraw" :does "Takes the question back unanswered; the conductor hears that."}]})
+
+(def ^:private operator-ask-actions
+  [{:id :answer-questions :label "Send answers" :kind :mutation :style :primary :notes? true}
+   {:id :reply :label "Answer" :kind :resume :style :default}
+   {:id :withdraw :label "Withdraw" :kind :mutation :style :danger}])
 
 (defn- card-props [ws-id ask actions & {:as more}]
   (merge {:project "nido" :ws-id ws-id :ask ask :actions actions} more))
@@ -438,9 +473,10 @@
    `:session` the session a Reply resumes.
 
    Several questions share one card with a stepper; choices made in it are page state until the
-   Ask's `:submit` sends them all — with the words written for a question that has no options
-   when the submit's descriptor says it records them, `:words?` — so a question may be left
-   open. The submit, or with none the recommended option, is the one primary button."
+   Ask's `:submit` sends them all — with a comment written on each question when the submit's
+   descriptor says it records notes, `:notes?`, or else the words written for a question that has
+   no options when it says it records words, `:words?` — so a question may be left open. The
+   submit, or with none the recommended option, is the one primary button."
   (block/block
    {:id      :ask
     :doc     "One Ask, answered."
@@ -463,6 +499,11 @@
               question, and Accept as the one submitting action. Click Previous/Next and the
               markers — the stepper is page state and works here."
       :props (card-props "ws-card-2" two-question-ask two-question-actions :session "auto")}
+     {:title "a comment on the question"
+      :note  "An ask the conductor raised. Choose, then Send — and write about the question itself,
+              beside a choice or instead of one: what it misses, or why no option fits. The comment
+              reaches the asker under this question."
+      :props (card-props "ws-card-9" operator-ask operator-ask-actions)}
      {:title "pending"
       :note  "Its agent is running. Every choice renders with no control at all, so a poll cannot
               flip it back to a fresh button."

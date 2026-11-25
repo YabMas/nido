@@ -54,6 +54,33 @@
   (is (not (str/includes? (html (card two-questions [submit-action] :pending? true))
                           "qc-words"))))
 
+(def ^:private notes-action {:id :answer-questions :kind :mutation :label "Send answers" :notes? true})
+
+(deftest a-card-that-records-notes-offers-every-question-a-note
+  (let [out (html (card two-questions [notes-action]))]
+    (testing "every question, with options or without, has a note field under its own index"
+      (is (str/includes? out "data-bind=\"ask.ws_1.notes.q0\""))
+      (is (str/includes? out "data-bind=\"ask.ws_1.notes.q1\""))
+      (is (= 2 (count (re-seq #"data-bind=\"ask\.ws_1\.notes\.q\d\"" out))) "one note field per question, no more"))
+    (testing "no words field beside it: the note is the question's text field"
+      (is (not (str/includes? out "ask.ws_1.words."))))
+    (testing "the card's state holds a letter and a note per question, so Send posts each in question order"
+      (is (str/includes? out "&quot;answers&quot;:{&quot;q0&quot;:&quot;&quot;,&quot;q1&quot;:&quot;&quot;}"))
+      (is (str/includes? out "&quot;notes&quot;:{&quot;q0&quot;:&quot;&quot;,&quot;q1&quot;:&quot;&quot;}")))
+    (testing "a question with only a note counts as answered in the stepper"
+      (is (str/includes? out "$ask.ws_1.notes.q0")))))
+
+(deftest a-one-question-card-that-records-notes-chooses-then-sends
+  (let [one (-> two-questions (update :questions (comp vec (partial take 1))))
+        out (html (card one [notes-action]))]
+    (is (str/includes? out "data-bind=\"ask.ws_1.notes.q0\""))
+    (is (not (str/includes? (subs out (str/index-of out "qc-opts") (str/index-of out "class=\"controls\"")) "@post"))
+        "no option posts by itself: choosing is page state until Send")
+    (is (str/includes? out "/a/answer-questions") "Send answers is the submit")))
+
+(deftest a-pending-card-offers-no-note-field
+  (is (not (str/includes? (html (card two-questions [notes-action] :pending? true)) "qc-words"))))
+
 ;; The fukan blocker that prompted this (ws-20261117-2786b5, entry 75), trimmed: its body is a
 ;; three-finding bullet list, and its recommended option enumerates (1) … (2) … inline.
 (def ^:private summary

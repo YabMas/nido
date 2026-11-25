@@ -4,11 +4,11 @@
    own, and heard by whoever asked. Each Claim's name is the claim's id, its docstring the
    statement, and its :about the elements it is about."
   (:require [canvas.vocab.claim :refer [Claim]]
-            [canvas.coordinator.work :refer [core-resolve! person-says!]]
+            [canvas.coordinator.work :refer [core-ask-card core-resolve! person-says!]]
             [canvas.core.ask-tool :refer [core-ask-tool]]
             [canvas.core.buffer :refer [core-buffer]]
             [canvas.core.domain :refer [core-domain]]
-            [canvas.ui.surface :refer [ui-server]]))
+            [canvas.ui.surface :refer [ui-components-ask ui-server]]))
 
 (Claim conductor-hears-the-answer
   "When the person answers an operator ask, the conductor's :ask-answered inbox item carries the answer value, and the conductor's brief prints it beside the ask's id. decide still never reads the value's content."
@@ -29,3 +29,11 @@
 (Claim words-paths-unchanged
   "The ask-wide Answer box (:reply), tell and blocker:answer answer an ask with the same text the same words gave before this change, tied to no question."
   {:about [core-resolve! person-says!] :evidence "test"})
+
+(Claim every-core-ask-chooses-then-sends
+  "Every core ask's card, whatever its number of questions, has Send answers (:answer-questions) as its submit, and none of its options carries a gate action of its own; the submit's descriptor says it records notes."
+  {:about [core-ask-card] :evidence "test"})
+
+(Claim every-question-takes-a-note
+  "On a card whose submit records notes, every question renders its own note field beside its options, held under the card's signal by question index; Send posts each question's choice and note in question order. On a card whose submit does not record notes, a question with options has no text field, as before."
+  {:about [ui-components-ask] :evidence "test"})
