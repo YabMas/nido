@@ -183,9 +183,9 @@
               tripped? (assoc :breaker :open :breaker-opened-at (clock/now-iso)))))))))
 
 (defn- read-all
-  "Every workstream of `project` that reads, in `ws/list-ids` order."
+  "Every workstream of `project` that reads, in id order, read in one request."
   [project]
-  (vec (keep #(ws/read-ws project %) (ws/list-ids project))))
+  (ws/project-records project))
 
 (defn- by-ref
   "Each external-ref id the workstreams `wss` carry → the first of them, in `wss`'s order, that

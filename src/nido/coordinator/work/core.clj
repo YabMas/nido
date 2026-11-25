@@ -153,6 +153,11 @@
        (.start)))
    nil))
 
+(defn ^{:malli/schema [:=> [:cat :map] :map]} of-state
+  "Committed state `st` as `held` keeps a workstream's entry: {:state :awaiting :pos}."
+  [st]
+  {:state st :awaiting (vec (d/awaiting-person st)) :pos 0})
+
 (defn ^{:malli/schema [:=> [:cat] :map]} held
   "Every workstream's state the feed has delivered: {ws-key {:state :awaiting :pos}}. Read once
    from the daemon when nothing follows the feed in this process, so a one-shot surface renders the
@@ -162,7 +167,7 @@
   (cond
     (client/local?)
     (into {} (for [[k st] (client/value! (client/states "") :states)]
-               [k {:state st :awaiting (vec (d/awaiting-person st)) :pos 0}]))
+               [k (of-state st)]))
 
     (:following? @mirror)
     (let [{:keys [caught-up wait-until]} @mirror]

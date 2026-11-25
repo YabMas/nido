@@ -198,7 +198,9 @@
    session's substrate-history / created-at. ISO strings sort lexically = chronologically. nil
    when nothing is present."
   [ws sessions]
-  (->> (timestamps ws sessions) (remove nil?) sort last))
+  ;; The greatest, found in one pass: sorting every row's timestamps was a fifth of a board read.
+  (reduce (fn [a b] (if (or (nil? a) (and b (pos? (compare b a)))) b a))
+          nil (timestamps ws sessions)))
 
 (defn- max-priority
   "Highest autonomy :priority across a workstream's sessions (0 when none carry
@@ -379,8 +381,12 @@
       :last-activity   (last-activity ws sessions)
       :facets          (:facets ws)
       ;; Standing's answer, read off the ledger — the one placement asks. Asked only of a ledger
-      ;; holding a findings round: nearly none do, and a board reads ~1000 rows.
-      :open-findings   (if (some #(= :findings (:kind %)) (:entries ws))
+      ;; holding a findings round that is not settled: nearly none are, a board reads thousands
+      ;; of rows, and only the board draws the count, never on a settled row — while a settled
+      ;; review's findings are the costliest ledgers to read.
+      :open-findings   (if (and (some #(= :findings (:kind %)) (:entries ws))
+                                (let [c (workstream/closure ws)]
+                                  (or (nil? c) (= :between-phases (:outcome c)))))
                          (count (standing/open-findings project (:id ws)))
                          0)})))
 
@@ -435,7 +441,7 @@
    orphan / never-provisioned tickets are visible. Builds the page-facts cache once."
   [project]
   (let [facts   (notion-cache/project-page-facts project)
-        wss     (keep #(workstream/read-ws project %) (workstream/list-ids project))
+        wss     (workstream/project-records project)
         ws-rows (mapv #(workstream-row project % facts) wss)
         covered (into #{} (mapcat (fn [w] (remove nil? [(:page-id (notion-ref w))
                                                          (:id (ledger-ref w))]))) wss)

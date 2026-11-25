@@ -16,6 +16,10 @@
     "The content of an entry of a workstream record, as written, or nil."
     {:signature [:=> [:catn [:w :any] [:seq-n :int]] [:maybe :string]]
      :delegates [client/entry-contents]})
+  (Operation prime!
+    "Keep content a bulk read fetched as what `text` answers for those entries, so a reader folding
+     many ledgers asks the core for them once."
+    {:signature [:=> [:catn [:w :any] [:contents [:map-of :int :string]]] :nil]})
   (Operation parsed
     "An entry parsed through the READ contract and stamped with its :seq and :at, or nil when it
      no longer parses."

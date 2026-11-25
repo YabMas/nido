@@ -30,7 +30,7 @@
     {:signature [:=> [:catn [:ws Workstream]] [:maybe :string]]})
   (Operation open-notion-workstreams "Every open workstream carrying a Notion page: open as the core says when `core` is given, else as the ledger's closure does."
     {:signature [:=> [:catn [:project ProjectName] [:core [:? [:maybe :map]]]] [:sequential Workstream]]
-     :delegates [notion-page-id workstream/list-ids workstream/read-ws]})
+     :delegates [notion-page-id workstream/project-records]})
   (Operation poll-and-react! "One reconcile poll for a project."
     {:signature [:=> [:catn [:project ProjectName] [:opts :map]] :any]
      :delegates [open-notion-workstreams sync-action page-status page-ballholder-ids page-ballholder-name notion/retrieve-page workstream/advance-stage!]}))

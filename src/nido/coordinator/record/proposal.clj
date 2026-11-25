@@ -152,11 +152,10 @@
    this surface used to render identically to a finished one."
   [project]
   (let [pk (keyword (name project))]
-    (->> (cws/list-ids pk)
-         (keep (fn [ws-id]
-                 (let [w (cws/read-ws pk ws-id)]
-                   (when (some #(= :review-run (:adapter %)) (:external-refs w))
-                     {:ws-id ws-id :w w}))))
+    (->> (cws/project-records pk)
+         (keep (fn [w]
+                 (when (some #(= :review-run (:adapter %)) (:external-refs w))
+                   {:ws-id (:id w) :w w})))
          (mapcat (fn [{:keys [ws-id w]}]
                    (let [decided (decisions-by-address pk ws-id)
                          landed  (landings-by-address pk ws-id)
@@ -221,14 +220,13 @@
    improvement skill when it has landed, or by a human clearing a wedge."
   [project]
   (let [pk (keyword (name project))]
-    (->> (cws/list-ids pk)
-         (keep (fn [ws-id]
-                 (let [w (cws/read-ws pk ws-id)]
-                   (when-let [ref (some #(when (= improvement-adapter (:adapter %)) %)
-                                        (:external-refs w))]
-                     (let [closed (cws/closure w)]
-                       {:address (:id ref) :ws-id ws-id :open? (nil? closed)
-                        :outcome (:outcome closed)})))))
+    (->> (cws/project-records pk)
+         (keep (fn [{ws-id :id :as w}]
+                 (when-let [ref (some #(when (= improvement-adapter (:adapter %)) %)
+                                      (:external-refs w))]
+                   (let [closed (cws/closure w)]
+                     {:address (:id ref) :ws-id ws-id :open? (nil? closed)
+                      :outcome (:outcome closed)}))))
          vec)))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:maybe :map]]}
@@ -395,9 +393,9 @@
    latest-wins meaningful."
   [project]
   (let [pk (keyword (name project))]
-    (->> (cws/list-ids pk)
-         (mapcat (fn [ws-id]
-                   (let [{:keys [ledger entries]} (active-ledger pk ws-id)]
+    (->> (cws/project-records pk)
+         (mapcat (fn [{ws-id :id :as ledger}]
+                   (let [entries (:entries ledger)]
                      (->> entries
                           (filter #(= :improvement-plan (:kind %)))
                           (keep (fn [e]

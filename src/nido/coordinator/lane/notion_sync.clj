@@ -121,8 +121,7 @@
    the ledger's closure does."
   ([project] (open-notion-workstreams project nil))
   ([project core]
-   (->> (ws/list-ids project)
-        (keep #(ws/read-ws project %))
+   (->> (ws/project-records project)
         (filter #(and (if core ((:open? core) project (:id %)) (nil? (ws/closure %)))
                       (notion-page-id %))))))
 

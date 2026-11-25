@@ -94,8 +94,7 @@
    correlate. Normalize both sides here."
   [project id]
   (let [target (str/lower-case id)]
-    (->> (ws/list-ids project)
-         (keep #(ws/read-ws project %))
+    (->> (ws/project-records project)
          (some (fn [w]
                  (when (some #(and (= :github (:adapter %))
                                    (= target (some-> (:id %) str/lower-case)))

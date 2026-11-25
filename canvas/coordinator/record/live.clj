@@ -34,7 +34,7 @@
      is answered from the picture from then on. Everything counts as moved until the first
      census has passed that on."
     {:signature [:=> [:catn [:projects [:sequential ProjectName]]] :any]
-     :delegates [workstream/list-ids workstream/read-ws workstream/activation workstream/closure
+     :delegates [workstream/over-project workstream/read-ws workstream/activation workstream/closure
                  drain/drain? session/list-sessions runs/list-run-ids runs/read-run
                  state/workstreams-dir state/workstream-dir state/ws-sessions-dir state/runs-dir
                  state/run-dir state/session-events-path events/use-index!]})
@@ -62,7 +62,7 @@
     "A project's workstream ids a pass visits: the subjects and the moved, or every one while
      not started."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :string]]
-     :delegates [workstream/list-ids]})
+     :delegates [workstream/project-records]})
   (Operation unfinished-run-ids
     "The Runs not yet done, failed or dry-run, and any that moved; every Run while not started."
     {:signature [:=> [:catn] [:vector RunId]]

@@ -91,7 +91,7 @@
   (Operation workstream-rows
     "Every display row for a project."
     {:signature [:=> [:catn [:project ProjectName]] [:vector WorkstreamRow]]
-     :delegates [workstream/list-ids workstream/read-ws workstream-row]})
+     :delegates [workstream/project-records workstream-row]})
   (Operation grouped-by-stage
     "Rows partitioned by lifecycle stage."
     {:signature [:=> [:catn [:rows [:vector WorkstreamRow]]] :map]})

@@ -40,6 +40,15 @@
           (doseq [[n t] got] (io/cache-store texts cap (text-key w n) t))
           (get got seq-n)))))
 
+(defn ^{:malli/schema [:=> [:cat :any [:map-of :int :string]] :nil]}
+  prime!
+  "Keep `contents` (seq → content), read for the workstream record `w` in some bulk read, as what
+   `text` answers for those entries — so a reader folding many ledgers asks the core for them
+   once, never ledger by ledger."
+  [w contents]
+  (doseq [[n t] contents] (io/cache-store texts cap (text-key w n) t))
+  nil)
+
 (defn ^{:malli/schema [:=> [:cat :any :int] [:maybe :map]]}
   parsed
   "The entry at `seq-n` on `w` parsed through the READ contract and stamped with its :seq and :at,

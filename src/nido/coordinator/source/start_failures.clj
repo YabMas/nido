@@ -90,9 +90,8 @@
   [project]
   (let [runs-by-ws (recovery-runs-by-ws project)]
     (vec
-     (for [ws-id (ws/list-ids project)
-           :let  [w   (ws/read-ws project ws-id)
-                  ref (some #(when (= adapter (:adapter %)) %) (:external-refs w))]
+     (for [{ws-id :id :as w} (ws/project-records project)
+           :let  [ref (some #(when (= adapter (:adapter %)) %) (:external-refs w))]
            :when ref
            :let  [runs     (get runs-by-ws ws-id [])
                   outcomes (mapcat :outcomes (ws/entries-of project ws-id :session-restored))]]

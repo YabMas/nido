@@ -143,11 +143,21 @@
         slices (for [[[project _] {:keys [slices]}] ws, id slices] [project id])]
     (assoc p :subjects (into own slices))))
 
-(defn- project-ids [project] (vec (ws/list-ids project)))
+(defn- project-ids [project] (mapv :id (ws/project-records project)))
+
+(defn- project-facts
+  "[ids facts] for `project`: its workstreams' ids in id order, and what deciding subjecthood
+   needs of each by [project id] — every one read in one request."
+  [project]
+  (ws/over-project project
+                   (fn [records]
+                     (let [ids (mapv :id records)]
+                       [ids (into {} (for [id ids] [[project id] (read-ws-facts project id)]))]))))
 
 (defn- build [projects now-ms]
-  (let [ids  (into {} (map (fn [p] [p (project-ids p)])) projects)
-        wsf  (into {} (for [[p xs] ids, id xs] [[p id] (read-ws-facts p id)]))
+  (let [read (into {} (map (fn [p] [p (project-facts p)])) projects)
+        ids  (into {} (map (fn [[p [xs _]]] [p xs])) read)
+        wsf  (into {} (mapcat (fn [[_ [_ f]]] f)) read)
         rids (runs/list-run-ids)
         logs (scan-logs)]
     (with-subjects
@@ -298,7 +308,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :string]]}
   subjects
-  "The ids of `project`'s workstreams a pass visits, in `ws/list-ids` order: the subjects and the
+  "The ids of `project`'s workstreams a pass visits, in id order: the subjects and the
    workstreams the last census found moved. Every workstream of the project while the picture
    is not started, or for a project registered after it was."
   [project]
@@ -306,7 +316,7 @@
     (if (and p (contains? (:projects p) project))
       (let [want (into (:subjects p) (get-in p [:moved :ws]))]
         (filterv #(contains? want [project %]) (get-in p [:projects project :ids])))
-      (vec (ws/list-ids project)))))
+      (project-ids project))))
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :RunId]]}
   unfinished-run-ids

@@ -63,6 +63,25 @@
      workstream's lock always asks the core."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Workstream]]
      :delegates [client/state client/states]})
+  (Operation project-records
+    "Every workstream record of a project the core holds, in id order, read in one request — the
+     open ones only on request, as the core's summary says — with every closure's entry fetched
+     beside it."
+    {:signature [:=> [:catn [:project ProjectName] [:opts [:? :map]]] [:vector Workstream]]
+     :delegates [client/project-states entry/prime!]})
+  (Operation over-project
+    "Call a function with a project's records read in one request, every read-ws of one of them in
+     its extent answered from that read outside the append lock."
+    {:signature [:=> [:catn [:project ProjectName] [:f fn?]] :any]
+     :delegates [project-records client/project-states entry/prime!]})
+  (Operation pass-state
+    "The committed state of a workstream the enclosing over-project read, or nil."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
+  (Operation ledger-stamps
+    "A stamp for every workstream of a project, read off its summaries in one request: a value
+     that moves whenever its ledger, identity or coordination does."
+    {:signature [:=> [:catn [:project ProjectName]] [:vector [:tuple WorkstreamId :any]]]
+     :delegates [client/summaries]})
   (Operation record-of-state
     "The workstream record a committed core state holds for an id — what read-ws answers for it —
      or nil, for a reader the core handed states in bulk."
@@ -286,7 +305,7 @@
   (Operation find-by-ref
     "The workstream answering to an external ref from a named adapter, or nil."
     {:signature [:=> [:catn [:project ProjectName] [:adapter :keyword] [:external-id :string]] [:maybe Workstream]]
-     :delegates [list-ids read-ws]})
+     :delegates [project-records]})
   (Operation own-pr
     "The :github ref of a workstream naming a pull request — as `owner/repo#n`, or as `n` when
      exactly one of its refs has that number — or nil: what nido knows as the workstream's own PR."
@@ -305,7 +324,7 @@
   (Operation find-by-ref-id
     "The workstream carrying this external id, whichever adapter raised it."
     {:signature [:=> [:catn [:project ProjectName] [:external-id :string]] [:maybe Workstream]]
-     :delegates [list-ids read-ws]})
+     :delegates [project-records]})
   (Operation newest-choice
     "The newest stage choice on a workstream, whatever has been recorded since."
     {:signature [:=> [:catn [:w :any]] [:maybe :map]]})

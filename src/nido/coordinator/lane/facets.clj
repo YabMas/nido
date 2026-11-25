@@ -54,8 +54,7 @@
    count refreshed. Reads the keychain token once."
   [project]
   (let [token (notion/keychain-token)]
-    (->> (ws/list-ids project)
-         (keep #(ws/read-ws project %))
+    (->> (ws/project-records project)
          (filter #(and (nil? (ws/closure %)) (wsv/notion-ref %)))
          (map #(refresh-ws! project (:id %) token))
          (filter some?)

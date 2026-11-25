@@ -63,8 +63,7 @@
    next sweep."
   ([project] (refresh-project! project generate))
   ([project gen]
-   (->> (ws/list-ids project)
-        (keep #(ws/read-ws project %))
+   (->> (ws/project-records project)
         (remove ws/closure)
         (keep (fn [w]
                 (let [basis (wsv/title-basis w (session/list-sessions project (:id w)))]
@@ -100,7 +99,7 @@
                                  :when session-name]
                              [[project-name session-name] dir]))]
     (into []
-          (for [w     (keep #(ws/read-ws project %) (ws/list-ids project))
+          (for [w     (ws/project-records project)
                 :when (not (ws/closure w))
                 :let  [sessions (session/list-sessions project (:id w))
                        title    (str/replace (wsv/label w sessions) #"[\t\r\n]+" " ")]

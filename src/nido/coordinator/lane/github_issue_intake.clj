@@ -78,9 +78,8 @@
    still unpromoted. delete! (not close!) so a re-assigned issue re-creates a
    fresh :ready entry next poll. Promoted workstreams are left untouched."
   [project assigned-ids]
-  (doseq [ws-id (ws/list-ids project)
-          :let  [w  (ws/read-ws project ws-id)
-                 id (some-> w issue-ref-id)]
+  (doseq [{ws-id :id :as w} (ws/project-records project)
+          :let  [id (issue-ref-id w)]
           :when (and id (not (contains? assigned-ids id)) (unpromoted? project w))]
     (ws/delete! project ws-id)))
 

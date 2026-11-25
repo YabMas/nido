@@ -594,9 +594,12 @@
 
 (defn- core-of
   "Workstream `ws-id`'s entry in the core, as `wcore/held` holds it, or nil when the core holds
-   none."
+   none. Inside a pass over its project (`cws/over-project`) a process that does not follow the
+   feed reads it from the pass's one read rather than reading every project's states again."
   [project ws-id]
-  (wcore/held-ws (core-held) project ws-id))
+  (if-let [st (when-not (:following? @wcore/mirror) (cws/pass-state project ws-id))]
+    (wcore/of-state st)
+    (wcore/held-ws (core-held) project ws-id)))
 
 (defn- core-overlay
   "Row `row` with its coordination — closure, needs-you, engagement, the pause and what is
@@ -710,11 +713,24 @@
             (not (contains? unrendered-bands band))
             (assoc :phase (wsv/phase-progress project ws-id)))))))))
 
+(defn- par-mapv
+  "`(mapv f xs)`, folded in chunks across the processors. Each row's status is its own ledger's
+   fold, independent of every other's, and a project holds thousands; the chunks run in futures,
+   which convey the enclosing pass (`cws/over-project`)."
+  [f xs]
+  (let [xs (vec xs)
+        n  (max 1 (quot (count xs) (* 2 (.availableProcessors (Runtime/getRuntime)))))]
+    (if (<= (count xs) n)
+      (mapv f xs)
+      (into [] (mapcat deref) (mapv #(future (mapv f %)) (partition-all n xs))))))
+
 (defn- read-rows
-  "`list-workstreams` without the memo — one full read of a project's workstreams."
+  "`list-workstreams` without the memo — one full read of a project's workstreams, in one request
+   to the core, which every fold of the read answers from."
   [project live-names]
-  (mapv #(with-status project live-names %)
-        (wsv/workstream-rows project)))
+  (cws/over-project project
+                    (fn [_] (par-mapv #(with-status project live-names %)
+                                      (wsv/workstream-rows project)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
   list-workstreams
@@ -798,8 +814,7 @@
         done-ids (into #{} (comp (filter #(= :done (:stage %))) (map :ws-id)) rows)]
     (if (empty? live)
       []
-      (->> (cws/list-ids project)
-           (keep #(cws/read-ws project %))
+      (->> (cws/project-records project)
            (keep (fn [w]
                    (let [closed (cws/closure w)]
                      ;; Between phases is closed and not finished: it has its own band,
@@ -853,17 +868,18 @@
    core holds them (`cws/ledger-stamp`), and its files — its directory, sessions/ and every
    session's, runs/, and each run it registers with that run's locks/. Directory mtimes stand
    for the files in them, which every writer creates or renames into place."
-  [project ^java.io.File wd]
+  ([project ^java.io.File wd] (ws-files-stamp project wd (cws/ledger-stamp project (.getName wd))))
+  ([project ^java.io.File wd ledger]
   (let [runs (java.io.File. wd "runs")]
     [(.lastModified wd)
-     (cws/ledger-stamp project (.getName wd))
+     ledger
      (dir-stamps (java.io.File. wd "sessions"))
      (.lastModified runs)
      (mapv (fn [^java.io.File m]
              (let [rd (java.io.File. (str (cstate/run-dir (.getName m))))]
                [(.lastModified rd)
                 (.lastModified (java.io.File. rd "locks"))]))
-           (.listFiles runs))]))
+           (.listFiles runs))])))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   board-stamp
@@ -892,9 +908,11 @@
 (defn- board-stamp*
   [project]
   (let [ws-root (java.io.File. (str (cstate/workstreams-dir project)))]
-    ;; Membership is the core's: one request for every workstream's state, which each stamp
-    ;; below then reads — so one the core holds with no directory is stamped too.
-    [(mapv #(ws-files-stamp project (java.io.File. ws-root ^String %)) (cws/list-ids project))
+    ;; Membership is the core's, and so is each ledger's stamp: one request for every
+    ;; workstream's summary, whose newest seq stands for its ledger — so one the core holds with
+    ;; no directory is stamped too.
+    [(mapv (fn [[id ledger]] (ws-files-stamp project (java.io.File. ws-root ^String id) ledger))
+           (cws/ledger-stamps project))
      (sstate/read-registry)
      (notion-cache/project-page-facts project)]))
 
@@ -2080,10 +2098,12 @@
                                       (concat (keep #(get-in % [:claude :session-id]) sessions)
                                               (keep #(get-in % [:dispatching :bg-id]) sessions)))
                      :settled?  settled?
-                     ;; At rest: only the sweep reaches it — settled history, or a review-loop
-                     ;; analysis, read off the position status gives it, whatever its band or
-                     ;; gate. Decides nothing else; the gate above reads `settled?`.
-                     :at-rest?  (or settled? (= :analysed (get-in row [:position :at])))
+                     ;; At rest: only the sweep reaches it — settled history, as the core's
+                     ;; engagement or the ledger's own close says (the core keeps most closed
+                     ;; ledgers open), or a review-loop analysis, read off the position status
+                     ;; gives it, whatever its band or gate. Decides nothing else; the gate above
+                     ;; reads `settled?`.
+                     :at-rest?  (or settled? finished? (= :analysed (get-in row [:position :at])))
                      :gate      (when gate? (core-gate project row))
                      ;; The winding-down band's row, less its live sessions, which are the
                      ;; registry's and change without this row being recomputed.
@@ -2142,17 +2162,22 @@
            :covered-by (into {} (for [[id e] entries c (:covers e)] [c id]))
            :finished-by-session (into {} (for [[id e] entries :when (:wind e) s (:workers (:wind e))] [s id])))))
 
+(declare refresh-project*)
+
 (defn- refresh-project
   "`p`, a project's held value (nil for none), refreshed as `mode` says:
      :list   every row not :at-rest?, every one at rest the registry shows a live session for, and
              the rows whose own page's facts moved, plus a workstream new to the core;
      :sweep  those, and every row whose liveness deadline falls before the next run.
-   Both take the project's membership from `list-ids` — one request for every workstream the core
-   holds, so one the core newly holds is reached at once — and the project's page facts as a
-   value."
+   Both take the project's membership and every state from one request to the core
+   (`cws/over-project`), which every row's fold answers from — so one the core newly holds is
+   reached at once — and the project's page facts as a value."
   [project p mode]
-  (let [order      (cws/list-ids project)
-        facts      (notion-cache/project-page-facts project)
+  (cws/over-project project (fn [records] (refresh-project* project p mode (mapv :id records)))))
+
+(defn- refresh-project*
+  [project p mode order]
+  (let [facts      (notion-cache/project-page-facts project)
         live       (live-session-names project)
         old-facts  (:facts p)
         horizon    (if (= :sweep mode) sweep-period-ms 0)
@@ -3280,8 +3305,7 @@
   "Drop every penned workstream of `project` still at :incoming and older than `max-age-ms` at
    `now-ms`, in its work records and, where the core holds it, there. Answers their ids."
   [project max-age-ms now-ms]
-  (->> (cws/list-ids project)
-       (keep #(cws/read-ws project %))
+  (->> (cws/project-records project)
        (filter (fn [w] (and (nil? (cws/closure w))
                             (= :incoming (standing/chosen-stage project (:id w) w))
                             (>= (- now-ms (if-let [c (:created-at w)] (.toEpochMilli (java.time.Instant/parse c)) now-ms))
@@ -3892,8 +3916,8 @@
   "Session names owned by ANY workstream of `project` — open or closed. Closed
    owners keep their sessions out of adoption (they are winding-down leftovers)."
   [project]
-  (->> (cws/list-ids project)
-       (mapcat #(csession/list-sessions project %))
+  (->> (cws/project-records project)
+       (mapcat #(csession/list-sessions project (:id %)))
        (map :name)
        set))
 
@@ -3908,8 +3932,7 @@
    entries, exactly one session) whose session is also owned by another OPEN
    workstream — the newest real owner wins. Returns the deleted ws-ids."
   [project]
-  (let [open (->> (cws/list-ids project)
-                  (keep #(cws/read-ws project %))
+  (let [open (->> (cws/project-records project)
                   (remove cws/closure))
         owners-of (fn [n]
                     (filter (fn [w] (some #(= n (:name %))
@@ -3933,8 +3956,8 @@
 (defn- held-twice
   "Every session name more than one workstream of `project` holds, with its holders."
   [project]
-  (->> (cws/list-ids project)
-       (mapcat (fn [ws-id] (map #(vector (:name %) ws-id) (csession/list-sessions project ws-id))))
+  (->> (cws/project-records project)
+       (mapcat (fn [{ws-id :id}] (map #(vector (:name %) ws-id) (csession/list-sessions project ws-id))))
        (group-by first)
        (keep (fn [[n pairs]] (when (< 1 (count pairs)) {:session n :holders (mapv second pairs)})))
        (sort-by :session)

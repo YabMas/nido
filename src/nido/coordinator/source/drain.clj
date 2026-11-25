@@ -165,8 +165,8 @@
   open-drains
   "The ids of `project`'s drains that are not closed."
   [project]
-  (filterv #(let [w (ws/read-ws project %)] (and w (drain/drain? w) (nil? (ws/closure w))))
-           (ws/list-ids project)))
+  (into [] (comp (filter #(and (drain/drain? %) (nil? (ws/closure %)))) (map :id))
+        (ws/project-records project)))
 
 (defn- fire-for
   "What one poll fires for drain `ws-id` given its census result `taken`: the census failure, when

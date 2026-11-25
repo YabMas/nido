@@ -110,18 +110,29 @@
 (defn- sweep-key [project ws-id]
   [(str (core/nido-root)) (client/ws-key project ws-id)])
 
+(def ^:dynamic ^:private *pass*
+  "While a pass over projects runs (`over-project`), an atom of what their reads answered:
+   {:read {[root project] [ws-id …]} :states {[root key] state}}. Every `read-ws` in the pass's
+   extent of a workstream it read answers from it, outside the append lock, however long the
+   pass takes. Nil outside a pass."
+  nil)
+
 (defn- forget!
-  "Drop what a sweep held of workstream `ws-id`, so this process reads its own writes."
+  "Drop what a sweep or a pass held of workstream `ws-id`, so this process reads its own writes."
   [project ws-id]
-  (swap! swept dissoc (sweep-key project ws-id)))
+  (swap! swept dissoc (sweep-key project ws-id))
+  (when-let [p *pass*] (swap! p update :states dissoc (sweep-key project ws-id))))
 
 (defn- core-state
   "Workstream `ws-id`'s committed state in the core."
   [project ws-id]
-  (let [hit (when-not *under-lock* (get @swept (sweep-key project ws-id)))]
-    (if (and hit (< (- (System/currentTimeMillis) (:at hit)) sweep-ms))
-      (:state hit)
-      (client/value! (client/state (client/ws-key project ws-id)) :state))))
+  (let [k    (sweep-key project ws-id)
+        pass (when-not *under-lock* (some-> *pass* deref :states))
+        hit  (when-not *under-lock* (get @swept k))]
+    (cond
+      (contains? pass k)                                                     (get pass k)
+      (and hit (< (- (System/currentTimeMillis) (:at hit)) sweep-ms))        (:state hit)
+      :else (client/value! (client/state (client/ws-key project ws-id)) :state))))
 
 (defn- record-of
   "The workstream record a committed core `state` holds for `ws-id`, or nil when it holds none."
@@ -392,6 +403,10 @@
   [w kind]
   (filter #(= kind (:kind %)) (generation/current-span (:entries w))))
 
+(def ^:private closure-kinds
+  "The kinds whose newest says whether a workstream stands settled (`closure`)."
+  [:closed :reopened :phase-gate])
+
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
   closure
   "How the ledger says the workstream `w` stands settled: the newest :closed entry, unless a
@@ -402,7 +417,7 @@
    `{:seq n :unreadable? true}`, with no outcome — never an older close's payload, which would
    report an outcome the workstream has since moved past."
   [w]
-  (let [newest (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w)))]
+  (let [newest (last (filter #(some #{(:kind %)} closure-kinds) (:entries w)))]
     (when (= :closed (:kind newest))
       (or (read-entry-at w (:seq newest))
           {:seq (:seq newest) :unreadable? true}))))
@@ -2207,6 +2222,86 @@
          sort
          vec)))
 
+(defn- read-project
+  "Every workstream of `project` the core holds, read in one request (`client/project-states`)
+   with the content of each one's newest closure entry: [[ws-id state] …] in id order, the
+   discarded left out. Each state is kept as `list-ids` keeps it and each closure entry primed
+   (`entry/prime!`), so neither `read-ws` nor `closure` asks the core again for them. `opts` may
+   ask for the open ones only (`:open? true`, closed and discarded as the core's summary says)."
+  [project opts]
+  (let [reply  (client/project-states project (assoc (select-keys opts [:open?]) :newest-of closure-kinds))
+        sts    (client/value! reply :states)
+        prefix (client/ws-key project "")
+        now    (System/currentTimeMillis)
+        root   (str (core/nido-root))
+        pairs  (into [] (keep (fn [[k st]] (when (record-of k st) [(subs k (count prefix)) st])))
+                     (sort-by key sts))]
+    (swap! swept into (for [[k st] sts] [[root k] {:state st :at now}]))
+    (doseq [[k contents] (:contents reply)
+            :let [id (subs k (count prefix))]]
+      (entry/prime! {:project project :id id} contents))
+    pairs))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :map]] [:vector :Workstream]]}
+  project-records
+  "Every workstream record of `project` the core holds — what `read-ws` answers for each — in id
+   order, read in one request. `{:open? true}` keeps those the core's summary says are neither
+   closed nor discarded. Each read answers `read-ws` for a moment after (`sweep-ms`), and every
+   `closure` read is fetched with it; a pass longer than that runs in `over-project`."
+  ([project] (project-records project {}))
+  ([project opts]
+   (if-let [ids (when-not (:open? opts)
+                  (some-> *pass* deref (get-in [:read [(str (core/nido-root)) project]])))]
+     (let [sts (:states @*pass*)]
+       (vec (keep #(let [k (sweep-key project %)] (when (contains? sts k) (record-of % (get sts k))))
+                  ids)))
+     (mapv (fn [[id st]] (record-of id st)) (read-project project opts)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName fn?] :any]}
+  over-project
+  "Call `(f records)` with every workstream record of `project` read in one request
+   (`project-records`), and answer what it answers. Every `read-ws` of one of them in `f`'s extent
+   — however deep, and on any thread conveying the binding — answers from that one read, outside
+   the append lock, which reads the core as ever; this process's own writes are read back. Nested,
+   a project already read is not read again."
+  [project f]
+  (let [root (str (core/nido-root))
+        take! (fn [p]
+                (let [pairs  (read-project project {})
+                      prefix (client/ws-key project "")]
+                  (swap! p (fn [m] (-> m
+                                       (assoc-in [:read [root project]] (mapv first pairs))
+                                       (update :states into (for [[id st] pairs]
+                                                              [[root (str prefix id)] st])))))))]
+    (if-let [p *pass*]
+      (do (when-not (get-in @p [:read [root project]]) (take! p))
+          (f (project-records project)))
+      (let [p (atom {:read {} :states {}})]
+        (binding [*pass* p]
+          (take! p)
+          (f (project-records project)))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector [:tuple :WorkstreamId :any]]]}
+  ledger-stamps
+  "[[ws-id stamp] …] in id order for every workstream of `project` the core holds, read off its
+   summaries in one request: a value that moves whenever its ledger, identity or coordination
+   does — its newest seq, and the rest of its summary. For a cache keyed on what changed over a
+   whole project."
+  [project]
+  (let [prefix (client/ws-key project "")]
+    (->> (client/value! (client/summaries project) :summaries)
+         (remove (fn [[_ sm]] (:discarded? sm)))
+         (sort-by key)
+         (mapv (fn [[k sm]] [(subs k (count prefix)) [(:last-seq sm) (hash (dissoc sm :last-seq :last-at))]])))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  pass-state
+  "The committed state of workstream `ws-id` the enclosing `over-project` read, or nil outside
+   one or for a workstream it did not read — for a reader of the core's coordination of many
+   workstreams that would otherwise read every state again."
+  [project ws-id]
+  (some-> *pass* deref :states (get (sweep-key project ws-id))))
+
 (defn- published-design
   "The design the work a PR publishes was done under: what the publisher names,
    else what an implementation record listing this PR among its :artifacts names.
@@ -2321,8 +2416,7 @@
   "Scan a project's workstreams for one carrying an external ref matching
    (adapter, external-id). Returns the workstream record or nil."
   [project adapter external-id]
-  (->> (list-ids project)
-       (keep #(read-ws project %))
+  (->> (project-records project)
        (some (fn [w]
                (when (some #(and (= adapter (:adapter %)) (= external-id (:id %)))
                            (:external-refs w))
@@ -2334,8 +2428,7 @@
    agnostic — Notion BR-#### or Slack id), or nil. Used to route a ref-keyed
    ledger append/read to its workstream. O(workstreams)."
   [project external-id]
-  (->> (list-ids project)
-       (keep #(read-ws project %))
+  (->> (project-records project)
        (some (fn [w] (when (some #(= external-id (:id %)) (:external-refs w)) w)))))
 
 (defn ^{:malli/schema [:=> [:cat :any :string] [:maybe :map]]}

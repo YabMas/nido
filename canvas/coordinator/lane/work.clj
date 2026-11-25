@@ -46,7 +46,7 @@
      :delegates [refresh-ws!]})
   (Operation refresh-project! "Refresh every open Notion-linked workstream in a project."
     {:signature [:=> [:catn [:project ProjectName]] :any]
-     :delegates [refresh-ws! workstream/list-ids workstream/read-ws]}))
+     :delegates [refresh-ws! workstream/project-records]}))
 
 (Module lane-findings
   "The staging findings round: what a human found after the work shipped.
@@ -121,4 +121,4 @@
      conductor's record nor what its conductor decided keeps it, and the conductor is retired before
      it is deleted."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [scratch? workstream/list-ids workstream/read-ws workstream/delete!]}))
+     :delegates [scratch? workstream/project-records workstream/delete!]}))

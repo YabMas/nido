@@ -16,9 +16,7 @@
   "Each workstream of `project` by the id of every external ref it carries — read once, so a
    project's tickets find their workstreams without a scan each."
   [project]
-  (into {} (for [id (cws/list-ids project)
-                 :let [w (cws/read-ws project id)]
-                 :when w
+  (into {} (for [w (cws/project-records project)
                  r (:external-refs w)]
              [(:id r) w])))
 

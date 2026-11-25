@@ -282,7 +282,7 @@
      this reads them rather than the copy the poll writes to its state file, and pairs each with
      what its sessions say: a hold no live session works on is one nothing will ever release."
     {:signature [:=> [:catn] [:vector :map]]
-     :delegates [triggers/load-for-project workstream/list-ids workstream/read-ws
+     :delegates [triggers/load-for-project workstream/project-records
                  session/list-sessions]})
   (Operation review-queues
     "The latest review-queue grooming of every project whose triggers declare the plan trigger —
@@ -303,7 +303,7 @@
     {:signature [:=> [:catn [:run-id RunId] [:fire [:=> [:cat :keyword :map :string] :any]]] :map]})
   (Operation proposals "Every proposal this project's review analyses have made."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
-     :delegates [workstream/list-ids]})
+     :delegates [workstream/project-records]})
   (Operation decide-proposal! "Record a human decision about one proposal."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:decision :map]] :map]
      :delegates [workstream/append-entry-at!]})
