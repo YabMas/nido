@@ -38,13 +38,14 @@
        Unavailable])
 
 (Kind ReadReply
-  "A read's reply — a state, the states by key, entry contents by seq, the workstreams held, an
-   error — or Unavailable."
+  "A read's reply — a state, the states by key, entry contents by seq, a stream's records, the
+   workstreams held, an error — or Unavailable."
   [:or [:map [:state :map]]
        [:map [:states [:map-of :string :map]]]
        [:map [:entries [:map-of :int :string]]]
        [:map [:summaries [:map-of :string :map]]]
        [:map [:asking [:map-of :string :map]]]
+       [:map [:records [:vector :map]]]
        [:map [:states [:map-of :string :map]]
         [:summaries {:optional true} [:map-of :string :map]]
         [:contents {:optional true} [:map-of :string [:map-of :int :string]]]]
@@ -73,8 +74,16 @@
   (Operation run-key?
     "Whether a core key names a run rather than a workstream."
     {:signature [:=> [:catn [:k :any]] :boolean]})
+  (Operation journal-key
+    "The core's name for a project's named journal, which no read of its workstreams or runs
+     returns."
+    {:signature [:=> [:catn [:project :any] [:jname :string]] :string]})
+  (Operation workstream-key?
+    "Whether a core key names a workstream — neither a run nor a journal."
+    {:signature [:=> [:catn [:k :any]] :boolean]
+     :delegates [run-key?]})
   (Operation split-key
-    "The project and workstream id of a core key, or nil — a run's key included."
+    "The project and workstream id of a core key, or nil — a run's or a journal's key included."
     {:signature [:=> [:catn [:k :string]] [:maybe [:tuple :string :string]]]})
   (Operation socket
     "The daemon's command socket."
@@ -106,6 +115,15 @@
     "The summary of every run of a project, by run id, as a ReadReply."
     {:signature [:=> [:catn [:project :any]] ReadReply]
      :delegates [run-key request!]})
+  (Operation records
+    "The records of a run or a journal, in append order, each with its seq, as a ReadReply."
+    {:signature [:=> [:catn [:k :string]] ReadReply]
+     :delegates [state]})
+  (Operation append-record!
+    "Append one record ({:kind k …}) to a run or a journal, naming how many of its records the
+     author read: a later of two racing appends is refused stale. Opens a journal on its first."
+    {:signature [:=> [:catn [:k :string] [:key :string] [:record :map] [:after :int]] CommandOutcome]
+     :delegates [command!]})
   (Operation asking
     "The committed state of every workstream of a project a person owes a move now — an open ask
      on a workstream not closed — by key, as a ReadReply."

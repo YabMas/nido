@@ -69,3 +69,22 @@
     (is (nil? (client/split-key k)) "no reader of workstreams takes it for one")
     (is (not (client/run-key? (client/ws-key :brian "ws-1"))))
     (is (= ["brian" "ws-1"] (client/split-key (client/ws-key :brian "ws-1"))))))
+
+(deftest a-journal-key-is-no-workstream-key
+  (let [k (client/journal-key :nido "improvement")]
+    (is (= "journal:nido/improvement" k))
+    (is (not (client/workstream-key? k)))
+    (is (nil? (client/split-key k)))
+    (is (not (client/workstream-key? (client/run-key :nido "r"))))
+    (is (client/workstream-key? (client/ws-key :nido "ws-1")))))
+
+(deftest a-journal-is-opened-by-its-first-record
+  (let [tmp (str (java.nio.file.Files/createTempDirectory "journal" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (with-redefs [core/nido-root (constantly tmp)]
+      (let [k (client/journal-key :nido "improvement")]
+        (is (= [] (:records (client/records k))))
+        (is (:events (client/append-record! k "a1" {:kind :decision :address "x"} 0)))
+        (is (= :stale (get-in (client/append-record! k "a2" {:kind :decision :address "y"} 0) [:refused :reason]))
+            "an author that read nothing behind the first is refused")
+        (is (:events (client/append-record! k "a3" {:kind :landing :commit "c"} 1)))
+        (is (= [[1 :decision] [2 :landing]] (map (juxt :seq :kind) (:records (client/records k)))))))))

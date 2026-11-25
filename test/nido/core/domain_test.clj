@@ -579,3 +579,46 @@
     (testing "never under a turn still running in it"
       (let [[s3] (d/step s {:command :start-turn :turn "t" :unit "u" :spec spec})]
         (is (= :turn-running (refusal s3 {:command :record-session-lost :unit "u"})))))))
+
+;; ── records: what a run did, and journals ────────────────────────────────────
+
+(def ^:private a-journal {:command :open-journal :journal {:project "nido" :name "improvement"}})
+
+(deftest a-journal-holds-records-of-any-kind-in-order
+  (let [[s] (run [a-journal
+                  {:command :append-record :record {:kind :decision :address "a" :verdict :accept} :after 0}
+                  {:command :append-record :record {:kind :landing :commit "c1"} :after 1}])]
+    (is (= [{:kind :decision :address "a" :verdict :accept :seq 1} {:kind :landing :commit "c1" :seq 2}]
+           (:records s)))
+    (is (empty? (d/violations s)))
+    (is (= {:project "nido" :journal {:project "nido" :name "improvement"} :last-seq 2
+            :closed? false :asking? false}
+           (d/summary s)))
+    (testing "an append names the seq its author read; the later of two racing is refused"
+      (is (= :stale (refusal s {:command :append-record :record {:kind :decision} :after 1}))))
+    (testing "a record is a map with a keyword :kind, and the core numbers it"
+      (is (= :record-needs-a-kind (refusal s {:command :append-record :record {:kind "x"} :after 2})))
+      (is (= :record-names-its-own-seq (refusal s {:command :append-record :record {:kind :x :seq 9} :after 2}))))
+    (testing "a journal admits nothing but records"
+      (doseq [c [{:command :open-unit :unit "x" :project "nido" :goal "g"} {:command :post-chat :message "m" :text "hi"}
+                 a-journal a-run]]
+        (is (= :not-a-journal-command (refusal s c)) (pr-str (:command c)))))
+    (testing "only an empty stream becomes a journal"
+      (is (= :stream-not-empty (refusal (first (run two-units)) a-journal))))))
+
+(deftest a-workstream-holds-no-records
+  (is (= :records-are-a-journals-or-a-runs
+         (refusal (first (run two-units)) {:command :append-record :record {:kind :x} :after 0}))))
+
+(deftest a-run-records-what-it-did-while-it-runs
+  (let [[s] (d/step (run-up) {:command :append-record :record {:kind :proposal :obs 1} :after 0})]
+    (is (= [{:kind :proposal :obs 1 :seq 1}] (:records s)))
+    (is (= [{:kind :proposal :obs 1 :seq 1}] (:records (d/summary s))))
+    (let [[over] (d/step s {:command :record-outcome :turn "review-queue-ab12 first" :outcome :completed})]
+      (is (= :run-is-over (refusal over {:command :append-record :record {:kind :proposal} :after 1}))
+          "once its unit finished, nothing is added to what the run did"))))
+
+(deftest records-fold-from-their-events
+  (let [cs [a-journal {:command :append-record :record {:kind :k} :after 0}]
+        [s events] (reduce (fn [[st evs] c] (let [[st' e] (d/step st c)] [st' (into evs e)])) [d/empty-state []] cs)]
+    (is (= s (d/fold events)))))

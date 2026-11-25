@@ -88,7 +88,7 @@
    holds workstreams only, and moves past a run's message without keeping it."
   [m {:keys [ws pos state awaiting]}]
   (cond-> (update m :pos max pos)
-    (not (client/run-key? ws)) (assoc-in [:ws ws] {:state state :awaiting (vec awaiting) :pos pos})))
+    (client/workstream-key? ws) (assoc-in [:ws ws] {:state state :awaiting (vec awaiting) :pos pos})))
 
 (def ^:private caught-up-wait-ms
   "How long after following starts a read may wait for the first catch-up before answering what
@@ -119,7 +119,7 @@
 
     :else
     (do (swap! mirror apply-message m)
-        (when (and on-change (not (client/run-key? (:ws m))))
+        (when (and on-change (client/workstream-key? (:ws m)))
           (try (on-change (:ws m)) (catch Exception _ nil)))
         true)))
 
@@ -170,7 +170,7 @@
   (cond
     (client/local?)
     (into {} (for [[k st] (client/value! (client/states "") :states)
-                   :when (not (client/run-key? k))]
+                   :when (client/workstream-key? k)]
                [k (of-state st)]))
 
     (:following? @mirror)
@@ -190,7 +190,7 @@
               (if (or (= ::quiet m) (nil? m) (:cut-off m) (:caught-up m))
                 acc
                 (recur (cond-> acc
-                         (not (client/run-key? (:ws m)))
+                         (client/workstream-key? (:ws m))
                          (assoc (:ws m) {:state (:state m) :awaiting (vec (:awaiting m)) :pos (:pos m)}))))))
           (finally (api/disconnect c))))
       (catch Exception _ {}))))

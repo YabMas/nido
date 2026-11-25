@@ -41,6 +41,13 @@
    session is destroyed and nothing on it runs again. A run has nobody to ask, so an :asked
    outcome reported for its turn is recorded as a failure.
 
+   A journal is the third: records only, kept across runs — no unit, turn, ask or identity.
+   `:open-journal` makes an empty stream one. A record is any map with a keyword `:kind`, which
+   is all the core reads of it: what each kind holds is its writer's to check. Records are
+   appended, never changed, on a journal and on a run while its unit is open — what that run did —
+   each naming the record seq its author read, so two authors racing are ordered and the later
+   refused.
+
    Pure: no clock, no ids minted, no I/O. Ids and times arrive in commands."
   (:require [clojure.set :as set]
             [clojure.string :as str]))
@@ -80,6 +87,8 @@
                         ; A run's state also carries :run, its identity {:id :project :trigger :goal
                         ; :profile :payload :fired-at}: absent on a workstream, so a workstream's
                         ; state reads as it did before runs were a kind.
+                        ; A journal's carries :journal {:project :name}, and it and a run's carry
+                        ; :records, in append order, each its record with the :seq it was given.
 
 (def person-input-kinds
   "The inbox items that carry a person's input. A wake for an inbox holding one is never capped."
@@ -337,6 +346,12 @@
                                   trigger     (assoc :trigger trigger)
                                   first-turn  (assoc :first-turn first-turn)
                                   background? (assoc :background? true))))
+
+(defmethod evolve :journal-opened [state {:keys [journal]}]
+  (assoc state :journal journal))
+
+(defmethod evolve :record-appended [state {:keys [record]}]
+  (update state :records (fnil conj []) (assoc record :seq (inc (count (:records state))))))
 
 (defmethod evolve :run-started [state {:keys [run spec]}]
   (-> state
@@ -610,6 +625,23 @@
       :else (accept {:event :run-started
                      :run (select-keys run [:id :project :trigger :goal :profile :payload :fired-at])
                      :spec spec}))))
+
+(defmethod decide :open-journal [state {:keys [journal]}]
+  (cond
+    (not= empty-state state)                                    (refuse :stream-not-empty)
+    (not (and (string? (:project journal)) (string? (:name journal)))) (refuse :journal-needs-project-and-name)
+    :else (accept {:event :journal-opened :journal journal})))
+
+(defmethod decide :append-record [state {:keys [record after]}]
+  (let [n (count (:records state))]
+    (cond
+      (not (or (:journal state) (:run state)))      (refuse :records-are-a-journals-or-a-runs)
+      (and (:run state) (not= :open (get-in state [:units (:id (:run state)) :status])))
+      (refuse :run-is-over)
+      (not (and (map? record) (keyword? (:kind record)))) (refuse :record-needs-a-kind)
+      (contains? record :seq)                      (refuse :record-names-its-own-seq)
+      (not= after n)                               (refuse :stale :seq n)
+      :else (accept {:event :record-appended :record record}))))
 
 (defmethod decide :record-provision-attempt [state {:keys [unit attempt want]}]
   (cond
@@ -941,7 +973,8 @@
    person owes it a move now — an open ask on a workstream that is not closed.
 
    A run's summary is its identity under :run, its `run-status`, the detail its turn or session
-   ended with, and :closed? once it is over; it never asks.
+   ended with, :closed? once it is over, and its records; it never asks. A journal's is its
+   identity under :journal and how many records it holds — the records themselves are its state's.
 
    A reading, never an event: core-store keeps it beside the state it is read from, in the same
    transaction, and rebuilds it with the state."
@@ -954,8 +987,12 @@
        :status  (run-status state)
        :detail  (or (:detail t) (get-in u [:session :detail]))
        :closed? (not= :open (:status u))
-       :asking? false})
-    (workstream-summary state)))
+       :asking? false
+       :records (vec (:records state))})
+    (if-let [j (:journal state)]
+      {:project (:project j) :journal j :last-seq (count (:records state)) :closed? false
+       :asking? false}
+      (workstream-summary state))))
 
 (def revisable-identity
   "The parts of a workstream's identity that change after it is created. Its project and
@@ -1029,9 +1066,10 @@
                      {:event :entry-appended :row (dissoc row :file) :content content})))))
 
 (def run-commands
-  "The commands a run admits: its one unit's mechanics. Every other command is a workstream's."
+  "The commands a run admits: its one unit's mechanics, and the records of what it did. Every
+   other command is a workstream's."
   #{:record-provision-attempt :record-provision-outcome :record-session-lost :start-turn
-    :record-outcome})
+    :record-outcome :append-record})
 
 (defn- not-on-a-run
   "Why `command` is refused on run state `state`, or nil when a run admits it."
@@ -1043,9 +1081,11 @@
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]} step
   "Decide `command` against `state`: [new-state events] when admitted, [state nil refusal] when not."
   [state command]
-  (let [{:keys [events refused]} (if-let [why (when (:run state) (not-on-a-run state command))]
-                                   {:refused why}
-                                   (decide state command))]
+  (let [why (cond
+              (:run state)     (not-on-a-run state command)
+              (:journal state) (when (not= :append-record (:command command))
+                                 {:reason :not-a-journal-command :command (:command command)}))
+        {:keys [events refused]} (if why {:refused why} (decide state command))]
     (if refused
       [state nil refused]
       [(reduce evolve state events) events nil])))

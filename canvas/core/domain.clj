@@ -22,9 +22,15 @@
    state: an entry is appended only after the seq its author read, so a ledger that moved
    under an author refuses the append rather than numbering past it.
 
-   A run is the other kind of stream: one fire of a trigger, with exactly one unit, its first turn
-   and the session profile it names, and no ledger, conductor, inbox, chat or ask. A run admits
-   only that unit's mechanics, and is over once its turn ends or its session fails to come up."
+   A run is the second kind of stream: autonomous work nido does behind the scenes — one fire of a
+   trigger, with exactly one unit, its first turn and the session profile it names, and no ledger,
+   conductor, inbox, chat or ask. A run admits only that unit's mechanics and the records of what
+   it did, and is over once its turn ends or its session fails to come up.
+
+   A journal is the third: records kept across runs, and nothing else. A record is one
+   polymorphic shape, a map with a keyword :kind, which is all the core reads of it; each kind's
+   fields are its writer's to check. Records are only ever appended, each after the record seq its
+   author read."
   (Operation decide
     "Decide a command against the whole workstream: the events it yields, or a refusal naming
      why, which changes nothing."

@@ -38,11 +38,25 @@
   [k]
   (str/starts-with? (str k) run-prefix))
 
+(def ^:private journal-prefix "journal:")
+
+(defn ^{:malli/schema [:=> [:cat :any :string] :string]} journal-key
+  "The core's name for journal `jname` of `project`: `journal:<project>/<name>`, which no read of a
+   project's workstreams or runs returns."
+  [project jname]
+  (str journal-prefix (name project) "/" jname))
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]} workstream-key?
+  "Whether `k` names a workstream — neither a run nor a journal."
+  [k]
+  (not (or (run-key? k) (str/starts-with? (str k) journal-prefix))))
+
 (defn ^{:malli/schema [:=> [:cat :string] [:maybe [:tuple :string :string]]]} split-key
-  "[project ws-id] of a core workstream key, or nil when it is not one — a run's key is not."
+  "[project ws-id] of a core workstream key, or nil when it is not one — a run's or a journal's
+   key is not."
   [k]
   (let [i (str/index-of (str k) "/")]
-    (when (and i (pos? i) (not (run-key? k))) [(subs k 0 i) (subs k (inc i))])))
+    (when (and i (pos? i) (workstream-key? k)) [(subs k 0 i) (subs k (inc i))])))
 
 (defn ^{:malli/schema [:=> [:cat] :string]} socket
   "The core daemon's command socket."
@@ -122,6 +136,7 @@
        [:map [:entries [:map-of :int :string]]]
        [:map [:summaries [:map-of :string :map]]]
        [:map [:asking [:map-of :string :map]]]
+       [:map [:records [:vector :map]]]
        [:map [:states [:map-of :string :map]]
         [:summaries {:optional true} [:map-of :string :map]]
         [:contents {:optional true} [:map-of :string [:map-of :int :string]]]]
@@ -230,3 +245,27 @@
       (if (and (> tries 1) (or (unavailable? o) (= :timeout (:error o))))
         (recur (dec tries))
         o))))
+
+;; ── records: what a run did, and journals ────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat :string] ReadReply]} records
+  "{:records [record …]} of the run or journal `k`, in append order, each with its `:seq` — empty
+   for a stream that holds none — or `Unavailable`."
+  [k]
+  (let [r (state k)]
+    (if (unavailable? r) r {:records (vec (get-in r [:state :records]))})))
+
+(defn ^{:malli/schema [:=> [:cat :string :string :map :int] CommandOutcome]} append-record!
+  "Append `record` ({:kind k …}) to the run or journal `k` under `key`, having read `after` of its
+   records. A journal not yet opened is opened first, named by its key. Answers the outcome:
+   refused `:stale` with the seq it holds when another append got there first — read again and
+   decide again, never resend — and `:run-is-over` on a run whose unit finished."
+  [k key record after]
+  (let [o (command! k key {:command :append-record :record record :after after})]
+    (if (and (= :records-are-a-journals-or-a-runs (get-in o [:refused :reason]))
+             (str/starts-with? k journal-prefix))
+      (let [[project jname] (str/split (subs k (count journal-prefix)) #"/" 2)]
+        (command! k (str "open/" k) {:command :open-journal :journal {:project project :name jname}})
+        ;; Under a key of its own: `key` answers the refusal it committed, every time it is asked.
+        (command! k (str key "/opened") {:command :append-record :record record :after after}))
+      o)))
