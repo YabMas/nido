@@ -59,7 +59,9 @@
    bench's measuring child only, each over a nido home of its own — an in-process core over the
    same domain — and retrying a lost reply under the same key. Every request is a CoreRequest and
    every answer data: a CommandOutcome or a ReadReply, Unavailable naming the daemon when no core
-   answered — never thrown, never a quiet second store; there is no fallback to files."
+   answered — never thrown, never a quiet second store; there is no fallback to files. The daemon
+   answers only a person's own process: never one whose nido home it does not serve, nor a request
+   made while a test runs — those the in-process core answers, so no test reaches the person's core."
   {:child [CoreRequest Unavailable CommandOutcome ReadReply]}
   (Operation ws-key
     "The core's name for a workstream of a project."

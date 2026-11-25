@@ -6,11 +6,17 @@
    A process may instead be given a core of its own (`use-local!`), which answers the same
    requests from memory; the bb test suite and the surface bench's measuring child are the two
    such processes, each over a nido home of its own. A process that has neither is answered
-   `Unavailable`, naming the daemon, never a quiet second store."
+   `Unavailable`, naming the daemon, never a quiet second store.
+
+   Whatever a process was given, the daemon answers only the person's own processes
+   (`daemon-answers?`): never one pointed at a nido home the daemon does not serve, and never a
+   request made while a test runs. Those are answered by the in-process core, so a test run any
+   way at all — not only through `bb nido:test` — cannot write the person's workstreams."
   (:require [clojure.string :as str]
             [nido.core.api :as api]
             [nido.core.local :as local]
-            [nido.core.release :as release]))
+            [nido.core.release :as release]
+            [nido.platform.core :as core]))
 
 ;; ── addressing ───────────────────────────────────────────────────────────────
 
@@ -47,6 +53,22 @@
   "Whether this process speaks to an in-process core."
   []
   @local-core)
+
+(defn- in-a-test?
+  "Whether a clojure.test test is running on this thread (or one it conveyed its bindings to)."
+  []
+  (boolean (some-> (find-ns 'clojure.test) (ns-resolve '*testing-vars*) deref seq)))
+
+(defn- daemon-answers?
+  "Whether the daemon may answer this request: the process was not given an in-process core, its
+   nido home (`nido-root`, the seam tests redirect) is the one the daemon serves, and no test is
+   running. A test that redirects the home, or one run straight from `bb -e` / a REPL rather than
+   `bb nido:test`, would otherwise write its fixtures into the person's core — where every one
+   showed up on the board as a workstream nobody started."
+  []
+  (and (not @local-core)
+       (= (str (core/nido-root)) (:home (release/paths)))
+       (not (in-a-test?))))
 
 ;; ── what the core answers ──────────────────────────────────────────────────────
 ;; Every request is one of the variants core-api serves, and every answer is data — a command's
@@ -117,7 +139,7 @@
 (defn ^{:malli/schema [:=> [:cat CoreRequest] [:or CommandOutcome ReadReply]]} request!
   "Send `req` to the core and answer its reply, or `Unavailable` when the daemon does not answer."
   [req]
-  (if @local-core
+  (if-not (daemon-answers?)
     (local/answer req)
     (let [s (socket)
           c (try (api/connect s) (catch Exception _ nil))]

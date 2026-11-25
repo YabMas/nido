@@ -36,7 +36,9 @@
    band addresses nido-home directly and is not redirected by it, so a test
    that redefines only this still sees nido-home's sessions. What keeps those
    from being a person's is `bb nido:test`, which runs every suite against a
-   home of its own (tasks.nido-test)."
+   home of its own (tasks.nido-test). The core daemon is held apart even
+   without it: nido.core.client never lets the daemon answer a process whose
+   nido-root is not the home it serves, nor a request made inside a test."
   []
   (str (nido-home)))
 
