@@ -23,7 +23,8 @@
 
 (defn- status-slot
   "The row's leading mark: where the workstream stands, as an icon with its words in the title —
-   the needs-you dot when the next move is the person's, else the state mark (working, paused,
+   the needs-you dot when the next move is the person's, the error mark when the machine stopped on
+   a failure, else the state mark (working, paused,
    stalled), else an empty slot of the same width so every title starts in one column. Where a
    workstream came from is not overview information; its links are on the workstream."
   [mark]
@@ -55,10 +56,12 @@
    business, and a row that reached for the screen to build its own could only ever be listed
    by that page."
   [{:keys [part] {:keys [project href selected? chat?]
-                  {:keys [label tag needs-you open-findings position phase stage] :as row} :row} :props}]
+                  {:keys [label tag needs-you failed open-findings position phase stage] :as row} :row} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
    [:div.gate-top
-    (status-slot (if needs-you (state/needs-mark) (state/state-mark (:status row) (:doing row))))
+    (status-slot (cond needs-you (state/needs-mark)
+                       failed    (state/error-mark)
+                       :else     (state/state-mark (:status row) (:doing row))))
     [:span.lbl label]
     (when chat? chat-mark)
     (when (pos? (or open-findings 0))

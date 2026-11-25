@@ -16,7 +16,9 @@
 
    ONE ANSWER, so no two facets can disagree: each is a field of `of` over one observation.
    Underway is live; stalled implies nothing underway and an open unit of the core's that nobody
-   holds; needs-you implies the person owes it."
+   holds; needs-you implies the person owes it, and so does failed. Needs-you says a question is
+   asked and failed that a stopped conductor needs its recovery; a workstream holding both is
+   both, since each still needs the person."
   [:map {:closed true}
    [:doing [:maybe :map]]
    [:live :boolean]
@@ -24,6 +26,7 @@
    [:paused :boolean]
    [:stalled :boolean]
    [:needs-you :boolean]
+   [:failed :boolean]
    [:engagement [:enum :settled :parked-at-gate :active :stalled :queued :idle]]])
 
 (Module view-activity

@@ -130,6 +130,10 @@
     "The needs-you mark: the one dot that says the next move is a person's, wherever a state is
      said — a board row, a needs-you row, an arc stage. Its title is the caller's to word."
     {:signature [:=> [:catn [:title [:? :string]]] :any]})
+  (Operation error-mark
+    "The error mark: the machine stopped on a failure and the person's move is its recovery — never
+     the needs-you dot, since nothing is asked. Its title is the caller's to word."
+    {:signature [:=> [:catn [:title [:? :string]]] :any]})
   (Operation arc-mark
     "The mark for one arc stage: what is happening there right now if anything is, and otherwise
      what the stage's records amount to."
@@ -203,7 +207,7 @@
    out — a card is read from a ledger record's shape, and reading twenty of those apart is a
    different job from the blocks a person iterates on. Its rows listing workstreams, on the board
    and on Needs you, say which workstreams have a side chat with news."
-  (Operation rail-status-fragment "The top bar's live bits: what needs you, and how the daemon is."
+  (Operation rail-status-fragment "The top bar's live bits: what needs you, what failed, and how the daemon is."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation fire-signal "The signal name for one field of a fire form."
     {:signature [:=> [:catn [:trigger-name :any] [:k :keyword]] :string]})
@@ -215,7 +219,7 @@
     "The page chrome every page sits inside: a top bar for what spans projects, a sidebar of the
      focused project's slices."
     {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [assembled-stylesheet lib/script]})
-  (Operation needs-fragment "The needs-you column."
+  (Operation needs-fragment "The home column: Needs you, the errors and the release candidates."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation gate-action-confirm-fragment "The immediate confirmation a gate action swaps in."
     {:signature [:=> [:catn [:action-id :any] [:project ProjectName] [:ws-id WorkstreamId]

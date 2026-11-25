@@ -477,3 +477,17 @@
             [s2] (d/step s' done)]
         (is (not (:closed? s2)))
         (is (= :open (get-in s2 [:units "u" :status])))))))
+
+(deftest a-stopped-conductor-asks-as-a-failure
+  (let [stop  {:command :raise-conductor-stop :ask "stop" :content ready}
+        [s]   (run [stop])]
+    (is (= {:kind :asking :failed? true :failure-only? true} (d/activity s))
+        "the only ask is the machine's own: the person owes a recovery, not an answer")
+    (is (every? d/machine-ask? (d/awaiting-person s)))
+    (testing "a question beside it is asked as well: the failure still stands, and is not the only ask"
+      (let [[s2] (run [{:command :start-turn :turn "k1" :unit nil :spec spec}
+                       {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c"}}
+                       {:command :raise-operator-ask :ask "a1" :binds ["k1"] :content ready}
+                       stop])]
+        (is (= {:kind :asking :failed? true} (d/activity s2)))
+        (is (= [false true] (map d/machine-ask? (sort-by :id (d/awaiting-person s2)))))))))

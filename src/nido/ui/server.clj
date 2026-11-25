@@ -106,11 +106,12 @@
   ([view-state] (derive-screen view-state {}))
   ([view-state {:keys [board?] :or {board? true}}]
   (when board? (refresh-for! view-state))
-  (let [{:keys [gates unavailable]} (work/read-gates)
+  (let [{:keys [gates errors unavailable]} (work/read-gates)
         groups (if board? (work/all-grouped) [])
         screen (work/screen view-state
                             {:groups           groups
                              :gates            gates
+                             :errors           errors
                              :unavailable      unavailable
                              :pending          (dev/pending-resolve-keys)
                              :winddown-pending (dev/pending-winddown-keys)})
@@ -145,6 +146,13 @@
                             (cond-> g
                               (and err (not (:pending? g))) (assoc :error-msg err))))
                         gates)))
+        (update :errors
+                (fn [errors]
+                  (mapv (fn [e]
+                          (let [err (get ws-errors (str (:project e) "/" (:ws-id e)))]
+                            (cond-> e
+                              (and err (not (:pending? e))) (assoc :error-msg err))))
+                        errors)))
         (update :groups
                 (fn [groups]
                   (mapv (fn [{:keys [project] :as g}]
@@ -197,6 +205,7 @@
    :active      active
    :scope       focus
    :needs-count (:needs-count screen)
+   :error-count (:error-count screen)
    :candidates-count (count (:candidates screen))
    :needs-unread (:unavailable screen)
    :daemon      (read-rail-daemon)
@@ -207,6 +216,7 @@
    (sse-fragment
     (str (views/needs-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
+                                      :error-count (:error-count screen)
                                       :candidates-count (count (:candidates screen))
                                       :needs-unread (:unavailable screen)
                                       :daemon (read-rail-daemon)})))))
@@ -216,6 +226,7 @@
    (sse-fragment
     (str (views/workstreams-fragment screen)
          (views/rail-status-fragment {:needs-count (:needs-count screen)
+                                      :error-count (:error-count screen)
                                       :candidates-count (count (:candidates screen))
                                       :needs-unread (:unavailable screen)
                                       :daemon (read-rail-daemon)})))))
@@ -403,9 +414,10 @@
   (sse-response
    (sse-fragment
     (str (views/ops-panel-fragment (ops-context))
-         (let [{:keys [gates unavailable]} (work/read-gates)]
+         (let [{:keys [gates errors unavailable]} (work/read-gates)]
            (views/rail-status-fragment
             {:needs-count  (count gates)
+             :error-count  (count errors)
              :needs-unread unavailable
              :daemon       (read-rail-daemon)}))))))
 

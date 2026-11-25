@@ -64,3 +64,22 @@
     (is (not (:live a)))
     (is (not (:needs-you a)))
     (is (not (:stalled a)))))
+
+(deftest a-stopped-conductor-is-failed-not-needs-you
+  (let [a (act/of (assoc quiet :core {:kind :asking :failed? true :failure-only? true}))]
+    (is (:failed a) "every ask the core holds is a machine failure")
+    (is (not (:needs-you a)) "so nothing is asked of the person")
+    (is (= :person (:owed-by a)) "though the recovery is still the person's move")
+    (is (= :parked-at-gate (:engagement a))))
+  (let [a (act/of (assoc quiet :core {:kind :asking}))]
+    (is (:needs-you a) "a question is still needs-you")
+    (is (not (:failed a))))
+  (testing "a question beside a stop is both: each still needs the person"
+    (let [a (act/of (assoc quiet :core {:kind :asking :failed? true}))]
+      (is (:needs-you a))
+      (is (:failed a))
+      (is (= :parked-at-gate (:engagement a)))))
+  (testing "a settled workstream is neither"
+    (let [a (act/of (assoc quiet :closed? true :core {:kind :asking :failed? true :failure-only? true}))]
+      (is (not (:failed a)))
+      (is (not (:needs-you a))))))

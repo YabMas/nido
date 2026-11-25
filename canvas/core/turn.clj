@@ -22,6 +22,10 @@
   (Operation parse-outcome
     "An executor's report as one of the four outcomes; anything else is failed."
     {:signature [:=> [:catn [:report :any]] :map]})
+  (Operation stderr-tail
+    "The last a run wrote to its stderr, or nothing: kept on a turn whose run ended without an
+     outcome, as the only word on why an agent that crashed died."
+    {:signature [:=> [:catn [:run-dir :string]] [:maybe :string]]})
   (Operation turn-dir
     "The directory of a workstream's turn under the runs root."
     {:signature [:=> [:catn [:root :string] [:ws :string] [:turn :string]] :string]})

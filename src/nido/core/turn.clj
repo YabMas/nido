@@ -128,14 +128,34 @@
   (submit {:key (outcome-key ws turn run) :ws ws
            :command (merge {:command :record-outcome :turn turn :run run} outcome)}))
 
+(def ^:private stderr-tail-chars 1500)
+
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :string]]} stderr-tail
+  "The last of what the run in `rdir` wrote to its stderr — its last lines, at most
+   `stderr-tail-chars` — or nil when it wrote nothing. What a run that died says about why."
+  [rdir]
+  (let [f (io/file rdir "err")]
+    (when (.exists f)
+      (let [s (str/trim (try (slurp f) (catch Exception _ "")))]
+        (when-not (str/blank? s)
+          (let [lines (remove str/blank? (str/split-lines s))
+                tail  (str/join "\n" (take-last 12 lines))]
+            (if (> (count tail) stderr-tail-chars)
+              (subs tail (- (count tail) stderr-tail-chars))
+              tail)))))))
+
 (defn- finished-outcome
   "The outcome of the run in `rdir`, which has ended: its output's, or :failed with its actions
-   unknown when the output carries none."
+   unknown when the output carries none — saying, under :stderr, the last its run wrote to stderr,
+   which is the only word on why an agent that crashed died."
   [executor rdir]
   (if-let [o (try ((:outcome executor) rdir)
                   (catch Throwable t (report! (str "reading " rdir) t) nil))]
     (parse-outcome o)
-    {:outcome :failed :detail {:reason :ended-without-outcome} :actions-unknown? true}))
+    {:outcome :failed
+     :detail (cond-> {:reason :ended-without-outcome}
+               (stderr-tail rdir) (assoc :stderr (stderr-tail rdir)))
+     :actions-unknown? true}))
 
 (defn- on-end!
   "The run [ws turn run] has ended: stop its deadline, and report its outcome."

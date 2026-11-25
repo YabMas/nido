@@ -44,6 +44,7 @@
    [nido.coordinator.view.activity :as act]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.work.core :as wcore]
+   [nido.core.domain :as domain]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
    [nido.coordinator.lane.pipeline :as pipeline]
@@ -599,11 +600,12 @@
      :claim    (when (and (not closed?) (= :working (:kind core))) (act/observe project ws-id))}))
 
 (defn- coordination
-  "The row fields `act/of`'s answer `a` sets: :status as the marks read it, :needs-you,
+  "The row fields `act/of`'s answer `a` sets: :status as the marks read it, :needs-you, :failed,
    :engagement and :doing — one answer, so no two of them can disagree."
   [a]
   {:status     (select-keys a [:owed-by :live :stalled :paused])
    :needs-you  (:needs-you a)
+   :failed     (:failed a)
    :engagement (:engagement a)
    :doing      (:doing a)})
 
@@ -1374,7 +1376,7 @@
                  (and (< (:seq %) g) (phase-trail-kinds (:kind %))))
             entries)))
 
-(declare gate pause-of)
+(declare gate error pause-of)
 
 (defn- arc-at
   "The arc of stages `entries` travelled, read at `position`: the stage a person owes marked
@@ -1478,6 +1480,9 @@
         ;; things. A core that does not answer leaves the pane without a card — the rail badge
         ;; says the project was not read — rather than failing the whole pane.
         :gate         (try (gate project ws-id) (catch Exception _ nil))
+        ;; Its card on the Errors list, when its machine stopped on a failure: what failed, and
+        ;; the recovery. Read as the gate is.
+        :error        (try (error project ws-id) (catch Exception _ nil))
         ;; A phased workstream's plan, phase by phase — nil for an unphased one.
         :plan         (plan project ws-id w)
         :holds        (holds project ws-id)
@@ -1711,17 +1716,82 @@
   "The gate of spine row `row`: its oldest ask awaiting the person in the core, offered for answer.
    nil when the core holds none for it."
   [project row]
-  (gate-of-asks project row (:awaiting (core-of project (:ws-id row)))))
+  (gate-of-asks project row (remove domain/machine-ask? (:awaiting (core-of project (:ws-id row))))))
+
+(def ^:private failure-words
+  "What each reason the core records on a failed or cancelled turn means, in a person's words."
+  {:ended-without-outcome "its agent exited without reporting an outcome"
+   :never-started         "it never started"
+   :no-such-executor      "no executor could run it"
+   :ask-without-call      "it asked without saying what"
+   :not-an-outcome        "it reported something that is not an outcome"
+   :deadline              "it ran past its deadline"})
+
+(defn- turn-pos
+  "Where conductor turn `t` falls among its workstream's: the position its id ends in."
+  [t]
+  (or (some-> (re-find #"(\d+)$" (str (:id t))) second parse-long) 0))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  conductor-failures
+  "The conductor turns of core state `state` that failed or were cancelled since one last
+   completed, asked or ran, oldest first — what stopped its conductor — each as
+   {:turn :outcome :why :stderr?}: :why says the recorded reason in words, :stderr the last its
+   run wrote there when the core kept it."
+  [state]
+  (->> (vals (:turns state))
+       (filter #(nil? (:unit %)))
+       (sort-by turn-pos)
+       reverse
+       (take-while #(#{:failed :cancelled} (:status %)))
+       reverse
+       (mapv (fn [{:keys [id status detail ended-by]}]
+               (let [reason (:reason detail)]
+                 (cond-> {:turn    id
+                          :outcome status
+                          :why     (or (failure-words reason)
+                                       (some-> reason name (str/replace "-" " "))
+                                       (some-> ended-by name (str/replace "-" " ") (->> (str "cancelled: ")))
+                                       (name status))}
+                   (:stderr detail) (assoc :stderr (:stderr detail))))))))
+
+(defn- error-of-asks
+  "The error card of spine row `row`, whose core state is `state`, when `failures` — its open
+   machine-side asks (`domain/machine-ask?`) — hold one: what failed, saying why from the turns
+   that failed, and the one recovery, :wake. nil when there are none. An error asks the person
+   nothing; it is on no needs-you list."
+  [project row state failures]
+  (when-let [a (first (sort-by :id failures))]
+    (let [fs (conductor-failures state)
+          n  (count fs)]
+      {:ws-id    (:ws-id row)
+       :project  (name project)
+       :origin   (:origin row)
+       :label    (:label row)
+       :tag      (:tag row)
+       :links    (:links row)
+       :what     "Its conductor stopped"
+       :because  (if (seq fs)
+                   (str "The last " (if (= 1 n) "conductor turn" (str n " conductor turns"))
+                        " failed — " (:why (last fs)) " (" (:turn (last fs)) ").")
+                   "Its conductor turns failed, so nothing wakes it.")
+       :failures fs
+       :core-ask (:id a)
+       :actions  [{:id :wake :label "Wake it again" :kind :mutation :style :primary
+                   :title "Its next turn hears everything it has yet to hear."}]})))
 
 (defn- asking-gate
   "What Needs you shows of workstream `ws-id`, which the core answered as asking with `held`
    ({:state :awaiting}): its gate, built from no row but what the record and its sessions say of
    it — label, tag, links and origin as the board names them, :awaiting-gate as its stage, what
-   runs as the core holds it — and, for a slice, the drain it belongs to. No gate for one its
-   ledger says was dismissed: a dismissal is never a card, whatever the core still holds open."
+   runs as the core holds it — and, for a slice, the drain it belongs to. Neither a gate nor an
+   error for one its ledger settled — closed with any outcome but :between-phases, as its board
+   row reads it settled — whatever the core still holds open: a settled workstream asks nothing
+   and has nothing to wake."
   [project ws-id held]
   (let [w        (cws/record-of-state ws-id (:state held))
-        dismissed? (and w (= :dismissed (:outcome (cws/closure w))))
+        closed   (when w (cws/closure w))
+        settled? (boolean (and closed (not= :between-phases (:outcome closed))))
         sessions (when w (cws/sessions project ws-id))
         origin   (if w (classify-origin w) :notion)
         row      {:ws-id  ws-id
@@ -1734,24 +1804,37 @@
                   :doing  (:doing (act/of (observation project ws-id held false nil)))}]
     {:row      row
      :slice-of (when (= :slice origin) (rdrain/drain-of w))
-     :gate     (when-not dismissed? (gate-of-asks project row (:awaiting held)))}))
+     :gate     (when-not settled?
+                 (gate-of-asks project row (remove domain/machine-ask? (:awaiting held))))
+     :error    (when-not settled?
+                 (error-of-asks project row (:state held) (filter domain/machine-ask? (:awaiting held))))}))
 
-(defn- asking-gates
-  "`project`'s gates as the core answers them in one request (`wcore/asking`): one per workstream
-   a person owes a move now, in key order. A slice is never a card of its own: its drain's card,
-   when the drain is asking too, names it in :raised-by. Throws when the core does not answer."
+(defn- asking-reading
+  "`project`'s gates and errors as the core answers them in one request (`wcore/asking`), each in
+   key order: a gate per workstream whose asks put a question to the person, an error per
+   workstream the machine stopped on a failure (`error-of-asks`) — so a workstream can hold one of
+   each. A slice is never a card of its own: its drain's gate, when the drain is asking too, names
+   it in :raised-by. Throws when the core does not answer."
   [project]
   (let [built  (for [[ws-id held] (sort-by key (wcore/asking project))]
                  (asking-gate project ws-id held))
-        raised (reduce (fn [m {:keys [row slice-of]}]
-                         (if slice-of (update m slice-of (fnil conj []) (:ws-id row)) m))
+        raised (reduce (fn [m {:keys [row slice-of gate]}]
+                         (if (and slice-of gate) (update m slice-of (fnil conj []) (:ws-id row)) m))
                        {} built)]
-    (into []
-          (keep (fn [{:keys [row gate]}]
-                  (when (and gate (not= :slice (:origin row)))
-                    (cond-> gate
-                      (get raised (:ws-id row)) (assoc :raised-by (get raised (:ws-id row)))))))
-          built)))
+    {:gates  (into []
+                   (keep (fn [{:keys [row gate]}]
+                           (when (and gate (not= :slice (:origin row)))
+                             (cond-> gate
+                               (get raised (:ws-id row)) (assoc :raised-by (get raised (:ws-id row)))))))
+                   built)
+     :errors (into [] (keep :error) built)}))
+
+(defn- asking-gates
+  "`project`'s gates as the core answers them in one request (`asking-reading`): one per
+   workstream whose asks put a question to the person, in key order. Throws when the core does not
+   answer."
+  [project]
+  (:gates (asking-reading project)))
 
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Gate]]}
@@ -1810,6 +1893,16 @@
                  (for [r (remove #(= :dismissed (:stage %)) (list-workstreams project))]
                    [r (when (owes? r) (core-gate project r))]))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  error
+  "The error card the Errors list holds for workstream `ws-id` (`error-of-asks`), or nil when its
+   machine has not stopped on a failure. Read from the core as `gate` is; throws when it does not
+   answer."
+  [project ws-id]
+  (->> (:errors (asking-reading project))
+       (filter #(= ws-id (:ws-id %)))
+       first))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
   gate
   "Full gate detail for one workstream — the card the Needs you list holds for it, from one core
@@ -1825,26 +1918,28 @@
 (declare live-session-names)
 
 (def GateReading
-  "What reading every project's gates came to: the gates of the projects the core answered for,
-   and, by project name, why each other project could not be read. A project is in exactly one
-   of them, so an unread project is never mistaken for one with nothing to ask."
+  "What reading every project's gates came to: the gates and errors of the projects the core
+   answered for, and, by project name, why each other project could not be read. A project is in
+   exactly one of them, so an unread project is never mistaken for one with nothing to ask."
   [:map
    [:gates [:vector :map]]
+   [:errors [:vector :map]]
    [:unavailable [:map-of :string :string]]])
 
 (defn ^{:malli/schema [:=> [:cat] GateReading]}
   read-gates
-  "Every registered project's gates, in list-projects order, each project's in key order — read
-   from the core, one request per project (`asking-gates`), never from held rows or a ledger
-   fold, so they answer as soon as the core does, whatever this process holds. The boundary where
-   each project's core reply becomes its outcome: its gates, or its key in :unavailable with the
-   reason it could not be read."
+  "Every registered project's gates and errors, in list-projects order, each project's in key
+   order — read from the core, one request per project (`asking-reading`), never from held rows
+   or a ledger fold, so they answer as soon as the core does, whatever this process holds. The
+   boundary where each project's core reply becomes its outcome: its gates and errors, or its key
+   in :unavailable with the reason it could not be read."
   []
   (reduce (fn [acc [pname _entry]]
-            (try (update acc :gates into (asking-gates pname))
+            (try (let [{:keys [gates errors]} (asking-reading pname)]
+                   (-> acc (update :gates into gates) (update :errors into errors)))
                  (catch Throwable t
                    (assoc-in acc [:unavailable (name pname)] (or (ex-message t) (str t))))))
-          {:gates [] :unavailable {}}
+          {:gates [] :errors [] :unavailable {}}
           (project/list-projects)))
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :Gate]]}
@@ -3187,17 +3282,25 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] [:maybe :map]]}
   core-resolve!
   "Do what gate action `action-id` asks of the core, as the person's keyed command; nil when the
-   action is not one the core answers. An option answers the oldest open ask with its option, a
-   reply with the person's words, Send answers with one answer per question it asks, a withdrawal
-   takes it back; Land grants the landing; Promote is
+   action is not one the core answers. An option answers the oldest open ask that is a question
+   (never a machine failure) with its option, a reply with the person's words, Send answers with
+   one answer per question it asks, a withdrawal takes it back; Wake answers the machine's stop,
+   the one recovery an error offers; Land grants the landing; Promote is
    the person's start, opening the workstream's unit; Done and Drop retract its open units and
    close it."
   [project ws-id action-id payload]
   (let [w    (wcore/state project ws-id)
-        ask  (first (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w)))))
+        open (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w))))
+        ask  (first (remove domain/machine-ask? open))
         act! #(wcore/act! project ws-id %)
         text (when-not (map? payload) (some-> payload str str/trim not-empty))]
     (cond
+      (= :wake action-id)
+      (if-let [stop (first (filter domain/machine-ask? open))]
+        (core-decision (act! {:command :answer-operator-ask :ask (:id stop) :answer "Wake it" :by :person})
+                       :woken)
+        {:decision :core-refused :because "its conductor is not stopped"})
+
       (option-action? action-id)
       (let [opt (nth (ask-options (get-in ask [:content :options])) (option-index action-id) nil)]
         (cond (nil? ask) {:decision :core-refused :because "nothing is asked"}
@@ -3260,15 +3363,20 @@
                      :map]}
   person-says!
   "What a person said to workstream `ws-id` outside a gate — from a bb verb, or passed on by the
-   workstream's chat — as their commands to the core: `words` answer the oldest ask awaiting them,
-   or, when none does, are posted to the conductor's chat; each of `grants` is given. `images`
+   workstream's chat — as their commands to the core: `words` answer the oldest question awaiting
+   them, or, when none does, are posted to the conductor's chat — and wake a conductor that
+   stopped on a failure, so it hears them; each of `grants` is given. `images`
    (digests, kept in the core's image store) go with the words to the conductor's chat — with an
    answer, on a chat message carrying the answer's words and saying which ask they answered. Answers
    {:answered ask-id-or-nil :posted bool :granted [kind] :refused [reason]}."
   ([project ws-id words grants] (person-says! project ws-id words grants nil))
   ([project ws-id words grants images]
    (let [w      (wcore/state project ws-id)
-         ask    (first (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w)))))
+         open   (sort-by :id (filter #(= :open (:status %)) (vals (:operator-asks w))))
+         ;; Words answer a question, never a machine failure: on a stopped conductor they are
+         ;; posted, and the stop is then woken so its next turn hears them.
+         ask    (first (remove domain/machine-ask? open))
+         stop   (first (filter domain/machine-ask? open))
          images (vec images)
          post!  #(wcore/act! project ws-id (cond-> {:command :post-chat :message (str "m-" (random-uuid))
                                                     :text %}
@@ -3281,8 +3389,12 @@
          ;; Images that went with an answer reach the conductor beside it, said to be its.
          shown  (when (and (= :answered (first said)) (seq images))
                   (post! (str words "\n\n(The person's answer to ask " (:id ask) ", with the images it carried.)")))
+         woken  (when (and stop (= :posted (first said)) (wcore/admitted? (second said)))
+                  (wcore/act! project ws-id {:command :answer-operator-ask :ask (:id stop)
+                                             :answer "Wake it" :by :person}))
          gs     (for [g grants] [g (wcore/act! project ws-id {:command :give-grant :grant g :by "person"})])
-         outs   (cond-> (vec (map second gs)) said (conj (second said)) shown (conj shown))]
+         outs   (cond-> (vec (map second gs)) said (conj (second said)) shown (conj shown)
+                  woken (conj woken))]
      {:answered (when (and (= :answered (first said)) (wcore/admitted? (second said))) (:id ask))
       :posted   (boolean (or (and (= :posted (first said)) (wcore/admitted? (second said)))
                              (and shown (wcore/admitted? shown))))
@@ -3333,7 +3445,7 @@
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
 
      ;; Coordination is the core's: every action it answers is the person's command to it.
-     (contains? #{:reply :withdraw :land :promote :done :drop :answer-questions} action-id)
+     (contains? #{:reply :withdraw :wake :land :promote :done :drop :answer-questions} action-id)
      (or (core-resolve! project ws-id action-id payload) {:decision :core-refused :because "nothing to do"})
 
      ;; Not a `case` branch: the id set is derived from report/option-letters, and case needs
@@ -3912,7 +4024,7 @@
   "The single pure derivation from view-state to the screen-model. Every render
    site (full page + SSE poll, overview + detail) renders a slice of THIS value,
    so they cannot disagree. `data` injects what only IO can produce:
-     :groups  (all-grouped)  :gates / :unavailable (read-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys)
+     :groups  (all-grouped)  :gates / :errors / :unavailable (read-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys)
      :winddown-pending (#{\"project/ws-id\"} optimistic bridge keys for pending bring-down!s).
    Selection detail is attached by the caller (needs work/workstream + dev-states).
 
@@ -3920,8 +4032,8 @@
    filtering here is what hid every :in-progress row behind the source chip's
    `source=notion` default."
   [{:keys [scope] :or {scope "all"}}
-   {:keys [groups gates unavailable pending winddown-pending]
-    :or {groups [] gates [] pending #{} winddown-pending #{}}}]
+   {:keys [groups gates errors unavailable pending winddown-pending]
+    :or {groups [] gates [] errors [] pending #{} winddown-pending #{}}}]
   (let [scoped     (->> (scope-keep scope groups)
                         (mapv (fn [{:keys [project] :as g}]
                                 (update-in g [:grouped :winding-down]
@@ -3943,6 +4055,12 @@
      ;; Every project's, not the scope's: Needs you spans all projects whatever
      ;; a view is focused on, and this is the count its badge shows.
      :needs-count (count gates)
+     ;; Every project's machine-side failures, apart from Needs you: an error asks the person
+     ;; nothing, it says what failed and offers its recovery. Each marked :pending? while its
+     ;; recovery is in flight, as a gate is.
+     :errors      (mapv (fn [e] (assoc e :pending? (contains? pending (str (:project e) "/" (:ws-id e)))))
+                        errors)
+     :error-count (count errors)
      ;; Every project's release candidates, for the same reason: their own list and badge,
      ;; apart from Needs you, since a candidate asks nobody anything.
      :candidates  (release-candidates groups)}))

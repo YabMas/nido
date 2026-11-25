@@ -162,11 +162,25 @@
   [state]
   (filter #(= :open (:status %)) (vals (:operator-asks state))))
 
+(def machine-ask-kinds
+  "The operator-ask kinds the machine raises about itself — a failure no decision was waiting on.
+   The person answering one is what recovers it, but nothing in it asks them to decide anything:
+   a surface shows it as an error, apart from what a person is asked."
+  #{:conductor-stopped})
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]} machine-ask?
+  "Whether operator ask `a` is a machine-side failure (`machine-ask-kinds`), not a question."
+  [a]
+  (contains? machine-ask-kinds (:kind a)))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]} activity
   "What the core is doing on a workstream whose state is `state`, as a surface reads it, or nil
    when it does nothing and is owed nothing: {:kind k}, with the :turn and :unit it concerns when
    there is one. Each kind outranks the ones after it:
-     :asking    an operator ask awaits the person (`awaiting-person`): the next move is theirs
+     :asking    an operator ask awaits the person (`awaiting-person`): the next move is theirs.
+                :failed? true when one of them is a machine failure (`machine-ask?`), whose move
+                is a recovery, not an answer; :failure-only? as well when every one is, so
+                nothing is asked of them
      :working   a unit's turn runs, or resumes with its call answered
      :deciding  the conductor runs or resumes, a unit's turn waits on the conductor's answer to
                 its call, or the conductor is owed a wake: its inbox holds items
@@ -183,7 +197,10 @@
           units (filter #(= :open (:status %)) (sort-by :id (vals (:units state))))]
       (cond
         (seq (awaiting-person state))
-        {:kind :asking}
+        (let [asks (awaiting-person state)]
+          (cond-> {:kind :asking}
+            (some machine-ask? asks)   (assoc :failed? true)
+            (every? machine-ask? asks) (assoc :failure-only? true)))
 
         (turn #(and (:unit %) (#{:running :resolved} (:status %))))
         (of :working (turn #(and (:unit %) (#{:running :resolved} (:status %)))))

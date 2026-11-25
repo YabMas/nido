@@ -384,11 +384,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :WorkstreamRow] :string]}
   format-row
-  "Display string for a stage-grouped row: `⏸ <label>   <substatus>` (the marker
-   is two spaces when the row does not need you)."
-  [{:keys [label needs-you engagement]}]
+  "Display string for a stage-grouped row: `⏸ <label>   <substatus>` — `✖ ` instead when its
+   machine stopped on a failure, and two spaces when the row neither needs you nor failed."
+  [{:keys [label needs-you failed engagement]}]
   (format "%s%s   %s"
-          (if needs-you "⏸ " "  ")
+          (cond needs-you "⏸ " failed "✖ " :else "  ")
           (truncate (str label) title-max)
           (engagement-substatus engagement)))
 

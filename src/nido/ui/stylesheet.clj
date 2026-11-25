@@ -359,6 +359,14 @@
      .topbar-icon { font-size:var(--fs-md); line-height:1; }
      .inbox-head { margin:var(--space-12) var(--space-16) var(--space-4); font-size:var(--fs-sm); color:var(--text-muted); }
      .candidate-mark { margin-right:var(--space-6); }
+     .rail-badge-err { background:var(--failed-bg); color:var(--failed); }
+     .rail-badge-err.zero { background:var(--neutral-bg); color:var(--text-faint); }
+     .error-mark { margin-right:var(--space-6); }
+     .error-card .error-what { color:var(--failed); margin-left:var(--space-6); }
+     .error-block { border-color:var(--failed-border); }
+     .error-failures { font-size:var(--fs-sm); padding-left:var(--space-16); }
+     .error-stderr { font-size:var(--fs-xs); white-space:pre; max-height:12em; overflow:auto;
+                     background:var(--neutral-bg); padding:var(--space-6); margin:var(--space-4) 0; }
      .rail-badge.unread { background:var(--neutral-bg); color:var(--accent-strong); font-style:italic; }
      .rail-health { margin-top:auto; padding-top:var(--space-14); font-size:var(--fs-xs); color:var(--text-muted); }
      .rail-health-btn { background:none; border:none; color:inherit; font:inherit;

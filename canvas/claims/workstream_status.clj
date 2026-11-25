@@ -63,5 +63,5 @@
   {:about [status-of] :evidence "round"})
 
 (Claim board-stage-from-records
-  "A non-bare board row's needs-you, engagement, live and what is underway are fields of one activity, `of` over the row's one observation. A row whose ledger closure settles it — any outcome but :between-phases — or that the core closed has needs-you off and engagement :settled; on any other non-bare row needs-you is whether the core asks the person something, and engagement is read off that same activity."
+  "A non-bare board row's needs-you, failed, engagement, live and what is underway are fields of one activity, `of` over the row's one observation. A row whose ledger closure settles it — any outcome but :between-phases — or that the core closed has needs-you and failed off and engagement :settled; on any other non-bare row needs-you is whether the core asks the person a question and failed whether it holds a machine failure it raised as an ask — a row holding both carries both — and engagement is read off that same activity."
   {:about [workstream-row list-workstreams activity/of] :evidence "round"})

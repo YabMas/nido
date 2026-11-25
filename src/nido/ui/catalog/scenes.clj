@@ -148,6 +148,11 @@
               :note "Hover each: a row's dot reads its default title, an arc stage's says what it
                      waits on."
               :render #(list (state/needs-mark) " " (state/needs-mark "waiting on you"))}]}
+   {:name "error-mark"
+    :note "The machine stopped on a failure and the person's move is its recovery. Never the
+           needs-you dot: nothing is asked, so a board scanned for questions does not find it."
+    :scenes [{:title "plain, and titled by its caller"
+              :render #(list (state/error-mark) " " (state/error-mark "its conductor stopped"))}]}
    {:name "state-mark"
     :note "Whether anything is happening right now, as one mark and no words. What runs and who
            owes the next move are the mark's title — hover to read them."

@@ -893,7 +893,83 @@
                 "shared, the second projection reuses the first's rows")))))))
 
 (def ^:private stop-content
-  {:question "Carry on with the rebase?" :explored "e" :recommendation "r" :options ["yes" "no"]})
+  {:question "This workstream's conductor has stopped. Wake it again?" :explored "e"
+   :recommendation "r" :options [{:option "Wake it"}]})
+
+(defn- raise-person-ask!
+  "Raise ask `ask` on workstream `ws-id` the way a conductor turn's ask reaches the person: the
+   turn asks, the rules raise its call — a question, not a machine failure."
+  [ws-id ask question]
+  (let [k (client/ws-key :brian ws-id)
+        t (str "conductor-" ask)]
+    (doseq [[i c] (map-indexed vector
+                               [{:command :start-turn :turn t :unit nil :spec {:executor :fake :instructions "i"}}
+                                {:command :record-outcome :turn t :run 1 :outcome :asked
+                                 :call {:id (str "call-" ask) :question question}}
+                                {:command :raise-operator-ask :ask ask :binds #{t}
+                                 :content {:question question :explored "e" :recommendation "r"
+                                           :options ["yes" "no"]}}])]
+      (is (:events (client/command! k (str ws-id "/" ask "/" i) c))))))
+
+(defn- stop-conductor!
+  "Fail workstream `ws-id`'s conductor turns until the rules stop it, as a machine out of
+   resources does: each turn ends without an outcome, the last saying on stderr why."
+  [ws-id]
+  (let [k (client/ws-key :brian ws-id)]
+    (doseq [i (range 3)
+            :let [t (str "conductor-" (+ 10 i))]]
+      (is (:events (client/command! k (str ws-id "/start-" t) {:command :start-turn :turn t :unit nil
+                                                                :spec {:executor :fake :instructions "i"}})))
+      (is (:events (client/command! k (str ws-id "/end-" t)
+                                    {:command :record-outcome :turn t :run 1 :outcome :failed
+                                     :detail (cond-> {:reason :ended-without-outcome}
+                                               (= 2 i) (assoc :stderr "oh no: Bun has crashed."))}))))
+    (is (:events (client/command! k (str ws-id "/stop") {:command :raise-conductor-stop :ask "conductor stopped 7"
+                                                        :content stop-content})))))
+
+(deftest a-stopped-conductor-is-an-error-not-a-gate
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects
+                    (constantly {"brian" {:directory "/tmp/brian"}})]
+        (let [a (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "Fix the thing"}]})
+              b (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-10" :title "Ask me"}]})]
+          (stop-conductor! (:id a))
+          (raise-person-ask! (:id b) "ask-b" "Ship it?")
+          (let [{:keys [gates errors]} (work/read-gates)
+                [e] errors]
+            (is (= [(:id b)] (map :ws-id gates)) "a person's question is under Needs you; the failure is not")
+            (is (= [(:id a)] (map :ws-id errors)) "the stopped conductor is an error")
+            (is (= ["brian" "Fix the thing" "Its conductor stopped" "conductor stopped 7"]
+                   ((juxt :project :label :what :core-ask) e)))
+            (is (re-find #"last 3 conductor turns failed — its agent exited without reporting an outcome \(conductor-12\)"
+                         (:because e))
+                "it says what failed")
+            (is (= "oh no: Bun has crashed." (:stderr (last (:failures e))))
+                "and what the run said on its way down")
+            (is (= [:wake] (map :id (:actions e))) "its one action is the recovery")
+            (is (= e (work/error :brian (:id a))) "the pane's error is the list's")
+            (is (nil? (work/gate :brian (:id a))) "and the pane holds no question for it"))
+          (testing "waking it answers the stop and takes it off the errors"
+            (is (= {:decision :woken} (work/resolve-gate! :brian (:id a) :wake)))
+            (is (empty? (:errors (work/read-gates))))
+            (is (= {:decision :core-refused :because "its conductor is not stopped"}
+                   (work/resolve-gate! :brian (:id a) :wake))))
+          (testing "a workstream holding a question and a stop is on both lists"
+            (stop-conductor! (:id b))
+            (let [{:keys [gates errors]} (work/read-gates)]
+              (is (= [(:id b)] (map :ws-id gates)))
+              (is (= "Ship it?" (:question (:ask (first gates)))) "Needs you shows the question, never the stop")
+              (is (= [(:id b)] (map :ws-id errors))))
+            (testing "and an option answers the question, never the stop"
+              (is (= {:decision :answered} (work/resolve-gate! :brian (:id b) :option-a)))
+              (is (= [(:id b)] (map :ws-id (:errors (work/read-gates))))))
+            (testing "a workstream its ledger settled is on neither list, whatever the core holds open"
+              (raise-person-ask! (:id b) "ask-b2" "And this?")
+              (workstream/close! :brian (:id b) :done)
+              (let [{:keys [gates errors]} (work/read-gates)]
+                (is (empty? gates))
+                (is (empty? errors))))))))))
 
 (deftest all-gates-are-the-core-s-open-asks
   (with-tmp
@@ -903,9 +979,8 @@
         (let [a (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "Fix the thing"}]})
               b (workstream/create! :brian {:external-refs []})]
           (is (empty? (work/all-gates)) "no open ask, no gate")
-          (is (= {:gates [] :unavailable {}} (work/read-gates)))
-          (client/command! (client/ws-key :brian (:id a)) "stop-a"
-                           {:command :raise-conductor-stop :ask "ask-1" :content stop-content})
+          (is (= {:gates [] :errors [] :unavailable {}} (work/read-gates)))
+          (raise-person-ask! (:id a) "ask-1" "Carry on with the rebase?")
           (let [[g :as gs] (work/all-gates)]
             (is (= 1 (count gs)) "only the workstream with an open ask is a gate")
             (is (= [(:id a) "brian" "Fix the thing" "BR-9" "Carry on with the rebase?" "ask-1"]
@@ -922,8 +997,7 @@
                     (constantly {"brian" {:directory "/tmp/brian"}})]
         (let [a (workstream/create! :brian {:external-refs []})
               b (workstream/create! :brian {:external-refs []})]
-          (client/command! (client/ws-key :brian (:id a)) "stop-a"
-                           {:command :raise-conductor-stop :ask "ask-1" :content stop-content})
+          (raise-person-ask! (:id a) "ask-1" "Carry on with the rebase?")
           (let [reads (atom 0)
                 orig  wsv/workstream-rows]
             (with-redefs [wsv/workstream-rows (fn [& args] (swap! reads inc) (apply orig args))]

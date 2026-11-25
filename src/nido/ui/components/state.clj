@@ -211,6 +211,13 @@
   ([] (needs-mark "needs you"))
   ([title] [:span.needs {:title title}]))
 
+(defn ^{:malli/schema [:=> [:cat [:? :string]] :any]}
+  error-mark
+  "The error mark: the machine stopped on a failure, and the person's move is its recovery — not
+   an answer, so never the needs-you dot. `title` is what hovering it reads."
+  ([] (error-mark "failed — needs recovering"))
+  ([title] [:span.error-mark {:title title} "⛔"]))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   arc-mark
   "The mark for one arc stage: what is happening there right now if anything is — a person being

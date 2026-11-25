@@ -27,11 +27,15 @@
    a gate cannot outlive the thing it was gating.")
 
 (Kind GateReading
-  "What reading every project's gates came to: the gates of the projects the core answered for,
-   and, by project name, why each other project could not be read. A project is in exactly one of
-   them, so an unread project is never mistaken for one with nothing to ask."
+  "What reading every project's gates came to: the gates and errors of the projects the core
+   answered for, and, by project name, why each other project could not be read. A project is in
+   exactly one of them, so an unread project is never mistaken for one with nothing to ask.
+
+   A gate puts a question to the person; an error says what failed on the machine's side and
+   offers its recovery. They are apart because a machine that stopped asks nobody anything."
   [:map
    [:gates [:vector :map]]
+   [:errors [:vector :map]]
    [:unavailable [:map-of :string :string]]])
 
 (Kind Screen
@@ -147,10 +151,20 @@
   (Operation gate "Full gate detail for one workstream, or nil when it is not gating."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Gate]]
      :delegates [gates]})
+  (Operation error
+    "The error card for one workstream — what failed on the machine's side, why, and its recovery
+     — or nil when its machine has not stopped on a failure. Read from the core as `gate` is."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
+  (Operation conductor-failures
+    "The conductor turns that failed since one last did not, oldest first, each with its reason
+     in words and the last its run wrote to stderr when the core kept it."
+    {:signature [:=> [:catn [:state [:maybe :map]]] [:vector :map]]})
   (Operation read-gates
-    "Every registered project's gates, read from the core — one request per project for the
-     workstreams a person owes a move — and never from held rows or a ledger fold: the boundary
-     where each project's core reply becomes its outcome, its gates or its reason in :unavailable."
+    "Every registered project's gates and errors, read from the core — one request per project for
+     the workstreams a person owes a move — and never from held rows or a ledger fold: the boundary
+     where each project's core reply becomes its outcome, its gates and errors or its reason in
+     :unavailable. A workstream its ledger settled is on neither list, as its board row reads it
+     settled, whatever the core still holds open."
     {:signature [:=> [:catn] GateReading] :delegates [classify-origin workstream/record-of-state]})
   (Operation all-gates
     "The gates read-gates reads: every project's the core answered for."
@@ -186,8 +200,9 @@
   (Operation resolve-gate!
     "Apply a gate follow-action. Position-carrying actions check the ledger has not moved, which
      is what makes two people clicking the same button safe. An action the core answers — an
-     option, a reply or a withdrawal of an ask, Land, Promote, Done, Drop — is sent to it as the
-     person's keyed command (`core-resolve!`)."
+     option, a reply or a withdrawal of a question, Wake on a stopped conductor, Land, Promote,
+     Done, Drop — is sent to it as the person's keyed command (`core-resolve!`). An option, a reply
+     or a withdrawal never reaches a machine failure, and Wake reaches nothing else."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
      :delegates [set-stage!]})
@@ -360,8 +375,9 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:landing :string]] :boolean]})
   (Operation person-says!
     "What a person said to a workstream outside a gate — from a bb verb, or passed on by the
-     workstream's side chat — as their commands to the core: words answer the oldest ask awaiting
-     them, or are posted to the conductor's chat when none does; images, named by digest, go with
+     workstream's side chat — as their commands to the core: words answer the oldest question
+     awaiting them, or are posted to the conductor's chat when none does — and wake a conductor
+     stopped on a failure, so it hears them; images, named by digest, go with
      the words to the conductor's chat; each grant is given. Answers {:answered :posted :granted
      :refused}."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:words [:maybe :string]]

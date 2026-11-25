@@ -76,13 +76,19 @@
                   state. A workstream whose next move the person owes is waiting on them, not
                   stalled, and one with no such unit is never stalled: nothing of it is the core's
                   to move.
-      :needs-you  the core asks the person something. Only a core ask: a ledger that says the
-                  person owes a move asks nothing until the core raises it.
+      :needs-you  the core asks the person a question. Only a core ask: a ledger that says the
+                  person owes a move asks nothing until the core raises it. Never a machine
+                  failure the core raised as an ask — that is :failed.
+      :failed     the core holds a machine-side failure for the person (its conductor stopped):
+                  that move is a recovery, shown as an error. A workstream holding a question as
+                  well is both needs-you and failed — each still needs the person
       :engagement :settled, :parked-at-gate (asked), :active (live), :stalled, :queued (the
                   machine owes it) or :idle}"
   [{:keys [closed? owed-by paused? core movable?] :as obs}]
   (let [doing   (when-not closed? (underway obs))
         asking? (and (not closed?) (= :asking (:kind core)))
+        failed  (boolean (and asking? (:failed? core)))
+        asked   (boolean (and asking? (not (:failure-only? core))))
         live    (some? doing)
         owed-by (if asking? :person (or owed-by :nobody))
         paused  (boolean paused?)
@@ -92,7 +98,8 @@
      :owed-by    owed-by
      :paused     paused
      :stalled    stalled
-     :needs-you  asking?
+     :needs-you  asked
+     :failed     failed
      :engagement (cond
                    closed?              :settled
                    asking?              :parked-at-gate

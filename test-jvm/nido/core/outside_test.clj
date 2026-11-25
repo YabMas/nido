@@ -97,6 +97,21 @@
       (is (= :failed (:outcome (turn/parse-outcome {:outcome :asked}))) "an ask without its call")
       (is (= :failed (:outcome (turn/parse-outcome "text")))))))
 
+(deftest a-run-that-dies-says-why-on-the-turn
+  (with-core [{:keys [s cmd!]} {}]
+    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+    (cmd! "ws" {:command :start-turn :turn "t" :unit "u"
+                :spec (spec "echo 'starting' >&2; echo 'oh no: Bun has crashed.' >&2; exit 134")})
+    (is (await-until #(= :failed (:status (turn-of s "ws" "t"))) 10000))
+    (is (= {:reason :ended-without-outcome :stderr "starting\noh no: Bun has crashed."}
+           (:detail (turn-of s "ws" "t")))
+        "the last its run wrote to stderr is kept beside the reason"))
+  (testing "a run that wrote nothing there keeps the reason alone"
+    (let [d (temp-dir)]
+      (is (nil? (turn/stderr-tail d)))
+      (spit (io/file d "err") (str/join "\n" (map #(str "line " %) (range 40))))
+      (is (= 12 (count (str/split-lines (turn/stderr-tail d)))) "and a long one keeps its last lines"))))
+
 (deftest a-run-past-its-deadline-is-cancelled
   (with-core [{:keys [s cmd!]} {}]
     (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})

@@ -42,15 +42,22 @@
   (Operation awaiting-person
     "The asks awaiting the person: exactly the open operator asks."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
+  (Operation machine-ask?
+    "Whether an open ask is a failure the machine raised about itself — its conductor stopped —
+     rather than a question: the person's move on it is a recovery, and no surface lists it as
+     needing them."
+    {:signature [:=> [:catn [:ask :map]] :boolean]})
   (Operation background-run?
     "Whether a workstream is a background run: every unit a trigger opened as background work. A
      background run closes when its turn completes; the board does not list it."
     {:signature [:=> [:catn [:state :map]] :boolean]})
   (Operation activity
-    "What the core is doing on a workstream, or nothing: an ask awaiting the person, a unit's turn
-     working, the conductor deciding, or a session starting — the move it owes between turns
-     named as well as the turn running."
-    {:signature [:=> [:catn [:state :map]] [:maybe :map]]})
+    "What the core is doing on a workstream, or nothing: an ask awaiting the person — :failed? when
+     one is a machine failure, :failure-only? when every one is — a unit's turn working, the
+     conductor deciding, or a session starting — the move it owes between turns named as well as
+     the turn running."
+    {:signature [:=> [:catn [:state :map]] [:maybe :map]]
+     :delegates [awaiting-person machine-ask?]})
   (Operation violations
     "Every invariant a state breaks, as data; empty when the state is legal."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
