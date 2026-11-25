@@ -9,6 +9,7 @@
             [nido.ui.components.state :as state]
             [nido.libraries.ui.block :as block]
             [nido.ui.registry :as registry]
+            [nido.ui.stylesheet :as stylesheet]
             [nido.ui.views :as views]))
 
 (def ^:private sample-gate
@@ -1943,3 +1944,51 @@
     (is (str/includes? rec "href=\"/workstreams/nido/ws-r\""))
     (is (str/includes? rec "href=\"/workstreams/nido/ws-g\""))
     (is (not (str/includes? (str holds rec) "sel=")))))
+
+;; ── The sidebar's rail: collapsed until the person opens it, the choice kept in the browser ──
+
+(def ^:private chrome-ctx
+  {:active :workstreams :title "t" :needs-count 0 :daemon {:state :up} :scope "brian" :projects []})
+
+(deftest the-sidebar-starts-collapsed
+  ;; The server reads no preference, so it renders the sidebar without its open class; the body
+  ;; seeds sideOpen from the stored choice, false when none is stored.
+  (let [html (views/shell chrome-ctx [:p "body"])]
+    (is (re-find #"<nav class=\"sidebar\" data-class:open=\"\$sideOpen\">" html)
+        "the nav carries no open class from the server, only the binding")
+    (is (str/includes? html "sideOpen: localStorage.getItem(&apos;nidoSideOpen&apos;)===&apos;true&apos;")
+        "with no stored choice the signal is false")
+    (is (re-find #"<body data-signals__ifmissing=\"\{opsOpen: false, sideOpen:" html)
+        "the signal is declared once, on <body>, beside opsOpen")))
+
+(deftest only-the-toggle-writes-the-stored-choice
+  (let [html (views/shell chrome-ctx [:p "body"])]
+    (is (= 1 (count (re-seq #"localStorage\.setItem\(&apos;nidoSideOpen&apos;" html)))
+        "one writer of the key: the toggle")
+    (is (re-find #"<button[^>]*class=\"side-toggle\"[^>]*data-on:click=\"\$sideOpen = !\$sideOpen; localStorage\.setItem" html))))
+
+(deftest the-collapsed-rail-keeps-toggle-and-health
+  (let [html  (str (h/html (#'views/sidebar {:active :workstreams :scope "brian" :daemon {:state :up}})))
+        sheet (registry/assembled-stylesheet)]
+    (is (str/includes? html "side-toggle"))
+    (is (str/includes? html "id=\"rail-health\""))
+    (is (str/includes? sheet ".sidebar:not(.open) .side-link, .sidebar:not(.open) .side-divider { display:none; }")
+        "collapsed hides the slice labels")
+    (is (not (re-find #"\.sidebar:not\(\.open\)[^{]*\.rail-health[ ,{]" sheet))
+        "and never the health foot")
+    (is (= (views/rail-status-fragment {:needs-count 0 :daemon {:state :up}})
+           (views/rail-status-fragment {:needs-count 0 :daemon {:state :up}}))
+        "the patched health foot takes no sidebar state")))
+
+(deftest the-sidebar-width-is-stated-once
+  ;; Each width is one :layout token; every grid reads the column as --side-w, which the open
+  ;; sidebar alone sets, so no grid writes the width as a literal and the side-chat layouts follow.
+  (let [sheet  (registry/assembled-stylesheet)
+        rules  (str/replace sheet #"(?s):root\s*\{[^}]*\}" "")
+        tokens (:tokens (stylesheet/stylesheet))]
+    (is (= {:side-open-w "180px" :side-closed-w "48px"} (:layout tokens)))
+    (is (not (re-find #"180px|48px" rules)) "no rule restates a width")
+    (is (= 4 (count (re-seq #"grid-template-columns:var\(--side-w, var\(--side-closed-w\)\) 1fr" rules)))
+        "the base grid and each side-chat variant read the width")
+    (is (= 1 (count (re-seq #"--side-w:" rules))) "one rule sets the column's width")
+    (is (str/includes? rules "body:has(> .sidebar.open) { --side-w:var(--side-open-w); }"))))

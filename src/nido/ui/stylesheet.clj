@@ -303,7 +303,10 @@
         .link-k { color:var(--text-faint); font-size:var(--fs-xs); text-transform:uppercase;
                   letter-spacing:0.04em; min-width:82px; }"
    ;; top bar + sidebar + content-area chrome
-   " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr;
+   ;; The sidebar's two widths are the :layout tokens. Every grid reads its column as --side-w,
+   ;; which only the open sidebar sets and which falls back to the collapsed width — so the
+   ;; base grid and each side-chat variant follow whether the sidebar is open.
+   " body { margin:0; padding:0; display:grid; grid-template-columns:var(--side-w, var(--side-closed-w)) 1fr;
             grid-template-rows:auto minmax(0, 1fr); grid-template-areas:'top top' 'side main'; height:100vh; }
      .topbar { grid-area:top; display:flex; align-items:center; gap:var(--space-16); padding:var(--space-12) var(--space-22);
                background:var(--surface-raised); border-bottom:1px solid var(--border); }
@@ -331,6 +334,15 @@
      .menu a.active { color:var(--text-strong); }
      .sidebar { grid-area:side; background:var(--surface-raised); border-right:1px solid var(--border);
                 padding:var(--space-14); display:flex; flex-direction:column; gap:var(--space-3); }
+     body:has(> .sidebar.open) { --side-w:var(--side-open-w); }
+     .side-toggle { align-self:flex-start; background:none; border:none; cursor:pointer; color:var(--text-muted);
+                    font-size:var(--fs-md); line-height:1; padding:var(--space-6) var(--space-8); border-radius:var(--radius-5); }
+     .side-toggle:hover { background:var(--surface-hover); color:var(--text-strong); }
+     .sidebar:not(.open) { padding:var(--space-14) var(--space-6); align-items:center; }
+     .sidebar:not(.open) .side-toggle { align-self:center; }
+     .sidebar:not(.open) .side-link, .sidebar:not(.open) .side-divider { display:none; }
+     .sidebar:not(.open) .rail-health-btn { gap:0; color:transparent; width:var(--space-8); overflow:hidden; }
+     .sidebar:not(.open) .rail-health-btn .dot { margin-right:0; flex:none; }
      .side-link { display:block; padding:var(--space-7) var(--space-10); border-radius:var(--radius-5); color:var(--text-muted);
                   border-left:3px solid transparent; }
      .side-link:hover { background:var(--surface-hover); text-decoration:none; }
@@ -346,11 +358,11 @@
      .structure-tabs a.active { color:var(--text-strong); border-bottom:2px solid var(--text-strong); }
      /* With the chat's side panel, a third column under the top bar: room for its toggle when
         closed, the panel when open — below 1000px it covers the page instead. */
-     body:has(> .chat-side) { grid-template-columns:180px 1fr 58px; grid-template-areas:'top top top' 'side main chat';
+     body:has(> .chat-side) { grid-template-columns:var(--side-w, var(--side-closed-w)) 1fr 58px; grid-template-areas:'top top top' 'side main chat';
                               transition:grid-template-columns var(--dur-180) ease-out; }
-     body:has(> .chat-side.open) { grid-template-columns:180px 1fr 420px; }
+     body:has(> .chat-side.open) { grid-template-columns:var(--side-w, var(--side-closed-w)) 1fr 420px; }
      body > .chat-side { grid-area:chat; height:100%; position:static; }
-     @media (max-width: 999px) { body:has(> .chat-side.open) { grid-template-columns:180px 1fr 58px; } }
+     @media (max-width: 999px) { body:has(> .chat-side.open) { grid-template-columns:var(--side-w, var(--side-closed-w)) 1fr 58px; } }
      @media (prefers-reduced-motion: reduce) { body:has(> .chat-side) { transition:none; } }
      .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:var(--radius-9);
                    padding:0 var(--space-7); font-size:var(--fs-xs); min-width:18px; text-align:center; }

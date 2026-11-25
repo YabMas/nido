@@ -103,6 +103,11 @@
    :space-72 "72px"
    :space-136 "136px"}
 
+ :layout
+  ;; The page chrome's fixed widths: the sidebar open, and collapsed to its rail.
+  {:side-open-w "180px"
+   :side-closed-w "48px"}
+
  :radius
   {:radius-2 "2px"
    :radius-3 "3px"

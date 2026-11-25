@@ -130,12 +130,35 @@
      [:a {:href "/operations" :class (when (= :operations active) "active")} "Operations"]
      [:a {:href "/development" :class (when (= :development active) "active")} "Development"]]]])
 
+(def ^:private side-open-storage-key
+  "The localStorage key holding whether the person left the sidebar open — the one place that
+   choice is kept, since the server reads no preference."
+  "nidoSideOpen")
+
+(def ^:private chrome-signals-init
+  "data-signals__ifmissing for <body>: the chrome's client state. `sideOpen` is seeded from the
+   person's stored choice, and with none stored the sidebar starts collapsed. <body> is never
+   patched, so __ifmissing only seeds it on a full page load."
+  (str "{opsOpen: false, sideOpen: localStorage.getItem('" side-open-storage-key "')==='true'}"))
+
 (defn- sidebar
   "The focused project's slices, and the daemon's state at the foot. Every link
    carries the focus, so the sidebar reads the same on every page — on a page
-   that is not a slice, none is active."
+   that is not a slice, none is active.
+
+   Collapsed — how it starts until the person opens it — it is a rail showing only its toggle and
+   the health foot. Whether it is open is the `open` class Datastar sets from `$sideOpen`, on the
+   nav rather than <body>: hiccup writes an element's attributes sorted, so a class binding on
+   <body> would run before <body>'s own signals are seeded. The class stays outside #rail-health,
+   which renders the same either way."
   [{:keys [active scope daemon]}]
-  [:nav.sidebar
+  [:nav.sidebar {"data-class:open" "$sideOpen"}
+   [:button.side-toggle {"data-on:click" (str "$sideOpen = !$sideOpen; localStorage.setItem('"
+                                              side-open-storage-key "', $sideOpen)")
+                         "data-attr:aria-expanded" "$sideOpen"
+                         :aria-expanded "false"
+                         :title "Show or hide the sidebar" :aria-label "Toggle the sidebar"}
+    "☰"]
    (for [[id href label] slices]
      (list
       [:a {:class (str "side-link" (when (= id active) " active"))
@@ -307,7 +330,7 @@
       [:title (or title "nido") " — nido"]
       (wire/script)
       [:style (h/raw (registry/assembled-stylesheet))]]
-     [:body {:data-signals__ifmissing "{opsOpen: false}"}
+     [:body {:data-signals__ifmissing chrome-signals-init}
       (topbar ctx)
       (sidebar ctx)
       (into [:main {:class (str "content" (when bleed? " bleed"))}] content)

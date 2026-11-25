@@ -1,7 +1,7 @@
 (ns nido.libraries.ui.style
   "The stylesheet, assembled, and the lint that holds it to its tokens.
 
-   An app's tokens are one map of groups — :colour, :type, :space, :radius, :shadow, :motion —
+   An app's tokens are one map of groups — :colour, :type, :space, :layout, :radius, :shadow, :motion —
    each from token name to value. A value is a CSS value string, or a keyword naming another
    token, which is the second tier: a semantic token reads a reference one by name, and emits as
    var(--that). Names are unique across groups; the group says what kind of value it holds.
