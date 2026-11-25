@@ -1695,23 +1695,50 @@
        :resume-error nil
        :working?     false})))
 
+(defn- comment-lines
+  "The person's comment `note` on question `n`, marked as theirs and indented under the question's
+   line, every line of it."
+  [n note]
+  (str/join "\n" (cons (str "   The person's comment on question " n ":")
+                        (map #(str "     " %) (str/split-lines note)))))
+
 (defn- questions-answer
-  "The person's answers to the several questions of ask content, as the words the conductor
-   hears: one line per question, each its choice, the person's words, or left open. nil when every
-   question was left open."
+  "The person's answers to the questions of ask content, as the one string the asker reads, from
+   `picks` — one {:letter? :note?} per question, in question order. nil when no question has an
+   option or a note.
+
+   With no note anywhere it reads as it always did: for content without :questions, the chosen
+   option's label alone, as its option action answered; for content with :questions, one line per
+   question, its choice or left open. Once any question carries a note, every question is a line —
+   its option, that none was chosen, or left open — and a noted question's comment follows its own
+   line, marked as the person's comment on that question."
   [content picks]
-  (let [qs (core-questions content)
-        line (fn [i {:keys [question options]}]
-               (let [{:keys [letter words]} (get (vec picks) i)
-                     j   (when letter (first (keep-indexed #(when (= letter %2) %1) report/option-letters)))
-                     opt (when j (get options j))]
-                 [(boolean (or opt (not (str/blank? (str words)))))
-                  (str (inc i) ". " question " — "
+  (let [qs    (core-questions content)
+        picks (vec picks)
+        rows  (map-indexed
+               (fn [i {:keys [question options]}]
+                 (let [{:keys [letter note]} (get picks i)
+                       j    (when letter (first (keep-indexed #(when (= letter %2) %1) report/option-letters)))
+                       opt  (when j (get options j))
+                       note (some-> note str str/trim not-empty)]
+                   {:n (inc i) :question question :options options :opt opt :note note}))
+               qs)
+        noted? (some :note rows)]
+    (cond
+      (not (some #(or (:opt %) (:note %)) rows)) nil
+
+      (and (not noted?) (not (several? content)))
+      (str (:option (:opt (first rows))))
+
+      :else
+      (str/join "\n"
+                (for [{:keys [n question options opt note]} rows]
+                  (str n ". " question " — "
                        (cond opt (str (:option opt))
-                             (not (str/blank? (str words))) (str/trim (str words))
-                             :else "(left open)"))]))
-        lines (map-indexed line qs)]
-    (when (some first lines) (str/join "\n" (map second lines)))))
+                             (and note (seq options)) "no option chosen"
+                             note "no options were offered"
+                             :else "(left open)")
+                       (when note (str "\n" (comment-lines n note)))))))))
 
 (defn- core-gate
   "The gate of spine row `row`: its oldest ask awaiting the person in the core, offered for answer.
@@ -3325,7 +3352,8 @@
   "Do what gate action `action-id` asks of the core, as the person's keyed command; nil when the
    action is not one the core answers. An option answers the oldest open ask that is a question
    (never a machine failure) with its option, a reply with the person's words, Send answers with
-   one answer per question it asks, a withdrawal takes it back; Wake answers the machine's stop,
+   the one string `questions-answer` renders from a pick per question — its option, the person's
+   comment on it, both — a withdrawal takes it back; Wake answers the machine's stop,
    the one recovery an error offers; Land grants the landing; Promote is
    the person's start, opening the workstream's unit; Done and Drop retract its open units and
    close it."

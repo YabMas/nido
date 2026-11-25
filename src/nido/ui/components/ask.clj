@@ -31,11 +31,13 @@
 
 (def ^:private card-actions
   {:click  gate-click
-   ;; A card's submit sends every question's choice — its letter, or its words on a card whose
-   ;; submit records them. A card with no stepper and no submit seeds neither, so both are
-   ;; optional: an Accept on such a card resolves on the position alone.
+   ;; A card's submit sends every question's choice — its letter — with its words on a card whose
+   ;; submit records words, and its note on a card whose submit records notes. A card with no
+   ;; stepper and no submit seeds none of them, so all are optional: an Accept on such a card
+   ;; resolves on the position alone.
    :submit [:post :gate {:answers [:signal :answers choices {:optional true}]
-                         :words   [:signal :words choices {:optional true}]}]})
+                         :words   [:signal :words choices {:optional true}]
+                         :notes   [:signal :notes choices {:optional true}]}]})
 
 (def ^:private bar-actions
   {:click    gate-click

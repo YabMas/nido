@@ -100,10 +100,58 @@
       (is (= :core-refused (:decision (work/resolve-gate! :brian ws-id :answer-questions {:answers [{} {}]})))
           "nothing chosen answers nothing")
       (is (= {:decision :answered}
-             (work/resolve-gate! :brian ws-id :answer-questions {:answers [{:letter "A"} {:words "Only on the first failure"}]})))
+             (work/resolve-gate! :brian ws-id :answer-questions {:answers [{:letter "A"} {:letter "B"}]})))
       (is (= {:answered (str "1. Drop the question or keep it without its picture? — Drop it\n"
-                             "2. Tell the teacher? — Only on the first failure")}
-             (get-in (core-state c ws-id) [:turns "c1" :resolution]))))))
+                             "2. Tell the teacher? — Stay silent")}
+             (get-in (core-state c ws-id) [:turns "c1" :resolution]))
+          "with no note, the answer reads as the same choices always did"))))
+
+(defn- answered-with
+  "The answer text the core records when the ask `commands` raise is sent `picks` by Send answers,
+   or the refusal's decision."
+  [commands picks]
+  (let [out (atom nil)]
+    (with-ws
+      (fn [c ws-id]
+        (fake-core/seed! c :brian ws-id commands)
+        (let [r (work/resolve-gate! :brian ws-id :answer-questions {:answers picks})]
+          (reset! out (if (= :answered (:decision r))
+                        (get-in (core-state c ws-id) [:turns "c1" :resolution :answered])
+                        r)))))
+    @out))
+
+(deftest a-comment-is-said-under-its-own-question
+  (testing "a note beside a choice, and a note with no choice, each under its own question"
+    (is (= (str "1. Drop the question or keep it without its picture? — Drop it\n"
+                "   The person's comment on question 1:\n"
+                "     only for this release\n"
+                "     and say so in the notes\n"
+                "2. Tell the teacher? — no option chosen\n"
+                "   The person's comment on question 2:\n"
+                "     neither — ask the school first")
+           (answered-with several [{:letter "A" :note "only for this release\nand say so in the notes"}
+                                   {:note "neither — ask the school first"}]))))
+  (testing "a note on one question leaves another's open line as it was"
+    (is (= (str "1. Drop the question or keep it without its picture? — (left open)\n"
+                "2. Tell the teacher? — Tell them\n"
+                "   The person's comment on question 2:\n"
+                "     by mail")
+           (answered-with several [{} {:letter "A" :note "by mail"}]))))
+  (testing "a note alone is an answer: the wait ends on it"
+    (is (string? (answered-with several [{:note "this misses the point"} {}]))))
+  (testing "blank words are no note, and nothing at all answers nothing"
+    (is (= :core-refused (:decision (answered-with several [{:note "   "} {}]))))))
+
+(deftest a-one-question-ask-is-answered-by-send-too
+  (testing "with no note, the chosen option's label alone, as its option action answered"
+    (is (= "Yes" (answered-with fake-core/asking [{:letter "A"}]))))
+  (testing "with a note, the question, its choice and the comment"
+    (is (= (str "1. Ship it? — no option chosen\n"
+                "   The person's comment on question 1:\n"
+                "     not before the demo")
+           (answered-with fake-core/asking [{:note "not before the demo"}]))))
+  (testing "nothing chosen and nothing said is refused"
+    (is (= :core-refused (:decision (answered-with fake-core/asking [{}]))))))
 
 (deftest a-single-decision-recommends-only-what-its-writer-marked
   (with-ws

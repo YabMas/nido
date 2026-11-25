@@ -566,15 +566,19 @@
     (if (empty? idx) [] (mapv idx (range (inc (apply max (keys idx))))))))
 
 (defn- card-picks
-  "A blocker card's answers — its `answers` letters and its `words` — as one pick per question in
-   question order: {:letter …}, {:words …}, or {} for one left open. Indexed like `card-answers`,
-   so a question with no answer sent stays in its place."
-  [{:keys [answers words]}]
+  "A question card's Send answers post — its `answers` letters, its `notes`, and its `words` on a
+   card whose submit records words — as one pick per question in question order: a map holding a
+   :letter, a :note, both, or neither for one left open. A note is the trimmed words the person
+   wrote about the question, its note field's or else its words field's; blank words are no note.
+   Indexed like `card-answers`, so a question with nothing sent stays in its place."
+  [{:keys [answers notes words]}]
   (let [letters (card-answers answers)
-        said    (card-answers words)]
-    (mapv (fn [i] (let [l (get letters i) w (get said i)]
-                    (cond l {:letter l} w {:words w} :else {})))
-          (range (max (count letters) (count said))))))
+        noted   (card-answers notes)
+        said    (card-answers words)
+        note-of (fn [i] (some #(some-> (get % i) str/trim not-empty) [noted said]))]
+    (mapv (fn [i] (let [l (get letters i) n (note-of i)]
+                    (cond-> {} l (assoc :letter l) n (assoc :note n))))
+          (range (max (count letters) (count noted) (count said))))))
 
 (defn- gate-decoding
   "Which of the ask blocks' declared actions a gate click on `action-id` was sent by, as the
@@ -603,7 +607,7 @@
   [req action-id decoded]
   (cond
     (#{:reply :assert-gate} action-id)       (:text decoded)
-    ;; A blocker's several questions are sent together, each as its letter or its words.
+    ;; A card's questions are sent together, each as its letter, its note, both or neither.
     (= :answer-questions action-id)
     {:seq     (:entry (view-state/parse req))
      :answers (card-picks decoded)}
