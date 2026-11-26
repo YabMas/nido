@@ -250,6 +250,27 @@
         (is (re-find #"Owed now: the implementation review — at implemented" t))
         (is (re-find #"nido:review:loop" t))
         (is (not (re-find #"Owed now: implement —" t)))))
+    (testing "the review's direction calls no converged review a candidate by itself"
+      (let [t (brief (owed :implemented :review-implementation :mechanical))]
+        (is (re-find #"a release candidate if its QA passes or does not apply" t))
+        (is (not (re-find #"converges the workstream is a release candidate\." t)))))
+    (testing "QA owed or failed: the unit walks, plans or fixes, and nothing directs a landing"
+      (let [walk (brief (owed :qa-owed :walk-qa :authoring))
+            plan (brief (owed :qa-unplanned :plan-qa :authoring))
+            fix  (brief (owed :qa-failed :address-qa :working-copy))]
+        (is (re-find #"Owed now: the QA walk — at qa-owed" walk))
+        (is (re-find #"agent-browser" walk))
+        (is (re-find #"nido:workstream:screenshot:add" walk))
+        (is (re-find #"Owed now: the QA plan — at qa-unplanned" plan))
+        (is (re-find #":kind :qa-plan" plan))
+        (is (re-find #"Owed now: what the QA walk found — at qa-failed" fix))
+        (doseq [t [walk plan fix]
+                :let [line (re-find #"Owed now: [^\n]*" t)]]
+          (is (re-find #"no release candidate" line))
+          (is (not (re-find #"is a release candidate|lands it with Land" line))))))
+    (testing "the standing rule makes a candidate only once QA passes or does not apply"
+      (is (re-find #"converges and its QA passes or does not apply, the workstream is a release candidate"
+                   (brief nil))))
     (testing "a release candidate owes a unit nothing"
       (is (re-find #"Owed: nothing — at release-candidate" (brief (owed :release-candidate :land :release)))))
     (testing "a person's stage is not directed to a unit"

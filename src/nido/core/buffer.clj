@@ -229,7 +229,29 @@
        (= :review-implementation stage)
        (str "  Owed now: the implementation review — at " at ". Direct the unit holding the change to run `"
             nido-verb " nido:review:loop` in its working copy and to report the status it ends at; the loop "
-            "records the :review and fixes what it finds. Once it converges the workstream is a release candidate.")
+            "records the :review and fixes what it finds. Once it converges, the workstream is a release candidate "
+            "if its QA passes or does not apply; where its project declares QA, the QA plan and its walk come first.")
+
+       (= :plan-qa stage)
+       (str "  Owed now: the QA plan — at " at ". The implementation review converged, and no QA plan with steps "
+            "is recorded for the governing design. Direct the unit holding the change to record one with `" nido-verb
+            " nido:workstream:entry:add :project " (some-> project name) " :ws-id " ws-id " :kind :qa-plan :file <edn>`: "
+            "a :qa-plan citing the design ({:design {:seq N}}), in docs/reference/qa-brief.md's sections — :surface "
+            ":product with :steps ({:id :action :expected}), or :surface :none with the :reason nothing a user sees "
+            "changes. It is no release candidate yet.")
+
+       (= :walk-qa stage)
+       (str "  Owed now: the QA walk — at " at ". Direct the unit holding the change to walk the QA plan `" nido-verb
+            " nido:workstream:show` prints, step by step, through agent-browser against its session's running app "
+            "(the app port its briefing names); to keep a screenshot of every step with `" nido-verb
+            " nido:workstream:screenshot:add :file <path>`; and to record one :qa-walk citing the plan "
+            "({:plan {:seq N}}) with, for every step id, a :pass, :fail or :blocked result and its screenshot digests. "
+            "It is no release candidate until a walk passes; direct no landing.")
+
+       (= :address-qa stage)
+       (str "  Owed now: what the QA walk found — at " at ". A step failed. Direct the unit holding the change to fix it "
+            "and record the build (:layer-completed or :implementation-completed); the implementation review and a "
+            "new walk are owed after. It is no release candidate; direct no landing.")
 
        (= :address-findings stage)
        (str "  Owed now: the findings the review left open — at " at ". Direct the unit holding the change to "
@@ -269,7 +291,8 @@
          (str "  What the recipe owes could not be read now. In order it owes: implement, recorded by the unit as "
               ":layer-completed entries and an :implementation-completed citing the cleared design; then the "
               "implementation review, `" nido-verb " nido:review:loop` in the unit's working copy, which records "
-              "the :review. `" nido-verb " nido:owed` in a unit's working copy says which is owed now."))
+              "the :review; then, where the project declares QA, the QA plan and a walk of it that passes. `" nido-verb
+              " nido:owed` in a unit's working copy says which is owed now."))
        "  Every stage advances only by its record: direct each unit through the one owed, and on its outcome through the next."])))
 
 (defn ^{:malli/schema [:=> [:cat :string :map [:sequential :map] [:? [:maybe :map]]] :string]} brief
@@ -289,7 +312,7 @@
      (str "- How an ask is written and read, for every ask you raise or make:\n\n" (ask-tool/briefing) "\n")
      "- Directing a unit to ask several product questions, tell it to give each its own entry in the ask's `questions`."
      "- A unit with an unknown runs nothing until you settle it (settle_unknown) by observing what happened."
-     "- Never ask the person whether to land. Once the implementation review converges the workstream is a release candidate, and the person lands it with its Land button; you hear it when they do."
+     "- Never ask the person whether to land. Once the implementation review converges and its QA passes or does not apply, the workstream is a release candidate, and the person lands it with its Land button; you hear it when they do."
      "- Start a unit's next turn with start_unit_turn when its goal needs more work; it runs in the unit's own session. Stop when there is nothing left to decide."
      "- The person's chat messages reach you as they decided, often passed on by the workstream's chat agent, which answers their questions itself; each is the person's word. Answer every chat message the person sent with reply_chat. What you settle in chat takes effect only through the same tools."
      ""
