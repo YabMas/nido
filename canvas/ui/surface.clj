@@ -133,8 +133,9 @@
   (Operation arc-name "One arc stage's heading."
     {:signature [:=> [:catn [:stage :any]] :any]})
   (Operation needs-mark
-    "The needs-you mark: the one dot that says the next move is a person's, wherever a state is
-     said — a board row, a needs-you row, an arc stage. Its title is the caller's to word."
+    "The needs-you mark: the dot that says the next move is a person's in no kind in particular
+     — an aggregate such as a project's drop-down entry, or a category no kind names. Its title
+     is the caller's to word."
     {:signature [:=> [:catn [:title [:? :string]]] :any]})
   (Operation error-mark
     "The error mark: the machine stopped on a failure, and the person's move is its recovery — the
@@ -159,6 +160,11 @@
      speech bubble — the only glyph any surface says that kind with, in the needs colour, titled
      with the kind's needs-words unless its caller words it."
     {:signature [:=> [:catn [:kind :keyword] [:title [:? :string]]] :any]})
+  (Operation needs-kind-mark
+    "The mark a state is said with wherever the person is needed — a board row, a needs-you row,
+     an arc stage: the kind's own mark when the category names one, the needs-you dot when none
+     does, titled with the category's needs-words unless its caller words it."
+    {:signature [:=> [:catn [:needs [:maybe :keyword]] [:title [:? :string]]] :any]})
   (Operation arc-mark
     "The mark for one arc stage: what is happening there right now if anything is — the person
      waited on, titled with the category they are needed in, or an agent working — and otherwise
@@ -240,7 +246,7 @@
   (Operation fire-signal "The signal name for one field of a fire form."
     {:signature [:=> [:catn [:trigger-name :any] [:k :keyword]] :string]})
   (Operation fleet-card "What the fleet costs, and whether another session fits."
-    {:signature [:=> [:catn [:fleet :map]] :any]})
+    {:signature [:=> [:catn [:fleet [:maybe :map]] [:scope [:? [:maybe :string]]]] :any]})
   (Operation ops-panel-fragment "The ambient ops chrome: daemon, halt, breakers, triggers, fleet."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [fleet-card fire-signal]})
   (Operation shell

@@ -208,7 +208,14 @@
     (let [h (quot idle-ms 3600000)]
       (if (>= h 48) (str (quot h 24) "d") (str h "h")))))
 
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
+(defn- ops-post
+  "`@post(…)` expression for ops action `path`, carrying the focused project `scope` of the page
+   it was drawn on: the action answers with the top bar's counts, and without it they would be
+   read for whichever project the focus cookie last named, not the page's."
+  [scope path]
+  (str "@post('" path (when scope (str "?scope=" (java.net.URLEncoder/encode (str scope) "UTF-8"))) "')"))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:? [:maybe :string]]] :any]}
   fleet-card
   "Fleet memory: what every live session costs together, and what is idle enough
    to reclaim.
@@ -225,8 +232,10 @@
    residue was rehomed to exactly this ambient chrome.
 
    `nil` renders as unavailable rather than as an empty fleet — a probe that
-   failed must not read as a machine with nothing on it."
-  [{:keys [sessions in-use machine over? candidates signals-ok?] :as fleet}]
+   failed must not read as a machine with nothing on it. `scope` is the focused project of the
+   page it is drawn on, which its actions carry."
+  ([fleet] (fleet-card fleet nil))
+  ([{:keys [sessions in-use machine over? candidates signals-ok?] :as fleet} scope]
   [:div.card {:class (when over? "fleet-over")}
    [:strong "Fleet"]
    (if (nil? fleet)
@@ -253,9 +262,9 @@
                  [:span.meta "stopping…"]
                  [:button.btn
                   {"data-on:click"
-                   (str "@post('/ops/fleet/" (:project c) "/"
-                        (java.net.URLEncoder/encode (str (:session c)) "UTF-8")
-                        "/down')")}
+                   (ops-post scope (str "/ops/fleet/" (:project c) "/"
+                                        (java.net.URLEncoder/encode (str (:session c)) "UTF-8")
+                                        "/down"))}
                   "down"])]
               ;; A stop that failed keeps its button — the action stays retryable —
               ;; and says why. The panel polls every 5s, so this is the only place
@@ -271,15 +280,16 @@
           [:div.meta {:style "margin-top:7px"} "Idle check unavailable."]
 
           :else
-          [:div.meta {:style "margin-top:7px"} "Nothing idle — every session was touched today."]))))])
+          [:div.meta {:style "margin-top:7px"} "Nothing idle — every session was touched today."]))))]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   ops-panel-fragment
   "The ambient ops chrome: daemon state, halt/resume, open breakers with why
    each is open — clear for a trip, resume for a person's pause — and a fire form per manual trigger (placeholder-less →
    one click; placeholder-carrying → one input per {{event/*}} key, signals
-   fire_<trigger>_<key>). No route of its own — lives behind the rail dot."
-  [{:keys [daemon halt breakers triggers fleet]}]
+   fire_<trigger>_<key>). No route of its own — lives behind the rail dot. `:scope` is the
+   focused project of the page it is drawn on, which every action it posts carries."
+  [{:keys [daemon halt breakers triggers fleet scope]}]
   (str
    (h/html
     [:div {:id "ops-panel" :class "ops-panel"}
@@ -291,10 +301,10 @@
       (if halt
         (list [:span "⏸ halted by " (name (:source halt))
                (when (:note halt) (str " — " (:note halt)))]
-              [:button.btn.btn-primary {"data-on:click" "@post('/ops/resume')"} "Resume"])
+              [:button.btn.btn-primary {"data-on:click" (ops-post scope "/ops/resume")} "Resume"])
         (list [:span "running"]
-              [:button.btn.btn-danger {"data-on:click" "@post('/ops/halt')"} "Halt"]))]
-     (fleet-card fleet)
+              [:button.btn.btn-danger {"data-on:click" (ops-post scope "/ops/halt")} "Halt"]))]
+     (fleet-card fleet scope)
      [:div.card
       [:strong "Breakers"]
       (if (seq breakers)
@@ -303,7 +313,7 @@
         (for [{:keys [project trigger info]} breakers
               :let [lever (fn [verb label]
                             [:button.btn {"data-on:click"
-                                          (str "@post('/ops/breakers/" (name project) "/" (name trigger) "/" verb "')")}
+                                          (ops-post scope (str "/ops/breakers/" (name project) "/" (name trigger) "/" verb))}
                              label])]]
           [:div.actions
            [:span.mono (str (name project) "/" (name trigger))]
@@ -322,8 +332,8 @@
              [:input {"data-bind" (fire-signal name k)
                       :placeholder (clojure.core/name k)}])
            [:button.btn {"data-on:click"
-                         (str "@post('/ops/fire/" (clojure.core/name project)
-                              "/" (clojure.core/name name) "')")}
+                         (ops-post scope (str "/ops/fire/" (clojure.core/name project)
+                                              "/" (clojure.core/name name)))}
             "fire"]]))]])))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}

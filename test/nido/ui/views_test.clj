@@ -564,6 +564,25 @@
 ;; Ops panel — ambient chrome behind the rail health dot
 ;; ---------------------------------------------------------------------------
 
+(deftest every-ops-action-carries-the-pages-scope
+  ;; An ops action answers with the top bar's counts; without the page's scope they would be read
+  ;; for whichever project the focus cookie last named, which another tab may have moved.
+  (doseq [halt [nil {:source :person}]]
+    (let [html  (str/replace
+                 (views/ops-panel-fragment
+                  {:scope    "nido"
+                   :daemon   {:state :up}
+                   :halt     halt
+                   :breakers [{:project :brian :trigger :t :info {:tripped? true :disabled-by-user? true}}]
+                   :triggers {:brian [{:name :one-off :payload "{}"}]}
+                   :fleet    {:sessions 1 :in-use 1 :machine 10 :over? false
+                              :candidates [{:project "brian" :session "s" :bytes 1 :idle-ms 0}]}})
+                 #"&#39;|&apos;" "'")
+          posts (re-seq #"@post\('([^']*)'\)" html)]
+      (is (<= 5 (count posts)) "halt or resume, both breaker levers, the fire and the fleet's down")
+      (doseq [[_ url] posts]
+        (is (str/ends-with? url "?scope=nido") url)))))
+
 (deftest ops-panel-renders-daemon-halt-breakers-and-fire
   (let [html (views/ops-panel-fragment
               {:daemon   {:state :breaker :heartbeat-at "2026-07-21T10:00:00Z"}

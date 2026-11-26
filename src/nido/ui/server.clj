@@ -297,8 +297,11 @@
                                 (fleet/candidates rows))))
     (catch Throwable _ nil)))
 
-(defn- ops-context []
-  {:daemon   (read-rail-daemon)
+(defn- ops-context
+  "What the ops panel shows, for a page focused on project `scope`."
+  [scope]
+  {:scope    scope
+   :daemon   (read-rail-daemon)
    :halt     (control/halt-info)
    :fleet    (fleet-context)
    :breakers (control/tripped-triggers)
@@ -447,8 +450,9 @@
   [req]
   (sse-response
    (sse-fragment
-    (str (views/ops-panel-fragment (ops-context))
-         (rail-status (:scope (view-state req)) (read-tally))))))
+    (let [scope (:scope (view-state req))]
+      (str (views/ops-panel-fragment (ops-context scope))
+           (rail-status scope (read-tally)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Routing
