@@ -63,7 +63,9 @@
                         ; :refused: its destroy was refused because its working copy is not the
                         ; session's own to remove; terminal, never attempted again
    :turns         {}    ; turn-id -> {:id :unit (nil = conductor) :status :spec :run
-                        ;             :call :resolution :resolved-call :ended-by :detail}
+                        ;             :call :resolution :resolved-call :ended-by :detail :stuck :exited}
+                        ; :stuck {:run :reason}: the runner ended that run and saw it alive past its grace
+                        ; :exited run: the latest run whose exit is recorded (every recorded outcome sets it)
                         ; :spec {:executor kw :instructions str ...} is what the executor runs;
                         ; :run counts the turn's runs, 1 at start and one more per resumption, so
                         ; an outcome names the run it is for and a stale one is refused.
@@ -208,6 +210,30 @@
   [a]
   (contains? machine-ask-kinds (:kind a)))
 
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]} run-awaited?
+  "Whether the core still awaits the end of turn `t`'s current run: the turn runs or was cancelled
+   — a store that cancels a running turn leaves its run's process to end — and no exit of that run
+   is recorded (`:exited`, which every recorded outcome of a run sets). An asked, resolved or
+   finished turn recorded its run's exit. These are the runs a stuck report concerns, and the ones
+   a starting daemon takes back."
+  [t]
+  (boolean (and (#{:running :cancelled} (:status t)) (not= (:run t) (:exited t)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]} stuck?
+  "Whether turn `t`'s current run is stuck: the runner ended it and reported it alive past its
+   kill grace (`:stuck`), and its exit is not recorded (`run-awaited?`). Derived from those two
+   facts alone, so it reads the same whatever the turn's status or the workstream's closure."
+  [t]
+  (boolean (and (run-awaited? t) (= (:run t) (get-in t [:stuck :run])))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]} stuck-run
+  "The workstream's stuck run (`stuck?`) as {:turn :run :reason}, with the :unit when it has one,
+   or nil. The one reading every surface's stuck mark comes from, through `activity`."
+  [state]
+  (when-let [t (first (filter stuck? (sort-by :id (vals (:turns state)))))]
+    (cond-> {:turn (:id t) :run (:run t) :reason (get-in t [:stuck :reason])}
+      (:unit t) (assoc :unit (:unit t)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]} activity
   "What the core is doing on a workstream whose state is `state`, as a surface reads it, or nil
    when it does nothing and is owed nothing: {:kind k}, with the :turn and :unit it concerns when
@@ -216,6 +242,9 @@
                 :failed? true when one of them is a machine failure (`machine-ask?`), whose move
                 is a recovery, not an answer; :failure-only? as well when every one is, so
                 nothing is asked of them
+     :stuck     a turn's run was ended — it gave its final answer, passed its deadline or was
+                cancelled — and its process lives on regardless (`stuck?`): nothing it does is
+                read until it exits, so it is neither working nor deciding
      :working   a unit's turn runs, or resumes with its call answered
      :deciding  the conductor runs or resumes, a unit's turn waits on the conductor's answer to
                 its call, or the conductor is owed a wake: its inbox holds items
@@ -223,19 +252,29 @@
    Between a turn ending and the next starting, the core is owed a move it has not made yet;
    these kinds name that move, so a surface never reads a handover as nothing happening. A
    failed bring-up is not :starting: the conductor hears the failure, which is :deciding while
-   it is owed. A closed workstream does nothing."
+   it is owed. A closed workstream does nothing, except that a stuck run on it is still :stuck:
+   closing ends no process, and only its recorded exit clears the reading. An ask outranks a stuck
+   run, which it then carries as :stuck {:turn :unit}: a run cancelled because an ask about its
+   unit opened is stuck still, and reads so beside the ask. :stuck and :failed? are set
+   independently — a reader of :asking must accept either, both or neither."
   [state]
-  (when-not (or (:closed? state) (:discarded? state))
-    (let [ts    (sort-by :id (vals (:turns state)))
-          turn  (fn [pred] (first (filter pred ts)))
-          of    (fn [k t] (cond-> {:kind k :turn (:id t)} (:unit t) (assoc :unit (:unit t))))
-          units (filter #(= :open (:status %)) (sort-by :id (vals (:units state))))]
+  (let [ts    (sort-by :id (vals (:turns state)))
+        turn  (fn [pred] (first (filter pred ts)))
+        of    (fn [k t] (cond-> {:kind k :turn (:id t)} (:unit t) (assoc :unit (:unit t))))
+        units (filter #(= :open (:status %)) (sort-by :id (vals (:units state))))
+        stuck (some-> (stuck-run state) (select-keys [:turn :unit]) (assoc :kind :stuck))]
+    (if (or (:closed? state) (:discarded? state))
+      stuck
       (cond
         (seq (awaiting-person state))
         (let [asks (awaiting-person state)]
           (cond-> {:kind :asking}
             (some machine-ask? asks)   (assoc :failed? true)
-            (every? machine-ask? asks) (assoc :failure-only? true)))
+            (every? machine-ask? asks) (assoc :failure-only? true)
+            stuck                      (assoc :stuck (dissoc stuck :kind))))
+
+        stuck
+        stuck
 
         (turn #(and (:unit %) (#{:running :resolved} (:status %))))
         (of :working (turn #(and (:unit %) (#{:running :resolved} (:status %)))))
@@ -413,7 +452,7 @@
 
 (defmethod evolve :turn-asked [state {:keys [turn call]}]
   (let [{:keys [unit run]} (get-in state [:turns turn])]
-    (cond-> (update-in state [:turns turn] assoc :status :asked :call call)
+    (cond-> (update-in state [:turns turn] assoc :status :asked :call call :exited run)
       unit       (hear-later {:kind :turn-asked :unit unit :turn turn :run run})
       (nil? unit) conductor-settled)))
 
@@ -428,7 +467,7 @@
 (defmethod evolve :turn-ended [state {:keys [turn outcome detail actions-unknown?]}]
   (let [{:keys [unit run hears] :as t} (get-in state [:turns turn])
         disposed? (= :completed outcome)]
-    (cond-> (update-in state [:turns turn] #(cond-> (assoc % :status outcome)
+    (cond-> (update-in state [:turns turn] #(cond-> (assoc % :status outcome :exited run)
                                               detail (assoc :detail detail)))
       (and actions-unknown? unit)
       (update-in [:units unit :unknowns] conj (run-unknown-key turn run))
@@ -441,6 +480,13 @@
       (and (nil? unit) (not disposed?)) (update :inbox merge hears)
       (and (nil? unit) (not disposed?) (exhausted? detail))       (conductor-exhausted detail)
       (and (nil? unit) (not disposed?) (not (exhausted? detail))) (update :conductor-failures inc))))
+
+(defmethod evolve :turn-stuck [state {:keys [turn run reason]}]
+  (assoc-in state [:turns turn :stuck] {:run run :reason reason}))
+
+(defmethod evolve :turn-exited [state {:keys [turn run]}]
+  ;; A store-cancelled turn's run ended: its exit is recorded, and it stays cancelled.
+  (assoc-in state [:turns turn :exited] run))
 
 (defmethod evolve :call-answered [state {:keys [turn answer]}]
   (resolve-call state turn {:answered answer}))
@@ -770,6 +816,11 @@
   (let [t (get-in state [:turns turn])]
     (cond
       (nil? t)                             (refuse :no-such-turn :turn turn)
+      ;; A store-cancelled turn's run that has exited is recorded as exited, which clears a stuck
+      ;; report and refuses a later one, whichever arrives first; its outcome is discarded, so the
+      ;; turn stays cancelled.
+      (and (not= :running (:status t)) (run-awaited? t) (or (nil? run) (= run (:run t))))
+      (accept {:event :turn-exited :turn turn :run (:run t)})
       ;; A report from a turn a takeover cancelled, or any turn no longer running, is discarded.
       (not= :running (:status t))          (refuse :turn-not-running :turn turn :status (:status t))
       ;; So is one from an earlier run of a turn since resumed. A report that names no run is
@@ -793,6 +844,17 @@
                     actions-unknown? (assoc :actions-unknown? true))]
         (accept ended))
       :else                                (refuse :unknown-outcome :outcome outcome))))
+
+(defmethod decide :record-stuck [state {:keys [turn run reason]}]
+  (let [t (get-in state [:turns turn])]
+    (cond
+      (nil? t)                       (refuse :no-such-turn :turn turn)
+      ;; A run the store cancelled is ended by the runner after its turn reads cancelled.
+      (not (run-awaited? t))
+      (refuse :turn-not-running :turn turn :status (:status t))
+      (and run (not= run (:run t)))  (refuse :stale-run :turn turn :run run :current (:run t))
+      (stuck? t)                     (refuse :already-stuck :turn turn :run (:run t))
+      :else (accept {:event :turn-stuck :turn turn :run (:run t) :reason reason}))))
 
 (defmethod decide :resume-turn [state {:keys [turn]}]
   (let [t (get-in state [:turns turn])]

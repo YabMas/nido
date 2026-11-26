@@ -30,10 +30,20 @@
    files and redirected to the run's stdin by its own command line — the runner gives every run
    /dev/null.
 
+   The same wait holds a run open after its final answer: a watcher left running (a `tail -F`
+   Monitor) keeps Claude alive for as long as it runs. A Stop hook therefore asks, once per task,
+   whenever the model ends a response
+   with a background task still running: stop it, if that response was the final answer, or end
+   again to wait for it. A task the model ended again over is awaited (`awaited.edn` in the run's
+   directory), and the run is `settled?` — at rest at a final answer, held by nothing it awaits — as
+   soon as its output ends on a result and every task still running is not awaited. Claude's own
+   wait ceiling is pinned on every run, so no setting of the person's turns it off.
+
    Loads under bb as well as the JVM, because the hook runs under bb."
   (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.set :as set]
             [clojure.string :as str]
             [nido.core.ask-tool :as ask-tool]
             [nido.core.domain :as d])
@@ -60,9 +70,21 @@
   []
   (some-> (io/resource "nido/executor/claude.clj") io/file .getParentFile .getParentFile .getParentFile str))
 
+(def ^:private print-wait-ceiling-ms
+  "How long `claude -p` waits, idle after its last response, for background tasks before it stops
+   them and exits: Claude's own default, set on every run so that a person's setting of 0 (wait
+   forever) cannot hold a headless run open."
+  "600000")
+
 (defn- session-file [turn-dir] (io/file turn-dir "claude-session-id"))
 (defn- resolution-file [run-dir] (io/file run-dir "resolution.edn"))
 (defn- stdin-file [run-dir] (io/file run-dir "in.jsonl"))
+(defn- asked-file [run-dir] (io/file run-dir "asked.edn"))
+(defn- awaited-file [run-dir] (io/file run-dir "awaited.edn"))
+
+(defn- read-ids [f]
+  (or (when (.exists ^java.io.File f) (try (set (edn/read-string (slurp f))) (catch Exception _ nil)))
+      #{}))
 
 (defn- prompt-message
   "The stream-json user message prompting with `text` and the images `images` names, each read by
@@ -151,9 +173,13 @@
              ;; onto stdin, then execs Claude in its place.
              images        (->> (into ["/bin/sh" "-c" "f=$1; shift; exec \"$@\" < \"$f\"" "sh"
                                        (str (stdin-file run-dir))])))
-     :env {"CLAUDE_CODE_DISABLE_CRON" "1"}
+     :env {"CLAUDE_CODE_DISABLE_CRON" "1"
+           "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS" print-wait-ceiling-ms}
      :files (cond-> {settings (json/write-str
-                               {:hooks {:PreToolUse
+                               {:hooks {:Stop [{:hooks [{:type "command"
+                                                         :command (str bb-bin " --classpath " src
+                                                                       " -m nido.executor.claude stop " run-dir)}]}]
+                                        :PreToolUse
                                         (cond-> [{:matcher ask-tool-name
                                                   :hooks [{:type "command"
                                                            :command (str bb-bin " --classpath " src
@@ -176,20 +202,52 @@
               resolution (assoc (str (resolution-file run-dir))
                                 (pr-str {:call resolved-call :text (resolution-text resolution)})))}))
 
+(defn- events
+  "Reduce the run's stream-json output, one parsed event at a time, with `f` from `init`; a line
+   that is not JSON is skipped."
+  [run-dir f init]
+  (let [file (io/file run-dir "out")]
+    (if (.exists file)
+      (with-open [r (io/reader file)]
+        (reduce (fn [acc line]
+                  (if-let [o (try (json/read-str line :key-fn keyword) (catch Exception _ nil))]
+                    (f acc o)
+                    acc))
+                init (line-seq r)))
+      init)))
+
 (defn- result-events
   "Every `result` event in the run's stream-json output, in order: one per time the agent stopped,
    and Claude may wake it again after one."
   [run-dir]
-  (let [f (io/file run-dir "out")]
-    (when (.exists f)
-      (with-open [r (io/reader f)]
-        (->> (line-seq r)
-             (keep #(try (let [o (json/read-str % :key-fn keyword)] (when (= "result" (:type o)) o))
-                         (catch Exception _ nil)))
-             vec)))))
+  (events run-dir (fn [results o] (cond-> results (= "result" (:type o)) (conj o))) []))
 
 (defn- deferred-ask? [{:keys [stop_reason deferred_tool_use]}]
   (and (= "tool_deferred" stop_reason) (= ask-tool-name (:name deferred_tool_use))))
+
+(defn- conversing?
+  "Whether `o` is part of a model's response: what a response is made of, or the init that opens
+   one. Task bookkeeping, rate-limit notices and the like are not."
+  [{:keys [type subtype]}]
+  (or (#{"assistant" "user" "result"} type)
+      (and (= "system" type) (= "init" subtype))))
+
+(defn ^{:malli/schema [:=> [:cat :string] :boolean]} settled?
+  "Whether the run's output is at rest at a final answer: the last of the model's responses has
+   ended in a result, and no background task that still runs is one the model said it waits for
+   (`awaited.edn`). A run that is settled has nothing left to do; claude holding it open past that
+   is holding it for nothing."
+  [run-dir]
+  (let [{:keys [last-conversing running]}
+        (events run-dir
+                (fn [acc o]
+                  (cond-> acc
+                    (conversing? o) (assoc :last-conversing (:type o))
+                    (and (= "system" (:type o)) (= "background_tasks_changed" (:subtype o)))
+                    (assoc :running (set (map :task_id (:tasks o))))))
+                {:last-conversing nil :running #{}})]
+    (boolean (and (= "result" last-conversing)
+                  (empty? (set/intersection running (read-ids (awaited-file run-dir))))))))
 
 (defn- outcome
   "The outcome a finished run's output carries, or nil when it carries none. A deferred ask is the
@@ -227,9 +285,10 @@
    worktree, so nido's own skills — the ones a trigger names — reach it only this way), :image
    ((fn [digest] -> {:mime :data} or nil), which reads the images a spec names)."
   [opts]
-  {:launch  (partial launch opts)
-   :outcome outcome
-   :attach  (partial attach opts)})
+  {:launch   (partial launch opts)
+   :outcome  outcome
+   :settled? settled?
+   :attach   (partial attach opts)})
 
 ;; ── the hook ─────────────────────────────────────────────────────────────────
 
@@ -317,15 +376,54 @@
             (recur)))))
     (.waitFor p)))
 
+(defn- task-line [{:keys [id type description command]}]
+  (str "- " id " (" type "): " description (when command (str " — `" command "`"))))
+
+(defn ^{:malli/schema [:=> [:cat :string :map] [:maybe :map]]} stop-decision
+  "The Stop hook's answer for `event` in run directory `run-dir`: a block asking about the
+   background tasks still running that it has not asked about, or nil to let the response end.
+
+   It asks about each task once (`asked.edn`). A task asked about that is still running when the
+   model ends again is one it waits for: it is recorded as awaited (`awaited.edn`), and the model is
+   not asked about it again."
+  [run-dir {:keys [background_tasks]}]
+  (let [running (filterv #(#{"running" "pending"} (:status %)) background_tasks)
+        ids     (set (map :id running))
+        asked   (read-ids (asked-file run-dir))
+        awaited (read-ids (awaited-file run-dir))
+        unasked (set/difference ids asked awaited)
+        ;; What the block presents is what decides it: a task asked about or awaited is never
+        ;; presented again, not even beside a new one.
+        asking  (filterv #(contains? unasked (:id %)) running)]
+    ;; A task asked about that still runs as the model ends again is awaited, whatever else this
+    ;; ending asks about.
+    (when-let [newly (seq (set/difference (set/intersection ids asked) awaited))]
+      (spit (awaited-file run-dir) (pr-str (vec (sort (into awaited newly))))))
+    (if (seq asking)
+      (do (spit (asked-file run-dir) (pr-str (vec (sort (set/union asked unasked)))))
+          {:decision "block"
+           :reason (str "This is a headless nido turn: it cannot end while background work you started "
+                        "is still running, and nothing reads it until it ends. Still running:\n"
+                        (str/join "\n" (map task-line asking))
+                        "\n\nIf your response was your final answer, stop each of these with TaskStop "
+                        "now, then end with your final answer again, in full: the response you end on is "
+                        "what nido records as this turn's answer. If you are deliberately waiting for "
+                        "one of them to finish, stop the rest, then end your response again: what is "
+                        "still running then is taken as what you wait for, and you are woken when it "
+                        "finishes.")})
+      nil)))
+
 (defn ^:export -main
   "`hook <run-dir>`: answer one PreToolUse event on stdin. `guard <cwd>`: refuse a file edit into
    working copy `cwd`, for a read-only turn. `supervise <argv…>`: run Claude, ending it at its
-   first deferral."
+   first deferral. `stop <run-dir>`: answer one Stop event on stdin."
   [& [cmd arg & more]]
   (case cmd
     "hook"      (let [event (json/read-str (slurp *in*) :key-fn keyword)]
                   (println (json/write-str (hook-decision arg event))))
     "guard"     (when-let [d (guard-decision arg (json/read-str (slurp *in*) :key-fn keyword))]
+                  (println (json/write-str d)))
+    "stop"      (when-let [d (stop-decision arg (json/read-str (slurp *in*) :key-fn keyword))]
                   (println (json/write-str d)))
     "supervise" (System/exit (supervise (cons arg more)))
     nil))

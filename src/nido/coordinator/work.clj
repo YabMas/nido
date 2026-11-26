@@ -624,11 +624,24 @@
   "The row fields `act/of`'s answer `a` sets: :status as the marks read it, :needs-you, :failed,
    :engagement and :doing — one answer, so no two of them can disagree."
   [a]
-  {:status     (select-keys a [:owed-by :live :stalled :paused :needs-you :needs])
+  {:status     (cond-> (select-keys a [:owed-by :live :stalled :paused :needs-you :needs])
+                 ;; Only when it is: a stuck turn is rare, and its mark is the only reader.
+                 (:stuck a) (assoc :stuck true))
    :needs-you  (:needs-you a)
    :needs      (:needs a)
    :engagement (:engagement a)
    :doing      (:doing a)})
+
+(defn- finished?
+  "Whether a workstream is finished for the board: its records close it other than between phases
+   (`closure`), or its row reads :done (`stage`) — and no run of it is stuck (`stuck?`, the core's
+   `nido.core.domain/activity` :stuck). A stuck run's process will not exit, whatever closed the
+   workstream, and only its recorded exit finishes it. The one reading the band, winding-down and
+   the listing take, so none of them can place a stuck row where the others do not."
+  [closure stage stuck?]
+  (boolean (and (not stuck?)
+                (or (and closure (not= :between-phases (:outcome closure)))
+                    (= :done stage)))))
 
 (defn- with-status
   "A spine row with its band, position and coordination.
@@ -637,6 +650,10 @@
    :intake when it records none of the work — so does a workstream nobody activated, whose units
    the core ran all the same — and then the core's coordination says where it stands, and a
    workstream under way is out of the triage pen; a workstream the core closed is :done.
+
+   A row the core reads stuck (`nido.core.domain/activity` :stuck) is :in-progress whatever else
+   would place it — settled, closed by the core, a background run — so no band the board leaves
+   undrawn hides a process that will not exit; only its recorded exit moves it on.
 
    A row the ledger settled takes its band from its closure and reads no status — ~1000
    workstreams sit on a board and nearly all are settled and drawn nowhere, so skipping it is
@@ -652,8 +669,10 @@
            outcome (:outcome closed)
            spine   (to-spine row)
            cw      (core-of project ws-id)
-           obs     #(act/of (observation project ws-id cw %1 %2 %3))]
-       (if (and closed (not= :between-phases outcome))
+           obs     #(act/of (observation project ws-id cw %1 %2 %3))
+           settled (and closed (not= :between-phases outcome))
+           stuck?  (let [a (wcore/activity cw)] (boolean (or (= :stuck (:kind a)) (:stuck a))))]
+       (if (finished? closed nil stuck?)
          (let [stage  (if (= :dismissed outcome) :dismissed :done)
                shown? (or whole? (= :dismissed outcome))
                st     (when shown? (pipeline/status project ws-id))]
@@ -671,6 +690,7 @@
                landing? (and (contains? (get-in cw [:state :grants]) :merge)
                              (landing-positions (:at pos)))
                band     (cond
+                          stuck?                                 :in-progress
                           core-closed?                           :done
                           closed                                 :awaiting-gate
                           :else (let [b (band-of project ws-id (:origin spine) pos)]
@@ -685,7 +705,7 @@
                                  :stage      band
                                  :dismissed? false
                                  :position   placed)
-                          (coordination (obs (= :done band) band facts)))
+                          (coordination (obs (boolean (or (= :done band) settled core-closed?)) band facts)))
              (not (contains? unrendered-bands band))
              (assoc :phase (wsv/phase-progress project ws-id)))))))))
 
@@ -781,7 +801,7 @@
   "`winding-down` read off the records: every finished workstream's sessions."
   [project live-names rows]
   (let [live     (set live-names)
-        done-ids (into #{} (comp (filter #(= :done (:stage %))) (map :ws-id)) rows)]
+        row-of   (into {} (map (juxt :ws-id identity)) rows)]
     (if (empty? live)
       []
       (->> (cws/project-records project)
@@ -789,8 +809,8 @@
                    (let [closed (cws/closure w)]
                      ;; Between phases is closed and not finished: it has its own band,
                      ;; and a row is on exactly one.
-                     (when (or (and closed (not= :between-phases (:outcome closed)))
-                               (contains? done-ids (:id w)))
+                     (when (let [row (row-of (:id w))]
+                             (finished? closed (:stage row) (get-in row [:status :stuck])))
                        (let [sessions (cws/sessions project (:id w))
                              live-s   (filterv #(contains? live (:name %)) sessions)]
                          (when (seq live-s)
@@ -2166,7 +2186,9 @@
           core-hash (hash (:state (core-of project ws-id)))
           sessions  (cws/sessions project ws-id)
           row       (with-status project (wsv/workstream-row project w facts))
-          settled?  (= :settled (:engagement row))
+          ;; A stuck run is read apart from the engagement, which reads a closed workstream
+          ;; :settled whatever runs on it; a row whose process will not exit is never at rest.
+          settled?  (and (= :settled (:engagement row)) (not (get-in row [:status :stuck])))
           page-id   (:page-id (wsv/notion-ref w))
           ;; The rule gates* applies: a denial alone makes no gate (all-denials notices it).
           gate?     (and (not= :dismissed (:stage row))
@@ -2175,8 +2197,8 @@
                          ;; a person's :assert-gate, which only a gate carries.
                          (not (and settled? (not= :awaiting-gate (:stage row)))))
           closed    (cws/closure w)
-          finished? (or (and closed (not= :between-phases (:outcome closed)))
-                        (= :done (:stage row)))
+          ;; Not finished while stuck: a listing refresh reaches the row, so its exit is seen.
+          done?     (finished? closed (:stage row) (get-in row [:status :stuck]))
           e         {:row       row
                      :page-id   page-id
                      :covers    (set (remove nil? [page-id (:id (wsv/ledger-ref w))]))
@@ -2185,11 +2207,11 @@
                      ;; At rest: only the sweep reaches it — settled history, as the core's
                      ;; engagement or the ledger's own close says (the core keeps most closed
                      ;; ledgers open). Decides nothing else; the gate above reads `settled?`.
-                     :at-rest?  (or settled? finished?)
+                     :at-rest?  (or settled? done?)
                      :gate      (when gate? (row-gate project row))
                      ;; The winding-down band's row, less its live sessions, which are the
                      ;; registry's and change without this row being recomputed.
-                     :wind      (when finished?
+                     :wind      (when done?
                                   {:ws-id   ws-id
                                    :project (name project)
                                    :stage   :winding-down

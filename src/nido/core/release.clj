@@ -91,11 +91,12 @@
 (defn- log [& xs] (binding [*out* *err*] (apply println "nido.core.release:" xs) (flush)))
 
 (defn- with-running-turns
-  "The workstreams of `wss` ({:ws :state}) whose state records a turn running: the ones a start
-   takes back. Closed ones too — a workstream can close while its turn runs, as a landing turn's
-   own `land:record` closes it, and a run no start takes back reads running forever."
+  "The workstreams of `wss` ({:ws :state}) whose state records a turn whose run the core awaits
+   (`nido.core.domain/run-awaited?`): the ones a start takes back. Closed ones too — a workstream
+   can close while its turn runs, as a landing turn's own `land:record` closes it, and a run no
+   start takes back reads running forever."
   [wss]
-  (filter (fn [{:keys [state]}] (some #(= :running (:status %)) (vals (:turns state)))) wss))
+  (filter (fn [{:keys [state]}] (some (requiring-resolve 'nido.core.domain/run-awaited?) (vals (:turns state)))) wss))
 
 (defn- host-boot-id
   "This host boot's id as the kernel gives it — Linux's /proc/sys/kernel/random/boot_id, macOS's

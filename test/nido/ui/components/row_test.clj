@@ -50,3 +50,13 @@
                                                              :ask {:question "Q?"}}
                                                       :href "#"}
                                                      {} (fn [& _] "#")))) mark)))))
+
+(deftest a-stuck-row-that-asks-carries-both-marks
+  (let [html (str (h/html (block/render row/board-row "w"
+                                        {:project "nido" :row {:ws-id "w" :label "L" :needs-you true
+                                                               :status {:needs-you true
+                                                                        :owed-by :person :stuck true}}
+                                         :href "#"}
+                                        {} (fn [& _] "#"))))]
+    (is (str/includes? html (str (h/html (state/needs-mark)))) "the ask is the person's")
+    (is (str/includes? html "process will not exit") "and the run that will not end is marked beside it")))

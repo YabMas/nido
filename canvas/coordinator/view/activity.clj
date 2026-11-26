@@ -20,8 +20,8 @@
 
 (Kind Activity
   "Every facet of what is happening in a workstream: what is underway, whether anything runs,
-   who owes the next move, whether a person's pause stands, whether it has stalled, whether it
-   needs the person and in which category — an ask, a landing, a system error — and its
+   who owes the next move, whether a person's pause stands, whether it has stalled, whether its
+   turn is stuck, whether it needs the person and in which category — an ask, a landing, a system error — and its
    engagement.
 
    ONE ANSWER, so no two facets can disagree: each is a field of `of` over one observation.
@@ -29,7 +29,9 @@
    need of the person, a move an agent or the machine owes and an open unit of the core's that
    nobody holds; owed-by :person exactly when needs-you exactly when :needs names a category,
    with no exception — a core ask or a move an activated workstream's position owes them is an
-   :ask, a landing it owes them a :landing, a failure only they clear a :system-error.
+   :ask, a landing it owes them a :landing, a failure only they clear a :system-error. Stuck — the
+   core's turn was ended and its process lives on — is read apart from every other facet,
+   closure, ask and pause included, and implies nothing underway.
 
    ONE CLOSED VARIANT PER ENGAGEMENT, each fixing what its facets may be, and within it what runs
    fixed by whether it is live and paused — live is Running and unpaused, paused is never live,
@@ -44,6 +46,7 @@
       [:owed-by [:enum :agent :machine :nobody]]
       [:paused :boolean]
       [:stalled [:= false]]
+      [:stuck :boolean]
       [:needs-you [:= false]]
       [:needs :nil]]]
    [:parked-at-gate
@@ -55,6 +58,7 @@
           [:owed-by [:= :person]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= true]]
           [:needs [:enum :ask :landing :system-error]]]
      [:map {:closed true}
@@ -64,6 +68,7 @@
           [:owed-by [:= :person]]
           [:paused [:= true]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= true]]
           [:needs [:enum :ask :landing :system-error]]]
      [:map {:closed true}
@@ -73,6 +78,7 @@
           [:owed-by [:= :person]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= true]]
           [:needs [:enum :ask :landing :system-error]]]]]
    [:active
@@ -83,6 +89,7 @@
           [:owed-by [:enum :agent :machine :nobody]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]
    [:stalled
@@ -93,6 +100,7 @@
           [:owed-by [:enum :agent :machine]]
           [:paused [:= false]]
           [:stalled [:= true]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]
    [:queued
@@ -104,6 +112,7 @@
           [:owed-by [:= :machine]]
           [:paused [:= true]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]
      [:map {:closed true}
@@ -113,6 +122,7 @@
           [:owed-by [:= :machine]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]]
    [:idle
@@ -124,6 +134,7 @@
           [:owed-by [:enum :agent :nobody]]
           [:paused [:= true]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]
      [:map {:closed true}
@@ -133,6 +144,7 @@
           [:owed-by [:enum :agent :nobody]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]]])
 

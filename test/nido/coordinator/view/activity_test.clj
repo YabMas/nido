@@ -138,6 +138,38 @@
     (is (not (:live a)) "but no working dot while the person's pause stands")
     (is (:paused a))))
 
+(deftest a-stuck-turn-is-read-apart-from-every-other-facet
+  ;; Stuck is a fact about a process, not about who owes the move: it is never a stall, and it
+  ;; leaves closure, the ask and the pause to read as they would without it.
+  (let [a (act/of (assoc quiet :movable? true :core {:kind :stuck :turn "t" :unit "u"}))]
+    (is (:stuck a))
+    (is (not (:live a)) "nothing it does is underway")
+    (is (nil? (:doing a)))
+    (is (not (:stalled a)) "the core reads it, so it is not a unit left unmoved")
+    (is (not= :active (:engagement a))))
+  (is (not (:stuck (act/of (assoc quiet :core {:kind :working :turn "t"})))))
+  (testing "a stuck run on a closed workstream still reads stuck, and the workstream settled"
+    (let [a (act/of (assoc quiet :closed? true :core {:kind :stuck :turn "t"}))]
+      (is (:stuck a))
+      (is (= :settled (:engagement a)))))
+  (testing "a stuck run under an open ask reads stuck beside the ask, never as a stall"
+    (let [a (act/of (assoc quiet :movable? true :core {:kind :asking :stuck {:turn "t" :unit "u"}}))]
+      (is (:stuck a))
+      (is (:needs-you a) "the ask is still the person's")
+      (is (= :ask (:needs a)))
+      (is (not (:stalled a)) "a stall never needs you")
+      (is (not (:live a)))))
+  (testing "beside a machine failure as well: both are carried, independently"
+    (let [a (act/of (assoc quiet :failure :conductor-stopped
+                           :core {:kind :asking :failed? true :failure-only? true
+                                  :stuck {:turn "t" :unit "u"}}))]
+      (is (:stuck a))
+      (is (= :system-error (:needs a)))))
+  (testing "a held unit's stuck run reads stuck and paused both"
+    (let [a (act/of (assoc quiet :paused? true :core {:kind :stuck :turn "t" :unit "u"}))]
+      (is (:stuck a))
+      (is (:paused a)))))
+
 (deftest the-machine-owing-a-move-is-queued
   (is (= :queued (:engagement (act/of (assoc quiet :owed-by :machine))))))
 
@@ -158,7 +190,8 @@
         failure    [nil :conductor-stopped :start-failed]
         paused?    [false true]
         owed-by    [:person :agent :machine :nobody nil]
-        core       [nil {:kind :asking} {:kind :working :turn "t"} {:kind :deciding}]
+        core       [nil {:kind :asking} {:kind :working :turn "t"} {:kind :deciding}
+                    {:kind :stuck :turn "t"} {:kind :asking :stuck {:turn "t"}}]
         band       [:in-progress :shipping]
         movable?   [false true]
         claim      [nil claim]]
@@ -196,6 +229,10 @@
     (is (or (not (:closed? obs)) (and (not (:needs-you a)) (not (:stalled a)) (nil? (:doing a))
                                       (not (:live a)) (= :settled (:engagement a))))
         (str "settled is settled " (pr-str obs)))
+    (is (= (:stuck a) (boolean (or (= :stuck (:kind (:core obs))) (:stuck (:core obs)))))
+        (str "stuck is the core's reading alone, whatever else holds " (pr-str obs)))
+    (is (or (not (:stuck a)) (and (nil? (:doing a)) (not (:live a))))
+        (str "a stuck turn has nothing underway " (pr-str obs)))
     (is (= (:engagement a)
            (cond (:closed? obs) :settled (:needs-you a) :parked-at-gate (:live a) :active
                  (:stalled a) :stalled (= :machine (:owed-by a)) :queued :else :idle))

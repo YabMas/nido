@@ -198,12 +198,15 @@
   state-mark
   "Whether anything is happening in a workstream, as one mark and no words — the one mark every
    surface puts beside a workstream, read off its activity (`status`: the activity's :needs-you,
-   :paused, :stalled, :live and :owed-by) and what is underway (`doing`):
+   :stuck, :paused, :stalled, :live and :owed-by) and what is underway (`doing`):
      the mark of the category the person is needed in (`needs-kind-mark`) while they owe the
        next move, titled with its `needs-words`, and a merge's words (`doing-badge`) while a merge is underway —
-       a blocked merge has to read red on a board that is scanned rather than read — both side by
-       side when both hold;
+       a blocked merge has to read red on a board that is scanned rather than read — side by side
+       when both hold, with the stuck ⚠ between them when a run will not end: answering the ask
+       ends no process;
    and where neither holds, in precedence:
+     ⚠ in the failed colour when a turn is stuck — its run was ended and its process will not
+       exit, so only a person ends it — ahead of a pause, which ends no process either;
      ‖ in the dormant colour while a person's pause stands;
      ⚠ in the failed colour when it is stalled — an agent owes the move, nothing runs and nobody
        paused it, which is a fault and never a resting state;
@@ -213,14 +216,20 @@
    What runs, and who owes the next move, are the mark's title. Only :live lights the working dot:
    the activity already makes everything underway live, so a second test here could only
    disagree with it."
-  [{:keys [owed-by live stalled paused needs-you needs]} doing]
-  (let [what (wsv/doing-label doing)
-        tip  (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))]
+  [{:keys [owed-by live stalled stuck paused needs-you needs]} doing]
+  (let [what  (wsv/doing-label doing)
+        tip   (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))
+        stuck (when stuck
+                [:span.st-mark.stalled {:title (str "stuck — its agent's turn was ended and its "
+                                                    "process will not exit; end it by hand"
+                                                    (when (seq tip) (str " · " tip)))} "⚠"])]
     (cond
       (or needs-you (= :merge (:source doing)))
       (let [dot   (when needs-you (needs-kind-mark needs (str (needs-words needs) (when what (str " · " what)))))
-            badge (when (= :merge (:source doing)) (doing-badge doing))]
-        (if (and dot badge) (list dot " " badge) (or dot badge)))
+            badge (when (= :merge (:source doing)) (doing-badge doing))
+            marks (remove nil? [dot stuck badge])]
+        (if (next marks) (apply list (interpose " " marks)) (first marks)))
+      stuck                      stuck
       paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
       stalled                    [:span.st-mark.stalled {:title (str "stalled — nothing runs and nothing asks you"
                                                                      (when (seq tip) (str " · " tip)))} "⚠"]

@@ -24,8 +24,8 @@
 
 (defn- status-slot
   "The row's leading mark: where the workstream stands, as an icon with its words in the title —
-   the state mark (needs you, working, paused, stalled), else an empty slot of the same width so
-   every title starts in one column. Where a
+   the state mark (needs you, stuck, working, paused, stalled), else an empty slot of the same
+   width so every title starts in one column. Where a
    workstream came from is not overview information; its links are on the workstream."
   [mark]
   [:span.row-st mark])

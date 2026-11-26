@@ -70,11 +70,24 @@
     {:signature [:=> [:catn [:state :map]] [:maybe :keyword]]})
   (Operation activity
     "What the core is doing on a workstream, or nothing: an ask awaiting the person — :failed? when
-     one is a machine failure, :failure-only? when every one is — a unit's turn working, the
-     conductor deciding, or a session starting — the move it owes between turns named as well as
-     the turn running."
+     one is a machine failure, :failure-only? when every one is — a turn stuck, a unit's turn
+     working, the conductor deciding, or a session starting — the move it owes between turns
+     named as well as the turn running. An ask carries a stuck run it outranks, set independently
+     of :failed?: a reader of an ask accepts both."
     {:signature [:=> [:catn [:state :map]] [:maybe :map]]
-     :delegates [awaiting-person machine-ask?]})
+     :delegates [awaiting-person machine-ask? stuck-run]})
+  (Operation run-awaited?
+    "Whether the core still awaits the end of a turn's current run: the turn runs or was
+     cancelled, and no exit of that run is recorded — every recorded outcome records one."
+    {:signature [:=> [:catn [:turn :map]] :boolean]})
+  (Operation stuck?
+    "Whether a turn's current run is stuck: reported alive past its kill grace after the runner
+     ended it, and its exit not recorded (run-awaited?) — whatever the turn's status or the
+     workstream's closure."
+    {:signature [:=> [:catn [:turn :map]] :boolean]})
+  (Operation stuck-run
+    "The workstream's stuck run, or nothing: the one reading every stuck mark comes from."
+    {:signature [:=> [:catn [:state :map]] [:maybe :map]]})
   (Operation violations
     "Every invariant a state breaks, as data; empty when the state is legal."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})

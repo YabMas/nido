@@ -5,10 +5,10 @@
 (deftest a-start-takes-back-a-turn-running-on-a-closed-workstream
   ;; A landing turn's own land:record closes its workstream while the turn still runs; a start
   ;; that took back only open workstreams left that turn reading running forever.
-  (let [wss [{:ws "open-idle"      :state {:closed? false :turns {"t" {:status :completed}}}}
-             {:ws "open-running"   :state {:closed? false :turns {"t" {:status :running}}}}
-             {:ws "closed-running" :state {:closed? true  :turns {"t" {:status :completed}
-                                                                  "u" {:status :running}}}}
+  (let [wss [{:ws "open-idle"      :state {:closed? false :turns {"t" {:status :completed :run 1 :exited 1}}}}
+             {:ws "open-running"   :state {:closed? false :turns {"t" {:status :running :run 1}}}}
+             {:ws "closed-running" :state {:closed? true  :turns {"t" {:status :completed :run 1 :exited 1}
+                                                                  "u" {:status :running :run 1}}}}
              {:ws "closed-idle"    :state {:closed? true  :turns {}}}]]
     (is (= ["open-running" "closed-running"] (map :ws (#'release/with-running-turns wss))))))
 
@@ -40,3 +40,11 @@
       (is (= ["boot/B2/brian/a/u"] (map :key @sent)) "a start after a host boot records the loss")
       (is (= "B2" (:id (read-string (slurp f)))))
       (finally (.delete f)))))
+
+(deftest a-start-takes-back-a-run-the-store-cancelled-until-it-has-exited
+  ;; A store-cancelled run lives on until its process ends; a start that took back only running
+  ;; turns left it unwatched, and its stuck mark standing forever.
+  (let [wss [{:ws "cancelled-live"   :state {:turns {"t" {:status :cancelled :ended-by :takeover :run 1}}}}
+             {:ws "cancelled-exited" :state {:turns {"t" {:status :cancelled :ended-by :takeover :run 1 :exited 1}}}}
+             {:ws "deadline"         :state {:turns {"t" {:status :cancelled :run 1 :exited 1}}}}]]
+    (is (= ["cancelled-live"] (map :ws (#'release/with-running-turns wss))))))

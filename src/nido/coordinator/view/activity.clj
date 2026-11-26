@@ -79,6 +79,7 @@
       [:owed-by [:enum :agent :machine :nobody]]
       [:paused :boolean]
       [:stalled [:= false]]
+      [:stuck :boolean]
       [:needs-you [:= false]]
       [:needs :nil]]]
    [:parked-at-gate
@@ -90,6 +91,7 @@
           [:owed-by [:= :person]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= true]]
           [:needs [:enum :ask :landing :system-error]]]
      [:map {:closed true}
@@ -99,6 +101,7 @@
           [:owed-by [:= :person]]
           [:paused [:= true]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= true]]
           [:needs [:enum :ask :landing :system-error]]]
      [:map {:closed true}
@@ -108,6 +111,7 @@
           [:owed-by [:= :person]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= true]]
           [:needs [:enum :ask :landing :system-error]]]]]
    [:active
@@ -118,6 +122,7 @@
           [:owed-by [:enum :agent :machine :nobody]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]
    [:stalled
@@ -128,6 +133,7 @@
           [:owed-by [:enum :agent :machine]]
           [:paused [:= false]]
           [:stalled [:= true]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]
    [:queued
@@ -139,6 +145,7 @@
           [:owed-by [:= :machine]]
           [:paused [:= true]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]
      [:map {:closed true}
@@ -148,6 +155,7 @@
           [:owed-by [:= :machine]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]]
    [:idle
@@ -159,6 +167,7 @@
           [:owed-by [:enum :agent :nobody]]
           [:paused [:= true]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]
      [:map {:closed true}
@@ -168,6 +177,7 @@
           [:owed-by [:enum :agent :nobody]]
           [:paused [:= false]]
           [:stalled [:= false]]
+          [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]]])
 
@@ -188,7 +198,7 @@
   [{:keys [claim core band]}]
   (let [k (:kind core)]
     (cond
-      (= :asking k) nil
+      (#{:asking :stuck} k) nil
 
       (and claim (= :working k))
       (into {:source :claim} (select-keys claim [:kind :run-id :report-path :started-at :pid :progress]))
@@ -212,7 +222,9 @@
   of
   "The workstream's activity, every facet of it from `obs` alone — an `Observation`:
 
-     {:doing      what is underway (`underway`), or nil — always nil once settled
+     {:doing      what is underway (`underway`), or nil — always nil once settled, and nil while
+                  the core's turn is stuck: its run was ended and lives on, so nothing it does
+                  is underway
       :live       something runs: anything underway, except a merge waiting its turn
                   (`merge-queued`) and anything while a person's pause stands
       :needs-you  the person owes the next move: the core asks them; a failure only they clear
@@ -230,6 +242,11 @@
                   end, inbox item or ask will wake it, so only a person moves it again — a fault,
                   never a resting state. A workstream with no such unit is never stalled: nothing
                   of it is the core's to move; nor is one whose move is the person's or nobody's.
+      :stuck      the core's turn is stuck (`nido.core.domain/activity` :stuck, or an ask carrying
+                  the stuck run): its run was ended and its process lives on. A fact about a
+                  process, not about who owes the move, so it is read apart from every other
+                  facet — settled or not, asked or not, paused or not: closing a workstream ends
+                  no process, and an answer to an ask ends none either
       :engagement :settled, :parked-at-gate (needs you), :active (live), :stalled, :queued (the
                   machine owes it) or :idle}
 
@@ -238,6 +255,7 @@
      live ⇒ underway, and never paused;
      :owed-by :person ⇔ :needs-you ⇔ :needs names a category — no exception;
      a stall never needs you;
+     stuck ⇒ nothing underway, and so nothing live;
      settled ⇒ nothing underway, needed or stalled."
   [{:keys [closed? owed-by activated? landing? failure paused? core movable?] :as obs}]
   (let [doing     (when-not closed? (underway obs))
@@ -259,12 +277,16 @@
                         (= :person owed-by)  :nobody
                         :else                (or owed-by :nobody))
         stalled   (boolean (and (not closed?) movable? (nil? core) (not paused)
-                                (not needs-you) (#{:agent :machine} owed-by)))]
+                                (not needs-you) (#{:agent :machine} owed-by)))
+        ;; The core's reading alone: it reads a stuck run on a closed workstream too, and beside
+        ;; an ask, which carries it.
+        stuck     (boolean (or (= :stuck (:kind core)) (:stuck core)))]
     {:doing      doing
      :live       live
      :owed-by    owed-by
      :paused     paused
      :stalled    stalled
+     :stuck      stuck
      :needs-you  needs-you
      :needs      needs
      :engagement (cond

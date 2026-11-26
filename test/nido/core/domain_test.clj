@@ -498,6 +498,68 @@
                           ask]))
         "an ask awaiting the person outranks everything else")))
 
+(deftest a-run-cancelled-by-an-ask-reads-stuck-beside-the-ask
+  (let [[s] (run [{:command :open-unit :unit "x" :project "p" :goal "g" :session-cwd "/w"}
+                  {:command :open-unit :unit "y" :project "p" :goal "g" :session-cwd "/w"}
+                  {:command :start-turn :turn "tx" :unit "x" :spec spec}
+                  {:command :start-turn :turn "ty" :unit "y" :spec spec}
+                  {:command :record-outcome :turn "ty" :outcome :asked :call {:id "c" :question "q?"}}
+                  {:command :raise-operator-ask :ask "a" :binds ["ty"] :concerns "x" :content ready}
+                  {:command :record-stuck :turn "tx" :run 1 :reason :concerned-ask}])]
+    (is (= :cancelled (get-in s [:turns "tx" :status])))
+    (is (= {:kind :asking :stuck {:turn "tx" :unit "x"}} (d/activity s))
+        "the ask outranks it, and carries the run that will not end")
+    (let [[s2] (d/step s {:command :record-outcome :turn "tx" :run 1 :outcome :cancelled})]
+      (is (= {:kind :asking} (d/activity s2)) "until its exit is recorded"))))
+
+(deftest a-run-that-will-not-end-reads-stuck-until-it-does
+  (let [ready {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
+        unit-t {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}
+        stuck {:command :record-stuck :turn "t" :run 1 :reason :settled}
+        [s] (run [ready unit-t stuck])]
+    (is (= {:kind :stuck :turn "t" :unit "u"} (d/activity s)) "stuck, not working")
+    (is (= {:run 1 :reason :settled} (get-in s [:turns "t" :stuck])))
+    (is (= {:turn "t" :run 1 :reason :settled :unit "u"} (d/stuck-run s)))
+    (is (= :already-stuck (refusal s stuck)) "reported once per run")
+    (is (= :stale-run (refusal s (assoc stuck :run 2))))
+    (testing "its outcome, once it ends, is recorded as any turn's"
+      (let [[s] (run [ready unit-t stuck {:command :record-outcome :turn "t" :run 1 :outcome :completed}])]
+        (is (= :completed (get-in s [:turns "t" :status])))
+        (is (= :deciding (:kind (d/activity s))))
+        (is (= :turn-not-running (refusal s stuck)))))
+    (testing "a stuck run is still stuck once its workstream closes, until its exit clears it"
+      (is (= {:kind :stuck :turn "t" :unit "u"} (d/activity (assoc s :closed? true))))
+      (let [[s] (run [ready unit-t stuck {:command :record-outcome :turn "t" :run 1 :outcome :completed}])]
+        (is (nil? (d/activity (assoc s :closed? true))))))
+    (testing "every recorded outcome records its run's exit, so a turn taken over after it asked awaits nothing"
+      (let [[s] (run [ready unit-t {:command :record-outcome :turn "t" :run 1 :outcome :asked
+                                    :call {:id "k" :question "q?"}}
+                      {:command :hold-unit :unit "u"}])]
+        (is (= :cancelled (get-in s [:turns "t" :status])))
+        (is (= 1 (get-in s [:turns "t" :exited])))
+        (is (not (d/run-awaited? (get-in s [:turns "t"]))))
+        (is (= :turn-not-running (refusal s stuck)) "nor can it be reported stuck")))
+    (testing "a conductor turn that will not end is stuck too"
+      (let [[s] (run [ready {:command :start-turn :turn "c" :unit nil :spec {:executor :fake :instructions "i"}}
+                      {:command :record-stuck :turn "c" :run 1 :reason :deadline}])]
+        (is (= {:kind :stuck :turn "c"} (d/activity s)))))
+    (testing "a run the store cancelled that will not end is stuck, and its exit clears it without reviving the turn"
+      (let [hold {:command :hold-unit :unit "u"}
+            [s] (run [ready unit-t hold (assoc stuck :reason :takeover)])]
+        (is (= {:run 1 :reason :takeover} (get-in s [:turns "t" :stuck])))
+        (is (= :stuck (:kind (d/activity s))))
+        (let [[s] (run [ready unit-t hold (assoc stuck :reason :takeover)
+                        {:command :record-outcome :turn "t" :run 1 :outcome :cancelled}])]
+          (is (= :cancelled (get-in s [:turns "t" :status])))
+          (is (= 1 (get-in s [:turns "t" :exited])) "its exit is recorded")
+          (is (nil? (d/stuck-run s)) "and the stuck reading derives from it: no run is stuck")
+          (is (not= :stuck (:kind (d/activity s))))
+          (is (= :turn-not-running (refusal s {:command :record-outcome :turn "t" :run 1 :outcome :completed}))))
+        (testing "its exit recorded before the stuck report refuses the report, so no mark outlives the process"
+          (let [[s] (run [ready unit-t hold {:command :record-outcome :turn "t" :run 1 :outcome :cancelled}])]
+            (is (= :turn-not-running (refusal s (assoc stuck :reason :takeover))))
+            (is (not= :stuck (:kind (d/activity s))))))))))
+
 (deftest a-granted-landing-is-the-conductors-to-direct
   (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                   {:command :give-grant :grant :merge :by "person"}])]
@@ -531,6 +593,19 @@
                        stop])]
         (is (= {:kind :asking :failed? true} (d/activity s2)))
         (is (= [false true] (map d/machine-ask? (sort-by :id (d/awaiting-person s2)))))))))
+
+(deftest an-ask-carries-its-failure-and-a-stuck-run-independently
+  ;; :failed? and :stuck are separate facts about an :asking reading; either may be set alone or
+  ;; with the other, and a reader of :asking accepts both.
+  (let [[s] (run [{:command :open-unit :unit "x" :project "p" :goal "g" :session-cwd "/w"}
+                  {:command :start-turn :turn "tx" :unit "x" :spec spec}
+                  {:command :record-stuck :turn "tx" :run 1 :reason :settled}
+                  {:command :raise-conductor-stop :ask "stop" :content ready}])]
+    (is (= {:kind :asking :failed? true :failure-only? true :stuck {:turn "tx" :unit "x"}}
+           (d/activity s)))
+    (let [[s2] (d/step s {:command :record-outcome :turn "tx" :run 1 :outcome :completed})]
+      (is (= {:kind :asking :failed? true :failure-only? true} (d/activity s2))
+          "the run's exit clears :stuck and leaves the failure"))))
 
 ;; ── runs ─────────────────────────────────────────────────────────────────────
 

@@ -427,6 +427,15 @@ The core starts every turn and watches its process, so a turn whose agent exits 
 core records and hands to the workstream's conductor, which decides what follows. A turn that was
 running when the core stopped is taken back when it starts again.
 
+A turn that has given its final answer ends even when its agent does not exit. `claude -p` stays
+alive while a background task it started still runs (a `tail -F` watcher left over after the
+report), so the Claude executor's Stop hook asks the model, once per such task, to stop it or say
+it is waiting for it. The core ends any run that has read as at rest at a final answer, held by no
+task the agent said it waits for, for two minutes — whatever is still written to its output —
+killing it and what it started, and records the outcome its output carries. A run that exits on
+its own is not cleaned up after: what outlives it was detached on purpose (a session's services). A run the core ended whose process still will not exit reads **stuck**
+(⚠ on the dashboard), never "agent working"; its outcome is recorded once the process goes.
+
 ### Failed starts recover themselves
 
 Every session start that throws — `session:up`, the TUI or dashboard, a reply re-hydrating a parked session, a Run's spawn — is kept under `~/.nido/failures/` with its error chain, its service logs and on whose behalf it ran. `bb nido:recovery:failures` shows them.

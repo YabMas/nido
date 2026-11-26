@@ -23,6 +23,13 @@
   (Operation executor
     "The Claude Code executor, for the turn port."
     {:signature [:=> [:catn [:opts :map]] :map]})
+  (Operation settled?
+    "Whether a run's output is at rest at a final answer, held by no background task it waits for."
+    {:signature [:=> [:catn [:run-dir :string]] :boolean]})
+  (Operation stop-decision
+    "The Stop hook's answer: block once per background task still running to ask whether it is
+     awaited or left over, and record as awaited one the model ended again over."
+    {:signature [:=> [:catn [:run-dir :string] [:event :map]] [:maybe :map]]})
   (Operation hook-decision
     "The PreToolUse hook's answer: allow the resolved call with its resolution; deny any other whose
      question breaks the form, the reason the instructions core-domain's ask-problems gives; defer

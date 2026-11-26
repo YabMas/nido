@@ -674,3 +674,19 @@
             #(is (thrown-with-msg? clojure.lang.ExceptionInfo #"other" (work/refresh-list! :brian))
                  "anything else still throws")))
         (finally (work/release!))))))
+
+(deftest a-closed-workstream-whose-run-is-stuck-stays-on-the-board
+  (with-ws
+    (fn [c ws-id]
+      (fake-core/seed! c :brian ws-id
+                       [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}
+                        {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}
+                        {:command :record-stuck :turn "t" :run 1 :reason :settled}])
+      (swap! (:states c) update (wcore/ws-key :brian ws-id) assoc :closed? true)
+      (let [row (first (work/list-workstreams :brian))]
+        (is (= :in-progress (:stage row)) "in a band the board draws, not :done")
+        (is (get-in row [:status :stuck]))
+        (is (= [ws-id] (map :ws-id (get (work/grouped :brian) :in-progress)))))
+      (testing "and once its exit is recorded it settles"
+        (fake-core/seed! c :brian ws-id [{:command :record-outcome :turn "t" :run 1 :outcome :completed}])
+        (is (= :done (:stage (first (work/list-workstreams :brian)))))))))

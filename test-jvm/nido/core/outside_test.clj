@@ -135,6 +135,107 @@
                (select-keys (turn-of s "ws" "t") [:status :ended-by]))
             "and what it reports afterwards is discarded")))))
 
+(deftest a-run-the-runner-ended-is-recorded-by-why-even-when-the-reason-cannot-be-kept
+  (with-core [{:keys [s cmd! root]} {}]
+    (let [rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)]
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
+      ;; The run's directory cannot take the kept reason: the reason decided in memory is the one.
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u"
+                  :spec (spec (str "mkdir " rdir "/ended-by; echo '{:outcome :completed}'; sleep 30")
+                              :deadline-ms 500)})
+      (is (await-until #(= :cancelled (:status (turn-of s "ws" "t"))) 10000))
+      (is (= {:reason :deadline} (:detail (turn-of s "ws" "t")))))))
+
+(def settling-fake
+  "`fake`, reading a run as settled once the last line of its output is an outcome."
+  (assoc fake :settled? (fn [rdir] (some? ((:outcome fake) rdir)))))
+
+(defn- alive? [pid] (boolean (some-> (ProcessHandle/of pid) (.orElse nil) .isAlive)))
+
+(deftest a-run-ended-before-it-can-be-reached-is-ended-once-it-can
+  (with-core [{:keys [s cmd! root]} {:kill-grace-ms 5000}]
+    (let [rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)
+          real (io/file (temp-dir) "real")]
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
+      ;; Its pid is out of reach for a second, as before the wrapper publishes it.
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u"
+                  :spec (spec (str "echo $$ > " real "; mv " rdir "/pid " rdir "/pid.away; sleep 1; "
+                                   "mv " rdir "/pid.away " rdir "/pid; sleep 300"))})
+      (is (await-until #(and (.exists real) (.exists (io/file rdir "pid.away"))) 10000))
+      (cmd! "ws" {:command :hold-unit :unit "u"})
+      (let [pid (parse-long (str/trim (slurp real)))]
+        (is (await-until #(not (alive? pid)) 4000) "the end reaches it once its process can be reached")
+        (Thread/sleep 300)
+        (is (nil? (:stuck (turn-of s "ws" "t"))) "and it is never reported stuck")))))
+
+(deftest a-run-that-gave-its-final-answer-ends-whatever-it-left-running
+  (with-core [{:keys [s cmd! root]} {:executors {:fake settling-fake} :settle-ms 200 :check-ms 50}]
+    (let [child-f (io/file (temp-dir) "child")]
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
+      ;; The agent answers, and a watcher it started holds it open: it waits on the watcher.
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u"
+                  :spec (spec (str "sleep 300 & echo $! > " child-f "; "
+                                   "echo '{:outcome :completed :detail {:summary \"done\"}}'; wait"))})
+      (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000)
+          "the core ends the run and records the outcome its output carries")
+      (is (= {:summary "done"} (:detail (turn-of s "ws" "t"))))
+      (is (= {:kind :deciding} (d/activity (store/state s "ws")))
+          "and the conductor is owed the turn's end")
+      (let [child (parse-long (str/trim (slurp child-f)))]
+        (is (await-until #(not (alive? child)) 5000) "the watcher it left is ended with it")))))
+
+(def answer-fake
+  "`fake` whose outcome is the last line of output that is an EDN map, whatever follows it, and
+   which reads a run as settled once it has one: an agent whose answer stands while something it
+   left keeps writing to its output."
+  (let [outcome (fn [rdir]
+                  (let [f (io/file rdir "out")]
+                    (when (.exists f)
+                      (last (filter map? (map #(try (edn/read-string %) (catch Exception _ nil))
+                                              (str/split-lines (slurp f))))))))]
+    (assoc fake :outcome outcome :settled? (comp some? outcome))))
+
+(deftest a-run-ends-at-its-final-answer-while-what-it-left-keeps-writing
+  (with-core [{:keys [s cmd!]} {:executors {:fake answer-fake} :settle-ms 300 :check-ms 50}]
+    (let [child-f (io/file (temp-dir) "child")]
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
+      ;; The watcher holds the run's stdout and writes to it every 50 ms, so the output never rests.
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u"
+                  :spec (spec (str "(while :; do echo tick; sleep 0.05; done) & echo $! > " child-f "; "
+                                   "echo '{:outcome :completed :detail {:summary \"done\"}}'; wait"))})
+      (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 5000)
+          "the window runs from the answer, not from the output's last change")
+      (is (= {:summary "done"} (:detail (turn-of s "ws" "t"))))
+      (let [child (parse-long (str/trim (slurp child-f)))]
+        (is (await-until #(not (alive? child)) 5000) "and the writer it left is ended with it")))))
+
+(deftest a-run-still-working-is-not-ended
+  (with-core [{:keys [s cmd!]} {:executors {:fake settling-fake} :settle-ms 200 :check-ms 50}]
+    (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
+    (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "echo working; sleep 1; echo '{:outcome :completed}'")})
+    (Thread/sleep 600)
+    (is (= :running (:status (turn-of s "ws" "t"))) "output that is no final answer is not settled")
+    (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))))
+
+(deftest a-run-that-cannot-be-ended-reads-stuck
+  (with-core [{:keys [s cmd! root]} {:kill-grace-ms 200}]
+    (let [rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)
+          real (io/file (temp-dir) "real")]
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
+      ;; The run's handle names a process that is not it, so ending it reaches nothing.
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u"
+                  :spec (spec (str "echo $$ > " real "; echo 2147483646 > " rdir "/pid; sleep 300")
+                              :deadline-ms 300)})
+      (is (await-until #(:stuck (turn-of s "ws" "t")) 10000))
+      (is (= {:run 1 :reason :deadline} (:stuck (turn-of s "ws" "t"))))
+      (is (= :running (:status (turn-of s "ws" "t"))))
+      (is (= :stuck (:kind (d/activity (store/state s "ws")))) "it reads stuck, not working")
+      (testing "and once it does end, its outcome is recorded as usual"
+        (.destroyForcibly (.get (ProcessHandle/of (parse-long (str/trim (slurp real))))))
+        (is (await-until #(= :cancelled (:status (turn-of s "ws" "t"))) 10000))
+        (is (= {:reason :deadline} (:detail (turn-of s "ws" "t"))))
+        (is (not= :stuck (:kind (d/activity (store/state s "ws")))))))))
+
 (deftest a-starting-daemon-takes-back-what-the-last-one-left
   (let [dir (temp-dir) root (str dir "/turns") db (str dir "/core.db")
         s (store/open db)
@@ -271,6 +372,59 @@
         (is (= parent run) "in the core's cgroup")
         (is (not (.exists (io/file rdir "pid-refusals"))) "and its wrapper became the run, as before")))))
 
+(deftest a-run-the-runner-ended-keeps-why-across-a-restart
+  (let [dir (temp-dir) root (str dir "/turns") db (str dir "/core.db")
+        s (store/open db)
+        w (writer/start s {})
+        n (atom 0)
+        cmd! (fn [c] (deref (writer/submit! w {:key (str "k" (swap! n inc)) :ws "ws" :command c}) 10000 nil))
+        dead (turn/start {:root root :executors {:fake fake} :submit (fn [_] nil)})
+        rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)]
+    (try
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! c))
+      (cmd! {:command :start-turn :turn "t" :unit "u"
+             :spec (spec "echo '{:outcome :completed :detail {:summary \"done\"}}'; sleep 30" :deadline-ms 1500)})
+      (turn/changed! dead [{:ws "ws" :state (store/state s "ws")}])
+      (Thread/sleep 500)
+      (turn/stop! dead)
+      ;; The dead daemon had ended it as settled; its deadline passes while no daemon holds it.
+      (spit (io/file rdir "ended-by") "settled")
+      (Thread/sleep 1200)
+      (let [live (turn/start {:root root :executors {:fake fake} :submit #(writer/submit! w %)})]
+        (try
+          (turn/take-back! live "ws" (store/state s "ws"))
+          (is (await-until #(= :completed (get-in (store/state s "ws") [:turns "t" :status])) 10000)
+              "ended again as settled, not relabelled by its deadline: the outcome is its output's")
+          (finally (turn/stop! live))))
+      (finally (writer/stop! w) (store/close s)))))
+
+(deftest one-runs-unreadable-state-does-not-stop-recovery
+  (let [dir (temp-dir) root (str dir "/turns") db (str dir "/core.db")
+        s (store/open db)
+        w (writer/start s {})
+        n (atom 0)
+        cmd! (fn [c] (deref (writer/submit! w {:key (str "k" (swap! n inc)) :ws "ws" :command c}) 10000 nil))
+        dead (turn/start {:root root :executors {:fake fake} :submit (fn [_] nil)})
+        st #(get-in (store/state s "ws") [:turns % :status])]
+    (try
+      (doseq [u ["a" "b"]
+              c (sessions/ready {:command :open-unit :unit u :project "p" :goal "g"} "/tmp")]
+        (cmd! c))
+      (cmd! {:command :start-turn :turn "damaged" :unit "a" :spec (spec "sleep 1; echo '{:outcome :completed}'")})
+      (cmd! {:command :start-turn :turn "sound" :unit "b" :spec (spec "sleep 1; echo '{:outcome :completed}'")})
+      (turn/changed! dead [{:ws "ws" :state (store/state s "ws")}])
+      (Thread/sleep 500)
+      (turn/stop! dead)
+      ;; Its kept reason cannot be read: a directory where the file belongs.
+      (.mkdirs (io/file (turn/run-dir (turn/turn-dir root "ws" "damaged") 1) "ended-by"))
+      (let [live (turn/start {:root root :executors {:fake fake} :submit #(writer/submit! w %)})]
+        (try
+          (turn/take-back! live "ws" (store/state s "ws"))
+          (is (await-until #(= :completed (st "sound")) 5000) "every other run is taken back")
+          (is (await-until #(= :completed (st "damaged")) 5000) "and the damaged one is still watched")
+          (finally (turn/stop! live))))
+      (finally (writer/stop! w) (store/close s)))))
+
 ;; ── the Claude adapter ───────────────────────────────────────────────────────
 
 (defn- write-out! [rdir & events]
@@ -374,6 +528,65 @@
     (testing "the resolved call is allowed as before, whatever its form"
       (spit (io/file rdir "resolution.edn") (pr-str {:call "toolu_1" :text "yes"}))
       (is (= "allow" (:permissionDecision (decide {:question "Go?"})))))))
+
+(deftest the-stop-hook-asks-once-about-each-background-task
+  (let [rdir (temp-dir)
+        tail {:id "b1" :type "shell" :status "running" :description "follow the log" :command "tail -F /tmp/x.log"}
+        loop {:id "b2" :type "shell" :status "running" :description "the review loop" :command "bb nido:review:loop"}]
+    (is (nil? (claude/stop-decision rdir {:background_tasks []})) "nothing running: the response ends")
+    (let [d (claude/stop-decision rdir {:background_tasks [tail]})]
+      (is (= "block" (:decision d)) "a task still running at the end of a response is asked about")
+      (is (str/includes? (:reason d) "tail -F /tmp/x.log"))
+      (is (str/includes? (:reason d) "TaskStop"))
+      (is (str/includes? (:reason d) "final answer again, in full")
+          "the run's outcome is its last response, so the answer must be the response it ends on"))
+    (testing "ended again over it: it is awaited, and not asked about again"
+      (is (nil? (claude/stop-decision rdir {:stop_hook_active true :background_tasks [tail]})))
+      (is (nil? (claude/stop-decision rdir {:background_tasks [tail]}))))
+    (testing "a task started since is asked about, and only it: an awaited task is not presented again"
+      (let [d (claude/stop-decision rdir {:background_tasks [tail loop]})]
+        (is (= "block" (:decision d)))
+        (is (str/includes? (:reason d) "bb nido:review:loop"))
+        (is (not (str/includes? (:reason d) "tail -F /tmp/x.log")))))
+    (testing "a task asked about is awaited when the model ends again over it, also when a new task is asked about then"
+      (let [rdir (temp-dir)]
+        (claude/stop-decision rdir {:background_tasks [tail]})
+        (is (= "block" (:decision (claude/stop-decision rdir {:stop_hook_active true :background_tasks [tail loop]}))))
+        (is (= ["b1"] (edn/read-string (slurp (io/file rdir "awaited.edn")))))))
+    (testing "and a task that was stopped is never awaited"
+      (let [rdir (temp-dir)]
+        (claude/stop-decision rdir {:background_tasks [tail]})
+        (is (nil? (claude/stop-decision rdir {:stop_hook_active true :background_tasks []})))
+        (is (not (.exists (io/file rdir "awaited.edn"))))))))
+
+(deftest a-claude-run-is-settled-at-a-final-answer-held-by-nothing-it-awaits
+  (let [rdir (str (temp-dir) "/run-1")
+        bg (fn [& ids] {:type "system" :subtype "background_tasks_changed" :tasks (mapv #(hash-map :task_id %) ids)})
+        result {:type "result" :subtype "success" :stop_reason "end_turn" :result "done"}]
+    (write-out! rdir {:type "system" :subtype "init"} {:type "assistant"})
+    (is (not (claude/settled? rdir)) "mid-response")
+    (write-out! rdir {:type "system" :subtype "init"} (bg "b1") result)
+    (is (claude/settled? rdir) "answered, with a watcher it never said it waits for")
+    (write-out! rdir {:type "system" :subtype "init"} (bg "b1") result {:type "system" :subtype "init"} {:type "assistant"})
+    (is (not (claude/settled? rdir)) "woken again: working")
+    (write-out! rdir (bg "b1") result {:type "system" :subtype "task_updated"} {:type "rate_limit_event"})
+    (is (claude/settled? rdir) "bookkeeping after the answer is not work")
+    (spit (io/file rdir "awaited.edn") (pr-str ["b1"]))
+    (is (not (claude/settled? rdir)) "waiting on what it said it waits for")
+    (write-out! rdir (bg "b1" "b2") result)
+    (is (not (claude/settled? rdir)) "held by what it awaits, whatever else runs beside it")
+    (write-out! rdir (bg "b2") result)
+    (is (claude/settled? rdir) "but not by one it never said so of")
+    (write-out! rdir (bg) result)
+    (is (claude/settled? rdir) "nothing running: answered")
+    (testing "every run hooks Stop and pins claude's own wait ceiling"
+      (let [{:keys [launch]} (claude/executor {:src "/src" :bb-bin "bb"})
+            tdir (temp-dir)
+            l (launch {:turn-dir tdir :run-dir (str tdir "/run-1") :run 1 :spec {:instructions "x"}})
+            settings (json/read-str (get (:files l) (str tdir "/run-1/settings.json")) :key-fn keyword)]
+        (is (= "600000" (get-in l [:env "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"])))
+        (is (str/ends-with? (get-in settings [:hooks :Stop 0 :hooks 0 :command])
+                            (str "-m nido.executor.claude stop " tdir "/run-1")))))))
 
 (deftest the-ask-tool-refuses-without-an-answer
   (is (= ["ask"] (map :name (get-in (ask-tool/respond {:id 1 :method "tools/list"}) [:result :tools]))))

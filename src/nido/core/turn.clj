@@ -1,7 +1,7 @@
 (ns nido.core.turn
   "The Turn: one bounded stretch of agent work, and the executor port it runs through.
 
-   An executor is a map of three functions, and nothing above this namespace names a provider:
+   An executor is a map of these functions, and nothing above this namespace names a provider:
      :launch    (fn [run] -> {:argv [...] :env {...} :files {abs-path content}})
                 what to start for `run`; `run` is {:turn-dir :run-dir :run :spec :resolution
                 :resolved-call}, and a run past the first resumes the turn with :resolution
@@ -9,6 +9,8 @@
                 the one outcome a finished run's output carries, or nil when it carries none
      :attach    (fn [turn-dir] -> argv)
                 what a person runs to enter the turn's session
+     :settled?  optional (fn [run-dir] -> bool)
+                whether the run's output is at rest at a final answer, with nothing it waits for
    An outcome is {:outcome :completed|:asked|:failed|:cancelled ...}; an asked one carries
    :call {:id ...}. `outcome` is where executor output is parsed: anything that is not one of
    the four is :failed.
@@ -45,7 +47,21 @@
    rather than counting them.
 
    Every run has a deadline (the spec's :deadline-ms, else the runner's default). A run past it is
-   cancelled and recorded :cancelled {:reason :deadline}."
+   cancelled and recorded :cancelled {:reason :deadline}.
+
+   A run that has given its final answer is ended, whatever it left running: an agent can hold its
+   process open after it is done (a background watcher it never stopped). Every :check-ms the runner
+   asks the executor's :settled? of each run whose output changed since it last asked, and ends one
+   that has read settled for :settle-ms, whatever is still written to its output meanwhile. Its
+   outcome is the one its output carries, as for any run that ends. A run that exits on its own is
+   not cleaned up after: what outlives it was detached from it, and may be meant to (a session's
+   services, started from a turn).
+
+   Ending a run — at its deadline, by a cancel, or settled — kills it and everything it started,
+   trying again while its process cannot be reached yet.
+   A run still alive :kill-grace-ms after that is reported stuck, as a :record-stuck command, so
+   that what cannot be ended reads as stuck and not as working; its outcome is still recorded when
+   it does end."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [nido.core.domain :as d])
@@ -122,6 +138,27 @@
    daemon taking the run back counts from its launch, not from when it started watching."
   [rdir]
   (io/file rdir "pid-refusals-before"))
+(defn- ended-by-file [rdir] (io/file rdir "ended-by"))
+
+(declare report!)
+
+(defn- read-kept
+  "What run file `f` keeps, read by `parse` from its trimmed text, or nil when it keeps nothing or
+   cannot be read: an unreadable file is one run's state unknown, never a failure of whatever
+   reads it, so recovery and outcomes go on for that run and every other."
+  [^File f parse]
+  (when (.exists f)
+    (try (some-> (slurp f) str/trim not-empty parse)
+         (catch Throwable t (report! (str "reading " f) t) nil))))
+
+(defn- ended-by
+  "Why the runner ended run `k` ([ws turn run]) in `rdir` (`end-run!`), or nil when it did not end
+   it: the reason it decided, held in `live` the moment it decides, else the one kept in the run's
+   directory, which survives the daemon."
+  [{:keys [live]} k rdir]
+  (or (get-in @live [k :ended-by])
+      (let [f (ended-by-file rdir)]
+        (read-kept f keyword))))
 
 (defn- lock-free?
   "Whether no process holds the run's lock: true once the run has ended."
@@ -139,15 +176,17 @@
     (.release (.lock ch 0 1 false))))
 
 (defn- run-pid [rdir]
-  (some-> (let [f (pid-file rdir)] (when (.exists f) (slurp f))) str/trim parse-long))
+  (read-kept (pid-file rdir) parse-long))
 
 (defn- kill-run!
   "End the run in `rdir` and everything it started. Answers whether there was a process to end."
   [rdir]
   (if-let [ph (some-> (run-pid rdir) ProcessHandle/of (.orElse nil))]
-    (do (doseq [c (iterator-seq (.iterator (.descendants ^ProcessHandle ph)))] (.destroyForcibly ^ProcessHandle c))
-        (.destroyForcibly ^ProcessHandle ph)
-        true)
+    ;; The tree is read first and its root ended first, so no descendant is started past the kill.
+    (let [ds (vec (iterator-seq (.iterator (.descendants ^ProcessHandle ph))))]
+      (.destroyForcibly ^ProcessHandle ph)
+      (doseq [^ProcessHandle c ds] (.destroyForcibly c))
+      true)
     false))
 
 ;; ── resource exhaustion ──────────────────────────────────────────────────────
@@ -322,6 +361,12 @@
 
 (defn- outcome-key [ws turn run] (str "outcome/" ws "/" turn "/" run))
 
+(defn- submit-stuck!
+  "Report that run [ws turn run], which the runner ended because of `why`, is still alive."
+  [{:keys [submit]} ws turn run why]
+  (submit {:key (str "stuck/" ws "/" turn "/" run) :ws ws
+           :command {:command :record-stuck :turn turn :run run :reason why}}))
+
 (defn- submit-outcome!
   [{:keys [submit]} ws turn run outcome]
   (submit {:key (outcome-key ws turn run) :ws ws
@@ -356,34 +401,77 @@
                (stderr-tail rdir) (assoc :stderr (stderr-tail rdir)))
      :actions-unknown? true}))
 
+(defn- ended-outcome
+  "The outcome of run `k` in `rdir`, which has ended, by why the runner ended it (`ended-by`): a
+   deadline cancels it, and otherwise it is its output's, read as :resource-exhausted when it
+   failed and the host refused it (`classify-exhaustion`) — `refused` forks while it ran, or its
+   err saying so — whether it exited on its own or the runner ended it."
+  [runner executor k rdir refused]
+  (case (ended-by runner k rdir)
+    :deadline {:outcome :cancelled :detail {:reason :deadline}}
+    (classify-exhaustion (finished-outcome executor rdir) (run-err rdir) refused
+                         (System/currentTimeMillis))))
+
 (defn- on-end!
   "The run [ws turn run] has ended: stop its deadline, and report its outcome."
   [{:keys [live refusals] :as runner} executor ws turn run rdir]
-  (let [{:keys [deadline cancelled]} (get @live [ws turn run])
-        before (or (run-refusals-before rdir) (get-in @live [[ws turn run] :refusals-before]))]
+  (let [{:keys [deadline]} (get @live [ws turn run])
+        before (or (run-refusals-before rdir) (get-in @live [[ws turn run] :refusals-before]))
+        ;; Read while the run is still live, so a reason decided in memory is seen.
+        outcome (ended-outcome runner executor [ws turn run] rdir
+                               (refused-count (run-refusals rdir) before (refusals)))]
     (some-> deadline (.cancel false))
     (swap! live dissoc [ws turn run])
-    (submit-outcome! runner ws turn run
-                     (case cancelled
-                       :deadline {:outcome :cancelled :detail {:reason :deadline}}
-                       (classify-exhaustion (finished-outcome executor rdir) (run-err rdir)
-                                            (refused-count (run-refusals rdir) before (refusals))
-                                            (System/currentTimeMillis))))))
+    (submit-outcome! runner ws turn run outcome)))
+
+(defn- kill-until-delivered!
+  "Kill live run `k` in `rdir` and everything it started. While no process can be reached — its
+   pid not yet published — try again every :kill-retry-ms for as long as the run is live, so an
+   end decided before the run could be reached still reaches it."
+  [{:keys [live ^ScheduledExecutorService timer kill-retry-ms] :as runner} k rdir]
+  (when (and (contains? @live k) (not (kill-run! rdir)))
+    (.schedule timer ^Runnable (fn [] (try (kill-until-delivered! runner k rdir)
+                                           (catch Throwable t (report! (str "ending " k) t))))
+               (long kill-retry-ms) TimeUnit/MILLISECONDS)))
+
+(defn- end-run!
+  "End the live run [ws turn run] because of `why` (:deadline, :settled, or the reason the store
+   cancelled it): kill it and everything it started, and report it stuck if it is still alive
+   :kill-grace-ms later. Its outcome is reported when its process ends (`on-end!`). Ending a run
+   already being ended does nothing."
+  [{:keys [live ^ScheduledExecutorService timer kill-grace-ms] :as runner} ws turn run why]
+  (let [k [ws turn run]
+        [old _] (swap-vals! live #(if (and (contains? % k) (not (get-in % [k :ended-by])))
+                                    (assoc-in % [k :ended-by] why)
+                                    %))]
+    (when (and (contains? old k) (not (get-in old [k :ended-by])))
+      ;; Kept before the kill, so its exit reads it; a failure to keep it never spares the run.
+      (try (spit (ended-by-file (get-in old [k :rdir])) (name why))
+           (catch Throwable t (report! (str "keeping why " k " ended") t)))
+      (kill-until-delivered! runner k (get-in old [k :rdir]))
+      (.schedule timer ^Runnable (fn []
+                                   (when (contains? @live k)
+                                     (submit-stuck! runner ws turn run why)))
+                 (long kill-grace-ms) TimeUnit/MILLISECONDS))))
 
 (defn- watch!
   "Watch the run [ws turn run] in `rdir` until it ends, from `process` when this daemon started it,
-   else from its lock; arm its deadline for what remains of `deadline-ms`."
+   else from its lock; arm its deadline for what remains of `deadline-ms`. A run the runner had
+   already ended (`ended-by`) is ended again for the same reason, so it is reported stuck while it
+   lives on and its outcome is the one that reason gives."
   [{:keys [live refusals ^ScheduledExecutorService timer] :as runner} executor ws turn run rdir ^Process process deadline-ms]
-  (let [launched (or (some-> (let [f (launched-file rdir)] (when (.exists f) (slurp f))) str/trim parse-long)
+  (let [launched (or (read-kept (launched-file rdir) parse-long)
                      (System/currentTimeMillis))
-        remaining (max 0 (- (+ launched deadline-ms) (System/currentTimeMillis)))
-        dl (.schedule timer ^Runnable (fn []
-                                        (swap! live assoc-in [[ws turn run] :cancelled] :deadline)
-                                        (kill-run! rdir))
-                      (long remaining) TimeUnit/MILLISECONDS)]
-    ;; Refusals are counted from the count its launch kept in its directory; this one stands in
-    ;; only for a run launched before that count was kept.
-    (swap! live assoc [ws turn run] {:deadline dl :rdir rdir :refusals-before (refusals)})
+        remaining (max 0 (- (+ launched deadline-ms) (System/currentTimeMillis)))]
+    ;; Registered before its deadline is armed: a deadline already past fires at once, and ending a
+    ;; run that is not registered does nothing. Refusals are counted from the count its launch kept
+    ;; in its directory; :refusals-before stands in only for a run launched before that count was
+    ;; kept.
+    (swap! live assoc [ws turn run] {:rdir rdir :executor executor :refusals-before (refusals)})
+    (some->> (ended-by runner [ws turn run] rdir) (end-run! runner ws turn run))
+    (let [dl (.schedule timer ^Runnable (fn [] (end-run! runner ws turn run :deadline))
+                        (long remaining) TimeUnit/MILLISECONDS)]
+      (swap! live assoc-in [[ws turn run] :deadline] dl))
     (doto (Thread. ^Runnable (fn []
                                (try (if process (.waitFor process) (await-lock-free! rdir))
                                     (on-end! runner executor ws turn run rdir)
@@ -454,8 +542,28 @@
       (launch! runner ws t (some? (:run state)))
 
       (and (= :cancelled (:status t)) (:ended-by t) (contains? @live [ws (:id t) (:run t)]))
-      (do (swap! live assoc-in [[ws (:id t) (:run t)] :cancelled] (:ended-by t))
-          (kill-run! rdir)))))
+      (end-run! runner ws (:id t) (:run t) (:ended-by t)))))
+
+(defn- settle!
+  "End every live run that has given its final answer: its executor has read it settled at every
+   check for :settle-ms. The window runs from the first settled reading, not from the output's last
+   change, so a child still writing to the run's output after the answer cannot hold it open.
+   Output is read again only once it changes."
+  [{:keys [live settle-ms] :as runner}]
+  (let [now (System/currentTimeMillis)]
+    (doseq [[[ws turn run :as k] {:keys [rdir executor ended-by read-at settled-since]}] @live
+            :let [settled? (:settled? executor)
+                  out (io/file rdir "out")
+                  modified (.lastModified out)]
+            :when (and settled? (not ended-by) (.exists out))]
+      (let [since (if (= read-at modified)
+                    settled-since
+                    (when (try (settled? rdir) (catch Throwable t (report! (str "settling " rdir) t) false))
+                      (or settled-since now)))]
+        (if (and since (<= settle-ms (- now since)))
+          (end-run! runner ws turn run :settled)
+          (swap! live #(cond-> % (contains? % k)
+                         (update k assoc :read-at modified :settled-since since))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} start
   "Start a runner. Options:
@@ -469,10 +577,19 @@
      :scope                {:systemd-run path :tasks-max n} to start each run in a transient scope
                            of its own under that cap, or nil to start runs in the core's cgroup;
                            absent, `probe-scope` with `run-tasks-max` on Linux, nil elsewhere
+     :settle-ms            how long a run reads settled before it is ended
+                           (default 2 minutes)
+     :check-ms             how often runs are checked for that (default 15 seconds)
+     :kill-grace-ms        how long a run the runner ended may live on before it is reported
+                           stuck (default 30 seconds)
+     :kill-retry-ms        how often a run being ended is tried again while no process of it can
+                           be reached yet (default 200 ms)
    Feed it committed changes with `changed!`; take back what a previous daemon left with
    `take-back!`."
-  [{:keys [root executors submit default-deadline-ms refusals] :as opts
-    :or {default-deadline-ms (* 2 60 60 1000) refusals cgroup-pid-refusals}}]
+  [{:keys [root executors submit default-deadline-ms refusals settle-ms check-ms kill-grace-ms kill-retry-ms]
+    :as opts
+    :or {default-deadline-ms (* 2 60 60 1000) refusals cgroup-pid-refusals
+         settle-ms (* 2 60 1000) check-ms 15000 kill-grace-ms 30000 kill-retry-ms 200}}]
   (let [runner {:root root :executors executors :submit submit
                 :default-deadline-ms default-deadline-ms
                 :refusals refusals
@@ -484,6 +601,7 @@
                                                           (str "each run starts in a scope of its own, TasksMax=" (:tasks-max sc))
                                                           "no user systemd scope; runs start in the core's cgroup")))
                            sc))
+                :settle-ms settle-ms :kill-grace-ms kill-grace-ms :kill-retry-ms kill-retry-ms
                 :live (atom {})
                 :queue (LinkedBlockingQueue.)
                 :timer (doto (ScheduledThreadPoolExecutor.
@@ -500,6 +618,10 @@
                                            (recur)))))
                          "nido-turn-runner")
             (.setDaemon true) (.start))]
+    (.scheduleWithFixedDelay ^ScheduledExecutorService (:timer runner)
+                             ^Runnable (fn [] (try (settle! runner)
+                                                   (catch Throwable e (report! "settling" e))))
+                             (long check-ms) (long check-ms) TimeUnit/MILLISECONDS)
     (assoc runner :thread t)))
 
 (defn ^{:malli/schema [:=> [:cat :map [:sequential :map]] :nil]} changed!
@@ -510,31 +632,42 @@
   nil)
 
 (defn ^{:malli/schema [:=> [:cat :map :string :map] :nil]} take-back!
-  "Take back every turn workstream `ws`'s committed `state` records running, as a starting daemon
-   does: watch a run that still runs, report one that ended while no daemon held it, and report a
-   run that never started as failed. Starts nothing."
+  "Take back every turn of workstream `ws`'s committed `state` whose run the core awaits
+   (`d/run-awaited?`), as a starting daemon does: watch a run that still runs, report one that
+   ended while no daemon held it, and report a run that never started as failed. A run of a turn
+   the store cancelled that still runs is watched and ended again. Starts nothing."
   [{:keys [root default-deadline-ms] :as runner} ws state]
   (doseq [t (vals (:turns state))
-          :when (= :running (:status t))
+          :when (d/run-awaited? t)
           :let [{turn :id run :run} t
                 rdir (run-dir (turn-dir root ws turn) run)
                 executor (executor-of runner t)]]
-    (cond
-      (or (nil? executor) (not (.exists (launched-file rdir))))
-      ;; The directory is claimed first, so no change converged before this outcome commits can
-      ;; start the run after all.
-      (do (.mkdirs (io/file rdir))
-          (submit-outcome! runner ws turn run {:outcome :failed :detail {:reason :never-started}}))
+    ;; Each run on its own: what one run's directory keeps going wrong is that run's, and every
+    ;; other is still taken back.
+    (try
+     (cond
+       (= :cancelled (:status t))
+       (when (and executor (.exists (launched-file rdir)))
+         (if (lock-free? rdir)
+           ;; Its exit is recorded, which clears a stuck report.
+           (submit-outcome! runner ws turn run (ended-outcome runner executor [ws turn run] rdir (run-refusals rdir)))
+           (do (watch! runner executor ws turn run rdir nil (or (get-in t [:spec :deadline-ms]) default-deadline-ms))
+               (end-run! runner ws turn run (:ended-by t)))))
 
-      ;; Ended while no daemon held it: nothing counted the core's cgroups at its end, so only its
-      ;; err and its own scope's count can say the host refused it.
-      (lock-free? rdir)
-      (submit-outcome! runner ws turn run (classify-exhaustion (finished-outcome executor rdir) (run-err rdir)
-                                                               (run-refusals rdir)
-                                                               (System/currentTimeMillis)))
+       (or (nil? executor) (not (.exists (launched-file rdir))))
+       ;; The directory is claimed first, so no change converged before this outcome commits can
+       ;; start the run after all.
+       (do (.mkdirs (io/file rdir))
+           (submit-outcome! runner ws turn run {:outcome :failed :detail {:reason :never-started}}))
 
-      :else
-      (watch! runner executor ws turn run rdir nil (or (get-in t [:spec :deadline-ms]) default-deadline-ms))))
+       ;; Ended while no daemon held it: nothing counted the core's cgroups at its end, so only its
+       ;; err and its own scope's count can say the host refused it.
+       (lock-free? rdir)
+       (submit-outcome! runner ws turn run (ended-outcome runner executor [ws turn run] rdir (run-refusals rdir)))
+
+       :else
+       (watch! runner executor ws turn run rdir nil (or (get-in t [:spec :deadline-ms]) default-deadline-ms)))
+     (catch Throwable e (report! (str "taking back " ws " " turn " run " run) e))))
   nil)
 
 (defn ^{:malli/schema [:=> [:cat :map :string :map] [:maybe [:sequential :string]]]} attach-argv

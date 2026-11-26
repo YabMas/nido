@@ -198,12 +198,14 @@
    {:name "state-mark"
     :note "Whether anything is happening right now, as one mark and no words. What runs and who
            owes the next move are the mark's title — hover to read them."
-    :scenes [{:title "needs you, running, paused, stalled, quiet"
-              :note "The five a board row can be in. Needing the person outranks the rest, since
-                     it is what a board is scanned for. Paused is a person's decision and stalled
+    :scenes [{:title "needs you, running, paused, stalled, stuck, quiet"
+              :note "The six a board row can be in, and stuck beside needs you. Needing the person
+                     outranks the rest, since it is what a board is scanned for; a run that will
+                     not end is marked beside it, because answering ends no process. Paused is a
+                     person's decision and stalled
                      is a fault, so they must not read alike — and quiet must render nothing at
                      all: a row where nothing is happening is the common case, and a mark on
-                     every row would drown the four that mean something."
+                     every row would drown the five that mean something."
               :render #(rail first
                              [["needs you" {:owed-by :person :needs-you true} nil]
                               ["live" {:owed-by :agent :live true} {:source :claim :kind :diff-review
@@ -211,6 +213,8 @@
                                                                                :findings 3}}]
                               ["paused" {:owed-by :agent :paused true} nil]
                               ["stalled" {:owed-by :agent :stalled true} nil]
+                              ["stuck" {:owed-by :agent :stuck true} nil]
+                              ["stuck, needs you" {:owed-by :person :needs-you true :needs :ask :stuck true} nil]
                               ["quiet" {:owed-by :person} nil]]
                              (fn [[_ st doing]]
                                (or (state/state-mark st doing)
