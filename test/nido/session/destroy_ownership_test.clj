@@ -133,3 +133,16 @@
         (is (empty? @removed) "nothing was forgotten or removed")
         (is (empty? @touched))
         (is (fs/directory? (fs/path proj ".jj" "repo")))))))
+
+(deftest a-destroy-judges-the-path-it-removes-not-a-lexical-reading-of-it
+  (with-layout
+    (fn [{:keys [root wts] :as l}]
+      (testing "a symlink before `..`: /wt/link/../s is beside link's target, not /wt/s"
+        (let [outside (fs/path root "outside")
+              victim  (fs/path outside "s")]
+          (fs/create-dirs (fs/path outside "subdir"))
+          (fs/create-dirs victim)
+          (spit (str (fs/path victim "f")) "x")
+          (fs/create-sym-link (fs/path wts "link") (fs/path outside "subdir"))
+          (is (refused-and-kept? l (destroy-through-verb! "s" (str wts "/link/../s")) victim))
+          (is (fs/exists? (fs/path victim "f"))))))))
