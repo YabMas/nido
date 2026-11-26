@@ -250,12 +250,19 @@
   (is (= [] (turn/scope-argv nil "/r" "t" 1)))
   (is (= 8000 turn/run-tasks-max))
   (with-core [{:keys [s cmd! root]} {:scope nil}]
-    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
-    (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "cut -d: -f3 /proc/self/cgroup 2>/dev/null; echo '{:outcome :completed}'")})
-    (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))
-    (let [rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)]
-      (is (not (str/includes? (slurp (io/file rdir "out")) "nido-run-")) "in the core's cgroup")
-      (is (not (.exists (io/file rdir "pid-refusals"))) "and its wrapper became the run, as before"))))
+    ;; The core here is this JVM, so its run belongs in the cgroup this JVM is in — which is a
+    ;; `nido-run-` scope when the suite itself runs as a scoped turn. procfs answers
+    ;; `available()` with EINVAL, so the file is read through NIO rather than slurped.
+    (let [cg (java.nio.file.Paths/get "/proc/self/cgroup" (make-array String 0))
+          parent (when (java.nio.file.Files/exists cg (make-array java.nio.file.LinkOption 0))
+                   (-> (java.nio.file.Files/readAllLines cg) first (str/split #":" 3) (get 2)))]
+      (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "cut -d: -f3 /proc/self/cgroup 2>/dev/null; echo '{:outcome :completed}'")})
+      (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))
+      (let [rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)
+            run (when parent (first (str/split-lines (slurp (io/file rdir "out")))))]
+        (is (= parent run) "in the core's cgroup")
+        (is (not (.exists (io/file rdir "pid-refusals"))) "and its wrapper became the run, as before")))))
 
 ;; ── the Claude adapter ───────────────────────────────────────────────────────
 
