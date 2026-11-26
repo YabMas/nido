@@ -12,7 +12,9 @@
    `:profile` names the session profile to bring the session up with (default :full).
 
    Its last line of output is an EDN map: {:cwd <worktree>} for up, {:stopped true},
-   {:destroyed true}, {:ok true} for :check — or {:error <message>} with exit 1."
+   {:destroyed true}, {:ok true} for :check — or {:error <message>} with exit 1, carrying
+   `:refused :not-owned` and the `:path` kept when session-lifecycle refused to remove a directory
+   that is not the session's own."
   (:require [nido.platform.task-args :as task-args]
             [nido.session.lifecycle :as lifecycle]))
 
@@ -42,4 +44,6 @@
           "destroyed" (do (lifecycle/destroy! session lopts) (result! {:destroyed true} 0))
           (result! {:error (str "unknown :want " (:want opts))} 1)))
       (catch Throwable t
-        (result! {:error (or (ex-message t) (str t))} 1)))))
+        (result! (cond-> {:error (or (ex-message t) (str t))}
+                   (= :not-owned (:reason (ex-data t))) (assoc :refused :not-owned :path (:path (ex-data t))))
+                 1)))))
