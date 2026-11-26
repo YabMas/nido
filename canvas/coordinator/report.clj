@@ -205,4 +205,12 @@
   (Operation report->markdown
     "Render a `:format`-tagged payload to markdown: each event type to its own headed section,
      `:markdown` to its body, anything unknown to the empty string."
-    {:signature [:=> [:catn [:report [:maybe LedgerEvent]]] :string]}))
+    {:signature [:=> [:catn [:report [:maybe LedgerEvent]]] :string]})
+  (Operation walk-passed?
+    "Whether every result of a QA walk is :pass; :fail and :blocked are both not passed."
+    {:signature [:=> [:catn [:walk [:maybe :map]]] :boolean]})
+  (Operation qa-brief
+    "The landing QA brief rendered from the plan the QA reading stands on: the plan's sections in
+     qa-brief.md's shape for :passed, the one-line brief from its reason for :not-applicable, nil
+     otherwise."
+    {:signature [:=> [:catn [:qa [:maybe :map]]] [:maybe :string]]}))

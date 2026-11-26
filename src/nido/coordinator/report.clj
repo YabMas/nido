@@ -4138,6 +4138,82 @@
    [:fn {:error/message "a layer's index is at most the number of layers the cut planned"}
     (fn [{:keys [layer of]}] (<= layer of))]])
 
+(def build-kinds
+  "Every kind that records the change being built: a finished layer, and the whole implementation.
+   The one statement of which records are a build — the review's pass is withdrawn by a newer one,
+   and a QA walk observes only the build it follows — read through `standing`, never restated."
+  #{:implementation-completed :layer-completed})
+
+;; ── QA: the plan a reviewer is handed, and the walk that exercised it ─────────────────────
+
+(def QaStep
+  "One step of a QA plan: one action a reviewer takes, and what they should see. :id is the
+   plan's own name for the step, which a walk's result cites."
+  [:map {:closed true}
+   [:id       [:string {:min 1}]]
+   [:action   [:string {:min 1}]]
+   [:expected [:string {:min 1}]]])
+
+(def QaPlan
+  "What a reviewer of the change is to do and see, in `docs/reference/qa-brief.md`'s sections, as
+   the change's author records it — before or after the build, owed once its implementation review
+   passes. :design cites the design it plans; the QA reading reads only the plans citing the
+   governing design, newest first.
+
+   :surface :product is a change a user sees, and carries its steps; :none is a change nothing a
+   user sees moves, and carries the :reason that becomes the brief's one line. Step ids are unique
+   within a plan, because a walk's result names its step by id."
+  [:and
+   [:map {:closed true}
+    [:format           [:= :qa-plan]]
+    [:design           [:map {:closed true} [:seq int?]]]
+    [:surface          [:enum :product :none]]
+    [:reason           {:optional true} [:string {:min 1}]]
+    [:what-changed     {:optional true} [:string {:min 1}]]
+    [:before-you-start {:optional true} [:string {:min 1}]]
+    [:steps            {:optional true} [:vector QaStep]]
+    [:also-check       {:optional true} [:vector [:string {:min 1}]]]
+    [:not-in-change    {:optional true} [:vector [:string {:min 1}]]]]
+   [:fn {:error/message "a :product plan carries at least one step"}
+    (fn [{:keys [surface steps]}] (or (not= :product surface) (seq steps)))]
+   [:fn {:error/message "a :none plan carries the :reason nothing a user sees changes"}
+    (fn [{:keys [surface reason]}] (or (not= :none surface) (some? reason)))]
+   [:fn {:error/message "step ids are unique within a plan"}
+    (fn [{:keys [steps]}] (= (count steps) (count (distinct (map :id steps)))))]])
+
+(def qa-outcomes
+  "What a walk records of a step: :pass, or a failing outcome — :fail, or :blocked for a step the
+   walk could not carry out. Everything reading a walk counts every outcome but :pass as not
+   passed."
+  #{:pass :fail :blocked})
+
+(def QaResult
+  "One step of a walk: the step it carried out, by the plan's id, what happened, and the
+   screenshots it took — each named by the digest `bb nido:workstream:screenshot:add` printed."
+  [:map {:closed true}
+   [:step        [:string {:min 1}]]
+   [:outcome     (into [:enum] (sort qa-outcomes))]
+   [:screenshots [:vector {:min 1} [:re #"^[0-9a-f]{64}$"]]]
+   [:note        {:optional true} [:string {:min 1}]]])
+
+(def QaWalk
+  "A walk of a :product plan through agent-browser against the session's running app: exactly
+   one result for every step of the plan it cites, each with at least one screenshot. Whether the
+   plan it cites is a :product plan and the results cover it is checked at the append, against the
+   plan; whether every screenshot's bytes are kept is the writing verb's to check."
+  [:map {:closed true}
+   [:format  [:= :qa-walk]]
+   [:plan    [:map {:closed true} [:seq int?]]]
+   [:app     {:optional true} [:string {:min 1}]]
+   [:results [:vector {:min 1} QaResult]]
+   [:note    {:optional true} [:string {:min 1}]]])
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  walk-passed?
+  "Whether every result of the walk `walk` is :pass."
+  [walk]
+  (boolean (and (seq (:results walk)) (every? #(= :pass (:outcome %)) (:results walk)))))
+
 ;; ── Generations: a design's generation-defining elements, and the talk that moves them ──
 ;;
 ;; A generation is a span of one workstream's ledger within which the ids its designs mark
@@ -4524,6 +4600,8 @@
    :resumed                  Resumed
    :notion-status            NotionStatus
    :layer-completed          LayerCompleted
+   :qa-plan                  QaPlan
+   :qa-walk                  QaWalk
    :issue                    Issue
    :generation               Generation
    :recut                    Recut
@@ -6168,6 +6246,67 @@
                 [""]))
       [(str "Source: " source-url)])))
 
+(defn- qa-plan-sections
+  "A :product plan's sections, in `docs/reference/qa-brief.md`'s order and headings, as
+   [heading lines] pairs — a section the plan does not carry is left out. Steps are numbered, each
+   one action then what should happen."
+  [{:keys [what-changed before-you-start steps also-check not-in-change]}]
+  (cond-> []
+    what-changed     (conj ["What changed" [what-changed]])
+    before-you-start (conj ["Before you start" [before-you-start]])
+    (seq steps)      (conj ["Steps" (map-indexed (fn [i {:keys [action expected]}]
+                                                   (str (inc i) ". " action " Expected: " expected))
+                                                 steps)])
+    (seq also-check) (conj ["Also check" (map #(str "- " %) also-check)])
+    (seq not-in-change) (conj ["Not in this change" (map #(str "- " %) not-in-change)])))
+
+(defn- qa-plan->markdown
+  [{:keys [surface reason steps design] :as plan}]
+  (str/join "\n"
+    (concat
+      [(str "# QA plan — " (if (= :product surface) "a change a user sees" "nothing a user sees changes"))
+       ""
+       (str "Plans design " (:seq design) ".")
+       ""]
+      (if (= :none surface)
+        [(str "Nothing a user sees changes: " reason)]
+        (concat
+          (mapcat (fn [[h ls]] (concat [(str "## " h)] ls [""])) (qa-plan-sections plan))
+          ["## Step ids"]
+          (map #(str "- `" (:id %) "` — " (:action %)) steps))))))
+
+(defn- qa-walk->markdown
+  [{:keys [plan app results note]}]
+  (str/join "\n"
+    (concat
+      [(str "# QA walk of plan " (:seq plan) " — "
+            (if (walk-passed? {:results results}) "every step passed"
+                (str (count (remove #(= :pass (:outcome %)) results)) " of " (count results)
+                     " steps not passed")))
+       ""]
+      (when app [(str "Walked against " app) ""])
+      (for [{:keys [step outcome screenshots note]} results]
+        (str "- `" step "` " (name outcome) " — " (str/join ", " (map #(subs % 0 12) screenshots))
+             (when note (str " — " note))))
+      (when note ["" note]))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
+  qa-brief
+  "The landing QA brief: a rendering of the plan the QA reading `reading` stands on, `plan` that
+   record — its sections in `docs/reference/qa-brief.md`'s shape while the reading is :passed, the
+   one-line 'nothing a user sees changes' brief from its :reason while it is :not-applicable — or
+   nil, when the reading is anything else and no brief may be written. /land writes this, or no
+   brief at all; it composes none of its own."
+  [{:keys [reading plan]}]
+  (case (:state reading)
+    :passed         (when (= :product (:surface plan))
+                      (str/join "\n"
+                        (concat ["QA instructions" ""]
+                                (mapcat (fn [[h ls]] (concat [h] ls [""])) (qa-plan-sections plan)))))
+    :not-applicable (when (= :none (:surface plan))
+                      (str "QA instructions\n\nNothing a user sees changes: " (:reason plan)))
+    nil))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :LedgerEvent]] :string]}
   report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own
@@ -6215,6 +6354,8 @@
     :resumed                  "# Resumed by a person"
     :notion-status            (notion-status->markdown report)
     :layer-completed          (layer-completed->markdown report)
+    :qa-plan                  (qa-plan->markdown report)
+    :qa-walk                  (qa-walk->markdown report)
     :generation               (generation->markdown report)
     :recut                    (recut->markdown report)
     :tension                  (tension->markdown report)
@@ -6281,7 +6422,17 @@
     :notion-status            (str "Notion status: " (:status report))
     :layer-completed          (str "Layer " (:layer report) "/" (:of report)
                                    (some->> (:seat report) (str " of "))  " done")
-    :generation               (str "Generation opened: " (first-line (:words report)))
+    :qa-plan                  (if (= :none (:surface report))
+                                (str "QA plan: nothing a user sees — " (first-line (:reason report)))
+                                (str "QA plan: " (count (:steps report)) " step"
+                                     (when (not= 1 (count (:steps report))) "s")
+                                     (some->> (:what-changed report) first-line (str " — "))))
+    :qa-walk                  (str "QA walk of plan " (get-in report [:plan :seq]) ": "
+                                   (if (walk-passed? report)
+                                     "passed"
+                                     (str (count (remove #(= :pass (:outcome %)) (:results report)))
+                                          " step(s) not passed")))
+    :generation             (str "Generation opened: " (first-line (:words report)))
     :recut                    (str "Re-cut proposed: " (first-line (:why report)))
     :tension                  (str "Tension to " (addressee->text (:to report)) ": "
                                    (first-line (:statement report)))

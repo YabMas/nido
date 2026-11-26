@@ -21,7 +21,12 @@
    [nido.coordinator.work.core :as wcore]
    [nido.coordinator.lane.landing :as landing]
    [babashka.fs :as fs]
-   [tasks.nido-attach :as attach]))
+   [nido.core.images :as images]
+   [nido.platform.core :as platform]
+   [tasks.nido-attach :as attach])
+  (:import (java.nio.file Files)
+           (java.security MessageDigest)
+           (java.util Base64)))
 
 (defn- resolve-ws-id
   "Workstream id from opts: explicit :ws-id, or :ref resolved via find-by-ref
@@ -64,6 +69,52 @@
     (owed-lines (keyword (:project opts)) (resolve-ws-id opts) (:seq (ex-data e)))
     []))
 
+(defn- qa-screenshot-root
+  "Where a QA walk's screenshots are kept, by digest: the nido home's `qa/screenshots/`, outside
+   the ledger, so a walk names its evidence and stays the size of its words."
+  []
+  (str (platform/nido-home) "/qa/screenshots"))
+
+(def ^:private screenshot-mimes
+  {"png" "image/png" "jpg" "image/jpeg" "jpeg" "image/jpeg" "webp" "image/webp" "gif" "image/gif"})
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  screenshot-add*
+  "Keep the screenshot file :file under the QA screenshot root through core-images' put!, and
+   answer the digest a :qa-walk result names it by. Throws when the file is missing, is not an
+   image by its extension, or its bytes were not kept."
+  [{:keys [file]}]
+  (let [f (some-> file str fs/file)]
+    (when-not (and f (fs/regular-file? f))
+      (throw (ex-info (str "No screenshot file at " (pr-str file) " — pass :file <path>") {:file file})))
+    (let [ext  (some-> (fs/extension f) str/lower-case)
+          mime (or (get screenshot-mimes ext)
+                   (throw (ex-info (str "Not a screenshot by its extension: " (pr-str ext)
+                                        " — one of " (str/join ", " (sort (keys screenshot-mimes))))
+                                   {:file file})))
+          bs   (Files/readAllBytes (.toPath ^java.io.File f))
+          d    (apply str (map #(format "%02x" %) (.digest (MessageDigest/getInstance "SHA-256") bs)))
+          kept (images/put! (qa-screenshot-root)
+                            {:mime mime :digest d :data (.encodeToString (Base64/getEncoder) bs)})]
+      (if (and (string? kept) (images/fetch (qa-screenshot-root) kept))
+        kept
+        (throw (ex-info (str "The screenshot was not kept: " (pr-str kept)) {:file file :kept kept}))))))
+
+(defn- check-walk-screenshots!
+  "Refuse a :qa-walk naming a screenshot digest the QA screenshot root keeps no bytes for — before
+   anything is appended. The ledger cannot ask: the bytes are kept outside it."
+  [kind body]
+  (when (= :qa-walk kind)
+    (let [r       (try (edn/read-string body) (catch Exception _ nil))
+          missing (->> (:results r) (mapcat :screenshots) distinct
+                       (remove #(and (string? %) (images/fetch (qa-screenshot-root) %))))]
+      (when (seq missing)
+        (throw (ex-info (str "The QA walk names screenshots nothing is kept for under "
+                             (qa-screenshot-root) ": " (str/join ", " missing)
+                             " — keep each with `bb nido:workstream:screenshot:add :file <path>`"
+                             " and name the digest it prints")
+                        {:missing (vec missing)}))))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   entry-add*
   "Append one entry. The body comes from :file when given, else :content — the
@@ -76,8 +127,10 @@
   [{:keys [project kind content file] :as opts}]
   (let [p     (keyword project)
         ws-id (resolve-ws-id opts)
-        n     (ws/append-entry! p ws-id {:kind (keyword (or kind "note"))}
-                                (if file (slurp (str file)) (or content "")))]
+        k     (keyword (or kind "note"))
+        body  (if file (slurp (str file)) (or content ""))
+        _     (check-walk-screenshots! k body)
+        n     (ws/append-entry! p ws-id {:kind k} body)]
     (when (= :intent (keyword kind))
       (run! println (owed-lines p ws-id n)))
     n))
@@ -201,6 +254,18 @@
           (println "append rejected:" (ex-message e))
           (when-let [ex (:explain (ex-data e))] (println (pr-str ex)))
           (run! println (refusal-lines opts e)))
+        (System/exit 1)))))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  screenshot-add
+  "bb nido:workstream:screenshot:add :file <path>
+   Keep a QA walk's screenshot under the nido home's QA screenshot root and print the digest a
+   :qa-walk result names it by. Exits non-zero, saying why, when nothing was kept."
+  [& args]
+  (let [[_ opts] (task-args/split-args args #{:file})]
+    (try
+      (println (screenshot-add* opts))
+      (catch Exception e
+        (binding [*out* *err*] (println "screenshot not kept:" (ex-message e)))
         (System/exit 1)))))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   stage-advance [& args] (run* stage-advance* args))

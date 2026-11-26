@@ -29,6 +29,13 @@
   (Operation show*
     "The `show*` entry point."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation screenshot-add*
+    "Keep a QA walk's screenshot file under the nido home's QA screenshot root, by digest, and print
+     the digest a :qa-walk result names it by."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation screenshot-add
+    "bb nido:workstream:screenshot:add :file <path>"
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation entry-add
     "bb nido:workstream:entry:add :project <p> (:ws-id <id> | :ref BR-####)"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

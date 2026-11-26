@@ -610,6 +610,11 @@
    :doc "Close a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :outcome <done|dropped>"
    :task (apply nido-workstream/close-cmd *command-line-args*)}
 
+  nido:workstream:screenshot:add
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Keep a QA walk's screenshot: :file <path>. Keeps its bytes under the nido home's qa/screenshots/ by digest and prints the digest a :qa-walk result names it by."
+   :task (apply nido-workstream/screenshot-add *command-line-args*)}
+
   nido:workstream:ref:add
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Add an external ref to a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :adapter <kw> :id <str> [:url <str> :title <str>]"

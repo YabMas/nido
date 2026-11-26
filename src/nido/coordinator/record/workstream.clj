@@ -1716,6 +1716,40 @@
     (when-let [why (slice-unlandable project w)]
       (throw (ex-info (:message why) (-> why (dissoc :message) (assoc :ws-id (:id w))))))))
 
+(defn- check-qa-citations!
+  "A QA plan cites the :design it plans, and a QA walk the :qa-plan it walks — a :product plan,
+   with exactly one result for every step id of it. A plan with no product surface has no steps to
+   walk, and a walk missing a step, or naming one twice or one the plan lacks, did not walk the
+   plan it cites. Whether a walk's screenshots are kept is the writing verb's to check: their bytes
+   are no ledger's."
+  [w kind payload]
+  (when (#{:qa-plan :qa-walk} kind)
+    (let [r (edn/read-string payload)]
+      (case kind
+        :qa-plan (do (when-not (get-in r [:design :seq])
+                       (throw (ex-info "A QA plan cites the design it plans, as {:design {:seq N}}" {})))
+                     (cites! w r [:design :seq] #{:design} "QA plan :design"))
+        :qa-walk (let [n    (get-in r [:plan :seq])
+                       _    (cites! w r [:plan :seq] #{:qa-plan} "QA walk :plan")
+                       plan (read-entry-at w n)]
+                   (when-not plan
+                     (throw (ex-info (str "QA walk cites plan " n ", which cannot be read") {:seq n})))
+                   (when-not (= :product (:surface plan))
+                     (throw (ex-info (str "QA walk cites plan " n ", whose surface is "
+                                          (pr-str (:surface plan)) " — only a :product plan is walked")
+                                     {:seq n :surface (:surface plan)})))
+                   (let [want  (mapv :id (:steps plan))
+                         got   (mapv :step (:results r))
+                         twice (keep (fn [[s c]] (when (> c 1) s)) (frequencies got))
+                         miss  (remove (set got) want)
+                         extra (remove (set want) got)]
+                     (when (or (seq twice) (seq miss) (seq extra))
+                       (throw (ex-info (str "A QA walk gives exactly one result for every step of plan " n
+                                            (when (seq miss) (str "; missing: " (str/join ", " miss)))
+                                            (when (seq twice) (str "; given twice: " (str/join ", " twice)))
+                                            (when (seq extra) (str "; not in the plan: " (str/join ", " extra))))
+                                       {:seq n :missing (vec miss) :twice (vec twice) :extra (vec extra)})))))))))
+
 (defn- check-append!
   "Every refusal an append makes of `payload` joining `w`, in the order `append-entry!` asks them.
    Shared by the two writes that give an entry its index row — a new entry, and one an interrupted
@@ -1725,6 +1759,7 @@
   (refuse-design-between-phases! w kind)
   (check-baseline-citation! w kind payload)
   (check-standing-citations! w kind payload)
+  (check-qa-citations! w kind payload)
   (check-fork-citation! project w kind payload)
   (check-merge-citation! project w kind payload)
   (check-intent-says-its-goal! w kind payload)
