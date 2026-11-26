@@ -350,3 +350,33 @@
   (let [m (nido.ui.components.state/arc-mark :off nil)]
     (is (= :span.arc-off (first m)))
     (is (= "QA" (nido.ui.components.state/arc-name :qa)))))
+
+;; ── the brief ──────────────────────────────────────────────────────────────
+
+(deftest the-brief-is-the-plan-rendered-or-nothing
+  (let [pl (assoc (product-plan 4) :also-check ["The class list still loads."]
+                  :not-in-change ["Exports."])]
+    (testing ":passed renders the plan's sections and steps in qa-brief.md's shape"
+      (let [b (report/qa-brief {:reading {:state :passed} :plan pl})]
+        (is (str/starts-with? b "QA instructions"))
+        (doseq [h ["What changed" "Before you start" "Steps" "Also check" "Not in this change"]]
+          (is (str/includes? b h)))
+        (is (str/includes? b "1. Do open. Expected: open happens."))
+        (is (str/includes? b "2. Do check. Expected: check happens."))))
+    (testing ":not-applicable is the one line from the plan's reason"
+      (is (= "QA instructions\n\nNothing a user sees changes: a background job only"
+             (report/qa-brief {:reading {:state :not-applicable} :plan (none-plan 4)}))))
+    (testing "owed, failed, or off: no brief"
+      (doseq [st [:owed :failed :off]]
+        (is (nil? (report/qa-brief {:reading {:state st} :plan pl})))))))
+
+(deftest show-prints-the-landing-brief-or-says-there-is-none
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d   (designed! add!)
+            out #(with-out-str (tw/show* {:project "brian" :ws-id id}))]
+        (with-redefs [project/qa (constantly :browser)]
+          (is (str/includes? (out) "none — QA reads owed, and no QA plan cites the governing design"))
+          (add! :qa-plan (none-plan d))
+          (is (str/includes? (out) "── landing QA brief ──\nQA instructions\n\nNothing a user sees changes")))))))

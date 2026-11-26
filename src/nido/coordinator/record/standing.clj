@@ -748,14 +748,7 @@
   [w]
   (last (filter #(contains? report/build-kinds (:kind %)) (:entries w))))
 
-(def ^:private qa-states
-  "What a workstream's QA reads, exactly one at a time."
-  [:enum :off :not-applicable :owed :failed :passed])
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:maybe :map] :any]
-                        [:map [:state qa-states] [:plan {:optional true} :int]
-                         [:surface {:optional true} [:enum :product :none]]
-                         [:walks [:vector :int]]]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:maybe :map] :any] :map]}
   qa*
   "The QA reading of workstream `ws-id`, given its current span `w`, its governing design `design`
    (stamped, or nil) and whether its project declares :qa — `declared?`, which the caller reads

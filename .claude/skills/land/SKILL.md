@@ -1,6 +1,6 @@
 ---
 name: land
-description: Land the current session's stack — mark every layer ready for review, answer the PR checks that readiness triggers and any review thread a human left (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR, write a product-terms QA brief onto the brian Notion ticket it closes and clean the page around it, and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
+description: Land the current session's stack — mark every layer ready for review, answer the PR checks that readiness triggers and any review thread a human left (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR, write the QA brief rendered from the recorded, walked QA plan onto the brian Notion ticket it closes (or none) and clean the page around it, and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
 ---
 
 # /land
@@ -445,11 +445,28 @@ notion page markdown "$PAGE"
 notion comment list "$PAGE" --all
 ```
 
-**Write it to `docs/reference/qa-brief.md`** — the reader, the sections, and
-how it goes into Notion are defined there, shared with `/review-queue`. Here its
-sources are the collapsed PR's layer briefs (Claims, Verify, Out of scope), the
-ticket and its comments, and the design record (`bb nido:workstream:show`);
-"Before you start" names staging. Build the callout JSON and send it:
+**The brief is the recorded QA plan, rendered — never one you compose.** Print it:
+
+```bash
+bb --config ~/Code/nido/bb.edn nido:workstream:show   # from the worktree; or :project brian :ws-id <id>
+```
+
+Its `qa:` line is the workstream's QA reading, and the section under
+`── landing QA brief ──` is the brief: the plan's sections in
+`docs/reference/qa-brief.md`'s shape when the walk of it passed, or the one-line
+"nothing a user sees changes" brief from its reason when the plan says nothing a
+user sees moves. **When that section reads `none — …`** — QA owed, failed, or
+off with no plan recorded — **write no brief**: report it in §7 as
+`skipped — no walked QA plan`, naming the verbs that record one (`nido:workstream:entry:add
+:kind :qa-plan`, then a `:qa-walk`). Do not fill the gap from the layer briefs,
+the ticket or the design: an unrecorded, unwalked brief is exactly what this
+step no longer writes.
+
+Turn the rendering into Notion blocks without changing its words — each section
+heading a heading, each numbered step a `numbered_list_item`, each `- ` line a
+`bulleted_list_item`, each other line a paragraph — inside the callout.
+`docs/reference/qa-brief.md` defines how it goes into Notion, shared with
+`/review-queue`. Build the callout JSON and send it:
 
 ```bash
 notion api PATCH /v1/blocks/"$PAGE"/children --body - <<'JSON'
@@ -698,7 +715,7 @@ Unresolved
 Checks
 - <check name> — <fixed how | still red>
 
-QA brief: <written to BR-#### | skipped — <not brian | no Closes claim> | failed — <did not land on top | what Notion answered>>
+QA brief: <written to BR-#### | skipped — <not brian | no Closes claim | no walked QA plan> | failed — <did not land on top | what Notion answered>>
 Follow-up: <written — <n> actions | none owed | skipped with the brief | failed — <why>>
 Cleanup: <done | skipped with the brief | partial — <what failed>>
   deleted:  <each line of stale text, quoted; leftovers by kind and count>

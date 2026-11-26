@@ -218,7 +218,14 @@
           (when plan
             (println)
             (println (str "── QA plan (entry " (:plan qa) ") ──"))
-            (println (report/report->markdown plan))))
+            (println (report/report->markdown plan)))
+          ;; The landing brief, rendered from that plan — what /land writes, or nothing.
+          (println)
+          (println "── landing QA brief ──")
+          (println (or (report/qa-brief {:reading qa :plan plan})
+                       (str "none — QA reads " (name (:state qa))
+                            (when-not plan ", and no QA plan cites the governing design")
+                            "; /land writes no brief"))))
         (when-let [idx (:entries w)]
           (println "ledger:")
           (doseq [{:keys [seq kind title]} idx]

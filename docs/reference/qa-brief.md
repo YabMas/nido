@@ -34,7 +34,11 @@ the brief says in its own words.
     Not in this change  what a reviewer might expect but will not find — so it
                       is not filed as a bug.
 
-Draw it from the change's own record: the PR's layer briefs (Claims, Verify,
+At landing, `/land` writes no brief of its own: it renders the workstream's
+recorded QA plan — the `:qa-plan` the QA walk exercised — which `bb
+nido:workstream:show` prints under `── landing QA brief ──`, or writes none.
+The plan's author writes the plan to this page. When grooming, `/review-queue`
+draws from the change's own record: the PR's layer briefs (Claims, Verify,
 Out of scope), the ticket and its comments, the design record — then translate
 every item into what a user does and sees. A check with no user-visible form (a
 migration, a log line, a query count) is dropped, not translated into jargon. If
