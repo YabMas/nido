@@ -316,7 +316,7 @@
       (is (nil? (dev/current-app-state "brian/ws-notion-ok")))
       (finally (dev/clear-app-state! "brian/ws-notion-ok")))))
 
-(deftest needs-spans-every-project-whatever-the-focus
+(deftest needs-lists-only-the-focused-project
   (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:ws-id "a" :project "brian" :origin :notion :stage :triage
                                              :label "BR-1" :report nil :actions [] :session nil}
                                             {:ws-id "b" :project "foo" :origin :notion :stage :triage
@@ -327,7 +327,7 @@
                 project/list-projects (fn [] {"brian" {:directory "/x"} "foo" {:directory "/y"}})]
     (let [resp (server/handle-request {:request-method :get :uri "/" :query-string "scope=brian"})]
       (is (str/includes? (:body resp) "BR-1"))
-      (is (str/includes? (:body resp) "FOO-1")))))
+      (is (not (str/includes? (:body resp) "FOO-1")) "another project's gate is not listed"))))
 
 (deftest a-page-remembers-its-focus
   (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [] :unavailable {}})
@@ -643,8 +643,8 @@
         (is @halted)
         (is (str/includes? (:body resp) "ops-panel"))))))
 
-(deftest ops-fragment-badge-counts-every-project
-  ;; Needs you spans every project, so the badge ignores the focus.
+(deftest ops-fragment-badge-counts-the-focused-project
+  ;; The top bar's counts are the focused project's.
   (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:project "brian" :ws-id "w1"}
                                             {:project "brian" :ws-id "w2"}
                                             {:project "fukan" :ws-id "w3"}] :unavailable {}})
@@ -656,8 +656,12 @@
     (let [scoped   (server/handle-request {:request-method :get :uri "/_fragment/ops"
                                            :query-string "scope=brian"})
           unscoped (server/handle-request {:request-method :get :uri "/_fragment/ops"})]
-      (is (str/includes? (:body scoped) ">3<") "a focus does not narrow the badge")
-      (is (str/includes? (:body unscoped) ">3<") "unscoped badge counts all 3 gates"))))
+      (is (str/includes? (:body scoped) "id=\"rail-needs-count\">2<") "brian's two gates")
+      (is (str/includes? (:body (server/handle-request {:request-method :get :uri "/_fragment/ops"
+                                                        :query-string "scope=fukan"}))
+                         "id=\"rail-needs-count\">1<")
+          "fukan's one")
+      (is (str/includes? (:body unscoped) "rail-needs-count") "with no focus named, the first project's"))))
 
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]

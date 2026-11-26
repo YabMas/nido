@@ -1456,17 +1456,15 @@
   (is (not (session/work-session? {:name "c" :conductor true})))
   (is (not (session/work-session? {:name "ch" :chat true}))))
 
-(deftest screen-needs-count-equals-gate-count
+(deftest screen-keeps-every-gate-at-scope-all
   (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "brian"}]
         s (work/screen {:surface :needs :scope "all" :source :notion :facets {}}
                        {:groups [] :gates gates :pending #{}})]
-    (is (= 2 (:needs-count s)))
     (is (= 2 (count (:gates s))))))
 
-(deftest screen-needs-count-spans-every-project
+(deftest screen-keeps-the-scopes-gates
   (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "nido"}]
         s (work/screen {:scope "nido"} {:groups [] :gates gates :pending #{}})]
-    (is (= 2 (:needs-count s)) "the badge counts every project's gates")
     (is (= ["b"] (map :ws-id (:gates s))) "the scoped view keeps its own")))
 
 (deftest screen-marks-pending-gates-working

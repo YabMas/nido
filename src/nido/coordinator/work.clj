@@ -4337,10 +4337,7 @@
      :gates       kept-gates
      ;; The projects whose gates could not be read (`read-gates`), so Needs you says so rather
      ;; than reading as nothing waiting.
-     :unavailable (or unavailable {})
-     ;; Every project's, not the scope's: Needs you spans all projects whatever
-     ;; a view is focused on, and this is the count its badge shows.
-     :needs-count (count gates)}))
+     :unavailable (or unavailable {})}))
 
 ;; ── the acts a surface performs on the work plane ────────────────────────────
 ;;

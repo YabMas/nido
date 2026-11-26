@@ -23,20 +23,38 @@
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
 
-(defn- rail-needs-badge
-  "The Needs-you count. `unread` names the projects whose gates could not be read: while any is
-   left the count is marked as not fully read — never the zero style — so an unread project never
-   shows as nothing needing you."
-  [n unread]
-  (if (seq unread)
-    [:span {:id "rail-needs-count" :class "rail-badge unread"
-            :title (str "not fully read: " (str/join ", " (sort (keys unread))))}
-     (str (or n 0) "?")]
-    [:span {:id "rail-needs-count" :class (str "rail-badge" (when (zero? (or n 0)) " zero"))} n]))
+(defn- tally-items
+  "The items of kind `kind` the tally holds for `project`."
+  [tally project kind]
+  (get-in tally [:by-project project kind] []))
 
-(def ^:private needs-icon
-  "Needs you: something waits on the person — an ask, a landing or a system error."
-  "✋")
+(defn- gate-kind? [kind] (not= :chat kind))
+
+(defn- unread-reason
+  "Why `project`'s gates could not be read, or nil when they were: what a gate kind's count of it
+   is marked by."
+  [tally project]
+  (get-in tally [:unavailable project]))
+
+(defn- kinds-count
+  "How many items of `kinds` the tally holds for `project`."
+  [tally project kinds]
+  (reduce + 0 (map #(count (tally-items tally project %)) kinds)))
+
+(defn- count-badge
+  "A count in the top bar's badge style, under `id`. `unread` — why its project's gates could not
+   be read, when they could not — marks it as not fully read rather than the zero style, so an
+   unread project never shows as nothing needing you."
+  [id n unread]
+  (if unread
+    [:span {:id id :class "rail-badge unread" :title (str "not fully read: " unread)} (str n "?")]
+    [:span {:id id :class (str "rail-badge" (when (zero? n) " zero"))} n]))
+
+(defn- rail-needs-badge
+  "The Needs-you count: every kind's items the tally holds for the focused project."
+  [{:keys [tally scope]}]
+  (count-badge "rail-needs-count" (kinds-count tally scope state/needs-kinds)
+               (unread-reason tally scope)))
 
 (defn- rail-health [{:keys [state]}]
   (let [s (name (or state :down))]
@@ -85,15 +103,15 @@
   "What spans every project: the project switcher, Needs you — every category the person is
    needed in, a landing among them — as an icon and its count, and the menu holding nido's own
    pages."
-  [{:keys [active needs-count needs-unread] :as ctx}]
+  [{:keys [active] :as ctx}]
   [:header.topbar
    [:a.topbar-brand {:href "/" :title "nido"}
     [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 44 :height 44}]]
    (project-switcher ctx)
    [:div.topbar-gap]
    [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/#needs-you"
-        :title "Needs you — asks, landings and system errors waiting on you" :aria-label "Needs you"}
-    [:span.topbar-icon needs-icon] (rail-needs-badge needs-count needs-unread)]
+        :title "Needs you" :aria-label "Needs you"}
+    [:span.topbar-icon (state/kind-mark :ask "Needs you")] (rail-needs-badge ctx)]
    [:details.gear {"data-on:click__outside" "el.open = false"}
     [:summary {:title "menu" :aria-label "menu"} "⚙"]
     [:div.menu
@@ -140,8 +158,8 @@
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   rail-status-fragment
   "The live top-bar elements, for SSE patching alongside a surface fragment."
-  [{:keys [needs-count needs-unread daemon]}]
-  (str (h/html (rail-needs-badge needs-count needs-unread))
+  [{:keys [daemon] :as ctx}]
+  (str (h/html (rail-needs-badge ctx))
        (h/html (rail-health daemon))))
 
 (defn ^{:malli/schema [:=> [:cat :any :keyword] :string]}
@@ -280,12 +298,13 @@
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   shell
   "Page chrome: top bar, sidebar, content area. `ctx` carries
-   {:active :title :needs-count :needs-unread :daemon :scope :projects}, where :scope is the
-   focused project — always one project, never \"all\" — and :bleed?, true for a page
+   {:active :title :tally :kind :daemon :scope :projects}, where :scope is the
+   focused project — always one project, never \"all\" — :tally what needs the person, by
+   project and kind, as the server counted it for the request, and :bleed?, true for a page
    that fills the content area edge to edge and scrolls within itself, and :side-chat, the chat's
    side panel (hiccup) when the page carries one — the grid gives it a column; `content` is hiccup.
-   The Needs-you badge counts every project's gates, so the ops poll that
-   patches it carries no scope."
+   The top bar's counts are the focused project's, so the ops poll that patches them carries its
+   scope."
   [{:keys [title bleed? side-chat] :as ctx} & content]
   (str
    (h/html
@@ -303,7 +322,7 @@
       (into [:main {:class (str "content" (when bleed? " bleed"))}] content)
       side-chat
       [:div.ops-wrap {:data-show "$opsOpen"
-                      :data-on-interval__duration.5s "$opsOpen && @get('/_fragment/ops')"}
+                      :data-on-interval__duration.5s (str "$opsOpen && @get('/_fragment/ops?scope=" (:scope ctx) "')")}
        [:div {:id "ops-panel"} [:p.meta "…"]]]]])))
 
 (defn ^{:malli/schema [:=> [:cat :map :keyword] :any]}
@@ -442,10 +461,11 @@
    place scope and selection are serialized — so a row link, a poll refresh, and
    a deep link all carry the identical view-state. Scope \"all\" is omitted,
    keeping /workstreams clean."
-  [{:keys [scope]} & [overrides]]
+  [{:keys [scope kind]} & [overrides]]
   (let [sel   (:sel overrides)
         pairs (cond-> []
                 (and scope (not= "all" scope)) (conj (str "scope=" scope))
+                kind (conj (str "kind=" (name kind)))
                 sel (conj (str "sel=" sel)))]
     (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
 
@@ -559,41 +579,70 @@
              [:li [:code turn] " " (name outcome) " — " why
               (when stderr [:pre.error-stderr stderr])])))])
 
+(defn- needs-item
+  "One item of a kind's section: a gate as its needs-you row, an unread chat as the row of the
+   workstream its chat is pinned to (the screen's `:chat-rows`, else the workstream named by its
+   id). Either opens that workstream's pane beside the list (/?sel=), where the gate is answered
+   or the chat is read in the side panel, and the open one is marked."
+  [{:keys [selection chats-unseen chat-rows] :as screen} kind item]
+  (let [project (str (:project item))
+        ws-id   (str (:ws-id item))
+        sel     (str project ":" ws-id)
+        open?   (and (= project (str (:project selection))) (= ws-id (str (:ws-id selection))))
+        href    (str "/" (screen-query screen {:sel sel}))]
+    (if (gate-kind? kind)
+      (list
+       (block/render row/gate-row sel
+                     {:gate  (assoc item :selected? open?)
+                      :href  href
+                      :chat? (contains? chats-unseen {:project project :ws-id ws-id})}
+                     {} no-router)
+       ;; A drain its slices raised escalations through: their questions are answered on
+       ;; the drains page, which lists them beside the drain's own.
+       (when (seq (:raised-by item))
+         [:a.gate-tag {:href (str "/drains?scope=" project)}
+          (str (count (:raised-by item)) " slice question" (when (< 1 (count (:raised-by item))) "s")
+               " on the drains page →")]))
+      (block/render row/board-row sel
+                    {:project   project
+                     :row       (or (get chat-rows ws-id) {:ws-id ws-id :label ws-id})
+                     :href      href
+                     :selected? open?
+                     :chat?     true}
+                    {} no-router))))
+
+(defn- needs-section
+  "One kind's section of the home list: headed by its mark, its words and the focused project's
+   count of it, then its items. A gate kind of a project whose gates could not be read names the
+   project as not loaded rather than reading as empty."
+  [{:keys [tally scope] :as screen} kind]
+  (let [items  (tally-items tally scope kind)
+        unread (when (gate-kind? kind) (unread-reason tally scope))]
+    [:section.needs-kind {:id (str "needs-" (name kind))}
+     [:h3.inbox-head (state/kind-mark kind) " " (state/needs-kind-heading kind) " "
+      (count-badge (str "needs-" (name kind) "-count") (count items) unread)]
+     (cond
+       (or (seq items) unread)
+       (list
+        (when unread
+          [:div.gate-err {:data-unavailable scope}
+           (str "⚠ " scope ": not loaded — its gates could not be read (" unread ")")])
+        (for [item items] (needs-item screen kind item)))
+       :else [:p.empty "Nothing here."])]))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
-  "The home list — initial render + SSE refresh: Needs you, one row per gate, each in the
-   category the person is needed in — an ask, a landing, a system error. Each row opens that
-   workstream's pane beside the list (/?sel=), where its question is answered, its Land given or
-   its failure retried, and the open one is marked. A project whose gates could not be read is
-   named as not loaded, never shown as an empty list."
-  [{:keys [gates selection unavailable] :as screen}]
+  "The home list — initial render + SSE refresh: what needs the person in the focused project, one
+   section per kind — ask, landing, system error, unread chat — in that order, or the one kind
+   the request names alone. Every section and its count is read from the screen's tally. Each
+   row opens that workstream's pane beside the list (/?sel=), and the open one is marked."
+  [{:keys [kind] :as screen}]
   (str
    (h/html
     [:div {:id "needs"}
-     [:h3.inbox-head {:id "needs-you"} [:span.topbar-icon needs-icon] " Needs you"]
-     (if (or (seq gates) (seq unavailable))
-      [:div {:id "needs-gates"}
-       ;; A project whose gates could not be read is said to be so: an empty list would read as
-       ;; nothing waiting on the person there.
-       (for [[project message] (sort-by key unavailable)]
-         [:div.gate-err {:data-unavailable project}
-          (str "⚠ " project ": not loaded — its gates could not be read (" message ")")])
-       (for [g gates
-             :let [sel (str (:project g) ":" (:ws-id g))]]
-         (list
-          (block/render row/gate-row sel
-                        {:gate (assoc g :selected? (and (= (:project g) (:project selection))
-                                                        (= (:ws-id g) (:ws-id selection))))
-                         :href (str "/" (screen-query screen {:sel sel}))
-                         :chat? (contains? (:chats-unseen screen) {:project (name (:project g)) :ws-id (str (:ws-id g))})}
-                        {} no-router)
-          ;; A drain its slices raised escalations through: their questions are answered on
-          ;; the drains page, which lists them beside the drain's own.
-          (when (seq (:raised-by g))
-            [:a.gate-tag {:href (str "/drains?scope=" (:project g))}
-             (str (count (:raised-by g)) " slice question" (when (< 1 (count (:raised-by g))) "s")
-                  " on the drains page →")])))]
-      [:div {:id "needs-gates"} [:p.empty "Nothing needs you right now."]])])))
+     [:div {:id "needs-you"}
+      (for [k (if kind [kind] state/needs-kinds)]
+        (needs-section screen k))]])))
 
 (defn- gate-action-fragment
   "Shared shape for the immediate, action-keyed gate-action pane fragment:

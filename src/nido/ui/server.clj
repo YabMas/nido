@@ -91,6 +91,35 @@
     (and selection (= :workstreams surface))    (work/refresh-selected! (:project selection) (:ws-id selection))
     :else                                       (work/refresh-list!)))
 
+(defn- gate-kind
+  "The needs kind a gate is counted under: its :needs. Every gate names one of the three
+   (`work/read-gates`); one that named none would be a move the person is asked for, so it is
+   counted as an ask rather than nowhere."
+  [{:keys [needs]}]
+  (case needs (:landing :system-error) needs :ask))
+
+(defn- tally
+  "What needs the person, counted once for a request, by project and kind: every project's gates
+   (`gates`, as read-gates answered them) under their :needs, and the workstream anchors
+   side-chat's `unseen` names under :chat. `{:by-project {<project> {<kind> [<item> …]}}
+   :unavailable {<project> <why>}}` — a project whose gates could not be read stays named in
+   :unavailable rather than counted as having none. Every count, home section and drop-down mark
+   a page shows is read from this one value, so no two of them can disagree."
+  [gates unseen unavailable]
+  (let [add (fn [acc project kind item] (update-in acc [(name project) kind] (fnil conj []) item))]
+    {:by-project  (as-> {} acc
+                    (reduce (fn [acc g] (add acc (:project g) (gate-kind g) g)) acc gates)
+                    (reduce (fn [acc a] (add acc (:project a) :chat a))
+                            acc (sort-by (juxt :project :ws-id) unseen)))
+     :unavailable (or unavailable {})}))
+
+(defn- read-tally
+  "The tally of a request that reads no screen: the gates read-gates answers and side-chat's
+   unseen, now."
+  []
+  (let [{:keys [gates unavailable]} (work/read-gates)]
+    (tally gates (side-chat/unseen) unavailable)))
+
 (defn ^{:malli/schema [:=> [:cat :any [:? :map]] :Screen]}
   derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
@@ -107,17 +136,31 @@
   (when board? (refresh-for! view-state))
   (let [{:keys [gates unavailable]} (work/read-gates)
         groups (if board? (work/all-grouped) [])
+        pending (dev/pending-resolve-keys)
         screen (work/screen view-state
                             {:groups           groups
                              :gates            gates
                              :unavailable      unavailable
-                             :pending          (dev/pending-resolve-keys)
+                             :pending          pending
                              :winddown-pending (dev/pending-winddown-keys)})
         sel (:selection view-state)
-        ws-errors (dev/failed-ws-errors)]
+        ws-errors (dev/failed-ws-errors)
+        unseen (side-chat/unseen)
+        ;; A gate whose Apply/Reply failed keeps its buttons (it stays retryable) and
+        ;; carries the reason — the resolve is async, so this is the only place the
+        ;; user ever learns the click did something and that something went wrong.
+        with-error (fn [g]
+                     (let [err (get ws-errors (str (:project g) "/" (:ws-id g)))]
+                       (cond-> g
+                         (and err (not (:pending? g))) (assoc :error-msg err))))
+        ;; Every project's gates as the home list shows them, whatever the view is focused on:
+        ;; the tally counts each project for the drop-down, and lists the focused one.
+        all-gates (mapv with-error (:gates (work/screen {:scope "all"} {:gates gates :pending pending})))]
     (-> screen
         ;; The workstreams whose rows carry the side chat's mark: a chat pinned there has news.
-        (assoc :chats-unseen (side-chat/unseen))
+        (assoc :chats-unseen unseen)
+        (assoc :tally (tally all-gates unseen unavailable))
+        (assoc :kind (:kind view-state))
         (assoc :selection
                (when sel
                  ;; The two pages that draw a pane beside their list; every other render with a
@@ -134,16 +177,7 @@
                                      (assoc :error-msg (get ws-errors (str (:project sel) "/" (:ws-id sel)))))
                                :dev-states (dev/ws-session-dev-states (:project sel) ws)
                                :machine (work/machine-facts (:project sel) (map :name (:sessions ws))))))))
-        ;; A gate whose Apply/Reply failed keeps its buttons (it stays retryable) and
-        ;; carries the reason — the resolve is async, so this is the only place the
-        ;; user ever learns the click did something and that something went wrong.
-        (update :gates
-                (fn [gates]
-                  (mapv (fn [g]
-                          (let [err (get ws-errors (str (:project g) "/" (:ws-id g)))]
-                            (cond-> g
-                              (and err (not (:pending? g))) (assoc :error-msg err))))
-                        gates)))
+        (update :gates #(mapv with-error %))
         (update :groups
                 (fn [groups]
                   (mapv (fn [{:keys [project] :as g}]
@@ -181,40 +215,55 @@
     (assoc vs :scope (if (some #{(:scope vs)} known) (:scope vs) (first known)))))
 
 (defn- needs-screen
-  "The screen Needs you renders: every project's gates, whatever is focused — read from the
-   core, with no board behind them."
+  "The screen Needs you renders: the gates read from the core, with no board behind them, and
+   the tally of what needs the person in every project — the focused one's listed, the others
+   counted for the drop-down."
   [vs]
-  (derive-screen (assoc vs :scope "all") {:board? false}))
+  (derive-screen vs {:board? false}))
+
+(defn- with-chat-rows
+  "`screen` with the focused project's held rows, by ws-id, of the workstreams its unread-chat
+   items name — what such an item is listed as. Read only when there is one: the gates carry
+   their own rows, and a chat item is the only one that needs a workstream's."
+  [{:keys [scope tally] :as screen}]
+  (if-let [items (seq (get-in tally [:by-project scope :chat]))]
+    (let [wanted (into #{} (map :ws-id) items)
+          rows   (try (work/list-workstreams (keyword scope)) (catch Throwable _ []))]
+      (assoc screen :chat-rows (into {} (comp (filter #(wanted (str (:ws-id %))))
+                                              (map (juxt (comp str :ws-id) identity)))
+                                     rows)))
+    screen))
 
 (defn- rail-ctx
-  "Chrome context: the slice or page that is `active`, the focused project, the
-   Needs-you badge — the screen's needs-count, which counts every project's
-   gates, so the badge and the Needs-you list always agree — and the chat's side
-   panel, open or closed as the request's page last left it."
+  "Chrome context: the slice or page that is `active`, the focused project, the tally of what
+   needs the person the screen was derived with — so the top bar and the home list count from one
+   value — and the chat's side panel, open or closed as the request's page last left it."
   [req active focus screen]
   {:side-chat   (side-chat/panel req (side-chat/open? req))
    :active      active
    :scope       focus
-   :needs-count (:needs-count screen)
-   :needs-unread (:unavailable screen)
+   :kind        (:kind screen)
+   :tally       (:tally screen)
    :daemon      (read-rail-daemon)
    :projects    (project-names)})
+
+(defn- rail-status
+  "The top bar's live bits for `focus`, from `tally`."
+  [focus tally]
+  (views/rail-status-fragment {:scope focus :tally tally :projects (project-names)
+                               :daemon (read-rail-daemon)}))
 
 (defn- needs-fragment-response [screen]
   (sse-response
    (sse-fragment
     (str (views/needs-fragment screen)
-         (views/rail-status-fragment {:needs-count (:needs-count screen)
-                                      :needs-unread (:unavailable screen)
-                                      :daemon (read-rail-daemon)})))))
+         (rail-status (:scope screen) (:tally screen))))))
 
 (defn- workstreams-fragment-response [screen]
   (sse-response
    (sse-fragment
     (str (views/workstreams-fragment screen)
-         (views/rail-status-fragment {:needs-count (:needs-count screen)
-                                      :needs-unread (:unavailable screen)
-                                      :daemon (read-rail-daemon)})))))
+         (rail-status (:scope screen) (:tally screen))))))
 
 (defn- fleet-context
   "The fleet card's facts, or nil if they could not be gathered.
@@ -393,17 +442,13 @@
   (sse-response (sse-fragment (views/recovery-fragment (session-recovery feed-from)))))
 
 (defn- ops-fragment-response
-  "The ops panel, with the top bar's live bits: the Needs-you badge counts every
-   project's gates, as it does on every page."
-  []
+  "The ops panel, with the top bar's live bits for the project `req` is focused on — the poll that
+   keeps them live on a page that polls no list."
+  [req]
   (sse-response
    (sse-fragment
     (str (views/ops-panel-fragment (ops-context))
-         (let [{:keys [gates unavailable]} (work/read-gates)]
-           (views/rail-status-fragment
-            {:needs-count  (count gates)
-             :needs-unread unavailable
-             :daemon       (read-rail-daemon)}))))))
+         (rail-status (:scope (view-state req)) (read-tally))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Routing
@@ -698,7 +743,7 @@
       (let [project (nth segs 2)
             session (java.net.URLDecoder/decode (nth segs 3) "UTF-8")]
         (dev/stop-session! project session)
-        (ops-fragment-response))
+        (ops-fragment-response req))
 
       ;; POST /workstreams/:project/:ws-id/pause|resume — the person's pause, from the pane.
       (and (= 4 (count segs)) (= "workstreams" (first segs)) (#{"pause" "resume"} (nth segs 3)))
@@ -848,7 +893,7 @@
                                    [k (str (get body* (keyword (views/fire-signal tname k)) ""))]))]
             (control/fire! project tname payload))
           :else nil)
-        (ops-fragment-response))
+        (ops-fragment-response req))
 
       ;; POST /_catalog/nowhere/… — where a catalog scene's buttons post. Every control a
       ;; block renders is present and shaped exactly as it is on a real page; this is what
@@ -877,7 +922,7 @@
       ;; names, so a person works the list without leaving it.
       []
       (let [vs     (view-state req)
-            screen (needs-screen vs)]
+            screen (with-chat-rows (needs-screen vs))]
         (page-response (:scope vs) (views/needs-page (rail-ctx req :needs (:scope vs) screen) screen)))
 
       ;; GET /_catalog — the component catalog and its chat. Linked from nothing: a dev surface
@@ -954,7 +999,7 @@
 
       ;; GET /_fragment/needs — queue + badge, across every project
       ["_fragment" "needs"]
-      (needs-fragment-response (needs-screen (view-state req)))
+      (needs-fragment-response (with-chat-rows (needs-screen (view-state req))))
 
       ;; GET /operations — the home: one card per operational concern
       ["operations"]
@@ -1006,10 +1051,10 @@
 
       ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
       ;; Scope rides ?scope=, parsed the same way every other view-state is —
-      ;; so the shell's scoped poll (see views/shell) gets a scoped badge count
-      ;; instead of the unscoped total clobbering it every 5s.
+      ;; so the shell's poll (see views/shell) patches the focused project's counts
+      ;; rather than another project's.
       ["_fragment" "ops"]
-      (ops-fragment-response)
+      (ops-fragment-response req)
 
       ;; Otherwise, dispatch on structure
       (cond

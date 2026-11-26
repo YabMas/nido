@@ -245,7 +245,7 @@
     "The page chrome every page sits inside: a top bar for what spans projects, a sidebar of the
      focused project's slices."
     {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [assembled-stylesheet lib/script]})
-  (Operation needs-fragment "The home column: Needs you, one card per workstream that needs the person, in its category."
+  (Operation needs-fragment "The home column: what needs the person in the focused project, one section per kind — or the one kind the request names — each headed by its mark and count."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation gate-action-confirm-fragment "The immediate confirmation a gate action swaps in."
     {:signature [:=> [:catn [:action-id :any] [:project ProjectName] [:ws-id WorkstreamId]
@@ -354,6 +354,11 @@
 
 (Module ui-server
   "The dashboard's HTTP surface.
+
+   HIDES which reads a request needs and in what scope it reads them, and how the gates and the
+   side chats' unseen anchors are combined into the tally of what needs the person, by project
+   and kind — counted once per request and handed to the page's chrome, which reads its counts,
+   lists and drop-down marks from it.
 
    `read-rail-daemon` is a named seam over the daemon reading so a test can stub it."
   (Operation read-rail-daemon "The rail's daemon reading. A stubbing seam."

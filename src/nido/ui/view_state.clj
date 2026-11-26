@@ -84,6 +84,17 @@
     (let [k (keyword (decode raw))]
       (when (some #{k} work/arc-rows) k))))
 
+(def ^:private needs-kinds
+  "The kinds a home page can be narrowed to (`nido.ui.components.state/needs-kinds`)."
+  #{:ask :landing :system-error :chat})
+
+(defn- kind
+  "`?kind=landing` -> :landing: the one needs kind the home page lists, or nil — every kind, one
+   section each. An unknown one reads as none rather than a page listing nothing."
+  [ps]
+  (when-let [raw (some (fn [[k v]] (when (= k "kind") v)) ps)]
+    (needs-kinds (keyword (decode raw)))))
+
 (defn- history?
   "`?history=1` -> true: whether the pane's raw ledger index is expanded. Absent
    is the resting state — the arc above it is the reading a driver wants, and the
@@ -102,7 +113,8 @@
       :ask     <core ask id>|nil — the ask a gate click answers
       :rounds  #{<long>}|nil
       :stage   <arc-stage keyword>|nil
-      :history? <boolean>}
+      :history? <boolean>
+      :kind    :ask|:landing|:system-error|:chat|nil — the one needs kind Needs you lists}
 
    No source/facet filtering: the board shows every origin (see
    nido.coordinator.work/board-bands). A legacy ?source= / facet / ?tab= bookmark
@@ -117,4 +129,5 @@
      :ask       (some (fn [[k v]] (when (= k "ask") (not-empty (decode v)))) ps)
      :rounds    (rounds ps)
      :stage     (stage ps)
-     :history?  (history? ps)}))
+     :history?  (history? ps)
+     :kind      (kind ps)}))

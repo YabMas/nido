@@ -57,80 +57,118 @@
                                          [])}
                              {}))))
 
+(defn- tally-of
+  "A tally as the server counts one (`nido.ui.server/tally`): `gates` under their :needs, the
+   `unseen` chat anchors under :chat, by project."
+  [gates & {:keys [unseen unavailable]}]
+  (let [add (fn [acc p k x] (update-in acc [p k] (fnil conj []) x))]
+    {:by-project  (as-> {} acc
+                    (reduce #(add %1 (str (:project %2)) (case (:needs %2) (:landing :system-error) (:needs %2) :ask) %2) acc gates)
+                    (reduce #(add %1 (:project %2) :chat %2) acc unseen))
+     :unavailable (or unavailable {})}))
+
+(defn- needs-screen
+  "A Needs-you screen focused on `scope` (brian unless named) over `gates`."
+  [gates & {:keys [scope unseen unavailable] :as more :or {scope "brian"}}]
+  (merge {:selection nil :scope scope
+          :tally (tally-of gates :unseen unseen :unavailable unavailable)}
+         (dissoc more :unseen :unavailable)))
+
 (deftest needs-fragment-lists-cards
-  (let [html (views/needs-fragment {:gates [sample-gate] :selection nil :scope "all"})]
+  (let [html (views/needs-fragment (needs-screen [sample-gate]))]
     (is (str/includes? html "id=\"needs\""))
     (is (str/includes? html "BR-7"))
     (is (str/includes? html "class=\"row-st\"><span class=\"needs\"")
         "a needs-you row leads with the needs-you dot, not where it came from")
     ;; a row opens its workstream's pane beside the list, where the gate is answered
-    (is (str/includes? html "href=\"/?sel=brian:ws-1\""))
+    (is (str/includes? html "href=\"/?scope=brian&amp;sel=brian:ws-1\""))
     (is (not (str/includes? html "href=\"/workstreams/brian/ws-1\"")))
     (is (not (str/includes? html "gate-card sel")) "nothing is selected, so no row is marked")))
 
-(deftest needs-fragment-cards-every-category-in-one-list
-  (let [landing {:project "nido" :ws-id "ws-2" :origin :scratch :stage :in-progress :label "Ship it"
+(defn- section
+  "The markup of `html`'s section of kind `k`, up to the next section."
+  [html k]
+  (second (re-find (re-pattern (str "(?s)id=\"needs-" (name k) "\"(.*?)(?:<section|$)")) html)))
+
+(deftest needs-fragment-has-one-section-per-kind-in-order
+  (let [landing {:project "brian" :ws-id "ws-2" :origin :scratch :stage :in-progress :label "Ship it"
                  :tag "ws-2" :needs :landing :owes :land :note "Ready to land." :ask nil
                  :actions [{:id :land :label "Land" :kind :mutation :style :primary}]}
-        failed  {:project "nido" :ws-id "ws-3" :origin :scratch :stage :in-progress :label "Boot it"
+        failed  {:project "brian" :ws-id "ws-3" :origin :scratch :stage :in-progress :label "Boot it"
                  :tag "ws-3" :needs :system-error :owes :retry-start
                  :note "A session failed to start: pg would not start" :ask nil}
-        html    (views/needs-fragment {:gates [(assoc sample-gate :needs :ask) landing failed]
-                                       :selection nil :scope "all"})]
-    (is (str/includes? html "title=\"needs you · ask\""))
-    (is (str/includes? html "title=\"needs you · landing\""))
-    (is (str/includes? html "title=\"needs you · system error\""))
-    (is (str/includes? html "Ready to land.") "a landing says what it waits on, asking nothing")
-    (is (str/includes? html "pg would not start"))
-    (is (not (str/includes? html "Release candidates"))
-        "a landing is carded in Needs you, not listed apart")))
+        html    (views/needs-fragment (needs-screen [(assoc sample-gate :needs :ask) landing failed]
+                                                    :unseen #{{:project "brian" :ws-id "ws-4"}}))]
+    (is (= ["ask" "landing" "system-error" "chat"]
+           (map second (re-seq #"<section class=\"needs-kind\" id=\"needs-([a-z-]+)\"" html)))
+        "one section per kind, in the icons' order")
+    (is (str/includes? (section html :ask) "BR-7"))
+    (is (str/includes? (section html :landing) "Ready to land.") "a landing says what it waits on, asking nothing")
+    (is (not (str/includes? (section html :landing) "BR-7")) "an item sits under its own kind alone")
+    (is (str/includes? (section html :system-error) "pg would not start"))
+    (is (str/includes? (section html :chat) "href=\"/?scope=brian&amp;sel=brian:ws-4\"")
+        "an unread chat links to the workstream its chat is pinned to")
+    (doseq [k [:ask :landing :system-error :chat]]
+      (is (str/includes? (section html k) (str "kind-mark kind-" (name k))) "each section is headed by its kind's mark")
+      (is (re-find #"id=\"needs-[a-z-]+-count\">1<" (section html k)) "and its count"))))
+
+(deftest needs-fragment-lists-only-the-focused-project
+  (let [other (assoc sample-gate :project "nido" :ws-id "ws-9" :label "Elsewhere")
+        html  (views/needs-fragment (needs-screen [sample-gate other]
+                                                  :unseen #{{:project "nido" :ws-id "ws-8"}}))]
+    (is (str/includes? html "BR-7"))
+    (is (not (str/includes? html "Elsewhere")) "another project's gate is not listed")
+    (is (not (str/includes? html "ws-8")) "nor another project's unread chat")))
+
+(deftest a-named-kind-lists-that-kind-alone
+  (let [landing (assoc sample-gate :ws-id "ws-2" :needs :landing :label "Ship it")
+        html    (views/needs-fragment (needs-screen [sample-gate landing] :kind :landing))]
+    (is (str/includes? html "Ship it"))
+    (is (not (str/includes? html "BR-7")))
+    (is (= ["landing"] (map second (re-seq #"<section class=\"needs-kind\" id=\"needs-([a-z-]+)\"" html))))))
 
 (deftest needs-fragment-says-a-project-was-not-loaded
-  (let [html (views/needs-fragment {:gates [] :selection nil :scope "all"
-                                    :unavailable {"brian" "the core daemon is not running"}})]
+  (let [html (views/needs-fragment (needs-screen [] :unavailable {"brian" "the core daemon is not running"}))]
     (is (str/includes? html "brian: not loaded"))
-    (is (not (str/includes? html "Nothing needs you right now."))
+    (is (str/includes? html "0?") "an unread project's gate kinds are counted as not fully read")
+    (is (not (str/includes? (section html :ask) "Nothing here."))
         "an unread project is never shown as nothing waiting"))
-  (is (str/includes? (views/needs-fragment {:gates [] :selection nil :scope "all"})
-                     "Nothing needs you right now.")))
+  (is (str/includes? (views/needs-fragment (needs-screen [])) "Nothing here.")))
 
 (deftest the-badge-says-a-project-was-not-read
-  (let [unread (views/rail-status-fragment {:needs-count 0 :needs-unread {"brian" "no core"}})
-        read   (views/rail-status-fragment {:needs-count 0 :needs-unread {}})]
+  (let [unread (views/rail-status-fragment {:scope "brian" :tally (tally-of [] :unavailable {"brian" "no core"})})
+        read   (views/rail-status-fragment {:scope "brian" :tally (tally-of [])})]
     (is (str/includes? unread "rail-badge unread"))
-    (is (not (str/includes? unread "zero")) "an unread project never shows the empty badge")
     (is (str/includes? unread "0?") "the count is marked as not fully read")
     (is (str/includes? read "rail-badge zero") "a fully read empty count keeps the zero style"))
-  (is (str/includes? (views/needs-page {:needs-count 2 :needs-unread {"brian" "no core"}
-                                        :scope "brian" :projects ["brian"]}
-                                       {:gates [] :scope "all" :selection nil
-                                        :unavailable {"brian" "no core"}})
+  (is (str/includes? (views/needs-page {:scope "brian" :projects ["brian"]
+                                        :tally (tally-of [sample-gate sample-gate] :unavailable {"brian" "no core"})}
+                                       (needs-screen [] :unavailable {"brian" "no core"}))
                      "2?")
       "the page chrome's badge says it too"))
 
 (deftest needs-fragment-marks-the-open-row
-  (let [html (views/needs-fragment {:gates [sample-gate (assoc sample-gate :ws-id "ws-2")]
-                                    :selection {:project "brian" :ws-id "ws-2"} :scope "all"})]
+  (let [html (views/needs-fragment (needs-screen [sample-gate (assoc sample-gate :ws-id "ws-2")]
+                                                 :selection {:project "brian" :ws-id "ws-2"}))]
     (is (= 1 (count (re-seq #"gate-card sel" html))) "exactly the selected row is marked")
-    (is (re-find #"class=\"gate-card sel\"[^>]* href=\"/\?sel=brian:ws-2\"" html))))
+    (is (re-find #"class=\"gate-card sel\"[^>]* href=\"/\?scope=brian&amp;sel=brian:ws-2\"" html))))
 
 (deftest a-slice-raised-drain-opens-in-place-and-points-at-the-drains-page
-  (let [html (views/needs-fragment {:gates [(assoc sample-gate :raised-by ["ws-s1" "ws-s2"])]
-                                    :selection nil :scope "all"})]
-    (is (str/includes? html "href=\"/?sel=brian:ws-1\"") "the drain's own row opens its pane on /")
+  (let [html (views/needs-fragment (needs-screen [(assoc sample-gate :raised-by ["ws-s1" "ws-s2"])]))]
+    (is (str/includes? html "sel=brian:ws-1\"") "the drain's own row opens its pane on /")
     (is (str/includes? html "href=\"/drains?scope=brian\"") "its slices' questions are one link away")
     (is (str/includes? html "2 slice questions"))))
 
 (deftest needs-page-lays-the-selected-pane-beside-the-list
-  (let [ctx    {:needs-count 1 :scope "brian" :projects ["brian"]}
-        pane   (views/needs-page ctx {:gates [sample-gate] :scope "all"
-                                      :selection {:project "brian" :ws-id "ws-1"
-                                                  :ws {:project "brian" :ws-id "ws-1" :label "Label of ws-1"
-                                                       :stage :triage :entries []}}})
-        bare   (views/needs-page ctx {:gates [sample-gate] :scope "all" :selection nil})]
+  (let [ctx    {:scope "brian" :projects ["brian"] :tally (tally-of [sample-gate])}
+        pane   (views/needs-page ctx (needs-screen [sample-gate]
+                                                   :selection {:project "brian" :ws-id "ws-1"
+                                                               :ws {:project "brian" :ws-id "ws-1" :label "Label of ws-1"
+                                                                    :stage :triage :entries []}}))
+        bare   (views/needs-page ctx (needs-screen [sample-gate]))]
     (is (str/includes? pane "id=\"ws-pane\""))
     (is (str/includes? pane "Label of ws-1") "the selected workstream's own pane")
-    (is (str/includes? pane "/_fragment/needs?sel=brian:ws-1") "the list's poll keeps the selection")
+    (is (str/includes? pane "/_fragment/needs?scope=brian&amp;sel=brian:ws-1") "the list's poll keeps the selection")
     (is (str/includes? bare "Select a workstream.") "no selection: the pane's placeholder")))
 
 (deftest a-gate-action-confirmation-keeps-the-panes-poll
@@ -140,11 +178,10 @@
         "the pane comes back on its own poll, whichever page hosts it")))
 
 (deftest needs-fragment-empty-state-is-calm
-  (is (str/includes? (views/needs-fragment {:gates [] :selection nil}) "Nothing needs you")))
+  (is (str/includes? (views/needs-fragment (needs-screen [])) "Nothing here.")))
 
 (deftest needs-fragment-marks-pending-gate-working
-  (let [html (views/needs-fragment {:gates [(assoc sample-gate :pending? true)]
-                                    :selection nil :scope "all"})]
+  (let [html (views/needs-fragment (needs-screen [(assoc sample-gate :pending? true)]))]
     (is (str/includes? html "working…") "a resumed gate shows working in the inbox row")))
 
 (deftest a-gate-shows-what-is-running-in-it-on-both-needs-you-surfaces
@@ -152,7 +189,7 @@
   ;; state, so a gate holds both at once — and the Needs-you queue and pane were
   ;; the surfaces that said only the first.
   (let [g (assoc sample-gate :doing {:source :claim :kind :diff-review} :status {:live true})]
-    (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
+    (is (str/includes? (views/needs-fragment (needs-screen [g]))
                        "reviewing the diff")
         "the inbox row carries the activity badge")
     (is (not (str/includes? (gate-in-pane g) "reviewing the diff"))
@@ -260,9 +297,9 @@
     (is (str/includes? html "round once"))))
 
 (deftest needs-page-has-shell-master-detail-and-poll
-  (let [html (views/needs-page {:active :needs :needs-count 1 :daemon {:state :up} :scope "all" :projects []}
-                               {:gates [sample-gate] :selection {:project "brian" :ws-id "ws-1"}
-                                :scope "all"})]
+  (let [html (views/needs-page {:active :needs :daemon {:state :up} :scope "brian" :projects []
+                                :tally (tally-of [sample-gate])}
+                               (needs-screen [sample-gate] :selection {:project "brian" :ws-id "ws-1"}))]
     (is (str/includes? html "topbar-link active"))      ; chrome present + Needs you active
     (is (str/includes? html "/_fragment/needs"))         ; polls the renamed fragment
     (is (str/includes? html "BR-7"))))                   ; the selected gate fills the pane
@@ -573,13 +610,14 @@
 
 (deftest gate-card-shows-resume-error-badge
   (let [g (assoc sample-gate :resume-error {:reason :resume-failed :message "exec failed"})
-        html (views/needs-fragment {:gates [g] :selection nil :scope "all"})]
+        html (views/needs-fragment (needs-screen [g]))]
     (is (str/includes? html "resume failed"))
     (is (str/includes? html "exec failed"))))
 
 (deftest shell-renders-chrome-with-active-and-badge
   (let [html (views/shell {:active :workstreams :title "Legacy"
-                           :needs-count 3 :daemon {:state :up} :scope "brian" :projects ["brian" "nido"]}
+                           :tally (tally-of [sample-gate sample-gate sample-gate])
+                           :daemon {:state :up} :scope "brian" :projects ["brian" "nido"]}
                           [:p "body-here"])]
     ;; the top bar: Needs you, the menu with Operations and Development
     (is (str/includes? html "Needs you"))
@@ -598,15 +636,16 @@
     (is (str/includes? html "dot-up"))
     (is (str/includes? html "body-here"))))
 
-(deftest shell-ops-poll-carries-no-scope
-  ;; The badge it patches counts every project's gates.
-  (let [html (views/shell {:active :workstreams :title "t" :needs-count 0
+(deftest shell-ops-poll-carries-the-focus
+  ;; The counts it patches are the focused project's.
+  (let [html (views/shell {:active :workstreams :title "t"
                            :daemon {:state :up} :scope "brian" :projects []}
                           [:p "body"])]
-    (is (str/includes? html "@get(&apos;/_fragment/ops&apos;)"))))
+    (is (str/includes? html "@get(&apos;/_fragment/ops?scope=brian&apos;)"))))
 
 (deftest rail-status-fragment-has-both-live-bits
-  (let [html (views/rail-status-fragment {:needs-count 2 :daemon {:state :halted}})]
+  (let [html (views/rail-status-fragment {:scope "brian" :tally (tally-of [sample-gate sample-gate])
+                                          :daemon {:state :halted}})]
     (is (str/includes? html "id=\"rail-needs-count\""))
     (is (str/includes? html ">2<"))
     (is (str/includes? html "id=\"rail-health\""))
@@ -1827,7 +1866,7 @@
 
 (deftest a-card-leads-with-its-question
   (let [g (assoc sample-gate :ask sample-ask)]
-    (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
+    (is (str/includes? (views/needs-fragment (needs-screen [g]))
                        "Where should students see interactive elements?")
         "the row previews the question, not the record's first line")
     (let [pane (gate-in-pane g)
