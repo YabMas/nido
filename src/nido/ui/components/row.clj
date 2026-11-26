@@ -31,13 +31,8 @@
 
 (def ^:private chat-mark
   "The mark a row listing a workstream carries when a side chat pinned to it finished a turn, or
-   waits on a permission, since the person last had it open: a speech bubble in the side panel's
-   icon form — 24 units, stroked, no fill — in the colour of a person's move."
-  [:span.chat-mark {:title "A chat here finished, or waits on you, since you last looked"
-                    :aria-label "A chat here has something new"}
-   [:svg {:viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"
-          :stroke-linecap "round" :stroke-linejoin "round" :aria-hidden "true"}
-    [:path {:d "M7.9 20A9 9 0 1 0 4 16.1L2 22Z"}]]])
+   waits on a permission, since the person last had it open: the unread-chat kind's mark."
+  (state/kind-mark :chat "A chat here finished, or waits on you, since you last looked"))
 
 (defn- tag-line
   "The workstream's stable identifier (wsv/tag — ticket id, else worktree name) on

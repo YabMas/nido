@@ -89,7 +89,8 @@
    says it.
 
    HIDES how a state is worded and how it is marked — which word a position reads as, which
-   glyph and which semantic colour mark it, and when a mark is lit rather than muted. One table
+   glyph and which semantic colour mark it, the kind the person is needed in among them, and
+   when a mark is lit rather than muted. One table
    per facet, so a second wording cannot exist. What it publishes is the marks, and the words
    that sit beside them where a mark is not enough — a review round's progress, an arc stage's
    heading, the status heading — each over the part of the state it says; a chip's title also
@@ -136,8 +137,8 @@
      said — a board row, a needs-you row, an arc stage. Its title is the caller's to word."
     {:signature [:=> [:catn [:title [:? :string]]] :any]})
   (Operation error-mark
-    "The error mark: the machine stopped on a failure, and the person's move is its recovery. Its
-     title is the caller's to word."
+    "The error mark: the machine stopped on a failure, and the person's move is its recovery — the
+     system-error kind's mark. Its title is the caller's to word."
     {:signature [:=> [:catn [:title [:? :string]]] :any]})
   (Operation gate-standing
     "How a needs-you card says where its request stands: working while its resolve runs, parked on
@@ -148,9 +149,16 @@
      bring-down runs, else how it closed and what it still holds."
     {:signature [:=> [:catn [:row :map]] :string]})
   (Operation needs-words
-    "How every surface says the category the person is needed in — an ask, a landing, a system
-     error — so the mark, the heading, the arc and the card word it alike."
+    "How every surface says the kind the person is needed in — an ask, a landing, a system
+     error, an unread chat — so the mark, the heading, the arc and the card word it alike."
     {:signature [:=> [:catn [:needs [:maybe :keyword]]] :string]})
+  (Operation needs-kind-heading "The heading of a list holding only one needs kind's items."
+    {:signature [:=> [:catn [:kind :keyword]] :string]})
+  (Operation kind-mark
+    "The mark of one needs kind — a raised hand, a rocket, an octagon holding an exclamation, a
+     speech bubble — the only glyph any surface says that kind with, in the needs colour, titled
+     with the kind's needs-words unless its caller words it."
+    {:signature [:=> [:catn [:kind :keyword] [:title [:? :string]]] :any]})
   (Operation arc-mark
     "The mark for one arc stage: what is happening there right now if anything is — the person
      waited on, titled with the category they are needed in, or an agent working — and otherwise
@@ -166,8 +174,8 @@
 
    HIDES what a row puts where and how dense it is. Each renders over the row's value as props
    and the page's router, so a row names no page's URL scheme and any surface can list one. A row
-   listing a workstream the page says has news in a side chat pinned to it draws that chat's
-   mark, whose look is the rows' own.
+   listing a workstream the page says has news in a side chat pinned to it draws the unread-chat
+   kind's mark, which the marks level draws.
    Written in `ui-components-state`'s marks; its rules are nido's, because the classes it is
    drawn with are shared with the pages around it.")
 

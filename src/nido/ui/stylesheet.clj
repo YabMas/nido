@@ -642,9 +642,11 @@
         .chat-row-btn svg { width:15px; height:15px; }
         .chat-pin.pinned { color:var(--text-strong); }
         .chat-dot { width:8px; height:8px; border-radius:50%; background:var(--accent, var(--working)); flex:none; }
-        /* A board row's mark: a chat pinned to its workstream has something the person has not seen. */
-        .chat-mark { display:inline-flex; color:var(--needs); flex:none; }
-        .chat-mark svg { width:13px; height:13px; }
+        /* A needs kind's mark (state/kind-mark): every kind is a move the person owes. Sized by
+           where it sits — a row's is the size of its text. */
+        .kind-mark { display:inline-flex; color:var(--needs); flex:none; }
+        .kind-mark svg { width:1em; height:1em; }
+        .gate-top .kind-mark svg { width:13px; height:13px; }
         /* The catalog scenes' own layout, for a scene that sets several calls of one function
            side by side or pairs an input with what it renders as. */
         .scene-rail { display:flex; flex-wrap:wrap; gap:var(--space-18); align-items:flex-start; }

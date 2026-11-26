@@ -198,8 +198,8 @@
                                      nido.ui.components.row/board-row "nido:ws-1"
                                      {:project "nido" :row {:ws-id "ws-1" :label "x"} :href "#" :chat? chat?}
                                      {} (fn [& _] "")))))]
-    (is (str/includes? (row true) "chat-mark"))
-    (is (not (str/includes? (row false) "chat-mark")))))
+    (is (str/includes? (row true) "kind-chat"))
+    (is (not (str/includes? (row false) "kind-chat")))))
 
 (deftest the-panel-follows-the-location
   (let [p (page-panel "/workstreams/nido/ws-1")]
@@ -326,8 +326,8 @@
                                      nido.ui.components.row/winddown-row "nido:ws-1"
                                      {:row {:project "nido" :ws-id "ws-1" :label "x" :sessions []} :chat? chat?}
                                      {} (fn [& _] "")))))]
-    (is (str/includes? (row true) "chat-mark"))
-    (is (not (str/includes? (row false) "chat-mark")))))
+    (is (str/includes? (row true) "kind-chat"))
+    (is (not (str/includes? (row false) "kind-chat")))))
 
 (deftest a-collapsed-panel-is-not-the-person-reading
   (let [id (new-chat! "/workstreams/nido/ws-1")

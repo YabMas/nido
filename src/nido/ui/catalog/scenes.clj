@@ -153,13 +153,28 @@
            heads a system error's account of what failed, in the pane."
     :scenes [{:title "plain, and titled by its caller"
               :render #(list (state/error-mark) " " (state/error-mark "its conductor stopped"))}]}
+   {:name "kind-mark"
+    :note "Each kind the person is needed in has one mark, the only glyph any surface says it with —
+           all four in the needs colour, since each is a move the person owes."
+    :scenes [{:title "each kind"
+              :note "Hover each: the title is the kind's needs-words."
+              :render #(rail str state/needs-kinds (fn [k] (state/kind-mark k)))}]}
+   {:name "needs-kinds"
+    :note "The kinds, in the order the top bar's icons and the home page's sections list them."
+    :scenes [{:title "in order"
+              :render #(into [:span] (interpose " " (map state/kind-mark state/needs-kinds)))}]}
+   {:name "needs-kind-heading"
+    :note "What a list holding only one kind's items is headed with."
+    :scenes [{:title "each kind"
+              :render #(rail str state/needs-kinds
+                             (fn [k] [:span (state/kind-mark k) " " (state/needs-kind-heading k)]))}]}
    {:name "needs-words"
     :note "The words for the category the person is needed in — an ask, a landing, a system error
            — which every surface's needs-you mark, heading and card say alike."
     :scenes [{:title "each category"
               :note "One concept, three kinds: the title tells a question from a landing from a
                      failure, so a scan of the dots can be followed by a hover that sorts them."
-              :render #(rail str [:ask :landing :system-error nil]
+              :render #(rail str [:ask :landing :system-error :chat nil]
                              (fn [n] [:span (state/needs-mark (state/needs-words n)) " "
                                       (state/needs-words n)]))}]}
    {:name "gate-standing"

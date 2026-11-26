@@ -131,9 +131,21 @@
 (declare needs-mark)
 
 (def ^:private needs-label
-  "The words for each category the person is needed in (`nido.coordinator.view.activity/needs-categories`),
-   one set every surface says them in."
-  {:ask "ask" :landing "landing" :system-error "system error"})
+  "The words for each kind the person is needed in, one set every surface says them in: the three
+   categories a gate is in (`nido.coordinator.view.activity/needs-categories`), and :chat, a side
+   chat pinned to a workstream with something the person has not seen — which no gate carries,
+   and the dashboard counts beside the gates."
+  {:ask "ask" :landing "landing" :system-error "system error" :chat "unread chat"})
+
+(def ^:private kind-heading
+  "How a list of one kind's items is headed."
+  {:ask "Asks" :landing "Landings" :system-error "System errors" :chat "Unread chats"})
+
+(defn ^{:malli/schema [:=> [:cat :keyword] :string]}
+  needs-kind-heading
+  "The heading of a list holding only kind `kind`'s items."
+  [kind]
+  (get kind-heading kind (name kind)))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :keyword]] :string]}
   needs-words
@@ -298,12 +310,46 @@
   ([] (needs-mark "needs you"))
   ([title] [:span.needs {:title title}]))
 
+(def ^:private kind-paths
+  "Each needs kind's glyph, as the SVG paths drawing it in the side panel's icon form: a raised
+   hand for an ask, a rocket for a landing, an octagon holding an exclamation for a system error,
+   a speech bubble for an unread chat."
+  {:ask          ["M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"
+                  "M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"
+                  "M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"
+                  "M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"]
+   :landing      ["M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"
+                  "m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"
+                  "M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"
+                  "M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"]
+   :system-error ["M12 16h.01" "M12 8v4"
+                  "M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"]
+   :chat         ["M7.9 20A9 9 0 1 0 4 16.1L2 22Z"]})
+
+(def needs-kinds
+  "The kinds the person is needed in, in the order every surface lists them."
+  [:ask :landing :system-error :chat])
+
+(defn ^{:malli/schema [:=> [:cat :keyword [:? :string]] :any]}
+  kind-mark
+  "The mark of needs kind `kind` — one per kind, the only glyph any surface says that kind with:
+   a 24-unit stroked SVG in currentColor, coloured --needs, since every kind is a move the
+   person owes. `title` is what hovering it reads, the kind's needs-words unless the caller says
+   how this one waits."
+  ([kind] (kind-mark kind (needs-words kind)))
+  ([kind title]
+   [:span {:class (str "kind-mark kind-" (name kind)) :title title :aria-label title}
+    (into [:svg {:viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"
+                 :stroke-linecap "round" :stroke-linejoin "round" :aria-hidden "true"}]
+          (map (fn [d] [:path {:d d}]) (get kind-paths kind)))]))
+
 (defn ^{:malli/schema [:=> [:cat [:? :string]] :any]}
   error-mark
-  "The error mark: the machine stopped on a failure, and the person's move is its recovery. It
-   heads a system error's account of what failed. `title` is what hovering it reads."
+  "The error mark: the machine stopped on a failure, and the person's move is its recovery — the
+   system-error kind's mark. It heads a system error's account of what failed. `title` is what
+   hovering it reads."
   ([] (error-mark "failed — needs recovering"))
-  ([title] [:span.error-mark {:title title} "⛔"]))
+  ([title] [:span.error-mark (kind-mark :system-error title)]))
 
 (defn ^{:malli/schema [:=> [:cat :any :any [:? [:maybe :keyword]]] :any]}
   arc-mark
