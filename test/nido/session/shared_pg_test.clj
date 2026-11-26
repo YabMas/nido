@@ -41,7 +41,7 @@
   ;; than initdb a blank cluster.
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo #"[Tt]emplate"
-       (shared/ensure-up! "definitely-not-a-real-project-xyz"))))
+       (shared/ensure-up! "definitely-not-a-real-project-xyz" nil))))
 
 (deftest down-removes-stale-pid-without-calling-pg-ctl-stop
   (let [tmp (str (fs/create-temp-dir))
@@ -75,7 +75,7 @@
 (deftest start-existing-restarts-a-cluster-that-is-shutting-down
   (let [calls (atom [])
         state (atom {:status :stopping :pid 123 :port 6145})]
-    (with-redefs [state/shared-pg-data-dir     (fn [_] "/d")
+    (with-redefs [state/shared-pg-data-dir     (let [d (str (fs/create-temp-dir))] (fn [_] d))
                   state/shared-log-file        (fn [_] "/d.log")
                   state/read-shared-meta       (fn [_] {})
                   state/write-shared-meta!     (fn [& _] nil)
@@ -86,7 +86,7 @@
                   pg/wait-for-tcp!             (fn [_] true)
                   shared/resolve-shared-port   (constantly 6145)
                   proc/tcp-open?               (fn [_] false)]
-      (is (= 6145 (#'shared/start-existing! "brian")))
+      (is (= 6145 (#'shared/start-existing! "brian" 200)))
       (is (= [:stop :start] @calls)))))
 
 (deftest the-shared-cluster-starts-with-room-for-a-fleet-of-sessions
@@ -106,7 +106,7 @@
                     state/write-shared-meta!   (fn [& _] nil)
                     shared/resolve-shared-port (constantly port)]
         (try
-          (is (= port (#'shared/start-existing! "tshared")))
+          (is (= port (#'shared/start-existing! "tshared" 1000)))
           (is (<= 1000 (parse-long
                         (str/trim (:out (babashka.process/shell
                                          {:out :string :err :string}
@@ -330,7 +330,7 @@
 
 (deftest ensure-ready-orders-up-then-advance-then-role
   (let [order (atom [])]
-    (with-redefs [shared/ensure-up! (fn [_] (swap! order conj :up) {:port 6000})
+    (with-redefs [shared/ensure-up! (fn [_ _] (swap! order conj :up) {:port 6000})
                   shared/advance-shared-to-main! (fn [_] (swap! order conj :advance) 2)
                   shared/ensure-app-role! (fn [_] (swap! order conj :role))
                   shared/with-lock (fn [_ f] (f))]
@@ -342,7 +342,7 @@
 
 (deftest ensure-ready-without-opts-is-plain-ensure-up
   (let [order (atom [])]
-    (with-redefs [shared/ensure-up! (fn [_] (swap! order conj :up) {:port 6000})
+    (with-redefs [shared/ensure-up! (fn [_ _] (swap! order conj :up) {:port 6000})
                   shared/advance-shared-to-main! (fn [_] (swap! order conj :advance))
                   shared/ensure-app-role! (fn [_] (swap! order conj :role))
                   shared/with-lock (fn [_ f] (f))]
@@ -355,7 +355,7 @@
   ;; concurrent shared session:ups can't race past ensure-up! and both
   ;; compute the same pending set unlocked.
   (let [lock-calls (atom [])]
-    (with-redefs [shared/ensure-up! (fn [_] {:port 6000})
+    (with-redefs [shared/ensure-up! (fn [_ _] {:port 6000})
                   shared/advance-shared-to-main! (fn [_] 1)
                   shared/ensure-app-role! (fn [_] nil)
                   shared/with-lock (fn [path f] (swap! lock-calls conj path) (f))]

@@ -14,6 +14,7 @@
    [nido.session.launcher :as launcher]
    [nido.session.run-link :as run-link]
    [nido.session.service :as service]
+   [nido.session.shared-pg :as shared-pg]
    ;; Load service implementations (must be loaded before state for the
    ;; defmethods to register; state itself has no transitive deps on them).
    ;; `eval` is additionally aliased: the idempotent up path calls its app
@@ -464,20 +465,52 @@
 (defn- stop-services!
   "Stop every service runtime `session` (instance `instance-id`) runs, in reverse start order. A
    service it declares but saved no state for is stopped from its own record, since a later start
-   that did not complete may have left its process there. A service that throws is reported and the
-   rest are still stopped."
+   that did not complete may have left its process there. A service it saved state for is stopped
+   from its record too, since that state may be an earlier start's, written before the record the
+   later start left named this runtime (a shared-cluster claim). So is every service the project
+   declares now that the runtime's saved state does not: a restart under more services than it
+   ran (a join) that did not complete left its record and no state. Last, the runtime's claim on
+   a shared cluster is released by its id, whatever the definitions name: a claim is the
+   runtime's, and a start that took one may have been killed before any record of the service
+   that took it was kept. Saved and unsaved services alike are stopped in reverse of the order
+   the project declares them in — the order they start in — so a service that holds what a later
+   one runs on (a claim the JVM's connections draw on) is stopped after it; one no longer
+   declared keeps its place after the saved service before it. A stop that throws is reported
+   and the other stops are still made."
   [session instance-id]
-  (doseq [svc-def (reverse (or (:service-defs session) []))]
-    (let [svc-name    (:name svc-def)
-          saved-state (get (:service-states session) svc-name)]
-      (try
-        (if saved-state
-          (do (core/log-step (str "Stopping " (name svc-name) "..."))
-              (service/stop-service! svc-def saved-state))
-          (service/stop-recorded! svc-def instance-id))
-        (catch Exception e
-          (println (str "warning: error stopping " (name svc-name) ": "
-                        (ex-message e))))))))
+  (let [saved    (or (:service-defs session) [])
+        declared (try (:services (read-session-edn (:project-name session)))
+                      (catch Exception e
+                        (println (str "warning: cannot read " (:project-name session)
+                                      "'s session.edn: " (ex-message e)))
+                        nil))
+        unsaved  (remove (comp (set (map :name saved)) :name) declared)
+        position (zipmap (map :name declared) (range))
+        ;; Start order: declared position; an undeclared saved service right after its predecessor.
+        ordered  (->> (concat saved unsaved)
+                      (reduce (fn [[acc prev] d]
+                                (let [p (get position (:name d) prev)]
+                                  [(conj acc [p d]) p]))
+                              [[] -1])
+                      first
+                      (sort-by first)
+                      (map second))]
+    (doseq [svc-def (reverse ordered)]
+      (let [svc-name    (:name svc-def)
+            saved-state (get (:service-states session) svc-name)
+            warn        (fn [e] (println (str "warning: error stopping " (name svc-name) ": "
+                                              (ex-message e))))]
+        (when saved-state
+          (try (core/log-step (str "Stopping " (name svc-name) "..."))
+               (service/stop-service! svc-def saved-state)
+               (catch Exception e (warn e))))
+        (try (service/stop-recorded! svc-def instance-id)
+             (catch Exception e (warn e)))))
+    (when instance-id
+      (try (shared-pg/release-claims-of! instance-id)
+           (catch Exception e
+             (println (str "warning: error releasing " instance-id "'s shared-cluster claim: "
+                           (ex-message e))))))))
 
 (defn- checkout?
   "Does a runtime carrying `dirs` (its members' worktrees) run out of a checkout of its own? Only
@@ -558,8 +591,26 @@
                                            :jvm jvm-cfg}
                                     session-name (assoc :name session-name)
                                     (checkout? (keys code)) (assoc :git-dir (checkout/git-dir run-dir)))})
-        ;; No session state is persisted unless every service starts.
-        result (start-each! init-ctx services opts)
+        ;; A worktree with no entry yet is given the boot placeholder a background start
+        ;; writes, naming this process, before any service starts: a start killed part-way
+        ;; leaves no session state, and its stop finds the runtime — and what a service took
+        ;; on its behalf, a shared-cluster claim among them — only through this entry.
+        placeholder? (not (get (state/read-registry) (str project-dir)))
+        _ (when placeholder?
+            (state/upsert-registry! (str project-dir)
+                                    {:project-dir  (str project-dir)
+                                     :project-name project-name
+                                     :instance-id  instance-id
+                                     :runtime-key  (:runtime-key opts)
+                                     :session-name session-name
+                                     :boot-pid     (.pid (java.lang.ProcessHandle/current))
+                                     :created-at   (core/now-iso)}))
+        ;; No session state is persisted unless every service starts. One that throws has
+        ;; rolled back what it started, so the placeholder written for it goes too.
+        result (try (start-each! init-ctx services opts)
+                    (catch Exception e
+                      (when placeholder? (state/remove-from-registry! (str project-dir)))
+                      (throw e)))
         final-ctx (:ctx result)
         session-data (cond-> {:project-dir run-dir
                               :project-name project-name
@@ -932,11 +983,7 @@
       (not session)
       ;; A start that never completed wrote no session.edn, yet a service it
       ;; reached may have left a detached process on its own record.
-      (do (doseq [svc-def (:services (read-session-edn (resolve-project-name project-dir)))]
-            (try (service/stop-recorded! svc-def instance-id)
-                 (catch Exception e
-                   (println (str "warning: error stopping " (name (:name svc-def)) ": "
-                                 (ex-message e))))))
+      (do (stop-services! {:project-name (resolve-project-name project-dir)} instance-id)
           ;; Nor did it replace the placeholder that said it was coming up.
           (when (= :booting (state/entry-phase (get (state/read-registry) project-dir)))
             (state/remove-from-registry! project-dir))

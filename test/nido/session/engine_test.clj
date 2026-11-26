@@ -13,6 +13,7 @@
    [nido.session.lifecycle :as lifecycle]
    [nido.session.service :as service]
    [nido.session.services.eval :as eval-svc]
+   [nido.session.shared-pg :as shared-pg]
    [nido.session.state :as state]
    [nido.session.test-pg :as test-pg]))
 
@@ -240,6 +241,89 @@
         (state/upsert-registry! wt-a {:instance-id "p--ws-1" :runtime-key "ws-1" :session-name "a"})
         (f wt-a wt-b))
       (finally (fs/delete-tree tmp)))))
+
+(deftest a-start-killed-before-it-registered-is-stopped-on-its-own-runtime
+  ;; A synchronous first start is killed after a service took something on the runtime's behalf
+  ;; (a shared-cluster claim) and before the session was registered: no rollback runs, no
+  ;; session.edn is written. Its stop must still reach that service under the runtime's id.
+  (with-runtime-home
+    (fn [_ _]
+      (let [wt-c    (str (fs/path (core/nido-home) "worktrees" "c"))
+            stopped (atom [])
+            svcs    {:services [{:type :postgresql :name :pg}]}]
+        (fs/create-dirs wt-c)
+        (with-redefs [engine/load-session-edn (constantly svcs)
+                      engine/read-session-edn (constantly svcs)
+                      service/start-service!  (fn [& _] (throw (Error. "killed")))
+                      service/stop-recorded!  (fn [_ id] (swap! stopped conj id))]
+          (is (thrown? Error (engine/start-session! wt-c {:runtime-key "ws-9" :session-name "c"})))
+          (with-out-str (engine/stop-session! wt-c)))
+        (is (= ["p--ws-9"] @stopped))
+        (is (nil? (get (state/read-registry) wt-c)) "the stop removes the placeholder")))))
+
+(deftest a-stop-over-older-saved-state-still-stops-the-runtimes-record
+  ;; A restart of a runtime nido started before admission existed is killed after the new start
+  ;; took a claim and before it wrote its state: the saved state is the older one, naming no
+  ;; :instance-id. The stop must still reach that service's record under the runtime's own id.
+  (with-runtime-home
+    (fn [wt-a _]
+      (let [recorded (atom [])]
+        (state/write-session! "p--ws-1"
+                              (assoc (state/read-session "p--ws-1")
+                                     :service-defs [{:type :postgresql :name :pg}]
+                                     :service-states {:pg {:mode :shared :project-name "p"}}))
+        (with-redefs [service/stop-service!  (fn [& _] nil)
+                      service/stop-recorded! (fn [_ id] (swap! recorded conj id))]
+          (with-out-str (engine/stop-session! wt-a)))
+        (is (= ["p--ws-1"] @recorded))))))
+
+(deftest a-stop-reaches-the-record-of-a-service-the-runtime-never-saved
+  ;; A runtime that ran no :postgresql (a conductor's) is restarted for a joiner that asks for one,
+  ;; and killed after the new start took a claim and before it wrote its state: the saved state
+  ;; declares no :postgresql at all. The stop must still reach its record under the runtime's id.
+  (with-runtime-home
+    (fn [wt-a _]
+      (let [recorded (atom [])]
+        (with-redefs [engine/read-session-edn (constantly {:services [{:type :postgresql :name :pg}]})
+                      service/stop-recorded!  (fn [d id] (swap! recorded conj [(:name d) id]))]
+          (with-out-str (engine/stop-session! wt-a)))
+        (is (= [[:pg "p--ws-1"]] @recorded))))))
+
+(deftest a-stop-releases-the-runtimes-claim-whatever-its-definitions-name
+  ;; A restart for a joiner took a claim and was killed before saving state, and :postgresql has
+  ;; since left the project's session.edn: neither the saved nor the declared definitions name
+  ;; it. The claim is the runtime's, and its stop still releases it.
+  (with-runtime-home
+    (fn [wt-a _]
+      (let [released (atom [])]
+        (with-redefs [engine/read-session-edn       (constantly {:services []})
+                      shared-pg/release-claims-of!  (fn [id] (swap! released conj id))]
+          (with-out-str (engine/stop-session! wt-a)))
+        (is (= ["p--ws-1"] @released))))))
+
+(deftest unsaved-services-stop-in-reverse-start-order-and-the-claim-goes-last
+  ;; An interrupted start saved no definitions: what it left is the project's services, which stop
+  ;; JVM first, then the :postgresql whose claim the JVM's connections drew on, then the claim.
+  (with-runtime-home
+    (fn [wt-a _]
+      (let [order (atom [])]
+        (with-redefs [engine/read-session-edn      (constantly {:services [{:type :postgresql :name :pg}
+                                                                           {:type :process :name :repl}]})
+                      service/stop-recorded!       (fn [d _] (swap! order conj (:name d)))
+                      shared-pg/release-claims-of! (fn [_] (swap! order conj :claim))]
+          (with-out-str (engine/stop-session! wt-a)))
+        (is (= [:repl :pg :claim] @order))))))
+
+(deftest a-start-that-throws-leaves-no-placeholder
+  (with-runtime-home
+    (fn [_ _]
+      (let [wt-c (str (fs/path (core/nido-home) "worktrees" "c"))]
+        (fs/create-dirs wt-c)
+        (with-redefs [engine/load-session-edn (constantly {:services [{:type :postgresql :name :pg}]})
+                      service/start-service!  (fn [& _] (throw (ex-info "failed" {})))]
+          (is (thrown? Exception
+                       (with-out-str (engine/start-session! wt-c {:runtime-key "ws-9" :session-name "c"})))))
+        (is (nil? (get (state/read-registry) wt-c)))))))
 
 (deftest a-second-session-joins-the-live-runtime
   (with-runtime-home

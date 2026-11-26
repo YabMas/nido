@@ -25,7 +25,15 @@
    string does not silently reach someone else's database.
 
    Migrations are advanced to `main@origin` rather than to the working copy: a shared cluster
-   that followed one session's branch would break every other session on it."
+   that followed one session's branch would break every other session on it.
+
+   It owns the cluster's CONNECTION BUDGET, which the project declares on its shared
+   :postgresql service: :max-connections, :reserved-connections and :session-connections. A
+   start of the cluster writes the declared limit into a settings file its postgresql.conf
+   includes, immediately before the postmaster starts; a running cluster is never restarted to
+   apply a changed one. A shared-mode session start is admitted only when every runtime's claim,
+   its own share and the reserve fit the limit the cluster STARTED with — admissions taken one at
+   a time under the cluster's lock, each claim held until nido stops its runtime."
   (Operation resolve-shared-port
     "A project's shared-cluster port, derived from its name so it is stable across restarts."
     {:signature [:=> [:catn [:project-name ProjectName]] :int]})
@@ -33,16 +41,39 @@
     "Run a function holding an exclusive OS file lock — what stops two sessions building the
      cluster at the same time."
     {:signature [:=> [:catn [:lock-path Path] [:f :any]] :any]})
-  (Operation ensure-up! "Ensure the shared cluster exists and is running."
-    {:signature [:=> [:catn [:project-name ProjectName]] :any]
+  (Operation ensure-up!
+    "Ensure the shared cluster exists and is running; a start runs it with the declared
+     :max-connections. Opens no client connection."
+    {:signature [:=> [:catn [:project-name ProjectName] [:service-def [:maybe :map]]] :any]
      :delegates [with-lock resolve-shared-port sstate/shared-lock-file sstate/shared-pg-data-dir
                  sstate/write-shared-meta!]})
-  (Operation status "What state the shared cluster is in."
-    {:signature [:=> [:catn [:project-name ProjectName]] :any] :delegates [sstate/read-shared-meta]})
+  (Operation validated-budget
+    "A shared-mode definition's connection budget, parsed — refused, naming the field and the
+     project, when :session-connections is not a positive integer. Touches no cluster."
+    {:signature [:=> [:catn [:project-name ProjectName] [:service-def :map]] :map]})
+  (Operation started-with-limit
+    "The max_connections the running shared cluster started with."
+    {:signature [:=> [:catn [:project-name ProjectName]] :int] :delegates [sstate/shared-pg-data-dir]})
+  (Operation admit!
+    "Admit a runtime on the cluster's budget, answered as a value: admitted, holding a claim, or
+     refused with the figures."
+    {:signature [:=> [:catn [:project-name ProjectName] [:instance-id :string] [:budget :map]] :map]
+     :delegates [ensure-up! with-lock started-with-limit sstate/shared-claims-file sstate/shared-lock-file]})
+  (Operation refusal "The error a budget refusal is thrown as, naming the budget's figures."
+    {:signature [:=> [:catn [:figures :map]] :any]})
+  (Operation release-claim! "Release a runtime's claim on the cluster's budget."
+    {:signature [:=> [:catn [:project-name ProjectName] [:instance-id :string]] :any]
+     :delegates [with-lock sstate/shared-claims-file sstate/shared-lock-file]})
+  (Operation release-claims-of! "Release a runtime's claim on whichever project's cluster holds one."
+    {:signature [:=> [:catn [:instance-id :string]] :any]
+     :delegates [release-claim! sstate/shared-dir]})
+  (Operation status "What state the shared cluster is in, and its connection budget."
+    {:signature [:=> [:catn [:project-name ProjectName] [:service-def [:maybe :map]]] :any]
+     :delegates [sstate/read-shared-meta started-with-limit]})
   (Operation down! "Stop the shared cluster, preserving its data."
     {:signature [:=> [:catn [:project-name ProjectName]] :any] :delegates [sstate/shared-pg-data-dir]})
   (Operation reset! "Drop the cluster's data and re-clone it from the template."
-    {:signature [:=> [:catn [:project-name ProjectName]] :any]
+    {:signature [:=> [:catn [:project-name ProjectName] [:service-def [:maybe :map]]] :any]
      :delegates [down! sstate/shared-pg-data-dir]})
   (Operation destroy! "Stop and remove the shared cluster entirely."
     {:signature [:=> [:catn [:project-name ProjectName]] :any]})
@@ -135,4 +166,5 @@
 ;; :postgresql. Declared beside the supplier because the protocol must not name its implementations.
 (Fulfilment postgresql-starts-service {:satisfier services-postgresql :surface service/start-service!})
 (Fulfilment postgresql-stops-service {:satisfier services-postgresql :surface service/stop-service!})
+(Fulfilment postgresql-stops-recorded {:satisfier services-postgresql :surface service/stop-recorded!})
 (Fulfilment postgresql-reports-status {:satisfier services-postgresql :surface service/service-status})

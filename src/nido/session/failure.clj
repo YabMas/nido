@@ -210,13 +210,21 @@
    session — its name, paths, ports, ids and counts. The project is part of it:
    the same message from two projects' session configs is two causes.
 
+   An error that says structurally what refused the start — `:refused` in its data, with
+   its `:reason` and `:field` — is that identity and nothing else of the chain, so no
+   message text, which a session's name can rewrite, splits one refusal into two causes.
+
    A short hash rather than the text, because it travels in a workstream ref.
    The text a person reads is the failure's own message."
   [failure]
-  (let [chain (:error failure)
-        text  (->> chain
-                   (map #(str (:class %) ": " (normalised (:message %) failure)))
-                   (str/join " <- "))
+  (let [chain   (:error failure)
+        refusal (some #(when (:refused (:data %)) (select-keys (:data %) [:refused :reason :field]))
+                      chain)
+        text    (if refusal
+                  (pr-str (into (sorted-map) refusal))
+                  (->> chain
+                       (map #(str (:class %) ": " (normalised (:message %) failure)))
+                       (str/join " <- ")))
         digest (.digest (java.security.MessageDigest/getInstance "SHA-1")
                         (.getBytes (str (:project failure) "|" text) "UTF-8"))]
     (str (:project failure) "-"

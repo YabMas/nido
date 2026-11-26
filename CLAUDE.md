@@ -496,9 +496,32 @@ The `:postgresql` service is a flat config map; the same fields apply to every s
    :extensions ["vector"]
    :port-range [5500 7500]
    :mode :shared            ; :shared (default) | :clone | :isolated
+   :max-connections 1000    ; :shared — the shared cluster's limit (default 200)
+   :reserved-connections 20 ; :shared — slots for nido's owner psql and operators (default 10)
+   :session-connections 45  ; :shared — REQUIRED: the most one runtime may open
    :clone-from-template true ; used only by :clone/:isolated mode
    :baseline {...}}]}        ; first-init seed; ignored in :shared mode
 ```
+
+### The shared cluster's connection budget
+
+nido owns how many connections the shared cluster allows. When it starts the
+cluster (seed, `session:up`, `shared:pg:up`/`reset`) it writes `:max-connections`
+into `pg-data/nido-shared.conf`, which the cluster's `postgresql.conf` includes
+last. It **never restarts a running cluster** to apply a changed limit: the new
+value takes effect at the next start (`bb nido:shared:pg:down` then `up` — which
+drops every attached session's connections, so it's the operator's call).
+
+Every shared-mode session start is **admitted** before the cluster is readied
+and before any later service (the JVM) launches: the claims of every runtime on
+the cluster (starting ones included; an up runtime with no claim counts at the
+declared share), plus this session's `:session-connections`, plus
+`:reserved-connections`, must fit the limit the cluster *started with*. A start
+that doesn't fit is refused with an error naming those figures and kept under
+`~/.nido/failures/` like any failed start. A shared-mode definition with no
+positive-integer `:session-connections` is refused outright. Claims live in
+`~/.nido/shared/<project>/claims.edn` and are released when nido stops the
+runtime; `bb nido:shared:pg:status` lists them.
 
 ### local.edn keys (brian)
 

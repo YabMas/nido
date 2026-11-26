@@ -26,7 +26,7 @@
 (deftest reset-resets-then-passes-role-and-source-opts-to-ensure-ready
   (let [reset-called (atom nil)
         got (atom nil)]
-    (with-redefs [shared/reset! (fn [proj] (reset! reset-called proj) {:port 1})
+    (with-redefs [shared/reset! (fn [proj _] (reset! reset-called proj) {:port 1})
                   shared/ensure-ready! (fn [proj opts] (reset! got [proj opts]) {:port 1})
                   engine/load-session-edn
                   (fn [_] {:services [{:type :postgresql :db-name "brian" :db-user "user"

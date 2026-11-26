@@ -19,12 +19,13 @@
 
 (deftest shared-start-uses-shared-cluster-and-creates-no-session-pgdata
   (let [calls (atom [])]
-    (with-redefs [nido.session.shared-pg/ensure-ready! (fn [proj opts] (swap! calls conj [proj opts]) {:port 6543})
+    (with-redefs [nido.session.shared-pg/admit! (fn [& _] {:admitted {}})
+                  nido.session.shared-pg/ensure-ready! (fn [proj opts] (swap! calls conj [proj opts]) {:port 6543})
                   nido.session.engine/source-project-root (fn [_] "/x/Code/brian")]
       (let [ctx {:session {:project-name "brian" :instance-id "brian--feat-x"
                            :project-dir "/tmp/wt"}}
             res (nido.session.service/start-service!
-                 {:type :postgresql :name :pg :mode :shared
+                 {:type :postgresql :name :pg :mode :shared :session-connections 45
                   :db-name "brian" :db-user "user" :db-password "password"}
                  ctx {})]
         (is (= ["brian"] (map first @calls)) "delegates to shared-pg/ensure-ready!")
@@ -35,7 +36,8 @@
 
 (deftest shared-stop-does-not-touch-the-shared-cluster
   (let [downs (atom 0)]
-    (with-redefs [nido.session.shared-pg/down! (fn [_] (swap! downs inc))]
+    (with-redefs [nido.session.shared-pg/release-claim! (fn [& _] nil)
+                  nido.session.shared-pg/down! (fn [_] (swap! downs inc))]
       (nido.session.service/stop-service!
        {:type :postgresql :mode :shared}
        {:mode :shared :project-name "brian"})
@@ -43,12 +45,13 @@
 
 (deftest shared-publishes-restricted-app-creds-when-configured
   (let [ready-opts (atom nil)]
-    (with-redefs [nido.session.shared-pg/ensure-ready! (fn [_ opts] (reset! ready-opts opts) {:port 6543})
+    (with-redefs [nido.session.shared-pg/admit! (fn [& _] {:admitted {}})
+                  nido.session.shared-pg/ensure-ready! (fn [_ opts] (reset! ready-opts opts) {:port 6543})
                   nido.session.engine/source-project-root (fn [_] "/x/Code/brian")]
       (let [ctx {:session {:project-name "brian" :instance-id "brian--feat-x"
                            :project-dir "/x/Code/brian/.worktrees/feat/x"}}
             res (nido.session.service/start-service!
-                 {:type :postgresql :name :pg :mode :shared
+                 {:type :postgresql :name :pg :mode :shared :session-connections 45
                   :db-name "brian" :db-user "user" :db-password "password"
                   :schema "brian" :app-db-user "brian_app" :app-db-password "app"}
                  ctx {})]
@@ -62,12 +65,13 @@
         (is (= "/x/Code/brian" (:source-repo @ready-opts)))))))
 
 (deftest shared-publishes-owner-creds-when-app-user-absent
-  (with-redefs [nido.session.shared-pg/ensure-ready! (fn [_ _] {:port 6543})
+  (with-redefs [nido.session.shared-pg/admit! (fn [& _] {:admitted {}})
+                  nido.session.shared-pg/ensure-ready! (fn [_ _] {:port 6543})
                 nido.session.engine/source-project-root (fn [_] "/x/Code/brian")]
     (let [ctx {:session {:project-name "brian" :instance-id "brian--feat-x"
                          :project-dir "/x/Code/brian/.worktrees/feat/x"}}
           res (nido.session.service/start-service!
-               {:type :postgresql :name :pg :mode :shared
+               {:type :postgresql :name :pg :mode :shared :session-connections 45
                 :db-name "brian" :db-user "user" :db-password "password"}
                ctx {})]
       (is (= "user" (get-in res [:context :db-user]))))))

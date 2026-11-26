@@ -4,8 +4,15 @@
    template. All :shared-mode sessions connect to it instead of cloning their
    own PGDATA.
 
-   Lifecycle (later tasks):
-     ensure-up! / status / down! / reset! / destroy!"
+   Lifecycle: ensure-up! / status / down! / reset! / destroy!
+
+   It owns the cluster's connection budget too. The project declares it on its shared
+   :postgresql service — :max-connections (the cluster's limit), :reserved-connections
+   (slots for nido's owner psql and operators) and :session-connections (the most one
+   runtime may open). A start of the cluster runs it with the declared limit; a running
+   one is never restarted to apply a changed one. A shared-mode session start is admitted
+   only when the runtimes' claims, its own share and the reserve fit the limit the
+   cluster started with: validated-budget / admit! / release-claim!."
   (:refer-clojure :exclude [reset!])
   (:require
    [babashka.fs :as fs]
@@ -42,14 +49,6 @@
    second thread."
   [lock-path f]
   (io/with-file-lock (str lock-path) f))
-
-(def ^:private shared-max-connections
-  "The template's stock postgresql.conf allows 100 connections, and one brian
-   session holds 14–40 of them (four Hikari pools and a pg2 pool), so a shared
-   cluster on the stock limit refuses the fifth or sixth session's app boot with
-   `too many clients already`. Sized for the whole fleet instead: an idle
-   connection slot costs PostgreSQL only a little shared memory."
-  1000)
 
 ;; ---------------------------------------------------------------------------
 ;; Lifecycle helpers
@@ -91,9 +90,129 @@
       (proc/find-available-port pref 200)
       pref)))
 
-(defn- start-existing!
-  "Start (or adopt) the already-seeded shared cluster; return its live port."
+;; ---------------------------------------------------------------------------
+;; The connection budget
+;; ---------------------------------------------------------------------------
+
+(def ^:private default-max-connections
+  "The limit a shared cluster starts with when its definition declares no :max-connections."
+  200)
+
+(def ^:private default-reserved-connections
+  "Slots kept for nido's own owner psql and operators when none are declared."
+  10)
+
+(def ^:private stock-max-connections
+  "PostgreSQL's own default, what a postmaster runs with when no file it reads sets one."
+  100)
+
+(def ^:private settings-file
+  "The settings nido writes into the shared cluster's data dir, included last by its
+   postgresql.conf. Written immediately before nido starts the postmaster and at no other
+   time, so it always says what the running postmaster started with."
+  "nido-shared.conf")
+
+(defn- invalid-field!
+  [project-name field v want]
+  (throw (ex-info (str project-name "'s shared :postgresql service "
+                       (if (nil? v)
+                         (str "declares no " field)
+                         (str "declares " field " " (pr-str v)))
+                       " — it must be " want ". Declare it on the :postgresql service in "
+                       project-name "'s session.edn.")
+                  {:refused :connection-budget :reason :invalid-budget
+                   :project-name project-name :field field :value v})))
+
+(defn- limit-of
+  "The :max-connections `service-def` declares, or the default. Throws naming the field
+   when it declares one that is not a positive integer."
+  [project-name service-def]
+  (let [v (:max-connections service-def)]
+    (cond (nil? v)     default-max-connections
+          (pos-int? v) v
+          :else        (invalid-field! project-name :max-connections v "a positive integer"))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}
+  validated-budget
+  "The connection budget a shared-mode :postgresql definition declares, parsed:
+   {:max-connections :reserved-connections :session-connections}. Touches no cluster.
+   Throws, naming the field and the project, when :session-connections is not a positive
+   integer — a shared-mode start never proceeds without one — or when :max-connections
+   or :reserved-connections is declared as something other than a positive, respectively
+   non-negative, integer."
+  [project-name service-def]
+  (let [{:keys [session-connections reserved-connections]} service-def]
+    (when-not (pos-int? session-connections)
+      (invalid-field! project-name :session-connections session-connections
+                      "a positive integer: the most connections one runtime on the shared cluster may open, its pools plus its agent's tools"))
+    (when-not (or (nil? reserved-connections) (nat-int? reserved-connections))
+      (invalid-field! project-name :reserved-connections reserved-connections
+                      "a non-negative integer"))
+    {:max-connections      (limit-of project-name service-def)
+     :reserved-connections (or reserved-connections default-reserved-connections)
+     :session-connections  session-connections}))
+
+(defn- conf-max-connections
+  "The max_connections the last uncommented setting in the conf file at `path` sets, or nil.
+   Reads the assignment as PostgreSQL does: the name in any case, `=` optional, the value
+   quoted or not, a trailing comment."
+  [path]
+  (when (fs/exists? (str path))
+    (some->> (str/split-lines (slurp (str path)))
+             (keep #(second (re-matches #"(?i)\s*max_connections(?:\s*=\s*|\s+)'?(\d+)'?\s*(?:#.*)?" %)))
+             last
+             parse-long)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :int]}
+  started-with-limit
+  "The max_connections the project's running shared cluster started with: what nido's
+   settings file says, else — a postmaster started before nido wrote one — what
+   PostgreSQL itself applied: an ALTER SYSTEM value in postgresql.auto.conf, which it
+   reads after postgresql.conf, else what postgresql.conf sets, else its stock default.
+   (A start nido makes drops any ALTER SYSTEM max_connections, so with the settings file
+   present the file is the whole answer.)"
   [project-name]
+  (let [dir (state/shared-pg-data-dir project-name)]
+    (or (conf-max-connections (fs/path dir settings-file))
+        (conf-max-connections (fs/path dir "postgresql.auto.conf"))
+        (conf-max-connections (fs/path dir "postgresql.conf"))
+        stock-max-connections)))
+
+(defn- drop-lines!
+  "Rewrite the conf file at `path` without the lines matching `re`, when it has any."
+  [path re]
+  (when (fs/exists? path)
+    (let [text (slurp path)
+          kept (remove #(re-matches re %) (str/split-lines text))]
+      (when (< (count kept) (count (str/split-lines text)))
+        (spit path (str (str/join "\n" kept) "\n"))))))
+
+(defn- write-limit!
+  "Write the settings file the postmaster about to start reads, and make the cluster's
+   postgresql.conf include it as its last line, active, so no later setting there
+   overrides it. postgresql.auto.conf is read after postgresql.conf, so a
+   max_connections an ALTER SYSTEM left there is dropped. Only ever called immediately
+   before a start of the postmaster."
+  [data-dir max-connections]
+  (let [conf    (str (fs/path data-dir "postgresql.conf"))
+        include (str "include_if_exists = '" settings-file "'")]
+    ;; Every earlier include of the file, active or commented out, goes; one is appended.
+    (drop-lines! conf (re-pattern (str "\\s*#?\\s*include(?:_if_exists)?\\s*=?\\s*'"
+                                       settings-file "'.*")))
+    (spit conf (str (some-> (when (fs/exists? conf) (slurp conf)) str/trimr not-empty (str "\n\n"))
+                    include "\n"))
+    (drop-lines! (str (fs/path data-dir "postgresql.auto.conf"))
+                 #"\s*max_connections\s*=.*")
+    (spit (str (fs/path data-dir settings-file))
+          (str "# Written by nido immediately before it starts this cluster; read by\n"
+               "# admission as the limit the running postmaster started with.\n"
+               "max_connections = " max-connections "\n"))))
+
+(defn- start-existing!
+  "Start (or adopt) the already-seeded shared cluster; return its live port. A start runs
+   the postmaster with `max-connections`; a cluster already running is adopted as it is,
+   never restarted to apply a changed limit."
+  [project-name max-connections]
   (let [data-dir (state/shared-pg-data-dir project-name)
         log-path (state/shared-log-file project-name)
         bin-dir  (pg/find-pg-bin-dir)
@@ -109,38 +228,165 @@
                     (core/log-step "Removing stale shared postmaster.pid")
                     (fs/delete-if-exists (:pid-file existing)))
             port  (pick-shared-port project-name)]
-        (pg/pg-ctl-start! bin-dir data-dir port log-path pg/socket-base-dir
-                          {"max_connections" shared-max-connections})
+        (write-limit! data-dir max-connections)
+        (pg/pg-ctl-start! bin-dir data-dir port log-path pg/socket-base-dir)
         (pg/wait-for-tcp! port)
         (state/write-shared-meta! project-name
                                   (merge (or (try (state/read-shared-meta project-name) (catch Exception _ nil)) {})
                                          {:project-name project-name :port port}))
-        (core/log-step (str "Shared cluster running (port " port ", data-dir=" data-dir ")"))
+        (core/log-step (str "Shared cluster running (port " port ", max_connections "
+                            max-connections ", data-dir=" data-dir ")"))
         port))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:maybe :map]] :any]}
   ensure-up!
   "Ensure the project's shared cluster exists and is running. Seeds it by
-   cloning the template (copy-on-write) on first call. Concurrency-safe. Returns {:port p}."
-  [project-name]
-  (with-lock (state/shared-lock-file project-name)
-    (fn []
-      (let [data-dir (state/shared-pg-data-dir project-name)
-            seeded?  (fs/exists? (str (fs/path data-dir "PG_VERSION")))]
-        (when-not seeded?
-          (assert-template-ready! project-name)
-          (fs/create-dirs (state/project-shared-dir project-name))
-          (core/log-step "Seeding shared cluster: cloning template…")
-          (pg/clone-pgdata! (template-data-dir project-name) data-dir)
-          (state/write-shared-meta! project-name
-                                    {:project-name project-name
-                                     :seeded-at (core/now-iso)}))
-        {:port (start-existing! project-name)}))))
+   cloning the template (copy-on-write) on first call; a start runs it with the
+   :max-connections `service-def` declares (nido's default when it declares none or is
+   nil). Concurrency-safe. Opens no client connection. Returns {:port p}."
+  [project-name service-def]
+  (let [limit (limit-of project-name service-def)]
+    (with-lock (state/shared-lock-file project-name)
+      (fn []
+        (let [data-dir (state/shared-pg-data-dir project-name)
+              seeded?  (fs/exists? (str (fs/path data-dir "PG_VERSION")))]
+          (when-not seeded?
+            (assert-template-ready! project-name)
+            (fs/create-dirs (state/project-shared-dir project-name))
+            (core/log-step "Seeding shared cluster: cloning template…")
+            (pg/clone-pgdata! (template-data-dir project-name) data-dir)
+            (state/write-shared-meta! project-name
+                                      {:project-name project-name
+                                       :seeded-at (core/now-iso)}))
+          {:port (start-existing! project-name limit)})))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+;; ---------------------------------------------------------------------------
+;; Admission — claims on the budget
+;; ---------------------------------------------------------------------------
+
+(defn- read-claims [project-name]
+  (or (io/read-edn (state/shared-claims-file project-name)) {}))
+
+(defn- on-cluster-runtimes
+  "instance-id of every runtime the registry records as up on the project's shared
+   cluster at `port` — a runtime once however many sessions share it. None when no port is
+   known: a cluster with no recorded port has no runtime up on it."
+  [project-name port]
+  (->> (when port (vals (state/read-registry)))
+       (filter #(and (= (str project-name) (str (:project-name %)))
+                     (= port (:pg-port %))
+                     (:instance-id %)
+                     (state/session-live? %)))
+       (map :instance-id)
+       distinct))
+
+(defn- claimed
+  "What runtimes on the cluster other than `instance-id` claim: every claim held, and every
+   runtime registered as up there that holds none — one started before admission
+   existed — at `share`."
+  [project-name port instance-id share]
+  (let [claims    (dissoc (read-claims project-name) instance-id)
+        unclaimed (->> (on-cluster-runtimes project-name port)
+                       (remove #(or (= % instance-id) (contains? claims %)))
+                       vec)]
+    {:claims    claims
+     :unclaimed unclaimed
+     :runtimes  (+ (count claims) (count unclaimed))
+     :claimed   (+ (reduce + 0 (map :connections (vals claims)))
+                   (* share (count unclaimed)))}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :map] :map]}
+  admit!
+  "Admit runtime `instance-id` onto the project's shared cluster under `budget` (as
+   `validated-budget` answers it). Brings the cluster up first, without opening a client
+   connection. Admissions of one project are taken one at a time, so each counts the
+   claims of the others. Answers as a value:
+     {:admitted figures} — the runtime now holds a claim of its :session-connections;
+     {:refused figures}  — it would take the cluster past its started-with limit.
+   figures: :project-name :max-connections (started-with) :reserved-connections
+   :runtimes :claimed :session-connections."
+  [project-name instance-id {:keys [reserved-connections session-connections] :as budget}]
+  (let [{:keys [port]} (ensure-up! project-name budget)]
+    (with-lock (state/shared-lock-file project-name)
+      (fn []
+        (let [limit (started-with-limit project-name)
+              {:keys [claims runtimes] :as c} (claimed project-name port instance-id
+                                                       session-connections)
+              figures {:project-name         project-name
+                       :port                 port
+                       :max-connections      limit
+                       :reserved-connections reserved-connections
+                       :runtimes             runtimes
+                       :claimed              (:claimed c)
+                       :session-connections  session-connections}]
+          (if (<= (+ (:claimed c) session-connections reserved-connections) limit)
+            (do (io/write-edn! (state/shared-claims-file project-name)
+                               (assoc claims instance-id
+                                      {:connections session-connections
+                                       :claimed-at  (core/now-iso)}))
+                {:admitted figures})
+            {:refused figures}))))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  refusal
+  "The error a budget refusal is thrown as. Its message carries the figures and the ways
+   out, and nothing that names one particular session, so every budget refusal of one
+   project is one failure cause."
+  [{:keys [project-name max-connections reserved-connections runtimes claimed
+           session-connections] :as figures}]
+  (ex-info (str project-name "'s shared Postgres cluster has no connection budget left for this session: "
+                "max_connections " max-connections ", reserve " reserved-connections
+                ", runtimes on it " runtimes " claiming " claimed
+                ", this session's :session-connections " session-connections
+                " — " (+ claimed session-connections reserved-connections) " > " max-connections
+                ". Stop a session, or raise :max-connections on " project-name
+                "'s shared :postgresql service and restart the shared cluster "
+                "(bb nido:shared:pg:down, then bb nido:shared:pg:up).")
+           (assoc figures :refused :connection-budget :reason :over-budget)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :any]}
+  release-claim!
+  "Release runtime `instance-id`'s claim on the project's shared cluster. No-op when it
+   holds none. Never throws: a release that fails is a known gap the design accepts — the
+   claim stays counted until removed by hand — so it is reported, naming the file and the
+   runtime, and the stop (or the failed start's own error) goes on."
+  [project-name instance-id]
+  (let [f (state/shared-claims-file project-name)]
+    (try
+      (when (fs/exists? f)
+        (with-lock (state/shared-lock-file project-name)
+          (fn []
+            (let [claims (read-claims project-name)]
+              (when (contains? claims instance-id)
+                (io/write-edn! f (dissoc claims instance-id))
+                (core/log-step (str "Released " project-name " shared-cluster claim of "
+                                    instance-id)))))))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println (str "warning: could not release " instance-id "'s claim on " project-name
+                        "'s shared cluster (" (ex-message e) "). It stays counted against "
+                        "admission: delete its entry from " f " by hand "
+                        "(bb nido:shared:pg:status :project " project-name " lists the claims).")))
+        nil))))
+
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  release-claims-of!
+  "Release runtime `instance-id`'s claim on whichever project's shared cluster holds one —
+   for a stop that knows the runtime but not its project."
+  [instance-id]
+  (let [root (state/shared-dir)]
+    (when (fs/exists? root)
+      (doseq [dir (fs/list-dir root)
+              :when (fs/exists? (fs/path dir "claims.edn"))]
+        (release-claim! (str (fs/file-name dir)) instance-id)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:maybe :map]] :any]}
   status
-  "Print shared-cluster status for a project."
-  [project-name]
+  "Print shared-cluster status for a project: the cluster, and its connection budget —
+   the limit it started with, the reserve and share `service-def` declares, and each
+   runtime's claim. The claims are printed whatever the cluster's state: they count against
+   admission until their runtimes stop, a destroyed cluster's included."
+  [project-name service-def]
   (let [data-dir (state/shared-pg-data-dir project-name)
         m        (try (state/read-shared-meta project-name) (catch Exception _ nil))
         seeded?  (fs/exists? (str (fs/path data-dir "PG_VERSION")))
@@ -153,7 +399,22 @@
     (println "  running?:" running?)
     (when m
       (when-let [p (:port m)] (println "  port:" p))
-      (when-let [t (:seeded-at m)] (println "  seeded-at:" t)))))
+      (when-let [t (:seeded-at m)] (println "  seeded-at:" t)))
+    (let [share   (:session-connections service-def)
+          reserve (or (:reserved-connections service-def) default-reserved-connections)
+          {:keys [claims unclaimed claimed]}
+          (claimed project-name (:port m) "" (if (pos-int? share) share 0))]
+      (println "connection budget:")
+      (println "  max_connections (started with):" (if running? (started-with-limit project-name) "—"))
+      (println "  declared :max-connections:" (or (:max-connections service-def)
+                                                 (str default-max-connections " (default)")))
+      (println "  reserve:" reserve)
+      (println "  per runtime (:session-connections):" (or share "— not declared"))
+      (println "  claimed:" claimed)
+      (doseq [[id {:keys [connections claimed-at]}] (sort-by key claims)]
+        (println (str "    " id "  " connections "  since " claimed-at)))
+      (doseq [id (sort unclaimed)]
+        (println (str "    " id "  " (or share "?") "  up, no claim (counted at the declared share)"))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   down!
@@ -172,10 +433,11 @@
           (do (fs/delete-if-exists pid-file)
               (core/log-step (str "Removed stale shared postmaster.pid for " project-name))))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:maybe :map]] :any]}
   reset!
-  "Stop, drop PGDATA, re-clone from template, start. Recovery path."
-  [project-name]
+  "Stop, drop PGDATA, re-clone from template, start with the :max-connections
+   `service-def` declares. Recovery path."
+  [project-name service-def]
   (with-lock (state/shared-lock-file project-name)
     (fn []
       (down! project-name)
@@ -184,17 +446,27 @@
           (fs/delete-tree data-dir)
           (core/log-step (str "Dropped shared PGDATA at " data-dir))))))
   ;; ensure-up! re-takes the lock; keep reset! simple by composing.
-  (ensure-up! project-name))
+  (ensure-up! project-name service-def))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   destroy!
-  "Stop and remove the shared cluster PGDATA + metadata."
+  "Stop and remove the shared cluster PGDATA + metadata. The claims of runtimes on it are
+   kept: a runtime's claim is held until nido stops that runtime, not the cluster, so a
+   recreated cluster still counts every runtime admitted before it."
   [project-name]
-  (down! project-name)
-  (let [dir (state/project-shared-dir project-name)]
+  (let [dir   (state/project-shared-dir project-name)
+        keep? #{(str (fs/absolutize (state/shared-claims-file project-name)))
+                (str (fs/absolutize (state/shared-lock-file project-name)))}]
     (when (fs/exists? dir)
-      (fs/delete-tree dir)
-      (core/log-step (str "Destroyed shared cluster for " project-name)))))
+      (with-lock (state/shared-lock-file project-name)
+        (fn []
+          (down! project-name)
+          (doseq [child (fs/list-dir dir)
+                  :when (not (keep? (str (fs/absolutize child))))]
+            (fs/delete-tree child))
+          (core/log-step (str "Destroyed shared cluster for " project-name
+                              (when (seq (read-claims project-name))
+                                " (its runtimes' connection claims are kept)"))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Migration file helpers
@@ -492,11 +764,12 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   ensure-ready!
-  "Bring the shared cluster up and, when opts opts-in (has :app-user or
-   :source-repo), advance it to main@origin and ensure the DDL-less role.
-   Returns {:port p}. opts nil/empty ⇒ plain ensure-up!."
+  "Bring the shared cluster up — a start runs it with opts' :max-connections, nido's
+   default when absent — and, when opts opts-in (has :app-user or :source-repo), advance
+   it to main@origin and ensure the DDL-less role. Returns {:port p}. opts nil/empty ⇒
+   plain ensure-up!."
   [project-name {:keys [db-name owner-user schema app-user source-repo] :as opts}]
-  (let [{:keys [port] :as up} (ensure-up! project-name)]
+  (let [{:keys [port] :as up} (ensure-up! project-name opts)]
     (when (and opts (or app-user source-repo))
       ;; ensure-up! already released its lock (sequential in-process, so
       ;; re-acquiring here is not reentrant) — take a fresh one so a second

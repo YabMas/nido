@@ -439,25 +439,48 @@
   [service-def ctx _opts]
   (if (= :shared (resolve-pg-mode service-def))
     ;; --- shared mode: no per-session PGDATA; connect to the shared cluster ---
+    ;; Validated, then admitted on the cluster's connection budget, and only then readied:
+    ;; a refusal throws here, before any later service — the session's JVM included — has
+    ;; started, and session-engine keeps it as a failed start.
     (let [{:keys [db-name db-user db-password schema app-db-user app-db-password
                   flyway-migrate?]
            :or {db-user "user" db-password "password" flyway-migrate? true}} service-def
           project-name (get-in ctx [:session :project-name])
           project-dir  (get-in ctx [:session :project-dir])
+          instance-id  (or (get-in ctx [:session :instance-id]) project-name)
+          budget       ((requiring-resolve 'nido.session.shared-pg/validated-budget) project-name service-def)
+          ;; Resolved before admission: a claim, once taken, is held only by the try below,
+          ;; so nothing fallible may run between admit! and it.
           source-repo  ((requiring-resolve 'nido.session.engine/source-project-root)
                         project-dir)
-          {:keys [port]} ((requiring-resolve 'nido.session.shared-pg/ensure-ready!)
-                          project-name
-                          {:db-name db-name :owner-user db-user :schema schema
-                           :app-user app-db-user :source-repo source-repo})
+          admission    ((requiring-resolve 'nido.session.shared-pg/admit!) project-name instance-id budget)
+          _            (when-let [figures (:refused admission)]
+                         (throw ((requiring-resolve 'nido.session.shared-pg/refusal) figures)))
+          {:keys [port]} (try
+                           ((requiring-resolve 'nido.session.shared-pg/ensure-ready!)
+                            project-name
+                            {:db-name db-name :owner-user db-user :schema schema
+                             :app-user app-db-user :source-repo source-repo
+                             :max-connections (:max-connections budget)})
+                           (catch Throwable t
+                             ;; Rollback never stops the service whose start threw, so
+                             ;; the claim this start took is released here.
+                             ((requiring-resolve 'nido.session.shared-pg/release-claim!) project-name instance-id)
+                             (throw t)))
           ;; Sessions connect with the DDL-less app role when configured, so a
           ;; migration attempt fails permission-denied instead of poisoning the
           ;; shared history. Falls back to the owner creds when not configured.
           conn-user (or app-db-user db-user)
-          conn-pass (or app-db-password db-password)]
+          conn-pass (or app-db-password db-password)
+          {:keys [admitted]} admission]
       (core/log-step (str "Using shared cluster for " project-name " (port " port ")"
-                          (when app-db-user (str " as " conn-user))))
-      {:state {:mode :shared :project-name project-name :pg-port port}
+                          (when app-db-user (str " as " conn-user))
+                          " — admitted " (:session-connections admitted) " connections; "
+                          (:runtimes admitted) " other runtimes claim " (:claimed admitted)
+                          " of " (:max-connections admitted) " (reserve "
+                          (:reserved-connections admitted) ")"))
+      {:state {:mode :shared :project-name project-name :pg-port port
+               :instance-id instance-id}
        :context {:port port :db-name db-name :db-user conn-user
                  :db-password conn-pass :flyway-migrate? flyway-migrate?}})
     ;; --- private mode (:clone / :isolated): EXISTING body, unchanged ---
@@ -524,7 +547,10 @@
 (defmethod service/stop-service! :postgresql
   [_service-def saved-state]
   (if (= :shared (:mode saved-state))
-    (core/log-step "Shared-mode session: leaving shared cluster running.")
+    (let [{:keys [project-name instance-id]} saved-state]
+      (when (and project-name instance-id)
+        ((requiring-resolve 'nido.session.shared-pg/release-claim!) project-name instance-id))
+      (core/log-step "Shared-mode session: leaving shared cluster running."))
     ;; --- private mode: EXISTING stop body, unchanged ---
     ;; Stop the cluster but leave PGDATA on disk. Sessions can be cycled
     ;; (down → up, JVM crash) without losing intra-session
@@ -538,6 +564,12 @@
                        (when id (state/pg-data-dir id)))]
       (when (and data-dir (fs/exists? data-dir))
         (pg-ctl-stop! data-dir)))))
+
+(defmethod service/stop-recorded! :postgresql
+  [_service-def instance-id]
+  ;; A start that saved no state may still have been admitted: its claim is released by
+  ;; the stop that stops what it left.
+  ((requiring-resolve 'nido.session.shared-pg/release-claims-of!) instance-id))
 
 (defmethod service/service-status :postgresql
   [_service-def saved-state]

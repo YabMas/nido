@@ -128,6 +128,8 @@
     "The lock guarding shared-cluster CREATION — two sessions coming up at once would otherwise
      both find no cluster and both build one."
     {:signature [:=> [:catn [:project-name ProjectName]] Path] :delegates [project-shared-dir]})
+  (Operation shared-claims-file "The connection claims runtimes hold on the shared cluster."
+    {:signature [:=> [:catn [:project-name ProjectName]] Path] :delegates [project-shared-dir]})
   (Operation read-shared-meta "The shared cluster's metadata, or nil."
     {:signature [:=> [:catn [:project-name ProjectName]] [:maybe :map]] :delegates [shared-meta-file]})
   (Operation write-shared-meta! "Persist the shared cluster's metadata."

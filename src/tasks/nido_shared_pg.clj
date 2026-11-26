@@ -32,14 +32,18 @@
   (:directory (second (lifecycle/resolve-project {:project project-name}))))
 
 (defn- ready-opts [project-name]
-  (let [{:keys [db-name db-user schema app-db-user app-db-password]} (pg-service-def project-name)]
+  (let [{:keys [db-name db-user schema app-db-user app-db-password max-connections]}
+        (pg-service-def project-name)]
     {:db-name db-name :owner-user (or db-user "user") :schema schema
      :app-user app-db-user :app-password app-db-password
-     :source-repo (project-source-dir project-name)}))
+     :source-repo (project-source-dir project-name)
+     :max-connections max-connections}))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   up
-  "Ensure the shared Postgres cluster for a project is up (seed+start), advance
+  "Ensure the shared Postgres cluster for a project is up (seed+start, with the
+   :max-connections its :postgresql service declares; a running cluster is left as it
+   is), advance
    it to main@origin, and ensure the DDL-less app role. Idempotent.
 
    Usage:
@@ -58,7 +62,7 @@
   [& args]
   (let [opts (parse-opts args)
         project-name (require-project opts)]
-    (shared/status project-name)))
+    (shared/status project-name (pg-service-def project-name))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   down
@@ -81,7 +85,7 @@
   [& args]
   (let [opts (parse-opts args)
         project-name (require-project opts)]
-    (shared/reset! project-name)
+    (shared/reset! project-name (pg-service-def project-name))
     (prn (shared/ensure-ready! project-name (ready-opts project-name)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

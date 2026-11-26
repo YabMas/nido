@@ -254,6 +254,14 @@
   [project-name]
   (str (fs/path (project-shared-dir project-name) "shared.lock")))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  shared-claims-file
+  "Connection claims on the shared cluster, instance-id → claim:
+   ~/.nido/shared/<project-name>/claims.edn. Outlives the cluster's destruction: a
+   claim is released by stopping its runtime."
+  [project-name]
+  (str (fs/path (project-shared-dir project-name) "claims.edn")))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
   read-shared-meta [project-name]
   (io/read-edn (shared-meta-file project-name)))
