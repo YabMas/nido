@@ -265,7 +265,13 @@
         (is (= :implemented (place (assoc pr :qa-state :owed))))
         (is (= :implemented (place (assoc base :review-passed? false :qa-state :owed))))))
     (testing "a halt still outranks QA"
-      (is (= :blocked (place (assoc base :qa-state :failed :blocker-seq 9)))))))
+      (is (= :blocked (place (assoc base :qa-state :failed :blocker-seq 9)))))
+    (testing "a passed review the clamped trail no longer holds — a superseding design since — advances nothing"
+      (let [d2 (assoc base :ks #{:intent :design :review :implementation-completed}
+                      :trail-records [{:kind :intent} {:kind :design}])]
+        (is (= :designed (place (assoc d2 :qa-state :owed :qa-product? false))))
+        (is (= :designed (place (assoc d2 :qa-state :owed :qa-product? true))))
+        (is (= :designed (place d2)) "nor makes a working-copy lander a candidate")))))
 
 (deftest each-qa-next-action-has-its-spine-stage
   (is (= {:stage :walk-qa :mode :authoring} (p/next-action :qa-owed :pickup)))

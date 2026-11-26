@@ -676,9 +676,12 @@
   (let [;; The kinds of the records the trail clauses read (`trail-records`), so the record
         ;; that placed a trail position is nameable (`placed-by`). Absent, the whole index.
         trail-ks       (if trail-records (into #{} (map :kind) trail-records) ks)
+        ;; The passed review, only while it stands in the trail: one under a design since
+        ;; superseded passed a change nobody is building now, and advances nothing.
+        review-stands? (and review-passed? (contains? trail-ks :review))
         ;; Landable as it stands: a PR-landing project lands its open PR, any other its working
         ;; copy, so a converged review is the whole of it there.
-        landable?      (or (contains? trail-ks :pr-opened) (and (false? lands-pr?) review-passed?))
+        landable?      (or (contains? trail-ks :pr-opened) (and (false? lands-pr?) review-stands?))
         design-stands? (not (and (= :design (:stage re-entry))
                                  (not (:indeterminate? re-entry))))
         ;; QA that holds the landing: owed, or failed. Under :off, :not-applicable or :passed —
@@ -716,18 +719,18 @@
     ;; QA THAT HOLDS keeps the workstream off every position whose next action is a landing —
     ;; :land-granted, :release-candidate, :published — and off :reviewed, whatever the review and
     ;; the grants say: a walk is evidence about the change as built, so the landing waits on it.
-    ;; A failed walk sends the work back to the build. Owed with the review passed, the plan is
-    ;; walked — or written, while no :product plan is the newest citing the governing design.
+    ;; A failed walk sends the work back to the build. Owed with the review passed and standing in
+    ;; the trail, the plan is walked — or written, while no :product plan is the newest citing the governing design.
     ;; Owed with a review in the trail that no longer passes — a build was recorded since, as
     ;; after a failed walk's fix — the review is owed again.
     (= :failed qa-state)                 :qa-failed
-    (and (= :owed qa-state) review-passed?) (if qa-product? :qa-owed :qa-unplanned)
+    (and (= :owed qa-state) review-stands?) (if qa-product? :qa-owed :qa-unplanned)
     (and qa-holds? (contains? trail-ks :review)) :implemented
 
     ;; The person granted the landing (`ws/unspent-grants`) and it has not landed since: the next
     ;; move is the seat's, which nido instructs, so no gate offers Land again.
     (and merge-granted? landable? (not qa-holds?)) :land-granted
-    (and review-passed? landable? (not qa-holds?)) :release-candidate
+    (and review-stands? landable? (not qa-holds?)) :release-candidate
     (and (contains? trail-ks :pr-opened) (not qa-holds?)) :published
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
