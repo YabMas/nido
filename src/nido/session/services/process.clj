@@ -128,9 +128,9 @@
                  (proc/quoted log-path)
                  " 2>&1 & printf %s $! > " (proc/quoted pid-path))
         ;; A runtime run out of its own checkout is told where git is (`checkout/git-dir`).
-        result (shell (cond-> {:continue true :out :string :err :string
-                               :dir project-dir :shutdown nil}
-                        git-dir (assoc :extra-env {"GIT_DIR" git-dir}))
+        result (shell {:continue true :out :string :err :string
+                       :dir project-dir :shutdown nil
+                       :env (proc/project-shell-env (when git-dir {"GIT_DIR" git-dir}))}
                       "bash" "-lc" cmd)
         pid (recorded-pid pid-path)]
     (when-not (zero? (:exit result))

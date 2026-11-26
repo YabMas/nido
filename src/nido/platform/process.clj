@@ -276,6 +276,40 @@
   quoted [s]
   (str "'" (str/replace s "'" "'\"'\"'") "'"))
 
+(def ^:private caller-shell-startup
+  "Variables that make every non-interactive shell source a file at startup.
+   They reach nido from whoever called it: Claude Code exports a project's
+   `.claude/settings.json` `env` into every process an agent's Bash tool starts,
+   and brian sets `BASH_ENV=env.sh` there."
+  ["BASH_ENV" "ENV"])
+
+(defn ^{:malli/schema [:=> [:cat] [:map-of :string :string]]}
+  inherited-env
+  "This process's environment — the seam a test replaces to stand in for a caller's."
+  []
+  (into {} (System/getenv)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:map-of :string :string]]] [:map-of :string :string]]}
+  project-shell-env
+  "The whole environment for a shell nido starts to run a project's own code (a
+   project-command, a service, a setup step): nido's environment without the
+   shell-startup variables its caller exported, with `extra` on top, so `extra`
+   may still set them.
+
+   The project command must run as it does from a person's terminal, not
+   differently because an agent called it. Inherited, a relative `BASH_ENV`
+   (brian's `env.sh`) is sourced by every bash under it whose cwd holds that
+   file, and brian's `env.sh` runs `git`. A test that puts a bash-script `git`
+   stub first on PATH then recurses: each stub's startup runs `git`, which is
+   the stub. On 2026-11-25 that recursed about 47,600 levels deep under a
+   seat's `nido:run ci-light`, until the core's cgroup ran out of tasks.
+
+   Pass the result as `:env`, not `:extra-env`: `:extra-env` merges into the
+   inherited environment and cannot remove anything from it."
+  [extra]
+  (merge (apply dissoc (inherited-env) caller-shell-startup)
+         extra))
+
 (defn ^{:malli/schema [:=> [:cat :string :int] :string]}
   log-tail [path lines]
   (if-not (fs/exists? path)

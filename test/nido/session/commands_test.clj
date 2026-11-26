@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [babashka.process]
    [nido.platform.lock]
+   [nido.platform.process]
    [clojure.test :refer [deftest is testing]]
    [nido.session.commands :as commands]))
 
@@ -72,3 +73,55 @@
   (is (= 3 (:exit (commands/run-command! {:probe {:cmd "exit 3"}} :probe {}
                                          {:continue? true :out :string :err :string})))
       ":continue? still hands the failure back instead of throwing"))
+
+;; ---------------------------------------------------------------------------
+;; A caller's BASH_ENV does not reach the command
+;;
+;; Regression, 2026-11-25: a brian seat ran `bb nido:run … ci-light`. Claude Code
+;; had exported brian's `.claude/settings.json` env, BASH_ENV=env.sh, into the
+;; seat's shells, and brian's env.sh runs `git rev-parse --git-common-dir`. A CI
+;; test put a bash-script `git` stub first on PATH: each stub's bash sourced
+;; env.sh, which ran `git` — the stub — again. ~47,600 levels, until the core's
+;; cgroup had no tasks left. Here the stub refuses past depth 5, so the control
+;; case stays bounded.
+;; ---------------------------------------------------------------------------
+
+(defn- storm-fixture
+  "A checkout-like dir holding an env.sh that runs `git` (as brian's does), and
+   a bash-script `git` stub that logs each call. env.sh stops at depth 5."
+  []
+  (let [d   (fs/create-temp-dir {:prefix "nido-bash-env"})
+        bin (fs/create-dirs (fs/path d "stubbin"))
+        git (fs/path bin "git")]
+    ;; The depth guard sits in env.sh, not the stub: the recursion happens at
+    ;; each stub's bash startup, before a line of the stub runs.
+    (spit (fs/file d "env.sh")
+          (str "[ \"${STORM_DEPTH:-0}\" -ge 5 ] && return 0\n"
+               "export STORM_DEPTH=$((${STORM_DEPTH:-0}+1))\n"
+               "__D=$(git rev-parse --git-common-dir 2>/dev/null)\n"))
+    (spit (fs/file git)
+          (str "#!/usr/bin/env bash\n"
+               "printf '%s\\n' \"$*\" >> " (fs/path d "calls") "\n"
+               "exit 1\n"))
+    (fs/set-posix-file-permissions git "rwxr-xr-x")
+    {:dir (str d) :bin (str bin) :calls (fs/file d "calls")}))
+
+(defn- calls [f] (if (fs/exists? f) (count (re-seq #"(?m)^rev-parse" (slurp f))) 0))
+
+(deftest a-callers-bash-env-does-not-reach-the-command
+  (let [{:keys [dir bin] :as fx} (storm-fixture)
+        cmd   {:probe {:cmd (str "PATH=" bin ":$PATH bash -c 'git ls-remote x' || true")
+                       :cwd dir}}
+        seat  (assoc (into {} (System/getenv)) "BASH_ENV" "env.sh")]
+    (try
+      (testing "control: with BASH_ENV passed through, the stub re-enters itself"
+        (commands/run-command! (assoc-in cmd [:probe :env] {"BASH_ENV" "env.sh"})
+                               :probe {} {:out :string :err :string})
+        (is (<= 4 (calls (:calls fx)))
+            "the fixture reproduces the recursion, so the case below can fail")
+        (fs/delete-if-exists (:calls fx)))
+      (testing "a seat's BASH_ENV, inherited, is dropped: env.sh never runs, no git call"
+        (with-redefs [nido.platform.process/inherited-env (constantly seat)]
+          (commands/run-command! cmd :probe {} {:out :string :err :string}))
+        (is (zero? (calls (:calls fx)))))
+      (finally (fs/delete-tree dir)))))

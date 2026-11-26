@@ -9,6 +9,7 @@
    [clojure.string :as str]
    [nido.platform.core :as core]
    [nido.platform.lock :as lock]
+   [nido.platform.process :as proc]
    [nido.session.context :as ctx]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] [:maybe :any]]}
@@ -104,9 +105,11 @@
            ;; Always :continue, so a failure surfaces as the throw below —
            ;; which names the command — rather than babashka's own, which
            ;; carries only the process map.
-           shell-opts (cond-> {:continue true :out out :err err}
-                        cwd (assoc :dir cwd)
-                        (seq env) (assoc :extra-env env))
+           ;; :env, not :extra-env — see proc/project-shell-env for why the
+           ;; caller's BASH_ENV must not reach the command.
+           shell-opts (cond-> {:continue true :out out :err err
+                               :env (proc/project-shell-env env)}
+                        cwd (assoc :dir cwd))
            invoke #(shell shell-opts "bash" "-lc" cmd)
            result (if lock
                     (lock/with-lock*

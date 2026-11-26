@@ -67,6 +67,15 @@
      :delegates [port-free?]})
   (Operation quoted "Shell-quote a string."
     {:signature [:=> [:catn [:s :string]] :string]})
+  (Operation inherited-env "This process's environment, as a map."
+    {:signature [:=> [:catn] [:map-of :string :string]]})
+  (Operation project-shell-env
+    "The environment for a shell that runs a project's own code: this process's, minus the
+     shell-startup variables (BASH_ENV, ENV) a caller exported, plus `extra`. A project command
+     runs the same whether a person or an agent started it; an agent's inherited BASH_ENV once
+     made a git stub recurse until the core's cgroup ran out of tasks."
+    {:signature [:=> [:catn [:extra [:maybe [:map-of :string :string]]]] [:map-of :string :string]]
+     :delegates [inherited-env]})
   (Operation log-tail "The last n lines of a file, or empty when it does not exist."
     {:signature [:=> [:catn [:path :string] [:lines :int]] :string]})
   (Operation rss-bytes "Resident set size of a pid in bytes, or nil."

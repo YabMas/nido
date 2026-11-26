@@ -153,7 +153,8 @@
       (core/log-step (str "Skipping shell step: " skip-if-exists " already exists"))
       (do
         (core/log-step (str "Running: " command))
-        (let [result (shell {:continue true :out :string :err :string :dir project-dir}
+        (let [result (shell {:continue true :out :string :err :string :dir project-dir
+                             :env (proc/project-shell-env nil)}
                             "bash" "-lc" command)]
           (when-not (zero? (:exit result))
             (core/log-step (str "WARNING: shell step failed: " (:err result)))))))))
