@@ -677,7 +677,9 @@
         ;; that placed a trail position is nameable (`placed-by`). Absent, the whole index.
         trail-ks       (if trail-records (into #{} (map :kind) trail-records) ks)
         ;; The passed review, only while it stands in the trail: one under a design since
-        ;; superseded passed a change nobody is building now, and advances nothing.
+        ;; superseded passed a change nobody is building now, and advances nothing. The caller
+        ;; reads `review-passed?` off these same trail records, so the review that passed is the
+        ;; one that stands; the presence check holds a caller that passes the fact bare to it.
         review-stands? (and review-passed? (contains? trail-ks :review))
         ;; Landable as it stands: a PR-landing project lands its open PR, any other its working
         ;; copy, so a converged review is the whole of it there.
@@ -1328,6 +1330,7 @@
           ;; The one QA reading, told whether the project declares :qa — read here beside the
           ;; landing declaration.
           qa     (standing/qa* project ws-id w design (qa-declared? project))
+          trail  (trail-records w design re)
           facts  {:class-position (class-position project whole ks)
                   ;; The drain records its own positions read: the proposal pending approval and
                   ;; the newest census under the current recipe.
@@ -1336,7 +1339,7 @@
                                      :census   (:seq (drain/newest-census whole))})
                   :closed?        (some? (or closed settled))
                          :closed-outcome (:outcome closed)
-                         :trail-records  (trail-records w design re)
+                         :trail-records  trail
                          :verdict-seq    (when (and verdict (not (:accepted? verdict))) (:seq verdict))
                          :decision-seq   (:seq decision)
                          :findings-open? (boolean (seq (standing/open-findings project ws-id)))
@@ -1377,7 +1380,10 @@
                          :merge-granted? (boolean (and (or (contains? ks :pr-opened) (contains? ks :review))
                                                        (some #(= :merge (:kind %))
                                                              (ws/unspent-grants project ws-id))))
-                         :review-passed? (implementation-review-passed? w)
+                         ;; Asked of the clamped trail, not the span: the review that passed is the
+                         ;; newest STANDING one, so a review under a design since superseded — however
+                         ;; late it was appended — passes nothing the fold places.
+                         :review-passed? (implementation-review-passed? (assoc w :entries trail))
                          ;; A declaration `landing` refuses reads as PR-landing: nothing then becomes
                          ;; a candidate before a PR is open, and its Land refuses it by name.
                          :lands-pr?      (not (false? (landing/names-pr? project)))

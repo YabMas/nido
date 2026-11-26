@@ -11,7 +11,8 @@
    [nido.coordinator.record.history :as history]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.reentry :as reentry]
-   [nido.coordinator.lane.pipeline :as p]))
+   [nido.coordinator.lane.pipeline :as p]
+   [nido.platform.project :as project]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -1535,6 +1536,24 @@
 (defn- a-review [status]
   {:format :review-report :status status :base "main" :base-rev nil :rounds 1 :fix-attempts 0
    :defects-settled 0 :findings-remaining 0 :report-path "r.edn"})
+
+(deftest a-late-passing-review-of-a-superseded-design-passes-nothing
+  ;; D2 is built and its review did not pass; a converged review citing D1 is appended after it.
+  ;; The span's newest review passed, but it is not the one standing: the D2 review is owed again.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            [b d1] (cleared-and-implemented! add!)
+            d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
+        (decide-and-clear! add! d2)
+        (add! :implementation-completed {:format :implementation-completed :summary "redone"
+                                         :artifacts [] :design {:seq d2}})
+        (add! :review (assoc (a-review :unresolved) :design {:seq d2}))
+        (add! :review (assoc (a-review :converged) :design {:seq d1}))
+        (with-redefs [project/qa (constantly :browser)]
+          (let [r (p/of :brian id)]
+            (is (= :implemented (:at r)))
+            (is (= :review-implementation (:stage (:next r))))))))))
 
 (deftest only-the-newest-review-over-the-built-change-passes-it
   (with-tmp
