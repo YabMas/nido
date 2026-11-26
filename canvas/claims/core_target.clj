@@ -60,7 +60,7 @@
   {:about [core-reconcile] :evidence "round"})
 
 (Claim idle-does-nothing
-  "With no command, event or due timer, the daemon executes nothing — its threads block — and routine coordination (every command, event and ordinary start) costs what it touches, not the size of the ledger; only explicitly requested work — a verification of stored state, or a migration (one that changes the fold, or the legacy import) — reads all of history."
+  "With no command, event or due timer, the daemon executes nothing — its threads block. Beyond an ordinary start's check of a sample of at most fifty workstreams against their history, only explicitly requested work reads all of history: a verification of stored state, or the upgrade verb's rebuild, which runs whenever the new release's core-domain source differs from the old one's."
   {:about [core-writer core-reconcile] :evidence "round"})
 
 (Claim external-calls-are-bounded
@@ -96,7 +96,7 @@
   {:about [core-writer core-buffer core-reconcile] :evidence "round"})
 
 (Claim events-are-inputs
-  "Every event core-domain yields records an input nido cannot recompute: a person's command, a turn's outcome, a conductor's judgement — every decision core-buffer makes, whether by rule or by a turn of its own — or a point-in-time fact about the outside world such as a merge. Nothing core-domain's fold of earlier events yields is committed as such an event, and no current condition that can be observed again, such as a process being alive, is ever one. An entry imported from a legacy ledger is not such an event: it is held with its content as written, marked as imported, and read as the legacy record it is."
+  "Every event core-domain yields records an input nido cannot recompute: a person's command, a turn's outcome, a conductor's judgement — every decision core-buffer makes, whether by rule or by a turn of its own — or a point-in-time fact about the outside world such as a merge. Nothing core-domain's fold of earlier events yields is committed as such an event, and no current condition that can be observed again, such as a process being alive, is ever one. The :workstream-created events the retired legacy-ledger import committed are marked imported, and the entries committed with them hold their content as written and are read as the legacy records they are."
   {:about [core-domain core-store] :evidence "round"})
 
 (Claim executor-state-is-a-handle

@@ -574,14 +574,6 @@ and the service.
 does until it is restarted. `bb nido:core:upgrade` restarts all three onto the
 checkout it is run in, which is what `bb nido:land` does after a landing.
 
-**The cut-over.** A nido home that ran the old coordinator moves to the core
-once, with `bb nido:core:cutover`: it snapshots the home, stops and disables
-the old coordinator and every legacy `claude --bg` session, imports every
-legacy ledger read-only, hands each unclosed workstream to the core and starts
-it. No imported running turn is started, and no legacy blocker becomes an ask.
-Until the core has started over the imported store, `bb nido:core:restore` puts
-the snapshot back and starts the old coordinator.
-
 Triggers live at `~/.nido/projects/<project>/triggers.edn`; envelopes hit
 `~/.nido/coordinator/queue/`.
 

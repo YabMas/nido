@@ -363,7 +363,6 @@
   (is (= :no-such-workstream (refusal d/empty-state {:command :revise-identity :changes {:facets {:a 1}}})))
   (let [[s] (run [{:command :create-workstream :identity id*}])]
     (is (= :workstream-exists (refusal s {:command :create-workstream :identity id*})))
-    (is (= :workstream-exists (refusal s {:command :import-ledger :identity id* :entries []})))
     (is (= :identity-not-revisable (refusal s {:command :revise-identity :changes {:project :brian}})))
     (let [[s2] (d/step s {:command :revise-identity :changes {:facets {:a 1} :title {:text "t" :basis "b"}}})
           [s3] (d/step s2 {:command :revise-identity :changes {:title nil}})]
@@ -386,19 +385,16 @@
         (is (nil? r) "the turn starts")
         (is (= :work-in-flight (refusal s3 {:command :discard-workstream})))))))
 
-(deftest a-legacy-ledger-is-imported-whole-with-its-seqs
-  (let [entries [{:row {:kind :intent :seq 1 :at "a" :ext "edn" :session "s"} :content "{}"}
-                 {:row {:kind :note :seq 3 :at "b" :ext "md"} :content "gap kept"}]
-        [s events] (run [{:command :open-unit :unit "u" :project "nido" :goal "g" :session-cwd "/w"}
-                         {:command :import-ledger :identity id* :entries entries}])]
-    (is (= [1 3] (map :seq (:ledger s))) "the seqs it was written under, gaps and all")
-    (is (= "s" (:session (first (:ledger s)))))
-    (is (= :open (get-in s [:units "u" :status])) "coordination already held is kept")
+(deftest the-events-the-retired-import-committed-still-fold
+  (let [events [{:event :workstream-created :identity id* :imported true}
+                {:event :entry-appended :row {:kind :intent :seq 1 :at "a" :ext "edn" :session "s"} :content "{}"}
+                {:event :entry-appended :row {:kind :note :seq 3 :at "b" :ext "md"} :content "gap kept"}]
+        s (d/fold events)]
+    (is (= id* (:identity s)) "the imported mark is not read")
+    (is (= [1 3] (map :seq (:ledger s))) "the seqs they were written under, gaps and all")
     (is (= 3 (d/latest-seq s)))
-    (is (= s (d/fold events)))
-    (is (= :seqs-not-increasing
-           (refusal d/empty-state {:command :import-ledger :identity id*
-                                   :entries (reverse entries)})))))
+    (is (= :unknown-command (refusal s {:command :import-ledger :identity id* :entries []}))
+        "no command imports a ledger any more")))
 
 (def ^:private digest-a (apply str (repeat 64 "a")))
 

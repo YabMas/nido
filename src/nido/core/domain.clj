@@ -1116,23 +1116,6 @@
                      :row (assoc (dissoc row :file) :seq (inc latest))
                      :content content}))))
 
-;; A legacy ledger arrives whole, with the seqs and times it was written under, as long as the
-;; workstream has no identity yet: an import is answered once.
-(defmethod decide :import-ledger [state {:keys [identity entries]}]
-  (let [seqs (map #(get-in % [:row :seq]) entries)]
-    (cond
-      (or (:identity state) (:discarded? state)) (refuse :workstream-exists)
-      (not (keyword? (:project identity)))      (refuse :identity-needs-a-project)
-      (not (every? pos-int? seqs))              (refuse :entry-needs-a-seq)
-      (not (apply < 0 seqs))                    (refuse :seqs-not-increasing)
-      (some #(entry-malformed (:row %) (:content %)) entries)
-      (refuse :entry-malformed
-              :seq (some #(when (entry-malformed (:row %) (:content %)) (get-in % [:row :seq])) entries))
-      :else (apply accept
-                   {:event :workstream-created :identity identity :imported true}
-                   (for [{:keys [row content]} entries]
-                     {:event :entry-appended :row (dissoc row :file) :content content})))))
-
 (def run-commands
   "The commands a run admits: its one unit's mechanics, and the records of what it did. Every
    other command is a workstream's."

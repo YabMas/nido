@@ -10,8 +10,6 @@
      ~/.nido/projects/<project>/triggers.edn
      ~/.nido/runs/<run-id>/{run.edn, _run-status.edn, artifacts/, agent.log, session-home}
      ~/.nido/projects/<project>/workstreams/<ws-id>/{activity.lock, activity.edn, sessions/<name>/session.edn}
-       — and, from before the core held ledgers, workstream.edn, entries/ and entries.meta/, read only by
-       the legacy-ledger import
      ~/.nido/projects/<project>/_pre-unification/   (legacy run/ticket records archived by migration)"
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
@@ -132,12 +130,6 @@
    reader of one workstream finds its runs without opening every run on disk."
   [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "runs")))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
-  workstream-edn-path
-  "One workstream's legacy record, from before the core held it — read by the import alone."
-  [project ws-id]
-  (str (fs/path (workstream-dir project ws-id) "workstream.edn")))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   activity-lock-path
