@@ -169,6 +169,94 @@
           (finally (turn/stop! live))))
       (finally (writer/stop! w) (store/close s)))))
 
+;; ── a scope per run ──────────────────────────────────────────────────────────
+
+(defn- test-scope
+  "A scope capped at `cap` where this host's user systemd manager gives one; nil, and the test
+   skips, where it does not."
+  [cap]
+  (or (turn/probe-scope "systemd-run" cap)
+      (do (println "skipped: no user systemd manager to give a run a scope") nil)))
+
+(def ^:private own-cgroup "cut -d: -f3 /proc/self/cgroup; cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/pids.max")
+
+(deftest a-run-starts-in-a-scope-of-its-own-under-its-cap
+  (when-let [scope (test-scope 50)]
+    (with-core [{:keys [s cmd! root]} {:scope scope}]
+      (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec (str own-cgroup "; echo '{:outcome :completed}'"))})
+      (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))
+      (let [[cg cap] (str/split-lines (slurp (io/file (turn/run-dir (turn/turn-dir root "ws" "t") 1) "out")))]
+        (is (re-find #"/nido-run-[0-9a-f]{16}\.scope$" cg) "its own scope")
+        (is (= "50" cap) "under its own cap")))))
+
+(deftest a-scoped-run-is-cancelled-through-the-port
+  (when-let [scope (test-scope 50)]
+    (with-core [{:keys [s cmd! root]} {:scope scope}]
+      (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+      (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "sleep 30")})
+      (let [pid-f (io/file (turn/run-dir (turn/turn-dir root "ws" "t") 1) "pid")]
+        (is (await-until #(.exists pid-f) 10000))
+        (let [ph (.get (ProcessHandle/of (parse-long (str/trim (slurp pid-f)))))
+              child (await-until #(first (iterator-seq (.iterator (.descendants ph)))) 5000)]
+          (is (some? child) "the wrapper waits on the run it forked")
+          (cmd! "ws" {:command :hold-unit :unit "u"})
+          (is (await-until #(not (or (.isAlive ph) (.isAlive ^ProcessHandle child))) 10000)
+              "the wrapper and its run are ended")
+          (is (await-until #(= {:status :cancelled :ended-by :takeover}
+                               (select-keys (turn-of s "ws" "t") [:status :ended-by]))
+                           5000)))))))
+
+(deftest a-starting-daemon-takes-back-runs-in-their-own-scopes
+  (when-let [scope (test-scope 5)]
+    (let [dir (temp-dir) root (str dir "/turns") db (str dir "/core.db")
+          s (store/open db)
+          w (writer/start s {})
+          n (atom 0)
+          cmd! (fn [c] (deref (writer/submit! w {:key (str "k" (swap! n inc)) :ws "ws" :command c}) 10000 nil))
+          dead (turn/start {:root root :executors {:fake fake} :submit (fn [_] nil) :scope scope})]
+      (try
+        (doseq [u ["a" "b" "c"]] (cmd! {:command :open-unit :unit u :project "p" :goal "g" :session-cwd "/tmp"}))
+        (cmd! {:command :start-turn :turn "still-running" :unit "a"
+               :spec (spec (str "{ " own-cgroup "; } >&2; sleep 2; echo '{:outcome :completed}'"))})
+        (cmd! {:command :start-turn :turn "refused-meanwhile" :unit "b"
+               :spec (spec "exec 2>/dev/null; for i in 1 2 3 4 5 6; do sleep 1 & done; wait")})
+        (cmd! {:command :start-turn :turn "refused-while-watched" :unit "c"
+               :spec (spec "sleep 2; exec 2>/dev/null; for i in 1 2 3 4 5 6; do sleep 1 & done; wait")})
+        (turn/changed! dead [{:ws "ws" :state (store/state s "ws")}])
+        (Thread/sleep 1500)
+        (turn/stop! dead)
+        (let [live (turn/start {:root root :executors {:fake fake} :submit #(writer/submit! w %)
+                                :refusals (constantly nil) :scope scope})
+              t #(get-in (store/state s "ws") [:turns %])]
+          (try
+            (turn/take-back! live "ws" (store/state s "ws"))
+            (is (await-until #(= :failed (:status (t "refused-meanwhile"))) 5000) "ended while no daemon held it")
+            (is (= :resource-exhausted (get-in (t "refused-meanwhile") [:detail :reason])))
+            (is (= :running (:status (t "still-running"))) "a scoped run that still runs is reattached")
+            (is (await-until #(= :completed (:status (t "still-running"))) 10000) "and recorded when it ends")
+            (is (re-find #"\.scope\n" (slurp (io/file (turn/run-dir (turn/turn-dir root "ws" "still-running") 1) "err")))
+                "from inside its own scope")
+            (is (await-until #(= :failed (:status (t "refused-while-watched"))) 10000))
+            (is (= :resource-exhausted (get-in (t "refused-while-watched") [:detail :reason]))
+                "refused at its own cap after the take-back")
+            (finally (turn/stop! live))))
+        (finally (writer/stop! w) (store/close s))))))
+
+(deftest without-a-user-systemd-manager-runs-start-as-before
+  (is (nil? (turn/probe-scope nil 8000)) "no systemd-run")
+  (is (nil? (turn/probe-scope "/nonexistent/systemd-run" 8000)) "no such binary")
+  (is (nil? (turn/probe-scope "false" 8000)) "a systemd-run whose manager does not answer")
+  (is (= [] (turn/scope-argv nil "/r" "t" 1)))
+  (is (= 8000 turn/run-tasks-max))
+  (with-core [{:keys [s cmd! root]} {:scope nil}]
+    (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+    (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "cut -d: -f3 /proc/self/cgroup 2>/dev/null; echo '{:outcome :completed}'")})
+    (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))
+    (let [rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)]
+      (is (not (str/includes? (slurp (io/file rdir "out")) "nido-run-")) "in the core's cgroup")
+      (is (not (.exists (io/file rdir "pid-refusals"))) "and its wrapper became the run, as before"))))
+
 ;; ── the Claude adapter ───────────────────────────────────────────────────────
 
 (defn- write-out! [rdir & events]

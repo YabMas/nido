@@ -44,6 +44,27 @@
   (Operation attach-argv
     "What a person runs to enter a turn's session."
     {:signature [:=> [:catn [:runner :map] [:ws :string] [:turn :map]] [:maybe [:sequential :string]]]})
+  (Operation classify-exhaustion
+    "A finished run's outcome as resource-exhausted when it failed and the host refused it a
+     process or thread — its stderr says so, or forks were refused it while it ran, at its own
+     scope's cap or in the cgroups beside it. A launch the host refuses is that run's outcome,
+     classified the same way."
+    {:signature [:=> [:catn [:outcome :map] [:err [:maybe :string]] [:refused [:maybe :int]]
+                         [:now :int]] :map]})
+  (Operation pid-refusals-above
+    "The forks the pids controller refused at a cgroup and at each of its ancestors, each refusal
+     counted once, at the level whose limit refused it — not once more at every slice above it,
+     whose hierarchical counters already hold it, and not when a sibling's own cap refused it."
+    {:signature [:=> [:catn [:root :string] [:cgroup :string]] [:maybe :int]]})
+  (Operation scope-argv
+    "What runs in front of a run so it is in a transient scope of its own, under the scope's
+     process cap; nothing without a scope."
+    {:signature [:=> [:catn [:scope [:maybe :map]] [:run-dir :string] [:turn :string] [:run :int]]
+                 [:sequential :string]]})
+  (Operation probe-scope
+    "A scope for runs when systemd-run can start one under a user systemd manager; none when it
+     cannot, and runs start in the core's own cgroup as before."
+    {:signature [:=> [:catn [:systemd-run [:maybe :string]] [:tasks-max :int]] [:maybe :map]]})
   (Operation stop!
     "Stop converging; runs keep running for the next daemon to take back."
     {:signature [:=> [:catn [:runner :map]] :nil]}))

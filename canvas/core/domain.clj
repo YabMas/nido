@@ -104,4 +104,12 @@
      refs, facets, birth, closure, ledger position, liveness and the asks awaiting the person, and
      whether a person owes it a move now."
     {:signature [:=> [:catn [:state :map]] :map]
-     :delegates [awaiting-person]}))
+     :delegates [awaiting-person]})
+  (Operation exhausted?
+    "Whether a turn's ending detail says the host refused its run resources. Such a conductor run
+     is no failure — it counts toward no stop ask — but defers the next wake."
+    {:signature [:=> [:catn [:detail :map]] :boolean]})
+  (Operation exhaustion-backoff-ms
+    "How long the conductor waits before its next wake after its nth consecutive exhausted turn:
+     doubling, bounded."
+    {:signature [:=> [:catn [:n :int]] :int]}))

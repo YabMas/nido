@@ -72,7 +72,11 @@
                         ; naming them when it starts, which takes them out; one that fails or is
                         ; cancelled puts them back, because it did not dispose of them.
    :inbox-seq     0     ; how many items the inbox has ever held, which numbers the next one
-   :conductor-failures 0 ; conductor turns failed or cancelled since one last completed or asked
+   :conductor-failures 0 ; conductor turns failed or cancelled since one last completed or asked,
+                        ; not counting a run the host refused resources to (`exhausted?`)
+   :conductor-exhaustions 0 ; conductor turns the host refused resources to, since one last
+                        ; completed or asked; each defers the next wake (`:conductor-retry-at`)
+   :conductor-retry-at nil ; epoch ms before which the conductor is not woken again, or nil
    :conductor-stopped? false ; a stop ask is open on the conductor; nothing wakes it until answered
    :grants        {}    ; grant kind -> {:by str}: what the person granted and has not yet spent
    :chat          []    ; [{:id :from #{:person :conductor} :text :turn :images}] in the order posted;
@@ -371,6 +375,28 @@
 (defmethod evolve :unit-goal-retracted [state {:keys [unit]}]
   (assoc-in state [:units unit :status] :retracted))
 
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]} exhausted?
+  "Whether a turn's ending `detail` says the host refused its run resources — a process or thread
+   it could not start. Such a run says nothing about the turn's work, so it is retried later rather
+   than counted as the conductor failing."
+  [detail]
+  (= :resource-exhausted (:reason detail)))
+
+(defn ^{:malli/schema [:=> [:cat :int] :int]} exhaustion-backoff-ms
+  "How long the conductor waits before its next wake after its `n`th consecutive exhausted turn:
+   30s doubling, at most 15 minutes. The host's limit is shared, so waking at once only adds to
+   what exhausted it."
+  [n]
+  (min (* 15 60 1000) (* 30 1000 (bit-shift-left 1 (min 10 (max 0 (dec n)))))))
+
+(defn- conductor-settled [state]
+  (assoc state :conductor-failures 0 :conductor-exhaustions 0 :conductor-retry-at nil))
+
+(defn- conductor-exhausted [state detail]
+  (let [n (inc (:conductor-exhaustions state 0))]
+    (assoc state :conductor-exhaustions n
+           :conductor-retry-at (some-> (:at detail) (+ (exhaustion-backoff-ms n))))))
+
 (defmethod evolve :turn-started [state {:keys [turn unit spec hears]}]
   (let [heard (select-keys (:inbox state) hears)]
     (-> state
@@ -382,7 +408,7 @@
   (let [{:keys [unit run]} (get-in state [:turns turn])]
     (cond-> (update-in state [:turns turn] assoc :status :asked :call call)
       unit       (hear-later {:kind :turn-asked :unit unit :turn turn :run run})
-      (nil? unit) (assoc :conductor-failures 0))))
+      (nil? unit) conductor-settled)))
 
 (defmethod evolve :turn-resumed [state {:keys [turn]}]
   (update-in state [:turns turn] #(-> % (assoc :status :running) (update :run inc))))
@@ -404,9 +430,10 @@
 
       (and unit (not (:run state))) (hear-later (turn-ended-item t outcome actions-unknown?))
 
-      (and (nil? unit) disposed?)       (assoc :conductor-failures 0)
-      (and (nil? unit) (not disposed?)) (-> (update :inbox merge hears)
-                                            (update :conductor-failures inc)))))
+      (and (nil? unit) disposed?)       conductor-settled
+      (and (nil? unit) (not disposed?)) (update :inbox merge hears)
+      (and (nil? unit) (not disposed?) (exhausted? detail))       (conductor-exhausted detail)
+      (and (nil? unit) (not disposed?) (not (exhausted? detail))) (update :conductor-failures inc))))
 
 (defmethod evolve :call-answered [state {:keys [turn answer]}]
   (resolve-call state turn {:answered answer}))
@@ -433,7 +460,7 @@
    its content."
   [state ask-id how answer]
   (if (= :conductor-stopped (get-in state [:operator-asks ask-id :kind]))
-    (assoc state :conductor-stopped? false :conductor-failures 0)
+    (conductor-settled (assoc state :conductor-stopped? false))
     (hear-later state (cond-> {:kind :ask-answered :ask ask-id :how how}
                         (some? answer) (assoc :answer answer)))))
 

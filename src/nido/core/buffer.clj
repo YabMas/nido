@@ -13,6 +13,8 @@
        across every workstream, in the order the wakes became owed
      - once the last `:max-failures` conductor turns failed, a stop ask is raised to the person;
        nothing wakes that conductor until the person answers it, a person's input included
+     - a conductor turn the host refused resources to (`d/exhausted?`) is no failure: it defers
+       the next wake by a doubling backoff and raises nothing
      - a unit whose session is not what it should be gets a provisioning attempt recorded, which
        core-provision then makes
    Each rule's command is keyed, so the same state seen twice issues nothing twice, and each is
@@ -113,13 +115,23 @@
      (when (and (not (false? wakes?)) (wake-owed? state max-failures))
        [(wake opts ws state pos)]))))
 
+(defn- ^{:malli/schema [:=> [:cat :map :int] :boolean]} backing-off?
+  "Whether `state`'s conductor waits out a backoff at `now` (epoch ms): its last turns were refused
+   resources by the host, and its retry time has not come."
+  [state now]
+  (boolean (some-> (:conductor-retry-at state) (> now))))
+
 (defn ^{:malli/schema [:=> [:cat :map [:map-of :string :map] [:sequential :string]] [:sequential :map]]} wakes
   "The conductor wakes to issue across every workstream: `states` is {ws {:state :pos}} as last
    committed, `owed-order` the workstreams in the order their wakes became owed. A wake for an
    inbox holding a person's input is issued at once; the rest only while fewer than `:wake-cap`
-   conductor turns hearing no person's input run, in `owed-order`."
-  [{:keys [max-failures wake-cap] :or {wake-cap 4} :as opts} states owed-order]
-  (let [owed (filter #(wake-owed? (:state (states %)) max-failures) owed-order)
+   conductor turns hearing no person's input run, in `owed-order`. A workstream backing off at
+   `:now` (`backing-off?`) is woken by neither, a person's input included: the host refused the
+   last run resources, and a person's message does not give them back."
+  [{:keys [max-failures wake-cap now] :or {wake-cap 4} :as opts} states owed-order]
+  (let [owed (filter #(and (wake-owed? (:state (states %)) max-failures)
+                           (not (and now (backing-off? (:state (states %)) now))))
+                     owed-order)
         {person true other false} (group-by #(person-input? (:state (states %))) owed)
         running (reduce + (map (comp background-running :state) (vals states)))
         admitted (concat person (take (max 0 (- wake-cap running)) other))]
@@ -436,6 +448,17 @@
 
 ;; ── running the rules ────────────────────────────────────────────────────────
 
+(defn ^{:malli/schema [:=> [:cat [:map-of :string :map] :int] [:maybe :int]]} next-retry-in
+  "Milliseconds from `now` until the earliest backoff among `states` ({ws {:state :pos}}) ends, or
+   nil when none is pending."
+  [states now]
+  (some->> (vals states)
+           (keep #(get-in % [:state :conductor-retry-at]))
+           (filter #(> % now))
+           seq
+           (apply min)
+           (+ (- now) 1)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]} start
   "Start the rules over committed changes. Options:
      :submit        (fn [envelope]) a command to the writer
@@ -452,8 +475,16 @@
         log! (fn [ws e] (binding [*out* *err*] (println "nido.core.buffer:" ws (.getMessage ^Throwable e))))
         t (doto (Thread. ^Runnable
                          (fn []
-                           (loop []
-                             (let [x (.take q)]
+                           (loop [decided (System/currentTimeMillis)]
+                             ;; A backoff ends with no commit to say so, so wait no longer than the
+                             ;; earliest one, and then decide the wakes again over the same states.
+                             ;; `decided` is the time the last wakes were decided at: a backoff still
+                             ;; pending then is waited for even when it has ended since.
+                             (let [x (if-let [ms (next-retry-in @states decided)]
+                                       (or (.poll q (long (- ms (- (System/currentTimeMillis) decided)))
+                                                  java.util.concurrent.TimeUnit/MILLISECONDS)
+                                           [])
+                                       (.take q))]
                                (when-not (= ::stop x)
                                  (doseq [{:keys [ws state pos]} x]
                                    (swap! states assoc ws {:state state :pos pos})
@@ -462,10 +493,11 @@
                                      (submit envelope)))
                                  (let [owing (set (filter #(wake-owed? (:state (@states %)) max-failures) (keys @states)))]
                                    (swap! owed-order #(into (vec (filter owing %)) (remove (set %) (sort owing)))))
-                                 (doseq [envelope (try (wakes opts @states @owed-order)
-                                                       (catch Throwable e (log! "wakes" e) nil))]
-                                   (submit envelope))
-                                 (recur)))))
+                                 (let [now (System/currentTimeMillis)]
+                                   (doseq [envelope (try (wakes (assoc opts :now now) @states @owed-order)
+                                                         (catch Throwable e (log! "wakes" e) nil))]
+                                     (submit envelope))
+                                   (recur now))))))
                          "nido-buffer")
             (.setDaemon true) (.start))]
     {:queue q :thread t}))

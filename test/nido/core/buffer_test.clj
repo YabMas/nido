@@ -69,6 +69,63 @@
     (is (= [:raise-conductor-stop] (map (comp :command :command) (b/decisions opts "ws" s 9)))
         "nothing wakes the conductor again: the person is asked instead")))
 
+(defn- exhausted-conductor-turns [n at]
+  (state-after (concat [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
+                        {:command :start-turn :turn "t" :unit "u" :spec spec}
+                        {:command :record-outcome :turn "t" :outcome :completed}]
+                       (mapcat (fn [i] (let [k (str "k" i)]
+                                         [{:command :start-turn :turn k :unit nil :spec spec :hears :inbox}
+                                          {:command :record-outcome :turn k :outcome :failed
+                                           :detail {:reason :resource-exhausted :at at}}]))
+                               (range n)))))
+
+(deftest a-conductor-the-host-refuses-backs-off-and-is-not-stopped
+  (let [at 1000000
+        s  (exhausted-conductor-turns 3 at)]
+    (is (= 0 (:conductor-failures s)) "a refused run is not the conductor failing")
+    (is (= 3 (:conductor-exhaustions s)))
+    (is (= (+ at (d/exhaustion-backoff-ms 3)) (:conductor-retry-at s)))
+    (is (seq (:inbox s)) "what it heard is back in the inbox")
+    (is (empty? (filter #(= :raise-conductor-stop (get-in % [:command :command]))
+                        (b/decisions opts "ws" s 9)))
+        "no stop ask: the person is not asked about the host's limits")
+    (let [states {"ws" {:state s :pos 9}}]
+      (testing "no wake before the retry time, a person's input included"
+        (is (empty? (b/wakes (assoc opts :now (dec (:conductor-retry-at s))) states ["ws"])))
+        (is (empty? (b/wakes (assoc opts :now (dec (:conductor-retry-at s)))
+                             {"ws" {:state (state-after-from s [{:command :post-chat :message "m" :text "hi"}]) :pos 10}}
+                             ["ws"]))))
+      (testing "the wake once it has come"
+        (is (= ["conductor-9"] (map (comp :turn :command) (b/wakes (assoc opts :now (:conductor-retry-at s)) states ["ws"])))))
+      (testing "the rules' loop is told when to look again"
+        (is (= 1001 (b/next-retry-in states (- (:conductor-retry-at s) 1000))))
+        (is (nil? (b/next-retry-in states (:conductor-retry-at s))))))))
+
+(deftest a-backoff-that-ends-while-the-wakes-are-decided-still-wakes
+  ;; The retry time passes after `wakes` read the clock and before the loop computes its wait: the
+  ;; loop must still look again, not block on an empty queue until an unrelated commit.
+  (let [s (exhausted-conductor-turns 1 (+ (- (System/currentTimeMillis) (d/exhaustion-backoff-ms 1)) 50))
+        submitted (atom [])
+        orig b/wakes]
+    (with-redefs [b/wakes (fn [& args] (let [r (doall (apply orig args))] (Thread/sleep 200) r))]
+      (let [buf (b/start {:submit #(swap! submitted conj %) :spec-fn (:spec-fn opts)})]
+        (try
+          (b/changed! buf [{:ws "ws" :state s :pos 9}])
+          (Thread/sleep 800)
+          (is (some #(= :start-turn (get-in % [:command :command])) @submitted)
+              "the conductor is woken once its retry time has come")
+          (finally (b/stop! buf)))))))
+
+(deftest the-backoff-doubles-to-a-ceiling
+  (is (= [30000 60000 120000 240000 480000 900000 900000]
+         (map d/exhaustion-backoff-ms [1 2 3 4 5 6 20]))))
+
+(deftest a-conductor-turn-that-completes-clears-the-backoff
+  (let [s (state-after-from (exhausted-conductor-turns 2 5)
+                            [{:command :start-turn :turn "ok" :unit nil :spec spec :hears :inbox}
+                             {:command :record-outcome :turn "ok" :outcome :completed}])]
+    (is (= [0 0 nil] ((juxt :conductor-failures :conductor-exhaustions :conductor-retry-at) s)))))
+
 (deftest a-unit-owes-its-session-before-its-first-turn
   (let [s (state-after [{:command :open-unit :unit "u" :project "p" :goal "g"}])
         [attempt] (b/decisions opts "ws" s 2)]

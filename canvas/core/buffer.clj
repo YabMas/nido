@@ -69,4 +69,10 @@
      rest only while fewer than the wake cap of background conductor turns run, in the order they
      became owed. Nothing runs while idle."
     {:signature [:=> [:catn [:opts :map] [:states [:map-of :string :map]] [:owed-order [:sequential :string]]]
-                 [:sequential :map]]}))
+                 [:sequential :map]]})
+  (Operation next-retry-in
+    "Milliseconds until the earliest conductor backoff among the states ends, or nil when none is
+     pending: a backoff ends with no commit to say so, so the rules wait no longer than this and
+     then decide the wakes again. A workstream backing off is woken by nothing, a person's input
+     included."
+    {:signature [:=> [:catn [:states [:map-of :string :map]] [:now :int]] [:maybe :int]]}))
