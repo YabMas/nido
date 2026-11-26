@@ -8,7 +8,8 @@
             [canvas.session.lifecycle :refer [session-lifecycle destroy!]]
             [canvas.ui.surface :refer [ui-tui]]
             [canvas.core.provision :refer [outcome-command session-name]]
-            [canvas.core.domain :refer [decide sessions-owed]]))
+            [canvas.core.domain :refer [decide sessions-owed]]
+            [canvas.coordinator.work :refer [coordinator-work]]))
 
 (Claim remove-only-owned-worktree
   "Session-lifecycle removes a worktree directory only when that path, judged without following a final symlink, is the named session's own worktree-path (the project's worktrees dir joined with the session name), lies strictly inside the project's worktrees dir, is not the project directory or an ancestor of it, and holds neither a .jj/repo directory nor a .git directory. Otherwise destroy! (and the poisoned-worktree recreate in up!) throws {:reason :not-owned} before stopping, detaching or removing anything."
@@ -33,3 +34,7 @@
 (Claim refused-is-terminal
   "sessions-owed never offers a want for a unit whose session is :refused, so a refused destroy is attempted once and never again by the core."
   {:about [sessions-owed] :evidence "test"})
+
+(Claim refused-is-shown
+  "Every unit whose session is :refused, on any workstream including closed and discarded ones, is listed on the Operations page with its workstream, unit and kept path, for as long as it reads :refused."
+  {:about [coordinator-work] :evidence "test"})

@@ -2537,6 +2537,26 @@
         (let [u (owed-revivals)] (swap! model #(when % (assoc % :casualties u))) u))
     (owed-revivals)))
 
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  refused-sessions
+  "Every unit session whose destroy session-lifecycle refused, because its working copy is not the
+   session's own to remove, on any workstream or run of any project — closed and discarded ones
+   above all, which no other read shows: [{:project :ws :unit :path :detail :closed? :discarded?}],
+   by project and workstream. A refusal is terminal, so one is listed for as long as it reads
+   refused. Read off the core's summaries, one request per project; a project whose read fails
+   throws, so a surface says it could not read rather than that nothing was refused."
+  []
+  (vec (for [[pname _] (sort-by key (project/list-projects))
+             [k sm] (sort-by key (core-client/value! (core-client/summaries pname) :summaries))
+             {:keys [unit cwd detail]} (:refused-sessions sm)]
+         {:project    (name pname)
+          :ws         (or (second (core-client/split-key k)) k)
+          :unit       unit
+          :path       cwd
+          :detail     detail
+          :closed?    (boolean (:closed? sm))
+          :discarded? (boolean (:discarded? sm))})))
+
 (def ^:private canonical-default-target
   "Fallback when a project hasn't configured a default for the action."
   {:promote :in-progress :new :in-progress})

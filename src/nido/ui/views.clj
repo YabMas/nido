@@ -2598,6 +2598,20 @@
                      [:code ":dry-run true"] " to preview")
                (str/join ", " (map #(str (:project %) "/" (or (:session %) (:instance-id %))) casualties))]}))
 
+(defn- refused-notice
+  "The unit sessions whose destroy was refused because their working copy is not the session's own
+   to remove: each names its workstream, its unit and the path kept. Nothing retries them, so this
+   is where a person learns of one. `refused` is nil when it could not be read, which is said."
+  [refused]
+  (notice-card
+   {:title    "Refused destroys"
+    :headline (if (nil? refused)
+                "could not be read"
+                (str (count refused) (if (= 1 (count refused)) " session" " sessions") " kept"))
+    :lines    (for [{:keys [project ws unit path closed? discarded?]} refused]
+                (list (str project "/" ws) (cond discarded? " (discarded)" closed? " (closed)")
+                      " · unit " unit " — kept " [:code (str path)]))}))
+
 (defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]] [:maybe :map] :HostModel] :any]}
   operations-home-cards
   "The card for each operational concern, read from the same values their own
@@ -2605,12 +2619,13 @@
    A value that could not be read (nil) is said on its card rather than shown as
    zero, since zero is the reading that nothing needs anyone.
 
-   `notices` — {:casualties [..]} — are what nido wants a person to know that is no
+   `notices` — {:casualties [..] :refused [..]} — are what nido wants a person to know that is no
    workstream's question, so they are here and never in the needs-you list. Shown only when there
-   is one: a notice of nothing is noise.
+   is one: a notice of nothing is noise. `:refused` is nil when it could not be read, which its
+   notice says rather than showing none.
 
    `host` is `nido.coordinator.view.host/host-model`'s answer, `{:unreadable :host}` included."
-  [proposals recovery holds queues {:keys [casualties]} host]
+  [proposals recovery holds queues {:keys [casualties] :as notices} host]
   (let [{:keys [open queued waiting]} (group-by proposal-band proposals)
         stuck (count (filter #(#{:stuck :waiting-on-you} (:state %)) holds))
         {:keys [needs-you recovering waiting-rec]}
@@ -2647,7 +2662,9 @@
          (review-queue-card [{:stage nil}])
          (review-queue-card queues)))
      (host-card host)
-     (when (seq casualties) (casualties-notice casualties))]))
+     (when (seq casualties) (casualties-notice casualties))
+     (let [refused (:refused notices [])]
+       (when (or (nil? refused) (seq refused)) (refused-notice refused)))]))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :any]] :string]}
   operations-home-fragment

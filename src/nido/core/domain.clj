@@ -987,34 +987,48 @@
   "The ledger kinds that say what a workstream was born as: a drain, a slice, a one-off."
   #{:drain :slice :scratch})
 
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} refused-sessions
+  "Every unit of `state` whose session's destroy was refused, as [{:unit :cwd :detail}] by unit id:
+   the working copy kept, and why. Read whatever the stream's standing — a refusal is terminal, so
+   it is found on closed and discarded workstreams above all."
+  [state]
+  (vec (for [u (sort-by :id (vals (:units state)))
+             :when (= :refused (get-in u [:session :status]))]
+         {:unit (:id u) :cwd (get-in u [:session :cwd]) :detail (get-in u [:session :detail])})))
+
 (defn- workstream-summary
   [state]
   (let [{:keys [project title external-refs facets intake created-at]} (:identity state)
         closed? (boolean (:closed? state))
         asks    (vec (sort (map :id (awaiting-person state))))
         last-e  (peek (vec (:ledger state)))
-        open-us (filter #(= :open (:status %)) (vals (:units state)))]
-    {:project       (some-> project name)
-     :title         (get title :text)
-     :external-refs (vec external-refs)
-     :facets        facets
-     :intake?       (some? intake)
-     :created-at    created-at
-     :born          (into (sorted-set) (comp (map :kind) (filter birth-kinds)) (:ledger state))
-     :closed?       closed?
-     :discarded?    (boolean (:discarded? state))
-     :last-seq      (or (:seq last-e) 0)
-     :last-at       (:at last-e)
-     :asks          asks
-     :asking?       (boolean (and (seq asks) (not closed?)))
-     :running?      (boolean (some #(= :running (:status %)) (vals (:turns state))))
-     :held?         (boolean (and (seq open-us) (every? :held? open-us)))}))
+        open-us (filter #(= :open (:status %)) (vals (:units state)))
+        refused (refused-sessions state)]
+    (cond->
+     {:project       (some-> project name)
+      :title         (get title :text)
+      :external-refs (vec external-refs)
+      :facets        facets
+      :intake?       (some? intake)
+      :created-at    created-at
+      :born          (into (sorted-set) (comp (map :kind) (filter birth-kinds)) (:ledger state))
+      :closed?       closed?
+      :discarded?    (boolean (:discarded? state))
+      :last-seq      (or (:seq last-e) 0)
+      :last-at       (:at last-e)
+      :asks          asks
+      :asking?       (boolean (and (seq asks) (not closed?)))
+      :running?      (boolean (some #(= :running (:status %)) (vals (:turns state))))
+      :held?         (boolean (and (seq open-us) (every? :held? open-us)))}
+      (seq refused) (assoc :refused-sessions refused))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} summary
   "What a reader of many workstreams needs of one, read off its state alone: its project, title,
    refs, facets and birth, whether it is closed, where its ledger stands, whether a turn runs or a
    person holds its units, and the ids of the asks awaiting the person. `:asking?` is whether a
    person owes it a move now — an open ask on a workstream that is not closed.
+   `:refused-sessions` (`refused-sessions`) is there only when some unit's destroy was refused, so a
+   summary kept before the key existed still reads equal to its state's.
 
    A run's summary is its identity under :run, its `run-status`, the detail its turn or session
    ended with, :closed? once it is over, and its records; it never asks. A journal's is its
@@ -1026,13 +1040,14 @@
   (if-let [run (:run state)]
     (let [u (get-in state [:units (:id run)])
           t (first (vals (:turns state)))]
-      {:project (:project run)
-       :run     run
-       :status  (run-status state)
-       :detail  (or (:detail t) (get-in u [:session :detail]))
-       :closed? (not= :open (:status u))
-       :asking? false
-       :records (vec (:records state))})
+      (cond-> {:project (:project run)
+               :run     run
+               :status  (run-status state)
+               :detail  (or (:detail t) (get-in u [:session :detail]))
+               :closed? (not= :open (:status u))
+               :asking? false
+               :records (vec (:records state))}
+        (seq (refused-sessions state)) (assoc :refused-sessions (refused-sessions state))))
     (if-let [j (:journal state)]
       {:project (:project j) :journal j :last-seq (count (:records state)) :closed? false
        :asking? false}
