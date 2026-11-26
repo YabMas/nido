@@ -2702,8 +2702,8 @@
     :headline (if (nil? refused)
                 "could not be read"
                 (str (count refused) (if (= 1 (count refused)) " session" " sessions") " kept"))
-    :lines    (for [{:keys [project ws unit path closed? discarded?]} refused]
-                (list (str project "/" ws) (cond discarded? " (discarded)" closed? " (closed)")
+    :lines    (for [{:keys [project ws run? unit path closed? discarded?]} refused]
+                (list (str project "/" ws) (cond run? " (run)" discarded? " (discarded)" closed? " (closed)")
                       " · unit " unit " — kept " [:code (str path)]))}))
 
 (defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]] [:maybe :map] :HostModel] :any]}

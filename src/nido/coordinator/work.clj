@@ -2541,16 +2541,23 @@
   refused-sessions
   "Every unit session whose destroy session-lifecycle refused, because its working copy is not the
    session's own to remove, on any workstream or run of any project — closed and discarded ones
-   above all, which no other read shows: [{:project :ws :unit :path :detail :closed? :discarded?}],
+   above all, which no other read shows: [{:project :ws :run? :unit :path :detail :closed? :discarded?}],
    by project and workstream. A refusal is terminal, so one is listed for as long as it reads
-   refused. Read off the core's summaries, one request per project; a project whose read fails
-   throws, so a surface says it could not read rather than that nothing was refused."
+   refused; a run's lists its run id as :ws and carries :run? true. Read off the core's
+   summaries, two requests per project — its workstreams, and its runs, which the core keeps
+   under a key of their own; a project whose read fails throws, so a surface says it could not
+   read rather than that nothing was refused."
   []
   (vec (for [[pname _] (sort-by key (project/list-projects))
-             [k sm] (sort-by key (core-client/value! (core-client/summaries pname) :summaries))
+             [ws run? sm] (concat
+                           (for [[k sm] (sort-by key (core-client/value! (core-client/summaries pname) :summaries))]
+                             [(or (second (core-client/split-key k)) k) false sm])
+                           (for [[id sm] (sort-by key (core-client/value! (core-client/runs pname) :runs))]
+                             [id true sm]))
              {:keys [unit cwd detail]} (:refused-sessions sm)]
          {:project    (name pname)
-          :ws         (or (second (core-client/split-key k)) k)
+          :ws         ws
+          :run?       run?
           :unit       unit
           :path       cwd
           :detail     detail
