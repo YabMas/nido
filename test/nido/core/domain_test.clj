@@ -251,7 +251,8 @@
       (gen/fmap (fn [u] {:command :open-unit :unit u :project u :goal "g"}) unit)
       (gen/fmap (fn [[u w]] {:command :record-provision-attempt :unit u :attempt (str "p-" u) :want w})
                 (gen/tuple unit (gen/elements [:up :stopped :destroyed])))
-      (gen/fmap (fn [[u o]] {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome o :cwd "/w"})
+      (gen/fmap (fn [[u o]] (cond-> {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome o}
+                                   (= :done o) (assoc :cwd "/w")))
                 (gen/tuple unit (gen/elements [:done :failed :refused])))
       (gen/fmap (fn [u] {:command :retry-provision :unit u}) unit)
       (gen/fmap (fn [g] {:command :give-grant :grant g :by "p"}) (gen/elements [:merge :intent]))
@@ -716,3 +717,24 @@
       (is (nil? (refusal s {:command :record-provision-outcome :unit "u" :attempt "b" :outcome :failed
                             :detail "x"}))
           (str "a " want " attempt that met the refusal records it :failed")))))
+
+(deftest only-an-up-that-came-up-sets-the-sessions-cwd
+  (testing "a failed :up carrying a cwd is refused, and the unit keeps no cwd"
+    (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g"}
+                    {:command :record-provision-attempt :unit "u" :attempt "a" :want :up}])]
+      (is (= :cwd-only-from-an-up
+             (refusal s {:command :record-provision-outcome :unit "u" :attempt "a" :outcome :failed
+                         :cwd "/src/p" :detail "x"})))))
+  (testing "a refused destroy carrying a cwd is refused, so it cannot overwrite the kept path"
+    (let [[s] (run (into (vec (cons {:command :create-workstream :identity id*} (unit-ready-at "u" "/w/u")))
+                         [{:command :record-merge :unit "u"} {:command :close-workstream}
+                          {:command :record-provision-attempt :unit "u" :attempt "d1" :want :destroyed}]))]
+      (is (= :cwd-only-from-an-up
+             (refusal s {:command :record-provision-outcome :unit "u" :attempt "d1" :outcome :refused
+                         :cwd "/elsewhere" :detail "x"})))))
+  (testing "a ledger whose failed :up carried a cwd folds without it"
+    (let [s (d/fold [{:event :unit-opened :unit "u" :project "p" :goal "g"}
+                     {:event :provision-attempted :unit "u" :attempt "a" :want :up}
+                     {:event :provision-recorded :unit "u" :attempt "a" :outcome :failed :cwd "/src/p"
+                      :detail "x"}])]
+      (is (nil? (get-in s [:units "u" :session :cwd]))))))

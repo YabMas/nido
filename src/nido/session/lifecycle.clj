@@ -506,14 +506,17 @@
     (re-find #"\.\.|//|[/.]$" s)              "it may not contain `..` or `//`, or end in `/` or `.`"))
 
 (defn- unfollowed
-  "`p` absolute and normalized, every directory above it resolved through its symlinks and `p`'s
-   own last segment not: so a worktree that is itself a symlink is judged as the link, never as
-   whatever it points at."
+  "`p` absolute, every directory above it resolved through the filesystem and `p`'s own last
+   segment not: so a worktree that is itself a symlink is judged as the link, never as whatever
+   it points at. The parent is resolved BEFORE any `..` is collapsed, as the kernel does, so
+   `/wt/link/../s` is judged where removing it acts — beside `link`'s target, not at `/wt/s`. A
+   last segment of `.` or `..` names no link and is resolved with the rest."
   [p]
-  (let [a (fs/normalize (fs/absolutize (fs/expand-home (str p))))]
-    (if-let [parent (fs/parent a)]
-      (str (fs/path (canonical parent) (str (fs/file-name a))))
-      (str a))))
+  (let [a    (fs/absolutize (fs/expand-home (str p)))
+        leaf (some-> (fs/file-name a) str)]
+    (if-let [parent (and (not (#{"." ".."} leaf)) (fs/parent a))]
+      (str (fs/path (canonical parent) leaf))
+      (canonical a))))
 
 (defn- not-owned-why
   "Why the directory `wt-path` is not session `name`'s own to remove, or nil when it is. A
@@ -568,7 +571,9 @@
    `:instance-id` is that runtime's; `:on` is the runtime it is on now, nil when it is down."
   [name opts]
   (let [[project-name {:keys [directory]}] (resolve-project opts)
-        wt-path (or (some-> (:path opts) str fs/expand-home str)
+        ;; Absolute, so the path the ownership guard judges is the one git and jj act on: run
+        ;; from the project directory, they would read a relative one against it instead.
+        wt-path (or (some-> (:path opts) str fs/expand-home fs/absolutize str)
                     (worktree-path project-name directory name))
         branch (or (:branch opts) name)
         base   (or (:base opts) "origin/main")

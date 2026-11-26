@@ -363,7 +363,9 @@
         status (case outcome :failed :failed :refused :refused (reached want))]
     (cond-> (update-in state [:units unit :session]
                        #(cond-> (-> % (dissoc :attempt :detail) (assoc :status status))
-                          cwd    (assoc :cwd cwd)
+                          ;; Only an :up that came up sets it; a ledger whose other outcomes
+                          ;; carried one folds without it.
+                          (and cwd (= :done outcome) (= :up want)) (assoc :cwd cwd)
                           detail (assoc :detail detail)))
       ;; A run has no conductor to hear a failure; one whose session never came up is over.
       (and (:run state) (= :failed outcome) (= :up want)) (assoc-in [:units unit :status] :finished)
@@ -701,6 +703,10 @@
       (refuse :refused-is-a-destroys :unit unit :want (:want a))
       (and (= :done outcome) (= :up (:want a)) (not (string? cwd)))
       (refuse :ready-needs-a-cwd)
+      ;; A session's cwd is set only by an :up that came up: one carried by any other outcome
+      ;; would adopt a path the core never provisioned, or overwrite the path a refusal kept.
+      (and (some? cwd) (not (and (= :done outcome) (= :up (:want a)))))
+      (refuse :cwd-only-from-an-up :unit unit :want (:want a) :outcome outcome)
       :else (accept (cond-> {:event :provision-recorded :unit unit :attempt attempt :outcome outcome}
                       cwd    (assoc :cwd cwd)
                       detail (assoc :detail detail)
