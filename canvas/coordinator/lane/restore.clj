@@ -29,4 +29,9 @@
      the run saying what happened to each. Refuses for a run that is not a recovery, or has
      recorded no :session-diagnosis."
     {:signature [:=> [:catn [:project ProjectName] [:run-key :string]] :map]
-     :delegates [continuation]}))
+     :delegates [continuation]})
+  (Operation dismiss!
+    "Record a person's dismissal of a recovery run in the project's recovery journal, settling every
+     failure it named without restoring it. Refuses for a run that is no recovery, one still queued
+     or running, and one already settled — so two dismissals of one run record one."
+    {:signature [:=> [:catn [:project ProjectName] [:run-id :string] [:note [:maybe :string]]] :map]}))

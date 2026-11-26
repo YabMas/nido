@@ -10,7 +10,8 @@
             [fukan.common.typing.malli]))
 
 (Module nido-recovery
-  "The verbs a recovery session works through: read what failed, restore it, land a nido fix.
+  "The verbs a recovery session works through: read what failed, restore it, land a nido fix —
+   and the one a person uses to dismiss a recovery that left its cause owed.
 
    The land verb is the gate, not advice. A recovery lands on nido's main unattended, so the
    verb itself runs the tests and the landing check at the exact tip it pushes, and refuses for a
@@ -29,4 +30,10 @@
      fast-forward origin's main, record the :merged on the run once."
     {:signature [:=> [:catn [:args [:* :any]]] :int]})
   (Operation land-cmd "bb entry point for land: exits with its code."
-    {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [land]}))
+    {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [land]})
+  (Operation dismiss
+    "Dismiss a recovery run that is over and left its cause owed, settling what it named without
+     restoring it; prints what it settled, or why it refused."
+    {:signature [:=> [:catn [:args [:* :any]]] :int]})
+  (Operation dismiss-cmd "bb entry point for dismiss: exits with its code."
+    {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [dismiss]}))

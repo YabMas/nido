@@ -2170,6 +2170,10 @@
       (when-let [remedy (:remedy diagnosis)] [:span.meta (str " · " remedy)])])
    (recovery-did r)
    (when (and needs (= :needs-you state)) [:p.prop-fix [:b "needs you"] " — " needs])
+   ;; A run that stopped for a person, or keeps failing, is retried until something settles it.
+   (when (and ws-id (#{:needs-you :waiting} state))
+     [:p.prop-fix "Or stop retrying it — settle what it named without restoring it: "
+      [:code (str "bb nido:recovery:dismiss :run " ws-id)]])
    [:div.prop-meta
     [:span.mono (str "cause " cause)]
     (when (= :waiting state)

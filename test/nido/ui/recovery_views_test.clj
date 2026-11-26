@@ -32,6 +32,7 @@
                                 :message "Advancing shared cluster failed"}]}})]
     (is (str/includes? html "needs you"))
     (is (str/includes? html "run ws-r") "named by its run, which has no page of its own")
+    (is (str/includes? html "bb nido:recovery:dismiss :run ws-r") "with the way to stop retrying it")
     (is (not (str/includes? html "/workstreams/nido/ws-r")))
     (is (str/includes? html "project-defect"))
     (is (str/includes? html "https://github.com/o/r/pull/1"))

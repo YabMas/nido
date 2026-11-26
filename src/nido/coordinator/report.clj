@@ -3948,6 +3948,20 @@
                 [:why          {:optional true} [:enum :no-person]]
                 [:note         {:optional true} string?]]]]])
 
+(def RecoveryDismissed
+  "A person dismissed a recovery run that ended leaving its cause owed — stopped for a person, or
+   failed — so that what it named is settled without being restored. Appended to the project's
+   recovery journal, since the run itself is over and takes no more records; :recovery is the
+   run's id.
+
+   Settles exactly what a :closed recovery does: every failure the run named. A failure of the same
+   cause that it did not name is still owed, and fires a recovery of its own."
+  [:map {:closed true}
+   [:format   [:= :recovery-dismissed]]
+   [:recovery string?]
+   [:by       [:enum :person]]
+   [:note     {:optional true} string?]])
+
 
 ;; ── Status changes a person or nido decides, recorded where status reads them ──
 ;;
@@ -4456,6 +4470,7 @@
    :design-cleared           DesignCleared
    :session-diagnosis        SessionDiagnosis
    :session-restored         SessionRestored
+   :recovery-dismissed       RecoveryDismissed
    :closed                   Closed
    :reopened                 Reopened
    :stage-set                StageSet

@@ -9,6 +9,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.source.start-failures :as start-failures]
    [nido.core.client :as client]
    [nido.platform.core :as core]
    [nido.session.failure :as failure]
@@ -195,3 +196,34 @@
           (restore/restore! :nido w))
         (is (= "ws-9" (:runtime-key (second (first @ups))))
             "a failure kept with no key comes back on its workstream's runtime, not one of its own")))))
+
+;; ── dismissing a recovery that left its cause owed ──────────────────────────
+
+(deftest a-person-dismisses-a-parked-recovery-and-what-it-named-is-settled
+  (with-tmp
+    (fn [_]
+      (let [cause  (str "cause-" (random-uuid))
+            start  (fn [failures status]
+                     (test-runs/run! :nido :session-recovery
+                                     {:adapter :session-recovery :id (str cause "@F1")
+                                      :cause cause :failures failures} status))
+            parked (start "F1,F2" :running)
+            live   (start "F3" :running)
+            by-id  (fn [] (into {} (map (juxt :ws-id identity)) (start-failures/recoveries :nido)))
+            reason (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))]
+        (records/append-to-run! (client/run-key :nido parked)
+                                {:kind :blocker :summary "s" :needs "may I reset the cluster?" :after "a"})
+        (client/command! (client/run-key :nido parked) (str "end/" parked)
+                         {:command :record-outcome :turn (str parked " first") :outcome :completed})
+        (is (= :awaiting-review (-> ((by-id) parked) :runs peek :state)) "parked, it stopped for a person")
+        (is (= :in-flight (reason #(restore/dismiss! :nido live nil))) "a running recovery is not dismissed")
+        (is (= :no-such-recovery (reason #(restore/dismiss! :nido "no-such-run" nil))))
+        (is (= {:recovery parked :settles ["F1" "F2"]} (restore/dismiss! :nido parked "handled by hand")))
+        (let [r ((by-id) parked)]
+          (is (= #{"F1" "F2"} (:settled r)) "dismissed, it settles everything it named")
+          (is (= :dismissed (-> r :closed :outcome)))
+          (is (= :done (-> r :runs peek :state)) "and no longer paces its cause"))
+        (is (= :settled (reason #(restore/dismiss! :nido parked nil))) "a second dismissal records nothing")
+        (is (= [{:kind :recovery-dismissed :recovery parked :by :person :note "handled by hand"}]
+               (mapv #(select-keys % [:kind :recovery :by :note])
+                     (records/of (records/journal :nido start-failures/journal-name)))))))))

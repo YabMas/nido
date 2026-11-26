@@ -12,8 +12,9 @@
 
    OWED IS DERIVED on every poll, never stored: a failure stops being owed when a recovery records
    it :restored or :withdrawn, or when a recovery that named it closed — a `:closed` record, which
-   only a recovery from before runs holds. A run that ends without settling what it was fired for
-   leaves it owed, as a recovery that dies does.
+   only a recovery from before runs holds, or a person's dismissal of the run in the project's
+   recovery journal (`journal-name`). A run that ends without settling what it was fired for leaves
+   it owed, as a recovery that dies does, until a person dismisses it.
 
    ONE RECOVERY OF A CAUSE AT A TIME, across refs: this source emits nothing for a cause while a
    recovery run of it is starting or running. The event's id is keyed by the cause, its earliest
@@ -35,6 +36,13 @@
 (def adapter
   "The `:adapter` a recovery fire's payload carries, which is what makes a run a recovery."
   :session-recovery)
+
+(def ^{:doc "The name of a project's recovery journal: what people decided about recovery runs that are over."}
+  journal-name "recovery")
+
+(defn- dismissed-ids [project]
+  (into #{} (keep #(when (= :recovery-dismissed (:kind %)) (:recovery %)))
+        (records/of (records/journal project journal-name))))
 
 (defn ^{:malli/schema [:=> [:cat :string] [:maybe :int]]}
   duration-ms
@@ -94,20 +102,22 @@
   recoveries
   "Every recovery of `project` as data the rest of this namespace decides on, oldest first: its
    cause, whether and when it ended, the failures named on it, those it settled — every one it
-   named, once it closed — its runs, and its records under `:entries` by kind. Throws when the core
-   is unreachable."
+   named, once it closed or a person dismissed it — its runs, and its records under `:entries` by
+   kind. Throws when the core is unreachable."
   [project]
   (let [rs      (->> (records/holders project)
                      (filter #(= adapter (keyword (-> % :run :payload :adapter))))
                      (sort-by #(str (-> % :run :fired-at))))
-        settled (into #{} (mapcat (comp settled-by :records)) rs)]
+        settled (into #{} (mapcat (comp settled-by :records)) rs)
+        gone    (dismissed-ids project)]
     (vec
      (for [{:keys [id records] :as r} rs
           :let [payload (-> r :run :payload)
                 named   (-> (set (split-ids (:failures payload)))
                             (into (some-> (first-named (:id payload)) vector))
                             (into (map :failure) (outcomes-of records)))
-                closed  (closed? records)
+                dropped (contains? gone id)
+                closed  (or dropped (closed? records))
                 mine    (if closed named (settled-by records))
                 state   (run-state r (every? (into settled mine) named))
                 fired   (-> r :run :fired-at)
@@ -116,7 +126,8 @@
        :cause    (str (or (:cause payload) (cause-of-ref (:id payload))))
        :closed   (when-not (#{:queued :running} state)
                    {:at last-at
-                    :outcome (or (when closed (some #(when (= :closed (:kind %)) (:outcome %)) (rseq records)))
+                    :outcome (or (when dropped :dismissed)
+                                 (when closed (some #(when (= :closed (:kind %)) (:outcome %)) (rseq records)))
                                  (if (= :done state) :done :dropped))})
        :named    named
        :settled  mine

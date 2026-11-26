@@ -1,6 +1,7 @@
 (ns tasks.nido-recovery
   "bb nido:recovery:* — the verbs a recovery session works through: read what
-   failed, restore it, land a nido fix.
+   failed, restore it, land a nido fix — and the one a person uses to dismiss a
+   recovery that left its cause owed.
 
    The land verb is the gate, not advice. A recovery lands on nido's main with
    nobody watching, so the verb runs the tests and the landing check itself, at
@@ -116,6 +117,26 @@
           (println (str "restore REFUSED · " (ex-message e)))
           1)))))
 
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
+  dismiss
+  "bb nido:recovery:dismiss :run <id> [:note \"…\"] — a person dismisses a recovery run that is
+   over and left its cause owed: what it named is settled without being restored, and stops being
+   retried. Exits 1 on a refusal."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)
+        run-id   (some-> (:run opts) str)]
+    (if-not run-id
+      (do (println "dismiss REFUSED · name the recovery run: :run <id>") 1)
+      (try
+        (let [{:keys [settles]} (restore/dismiss! :nido run-id (some-> (:note opts) str))]
+          (println (str "dismiss · " run-id " dismissed · settles " (count settles) " failure"
+                        (when (not= 1 (count settles)) "s")
+                        (when (seq settles) (str ": " (str/join ", " settles)))))
+          0)
+        (catch clojure.lang.ExceptionInfo e
+          (println (str "dismiss REFUSED · " (ex-message e)))
+          1)))))
+
 (defn- commit-url
   "Where a landed commit can be read: its page on GitHub when origin is a GitHub
    remote, else the commit id itself."
@@ -180,3 +201,6 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   land-cmd [& args] (System/exit (apply land args)))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  dismiss-cmd [& args] (System/exit (apply dismiss args)))

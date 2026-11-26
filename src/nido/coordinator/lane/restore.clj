@@ -122,3 +122,33 @@
     (when (seq outcomes)
       (records/append-to-run! run-key {:kind :session-restored :outcomes outcomes}))
     {:outcomes outcomes :settled? (empty? (owed-now))}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string [:maybe :string]] :map]}
+  dismiss!
+  "Record that a person dismissed recovery run `run-id` of `project`, settling every failure it
+   named without restoring it (report/RecoveryDismissed). Answers {:recovery run-id :settles ids},
+   the failures the dismissal settled.
+
+   Only a recovery that is over and left something owed can be dismissed. Refuses — throws with
+   :reason — for an id that names no recovery (:no-such-recovery), one still queued or running
+   (:in-flight), and one already settled, by its own restores, a close or an earlier dismissal
+   (:settled). The check reads the journal it appends to, so two dismissals of one run record one."
+  [project run-id note]
+  (records/decide-and-append!
+   (records/journal project start-failures/journal-name)
+   (fn [_]
+     (let [r (some #(when (= run-id (:ws-id %)) %) (start-failures/recoveries project))
+           state (-> r :runs peek :state)]
+       (cond
+         (nil? r)
+         (throw (ex-info (str run-id " is no recovery of " (name project)) {:reason :no-such-recovery}))
+         (#{:queued :running} state)
+         (throw (ex-info (str run-id " is still " (name state) " — it can be dismissed once it is over")
+                         {:reason :in-flight}))
+         (empty? (remove (set (:settled r)) (:named r)))
+         (throw (ex-info (str run-id " is settled already — nothing it named is owed")
+                         {:reason :settled}))
+         :else
+         {:append (cond-> {:kind :recovery-dismissed :recovery run-id :by :person}
+                    (not (str/blank? note)) (assoc :note note))
+          :then   {:recovery run-id :settles (vec (sort (remove (set (:settled r)) (:named r))))}})))))
