@@ -737,3 +737,70 @@
       (throw (ex-info (str "a findings entry could not be read on " ws-id)
                       {:reason :unreadable-ledger :project project :ws-id ws-id})))
     (last rounds)))
+
+;; ── QA: the plan the change is walked against, and what its walks say ───────────────────────
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  newest-build
+  "The index row of the newest record of the change being built on `w` — a kind
+   `report/build-kinds` names — or nil when nothing was built. What a review is judged after and a
+   QA walk observes: one built since withdraws both."
+  [w]
+  (last (filter #(contains? report/build-kinds (:kind %)) (:entries w))))
+
+(def ^:private qa-states
+  "What a workstream's QA reads, exactly one at a time."
+  [:enum :off :not-applicable :owed :failed :passed])
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:maybe :map] :any]
+                        [:map [:state qa-states] [:plan {:optional true} :int]
+                         [:surface {:optional true} [:enum :product :none]]
+                         [:walks [:vector :int]]]]}
+  qa*
+  "The QA reading of workstream `ws-id`, given its current span `w`, its governing design `design`
+   (stamped, or nil) and whether its project declares :qa — `declared?`, which the caller reads
+   off the registry, because standing reads no registry.
+
+   {:state s :plan <seq> :surface :product|:none :walks [<seq> …]}. The plan it stands on is the
+   newest :qa-plan citing the governing design, in every state, and there is none when no plan
+   cites it — then :plan and :surface are absent. :walks are that plan's walks recorded after the
+   newest build (`newest-build`): a walk observes the build it follows, so one recorded before a
+   later build says nothing about the change as it stands. The state is:
+
+     :off             the project declares no :qa
+     :not-applicable  the plan is :none — whatever earlier plans or walks say
+     :failed          a counted walk has a step not :pass
+     :passed          at least one walk counts, and none failed
+     :owed            otherwise: no plan, or no walk of it since the newest build
+
+   Derived on every read from the plans, the walks and the builds, and stored nowhere. Every
+   reader of a workstream's QA — the fold, the arc, show, the brief — asks this, and takes the
+   plan from it."
+  [project ws-id w design declared?]
+  (let [span  (in-span w)
+        dseq  (:seq design)
+        plan  (when dseq
+                (->> (ws/entries-of project ws-id :qa-plan)
+                     (filter #(and (span (:seq %)) (= dseq (get-in % [:design :seq]))))
+                     last))
+        built (or (:seq (newest-build w)) 0)
+        walks (when (= :product (:surface plan))
+                (->> (ws/entries-of project ws-id :qa-walk)
+                     (filter #(and (span (:seq %)) (= (:seq plan) (get-in % [:plan :seq]))
+                                   (> (:seq %) built)))))
+        state (cond
+                (not declared?)               :off
+                (= :none (:surface plan))     :not-applicable
+                (some #(not (report/walk-passed? %)) walks) :failed
+                (seq walks)                   :passed
+                :else                         :owed)]
+    (cond-> {:state state :walks (mapv :seq walks)}
+      plan (assoc :plan (:seq plan) :surface (:surface plan)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :map]}
+  qa
+  "The QA reading of workstream `ws-id` as `qa*` answers it, reading the workstream's current
+   span and governing design itself; `declared?` is whether its project declares :qa."
+  [project ws-id declared?]
+  (let [w (some-> (ws/read-ws project ws-id) (update :entries generation/current-span))]
+    (qa* project ws-id (or w {:entries []}) (governing-design project ws-id) declared?)))

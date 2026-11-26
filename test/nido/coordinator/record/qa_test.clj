@@ -9,6 +9,9 @@
    [nido.platform.core :as core]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.record.standing :as standing]
+   [nido.coordinator.lane.pipeline :as p]
+   [nido.platform.project :as project]
    [tasks.nido-workstream :as tw]))
 
 (defn with-tmp [f]
@@ -151,3 +154,88 @@
                                 (#'tw/check-walk-screenshots! :qa-walk (pr-str (walk 9 [["a" :pass]])))))
           (is (nil? (#'tw/check-walk-screenshots!
                      :qa-walk (pr-str (assoc-in (walk 9 [["a" :pass]]) [:results 0 :screenshots] [dg]))))))))))
+
+;; ── the declaration ────────────────────────────────────────────────────────
+
+(deftest a-project-takes-on-qa-only-by-declaring-it
+  (with-redefs [project/get-project (fn [n] (get {"brian" {:qa :browser} "nido" {} "typo" {:qa :browsr}} n))]
+    (is (= :browser (project/qa :brian)))
+    (is (nil? (project/qa :nido)) "no declaration: QA is off")
+    (is (nil? (project/qa :elsewhere)))
+    (is (= {:error :undeclared-qa :value :browsr} (project/qa "typo")) "an unknown value is refused by name")
+    (testing "a refused declaration is never read as off"
+      (is (true? (#'p/qa-declared? :typo)))
+      (is (false? (#'p/qa-declared? :nido))))))
+
+;; ── the one reading ────────────────────────────────────────────────────────
+
+(defn- build! [add! d] (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 1}))
+
+(deftest the-qa-reading-has-one-state-from-the-plans-walks-and-builds
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d  (designed! add!)
+            r  #(standing/qa :brian id true)]
+        (testing "a project that declares no :qa reads :off, plan or none"
+          (is (= :off (:state (standing/qa :brian id false)))))
+        (testing "no plan citing the governing design: owed, and no plan named"
+          (is (= {:state :owed :walks []} (r))))
+        (build! add! d)
+        (let [p1 (add! :qa-plan (product-plan d))]
+          (is (= {:state :owed :plan p1 :surface :product :walks []} (r)))
+          (is (= p1 (:plan (standing/qa :brian id false))) "even :off stands on the newest plan")
+          (let [w1 (add! :qa-walk (walk p1 [["open" :pass] ["check" :fail]]))]
+            (is (= {:state :failed :plan p1 :surface :product :walks [w1]} (r)))
+            (testing "a later walk with no build between does not outweigh a failed one"
+              (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]]))
+              (is (= :failed (:state (r))))))
+          (testing "a build since makes every earlier walk count for nothing"
+            (build! add! d)
+            (is (= {:state :owed :plan p1 :surface :product :walks []} (r))))
+          (let [w (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]]))]
+            (is (= {:state :passed :plan p1 :surface :product :walks [w]} (r))))
+          (testing ":blocked is not passed"
+            (add! :qa-walk (walk p1 [["open" :pass] ["check" :blocked]]))
+            (is (= :failed (:state (r)))))
+          (testing "the newest plan is :none: not applicable, whatever was walked before"
+            (let [n (add! :qa-plan (none-plan d))]
+              (is (= {:state :not-applicable :plan n :surface :none :walks []} (r)))))
+          (testing "the newest plan is :product again: its own walks alone count"
+            (let [p2 (add! :qa-plan (product-plan d ["one"]))]
+              (is (= {:state :owed :plan p2 :surface :product :walks []} (r))))))))))
+
+(deftest implementation-review-passed-reads-the-newest-build-from-standing
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d (designed! add!)
+            w #(ws/read-ws :brian id)]
+        (build! add! d)
+        (is (= :layer-completed (:kind (standing/newest-build (w)))))
+        (add! :review {:format :review-report :status :converged :base "main" :base-rev nil :rounds 1
+                       :fix-attempts 0 :defects-settled 0 :findings-remaining 0 :report-path "r.edn"
+                       :design {:seq d}})
+        (is (true? (p/implementation-review-passed? (w))))
+        (build! add! d)
+        (is (false? (p/implementation-review-passed? (w))))))))
+
+;; ── show ───────────────────────────────────────────────────────────────────
+
+(deftest show-prints-the-qa-reading-and-the-plan-whatever-is-newest
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d   (designed! add!)
+            out #(with-out-str (tw/show* {:project "brian" :ws-id id}))]
+        (with-redefs [project/qa (constantly :browser)]
+          (is (str/includes? (out) "qa: owed · product-facing: unclassified"))
+          (let [p1 (add! :qa-plan (product-plan d))]
+            (add! :note {:format :markdown :markdown "a later entry"})
+            (let [o (out)]
+              (is (str/includes? o (str "qa: owed · product-facing: :product · plan " p1)))
+              (is (str/includes? o "Do open. Expected: open happens.") "the plan's steps, though a later entry is newest")
+              (is (str/includes? o "## What changed")))))
+        (testing "a project with no :qa still prints its product-facing line"
+          (with-redefs [project/qa (constantly nil)]
+            (is (str/includes? (out) "qa: off · product-facing: :product"))))))))

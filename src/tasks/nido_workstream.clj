@@ -204,6 +204,21 @@
         ;; nothing has run against it for a week.
         (when-let [d (wsv/doing-label (:doing w))]
           (println "doing:" d))
+        ;; Its QA, for any workstream and whatever entry is newest: the one reading, whether the
+        ;; change is product-facing by the plan that reading stands on, and that plan.
+        (let [qa   (pipeline/qa p ws-id)
+              plan (some->> (:plan qa) (ws/entry-at-seq p ws-id))]
+          (println (str "qa: " (name (:state qa))
+                        (when-let [d (:declaration qa)]
+                          (str " (the registry's :qa " (pr-str (:value d)) " is not a QA it knows)"))
+                        " · product-facing: "
+                        (case (:surface qa) :product ":product" :none ":none" "unclassified")
+                        (when (:plan qa) (str " · plan " (:plan qa)))
+                        (when (seq (:walks qa)) (str " · walks " (str/join ", " (:walks qa))))))
+          (when plan
+            (println)
+            (println (str "── QA plan (entry " (:plan qa) ") ──"))
+            (println (report/report->markdown plan))))
         (when-let [idx (:entries w)]
           (println "ledger:")
           (doseq [{:keys [seq kind title]} idx]

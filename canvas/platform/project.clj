@@ -43,4 +43,13 @@
     {:signature [:=> [:catn [:name :any]]
                  [:or [:enum :pr-auto :pr-squash :push-main]
                       [:map [:error [:= :undeclared-landing]] [:value :any]]]]
+     :delegates [get-project]})
+  (Operation qa
+    "The QA stage a project takes on, as its registry entry declares it under :qa — :browser, a
+     walk of the plan through agent-browser — and nil when it declares none, which reads QA :off
+     on every workstream of it. Any other value is answered as {:error :undeclared-qa :value v},
+     never as nil."
+    {:signature [:=> [:catn [:name :any]]
+                 [:or :nil [:enum :browser]
+                      [:map [:error [:= :undeclared-qa]] [:value :any]]]]
      :delegates [get-project]}))

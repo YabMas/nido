@@ -113,4 +113,20 @@
      phase it belongs to are what the next round and its settling derive from. Fails closed on a
      round that cannot be read."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
-     :delegates [workstream/entries-of generation/current-span]}))
+     :delegates [workstream/entries-of generation/current-span]})
+  (Operation newest-build
+    "The index row of the newest record of the change being built — a kind the registry's
+     build-kinds names — or nil: what a review is judged after and a QA walk observes."
+    {:signature [:=> [:catn [:w :any]] [:maybe :map]]})
+  (Operation qa*
+    "The QA reading over a workstream's current span and governing design, told by its caller
+     whether the project declares :qa: its state — :off, :not-applicable, :owed, :failed or :passed
+     — the newest plan citing the governing design it stands on, with that plan's surface, and the
+     plan's walks recorded after the newest build."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any] [:design [:maybe :map]]
+                        [:declared? :any]] :map]
+     :delegates [workstream/entries-of newest-build]})
+  (Operation qa
+    "The QA reading, reading the workstream's current span and governing design itself."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:declared? :any]] :map]
+     :delegates [qa* governing-design generation/current-span]}))

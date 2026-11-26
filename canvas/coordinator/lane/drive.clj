@@ -62,6 +62,10 @@
     "Whether the newest review over the implementation passed, with nothing built since — what
      makes a workstream a release candidate."
     {:signature [:=> [:catn [:w :any]] :boolean]})
+  (Operation qa
+    "A workstream's QA reading, the one record-standing answers, told whether its project declares
+     :qa as the registry says beside the landing declaration."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]})
   (Operation next-action "The stage to run next and the mode it runs in, or nil at a terminus."
     {:signature [:=> [:catn [:position :any] [:kind :keyword]] [:maybe :map]]})
   (Operation amendment-owed

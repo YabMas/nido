@@ -33,7 +33,8 @@
    [nido.coordinator.record.entry :as entry]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.standing :as standing]
-   [nido.coordinator.record.workstream :as ws]))
+   [nido.coordinator.record.workstream :as ws]
+   [nido.platform.project :as project]))
 
 ;; ── The vocabulary ──────────────────────────────────────────────────────────
 
@@ -596,10 +597,27 @@
   [w]
   (let [es     (:entries w)
         review (last (filter #(= :review (:kind %)) es))
-        built  (last (filter #(#{:implementation-completed :layer-completed} (:kind %)) es))]
+        built  (standing/newest-build w)]
     (boolean (and review
                   (or (nil? built) (> (:seq review) (:seq built)))
                   (#{:clean :converged} (:status (entry/parsed w (:seq review))))))))
+
+(defn- qa-declared?
+  "Whether `project` takes on the QA stage — its registry entry declares :qa. A declaration
+   `project/qa` refuses reads as declared: QA is then owed, and nothing lands on a misspelling
+   past a stage nobody switched off."
+  [project]
+  (some? (project/qa project)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  qa
+  "Workstream `ws-id`'s QA reading — `standing/qa`'s answer, told whether its project declares
+   :qa as this module reads the registry beside the landing declaration. With :declaration, what
+   the registry says when it refuses it."
+  [project ws-id]
+  (let [d (project/qa project)]
+    (cond-> (standing/qa project ws-id (some? d))
+      (map? d) (assoc :declaration d))))
 
 (defn- place
   "The position, given everything already read. Pure — every argument is a fact

@@ -61,3 +61,23 @@
     (cond (nil? v)       :pr-auto
           (landings v)   v
           :else          {:error :undeclared-landing :value v})))
+
+(def ^:private qa-declarations
+  "The QA a project may declare under :qa in its registry entry: :browser, a walk of the plan
+   through agent-browser against the session's running app."
+  #{:browser})
+
+(defn ^{:malli/schema [:=> [:cat :any]
+                        [:or :nil [:enum :browser]
+                         [:map [:error [:= :undeclared-qa]] [:value :any]]]]}
+  qa
+  "The QA stage project `name` takes on, as its registry entry declares it under :qa: :browser,
+   or nil when the entry — or the project — declares none, and every workstream of it reads QA
+   :off. Any other value answers {:error :undeclared-qa :value v}, never nil: a misspelt
+   declaration would otherwise switch the stage off without anybody choosing it. `name` may be a
+   keyword."
+  [name]
+  (let [v (:qa (get-project (clojure.core/name name)))]
+    (cond (nil? v)            nil
+          (qa-declarations v) v
+          :else               {:error :undeclared-qa :value v})))
