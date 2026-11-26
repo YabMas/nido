@@ -66,6 +66,13 @@
    ;; The goal the newest survey was scoped for was replaced — the survey is
    ;; owed again, before anything that stands on it.
    :goal-superseded
+   ;; QA, in a project that declares it. A walk of the plan, recorded since the newest build,
+   ;; failed a step: the build is owed a fix, which records a build and so owes a walk again.
+   :qa-failed
+   ;; The implementation review passed and QA is owed: the plan is walked, or — where the newest
+   ;; plan citing the governing design is no :product plan, because none is recorded — written.
+   :qa-owed
+   :qa-unplanned
    ;; The person granted the landing of a published PR and it has not landed yet: the seat
    ;; lands it, on nido's instruction.
    :land-granted
@@ -318,7 +325,10 @@
    :review-implementation    :implementation
    :address-findings         :implementation
    :review-slice             :implementation
-   :clear-slice              :implementation})
+   :clear-slice              :implementation
+   :walk-qa                  :qa
+   :plan-qa                  :qa
+   :address-qa               :implementation})
 
 (def ^:private stage-of-claim
   "The spine stage each round that takes a claim is work in."
@@ -630,7 +640,7 @@
    a position is always answerable by pointing at an entry."
   [{:keys [closed? closed-outcome findings-open? blocker-seq retraction ks decided? approved?
            cleared? verified? re-entry trail-records layers triage-unaccepted? class-position
-           merge-granted? review-passed? lands-pr?]}]
+           merge-granted? review-passed? lands-pr? qa-state qa-product?]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
   ;; true, is true for ever. `re-entry` is the reading that says how far up the
@@ -661,7 +671,10 @@
         ;; copy, so a converged review is the whole of it there.
         landable?      (or (contains? trail-ks :pr-opened) (and (false? lands-pr?) review-passed?))
         design-stands? (not (and (= :design (:stage re-entry))
-                                 (not (:indeterminate? re-entry))))]
+                                 (not (:indeterminate? re-entry))))
+        ;; QA that holds the landing: owed, or failed. Under :off, :not-applicable or :passed —
+        ;; or a caller that read none — the fold places what it always placed.
+        qa-holds?      (contains? #{:owed :failed} qa-state)]
     (cond
     ;; :closed is the authority on `done`, and a :merged entry is NOT: every
     ;; :merged stays in the ledger for ever, while a phase plan and a findings
@@ -691,11 +704,22 @@
     ;; which `reentry` already lets through first.
     (= :baseline (:stage re-entry))      :goal-superseded
 
+    ;; QA THAT HOLDS keeps the workstream off every position whose next action is a landing —
+    ;; :land-granted, :release-candidate, :published — and off :reviewed, whatever the review and
+    ;; the grants say: a walk is evidence about the change as built, so the landing waits on it.
+    ;; A failed walk sends the work back to the build. Owed with the review passed, the plan is
+    ;; walked — or written, while no :product plan is the newest citing the governing design.
+    ;; Owed with a review in the trail that no longer passes — a build was recorded since, as
+    ;; after a failed walk's fix — the review is owed again.
+    (= :failed qa-state)                 :qa-failed
+    (and (= :owed qa-state) review-passed?) (if qa-product? :qa-owed :qa-unplanned)
+    (and qa-holds? (contains? trail-ks :review)) :implemented
+
     ;; The person granted the landing (`ws/unspent-grants`) and it has not landed since: the next
     ;; move is the seat's, which nido instructs, so no gate offers Land again.
-    (and merge-granted? landable?)       :land-granted
-    (and review-passed? landable?)       :release-candidate
-    (contains? trail-ks :pr-opened)      :published
+    (and merge-granted? landable? (not qa-holds?)) :land-granted
+    (and review-passed? landable? (not qa-holds?)) :release-candidate
+    (and (contains? trail-ks :pr-opened) (not qa-holds?)) :published
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
     ;; Layer entries cite the design they were built under, and `layers` counts only those
@@ -813,6 +837,11 @@
    :implementing      {:stage :implement             :mode :working-copy}
    :implemented       {:stage :review-implementation :mode :mechanical}
    :reviewed          {:stage :publish-draft-pr      :mode :working-copy}
+   ;; QA: the walk and the plan are records an agent writes, the walk driving agent-browser at the
+   ;; session's running app; a failed walk is a build defect, fixed in the working copy.
+   :qa-owed           {:stage :walk-qa               :mode :authoring}
+   :qa-unplanned      {:stage :plan-qa               :mode :authoring}
+   :qa-failed         {:stage :address-qa            :mode :working-copy}
    :premise-retracted {:stage :rebaseline              :mode :authoring}
    ;; A survey under the amended goal, superseding the one scoped for the old
    ;; goal. Both citations it carries are on the position's :re-entry :because —
@@ -1284,6 +1313,9 @@
           layers (layer-progress project ws-id w design 0)
           verdict (standing/verdict project ws-id whole)
           decision (when design (standing/proceeding-decision project ws-id (:seq design)))
+          ;; The one QA reading, told whether the project declares :qa — read here beside the
+          ;; landing declaration.
+          qa     (standing/qa* project ws-id w design (qa-declared? project))
           facts  {:class-position (class-position project whole ks)
                   ;; The drain records its own positions read: the proposal pending approval and
                   ;; the newest census under the current recipe.
@@ -1336,7 +1368,9 @@
                          :review-passed? (implementation-review-passed? w)
                          ;; A declaration `landing` refuses reads as PR-landing: nothing then becomes
                          ;; a candidate before a PR is open, and its Land refuses it by name.
-                         :lands-pr?      (not (false? (landing/names-pr? project)))}
+                         :lands-pr?      (not (false? (landing/names-pr? project)))
+                         :qa-state       (:state qa)
+                         :qa-product?    (= :product (:surface qa))}
           pos    (place facts)
           kind   (intake-kind whole (kinds whole))
           next-of (fn [p]
@@ -1377,6 +1411,9 @@
                                (next-of (place (dissoc facts :blocker-seq)))
                                nx)))
         :intake kind
+        ;; The QA reading the position was placed on, so the arc and every surface read the one
+        ;; answer rather than a second reading of the plans and walks.
+        :qa     qa
         ;; The re-entry point rides on the answer rather than only shaping it.
         ;; A reader shown a workstream clamped back to :design-approved has no
         ;; way to tell that from one that simply got there, and the surfaces and

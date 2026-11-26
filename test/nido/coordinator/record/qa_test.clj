@@ -239,3 +239,91 @@
         (testing "a project with no :qa still prints its product-facing line"
           (with-redefs [project/qa (constantly nil)]
             (is (str/includes? (out) "qa: off · product-facing: :product"))))))))
+
+;; ── the gate before the candidate ──────────────────────────────────────────
+
+(def ^:private place #'p/place)
+
+(deftest qa-that-holds-keeps-the-workstream-off-every-landing-position
+  (let [base {:ks #{:intent :review :implementation-completed} :review-passed? true :lands-pr? false}]
+    (testing "under :off, :not-applicable or :passed the fold places what it places today"
+      (doseq [st [nil :off :not-applicable :passed]]
+        (is (= :release-candidate (place (assoc base :qa-state st))))))
+    (testing "owed with the review passed: walk the plan, or write it while no :product plan is newest"
+      (is (= :qa-owed (place (assoc base :qa-state :owed :qa-product? true))))
+      (is (= :qa-unplanned (place (assoc base :qa-state :owed :qa-product? false)))))
+    (testing "failed: back to the build, whatever the review says"
+      (is (= :qa-failed (place (assoc base :qa-state :failed))))
+      (is (= :qa-failed (place (assoc base :qa-state :failed :review-passed? false)))))
+    (testing "a merge grant does not place a held workstream at :land-granted"
+      (is (= :qa-owed (place (assoc base :qa-state :owed :qa-product? true :merge-granted? true))))
+      (is (= :qa-failed (place (assoc base :qa-state :failed :merge-granted? true)))))
+    (testing "an open PR does not publish a held workstream; a review no longer passed is owed again"
+      (let [pr (assoc base :ks #{:intent :review :pr-opened} :lands-pr? true :review-passed? false)]
+        (is (= :published (place pr)))
+        (is (= :implemented (place (assoc pr :qa-state :owed))))
+        (is (= :implemented (place (assoc base :review-passed? false :qa-state :owed))))))
+    (testing "a halt still outranks QA"
+      (is (= :blocked (place (assoc base :qa-state :failed :blocker-seq 9)))))))
+
+(deftest each-qa-next-action-has-its-spine-stage
+  (is (= {:stage :walk-qa :mode :authoring} (p/next-action :qa-owed :pickup)))
+  (is (= {:stage :plan-qa :mode :authoring} (p/next-action :qa-unplanned :pickup)))
+  (is (= {:stage :address-qa :mode :working-copy} (p/next-action :qa-failed :pickup)))
+  (let [stage-of-next @#'p/stage-of-next]
+    (is (= :qa (stage-of-next :walk-qa)))
+    (is (= :qa (stage-of-next :plan-qa)))
+    (is (= :implementation (stage-of-next :address-qa)))))
+
+(deftest a-declared-project-walks-before-it-lands-and-a-failed-walk-returns-through-the-build
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d   (designed! add!)
+            at  #(:at (p/of :brian id))
+            review! #(add! :review {:format :review-report :status :converged :base "main" :base-rev nil
+                                    :rounds 1 :fix-attempts 0 :defects-settled 0 :findings-remaining 0
+                                    :report-path "r.edn" :design {:seq d}})]
+        (with-redefs [project/qa (constantly :browser)
+                      project/landing (constantly :push-main)]
+          (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts []
+                                           :design {:seq d}})
+          (review!)
+          (is (= :qa-unplanned (at)) "the review passed and no plan is recorded")
+          (is (= :qa (:stage (p/of :brian id))))
+          (let [pl (add! :qa-plan (product-plan d))]
+            (is (= :qa-owed (at)))
+            (is (= :walk-qa (get-in (p/of :brian id) [:next :stage])))
+            (add! :qa-walk (walk pl [["open" :pass] ["check" :fail]]))
+            (is (= :qa-failed (at)))
+            (is (= :implementation (:stage (p/of :brian id))))
+            (add! :qa-walk (walk pl [["open" :pass] ["check" :pass]]))
+            (is (= :qa-failed (at)) "a later walk with no build between does not outweigh the failure")
+            (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 1})
+            (is (= :implemented (at)) "the fix is built: the review is owed again")
+            (review!)
+            (is (= :qa-owed (at)))
+            (add! :qa-walk (walk pl [["open" :pass] ["check" :pass]]))
+            (is (= :release-candidate (at)) "QA passed: a candidate")
+            (is (= :passed (get-in (p/of :brian id) [:qa :state])))))
+        (testing "the same ledger in a project that declares no :qa"
+          (with-redefs [project/qa (constantly nil) project/landing (constantly :push-main)]
+            (is (= :release-candidate (at)))
+            (is (= :off (get-in (p/of :brian id) [:qa :state])))))))))
+
+(deftest a-none-plan-settles-qa-whatever-was-walked-before
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d (designed! add!)]
+        (with-redefs [project/qa (constantly :browser) project/landing (constantly :push-main)]
+          (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts []
+                                           :design {:seq d}})
+          (add! :review {:format :review-report :status :converged :base "main" :base-rev nil :rounds 1
+                         :fix-attempts 0 :defects-settled 0 :findings-remaining 0 :report-path "r.edn"
+                         :design {:seq d}})
+          (let [pl (add! :qa-plan (product-plan d))]
+            (add! :qa-walk (walk pl [["open" :fail] ["check" :pass]]))
+            (is (= :qa-failed (:at (p/of :brian id))))
+            (add! :qa-plan (none-plan d))
+            (is (= :release-candidate (:at (p/of :brian id))) "go by the newest plan")))))))
