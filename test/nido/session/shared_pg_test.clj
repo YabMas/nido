@@ -89,6 +89,34 @@
       (is (= 6145 (#'shared/start-existing! "brian")))
       (is (= [:stop :start] @calls)))))
 
+(deftest the-shared-cluster-starts-with-room-for-a-fleet-of-sessions
+  ;; A stock initdb allows 100 connections — what the template's cloned
+  ;; postgresql.conf carries — and a dozen brian sessions hold several hundred,
+  ;; so the next session's boot was refused with `too many clients already`.
+  (if-not (try (some? (pg/find-pg-bin-dir)) (catch Exception _ false))
+    (println "skipping: no PostgreSQL on this machine")
+    (let [tmp  (str (fs/create-temp-dir {:prefix "nido-shared-pg"}))
+          dir  (str (fs/path tmp "pg-data"))
+          bin  (pg/find-pg-bin-dir)
+          port (proc/find-available-port 6900 200)]
+      (pg/initdb! bin dir "user" nil)
+      (with-redefs [state/shared-pg-data-dir   (fn [_] dir)
+                    state/shared-log-file      (fn [_] (str (fs/path tmp "pg.log")))
+                    state/read-shared-meta     (fn [_] {})
+                    state/write-shared-meta!   (fn [& _] nil)
+                    shared/resolve-shared-port (constantly port)]
+        (try
+          (is (= port (#'shared/start-existing! "tshared")))
+          (is (<= 1000 (parse-long
+                        (str/trim (:out (babashka.process/shell
+                                         {:out :string :err :string}
+                                         (pg/pg-cmd bin "psql") "-h" "127.0.0.1" "-p" (str port)
+                                         "-U" "user" "-d" "postgres" "-At"
+                                         "-c" "show max_connections"))))))
+          (finally
+            (pg/pg-ctl-stop! dir)
+            (fs/delete-tree tmp)))))))
+
 (deftest down-stops-a-cluster-that-is-shutting-down
   (let [tmp (str (fs/create-temp-dir))
         _ (spit (str (fs/path tmp "PG_VERSION")) "17")

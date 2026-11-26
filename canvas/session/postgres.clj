@@ -106,9 +106,9 @@
   (Operation clone-pgdata! "APFS copy-on-write clone of a data directory."
     {:signature [:=> [:catn [:source-data-dir Path] [:target-data-dir Path]] :any]
      :delegates [template-stopped?]})
-  (Operation pg-ctl-start! "Start a cluster on a port."
+  (Operation pg-ctl-start! "Start a cluster on a port, with server settings that override its postgresql.conf."
     {:signature [:=> [:catn [:bin-dir Path] [:data-dir Path] [:pg-port :int] [:log-path Path]
-                            [:opts [:? :any]]] :any]
+                            [:socket-dir [:? :any]] [:server-settings [:? [:map-of :string :any]]]] :any]
      :delegates [pg-cmd]})
   (Operation wait-for-tcp! "Block until a port accepts connections, or give up."
     {:signature [:=> [:catn [:pg-port :int] [:opts [:? :any]]] :any]})

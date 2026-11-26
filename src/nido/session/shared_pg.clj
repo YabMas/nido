@@ -43,6 +43,14 @@
   [lock-path f]
   (io/with-file-lock (str lock-path) f))
 
+(def ^:private shared-max-connections
+  "The template's stock postgresql.conf allows 100 connections, and one brian
+   session holds 14–40 of them (four Hikari pools and a pg2 pool), so a shared
+   cluster on the stock limit refuses the fifth or sixth session's app boot with
+   `too many clients already`. Sized for the whole fleet instead: an idle
+   connection slot costs PostgreSQL only a little shared memory."
+  1000)
+
 ;; ---------------------------------------------------------------------------
 ;; Lifecycle helpers
 ;; ---------------------------------------------------------------------------
@@ -101,7 +109,8 @@
                     (core/log-step "Removing stale shared postmaster.pid")
                     (fs/delete-if-exists (:pid-file existing)))
             port  (pick-shared-port project-name)]
-        (pg/pg-ctl-start! bin-dir data-dir port log-path pg/socket-base-dir)
+        (pg/pg-ctl-start! bin-dir data-dir port log-path pg/socket-base-dir
+                          {"max_connections" shared-max-connections})
         (pg/wait-for-tcp! port)
         (state/write-shared-meta! project-name
                                   (merge (or (try (state/read-shared-meta project-name) (catch Exception _ nil)) {})

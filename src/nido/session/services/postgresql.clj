@@ -197,7 +197,7 @@
     (fs/create-dirs parent))
   (copy-tree-cheaply! source-data-dir target-data-dir))
 
-(defn ^{:malli/schema [:=> [:cat :Path :Path :int :Path [:? :any]] :any]}
+(defn ^{:malli/schema [:=> [:cat :Path :Path :int :Path [:? :any] [:? [:map-of :string :any]]] :any]}
   pg-ctl-start!
   "Start a Postgres cluster on a given port. Overrides port and socket dir via
    `-o` so the cloned cluster's stored postgresql.conf doesn't need editing.
@@ -212,10 +212,15 @@
    :shutdown nil disables the destroy-tree JVM shutdown hook
    babashka.process/shell registers by default — pg_ctl exits as soon as
    the postmaster is ready, but that postmaster is meant to outlive bb,
-   and the hook hangs the bb process trying to manage it at exit."
+   and the hook hangs the bb process trying to manage it at exit.
+
+   `server-settings` (name → value) are passed as `-c` flags, so they hold for
+   this start whatever the cloned postgresql.conf says."
   ([bin-dir data-dir pg-port log-path]
    (pg-ctl-start! bin-dir data-dir pg-port log-path data-dir))
   ([bin-dir data-dir pg-port log-path socket-dir]
+   (pg-ctl-start! bin-dir data-dir pg-port log-path socket-dir {}))
+  ([bin-dir data-dir pg-port log-path socket-dir server-settings]
    (core/log-step (str "Starting PostgreSQL on port " pg-port " (data-dir=" data-dir ")"))
    ;; The `-k` socket dir is a precondition of the flag, not something PG
    ;; creates. macOS reaps idle `/tmp` entries, so a short-lived socket-base-dir
@@ -236,7 +241,8 @@
                        (pg-cmd bin-dir "pg_ctl")
                        "start" "-D" data-dir
                        "-l" log-path
-                       "-o" (str "-p " pg-port " -k " socket-dir " -h 127.0.0.1")
+                       "-o" (str "-p " pg-port " -k " socket-dir " -h 127.0.0.1"
+                                 (apply str (for [[k v] server-settings] (str " -c " k "=" v))))
                        "-w")]
      (when-not (zero? (:exit result))
        ;; pg_ctl writes "could not start server" to stderr but the actual
