@@ -554,17 +554,16 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- destroy-session!
-  "destroy! + verify: if the underlying `git worktree remove --force` swallowed
-   an error and left the worktree behind, remove it. In-app replacement for the
-   bb wrapper's old destroy-and-verify! (fs/delete-tree instead of shelling out;
-   the println is captured to the action sink)."
+  "destroy!, then say so when the session's listed worktree survived it. The TUI removes nothing
+   itself: which directories are a session's own to remove is session-lifecycle's to decide, and
+   a worktree destroy! left behind is reported and left in place (the println is captured to the
+   action sink)."
   [sn {:keys [project] :as opts}]
   (lifecycle/destroy! sn opts)
   (let [{:keys [sessions]} (lifecycle/list-all-data {:project project})
         wt (some #(when (= sn (:name %)) (:worktree %)) sessions)]
     (when (and wt (fs/exists? wt))
-      (println (str "worktree survived destroy; removing " wt))
-      (fs/delete-tree wt))))
+      (println (str "worktree survived destroy; left in place: " wt)))))
 
 ;; Per-verb display words. `:fn` is the lifecycle call for the
 ;; session-shaped verbs — up!/down!/destroy-session!/up! (add) all take
