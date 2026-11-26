@@ -100,3 +100,15 @@
               (when (:refused o) (throw (ex-info "refused" {:command c :outcome o}))))))
         (is (= [["r1" true "r1" "/w/r1"]] (mapv (juxt :ws :run? :unit :path) (work/refused-sessions)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest a-removed-projects-refusals-stay-listed
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root        (constantly (str tmp))
+                    project/list-projects (fn [] {})]
+        (commit! "ws-gone" (refused-unit "a" "/src/nido" [{:command :record-merge :unit "a"}
+                                                         {:command :close-workstream}]))
+        (is (= [["nido" "ws-gone" "a" "/src/nido"]]
+               (mapv (juxt :project :ws :unit :path) (work/refused-sessions)))
+            "read off the core's records, not the project registry"))
+      (finally (fs/delete-tree tmp)))))

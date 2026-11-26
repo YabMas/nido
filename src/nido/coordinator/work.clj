@@ -2543,12 +2543,17 @@
    session's own to remove, on any workstream or run of any project — closed and discarded ones
    above all, which no other read shows: [{:project :ws :run? :unit :path :detail :closed? :discarded?}],
    by project and workstream. A refusal is terminal, so one is listed for as long as it reads
-   refused; a run's lists its run id as :ws and carries :run? true. Read off the core's
-   summaries, two requests per project — its workstreams, and its runs, which the core keeps
-   under a key of their own; a project whose read fails throws, so a surface says it could not
-   read rather than that nothing was refused."
+   refused; a run's lists its run id as :ws and carries :run? true. Read off the core's own
+   records, never the project registry, so a project removed from it keeps its refusals listed:
+   the core's keys name every project it holds a workstream or run of, and each project's
+   summaries and runs are read from there; a read that fails throws, so a surface says it could
+   not read rather than that nothing was refused."
   []
-  (vec (for [[pname _] (sort-by key (project/list-projects))
+  (vec (for [pname (->> (core-client/value! (core-client/workstreams) :workstreams)
+                        (keep #(let [k (str/replace-first % #"^run:" "")
+                                     i (str/index-of k "/")]
+                                 (when (and (core-client/workstream-key? k) i (pos? i)) (subs k 0 i))))
+                        distinct sort)
              [ws run? sm] (concat
                            (for [[k sm] (sort-by key (core-client/value! (core-client/summaries pname) :summaries))]
                              [(or (second (core-client/split-key k)) k) false sm])

@@ -125,8 +125,9 @@
     {:signature [:=> [:catn] :any]})
   (Operation refused-sessions
     "Every unit session whose destroy was refused as not the session's own to remove, on any
-     workstream of any project — closed and discarded ones included — with its workstream, unit and
-     kept path: what the Operations page lists for as long as it reads refused."
+     workstream or run of any project the core holds records of — closed and discarded ones, and
+     projects no longer registered, included — with its workstream, unit and kept path: what the
+     Operations page lists for as long as it reads refused."
     {:signature [:=> [:catn] [:vector :map]]})
   (Operation shown-revivals
     "The casualties a render shows: the sweep's held copy while the process holds its rows,
