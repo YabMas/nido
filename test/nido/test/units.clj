@@ -4,7 +4,8 @@
    `/units` read."
   (:require [babashka.fs :as fs]
             [nido.core.client :as client]
-            [nido.coordinator.record.workstream :as cws]))
+            [nido.coordinator.record.workstream :as cws]
+            [nido.test.sessions :as sessions]))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :string :string [:? :map]] :any]} open-unit!
   "Open unit `unit` on workstream `ws-id` of `project`. Given `:session` (a name), its session is
@@ -12,13 +13,15 @@
    that trigger opened it. Throws on a refusal."
   ([project ws-id unit] (open-unit! project ws-id unit {}))
   ([project ws-id unit {:keys [session trigger]}]
-   (let [o (client/command! (client/ws-key project ws-id) (str "open-" ws-id "-" unit)
-                            (cond-> {:command :open-unit :unit unit :project (name project) :goal "g"}
-                              session (assoc :session-cwd (str (fs/path "/worktrees" session)))
-                              trigger (assoc :trigger (name trigger))))]
+   (let [open (cond-> {:command :open-unit :unit unit :project (name project) :goal "g"}
+                trigger (assoc :trigger (name trigger)))
+         cmds (if session (sessions/ready open (str (fs/path "/worktrees" session))) [open])
+         os   (doall (map-indexed (fn [i c] (client/command! (client/ws-key project ws-id)
+                                                             (str "open-" ws-id "-" unit "-" i) c))
+                                  cmds))]
      (#'cws/forget! project ws-id)
-     (when (:refused o) (throw (ex-info "open-unit refused" {:outcome o})))
-     o)))
+     (when-let [o (some #(when (:refused %) %) os)] (throw (ex-info "open-unit refused" {:outcome o})))
+     (first os))))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :string :keyword] :string]} fire!
   "Open a unit on workstream `ws-id` of `project` as a fire of `trigger` does. Answers its id."

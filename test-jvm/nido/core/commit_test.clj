@@ -7,7 +7,8 @@
             [nido.core.domain :as d]
             [nido.core.feed :as feed]
             [nido.core.store :as store]
-            [nido.core.writer :as writer])
+            [nido.core.writer :as writer]
+            [nido.test.sessions :as sessions])
   (:import [java.lang.management ManagementFactory]
            [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
@@ -15,7 +16,7 @@
 (defn- temp-dir [] (str (Files/createTempDirectory "nido-commit-" (make-array FileAttribute 0))))
 
 (defn- open-unit [ws key unit & {:as more}]
-  (merge {:key key :ws ws :command {:command :open-unit :unit unit :project "p" :goal "g" :session-cwd "/tmp"}} more))
+  (merge {:key key :ws ws :command {:command :open-unit :unit unit :project "p" :goal "g"}} more))
 
 (defmacro with-writer [[w s db opts] & body]
   `(let [dir# (temp-dir)
@@ -46,7 +47,7 @@
 (deftest a-command-is-answered-with-what-committed-and-a-repeat-with-the-same
   (with-writer [w s db {}]
     (let [first-answer (answer (writer/submit! w (open-unit "ws" "k1" "u")))]
-      (is (= [{:event :unit-opened :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}] (:events first-answer)))
+      (is (= [{:event :unit-opened :unit "u" :project "p" :goal "g"}] (:events first-answer)))
       (testing "a resent key is answered from the store, not decided again"
         (is (= first-answer (answer (writer/submit! w (open-unit "ws" "k1" "u")))))
         (is (= 1 (count (store/events s "ws")))))
@@ -186,12 +187,13 @@
       (let [r (store/open-reader db)
             sub (feed/subscribe! f r 0 {})]
         (is (:caught-up (feed/take! sub 100)) "nothing committed yet: caught up at once")
-        (doseq [[k c] [["1" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}]
-                       ["2" {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}]
-                       ["3" {:command :record-outcome :turn "t" :outcome :asked :call {:id "c" :question "Go?"}}]]]
-          (answer (writer/submit! w {:key k :ws "ws" :command c})))
-        (let [ms (repeatedly 3 #(feed/take! sub 1000))]
-          (is (every? (comp empty? :awaiting) ms) "a unit's call is not shown as awaiting the person"))
+        (let [cmds (concat (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")
+                           [{:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}
+                            {:command :record-outcome :turn "t" :outcome :asked :call {:id "c" :question "Go?"}}])]
+          (doseq [[i c] (map-indexed vector cmds)]
+            (answer (writer/submit! w {:key (str "c" i) :ws "ws" :command c})))
+          (let [ms (doall (repeatedly (count cmds) #(feed/take! sub 1000)))]
+            (is (every? (comp empty? :awaiting) ms) "a unit's call is not shown as awaiting the person")))
         (answer (writer/submit! w {:key "4" :ws "ws" :command {:command :raise-operator-ask :ask "a" :binds ["t"] :concerns "u" :content ready}}))
         (is (= ["a"] (map :id (:awaiting (feed/take! sub 1000)))))
         (store/close r)))))
@@ -208,8 +210,8 @@
             ;; which is also what says the subscription is registered before anything commits.
             (is (:caught-up (next-within sub)) "the subscription says where its catch-up ends")
             (testing "commands, through the writer"
-              (is (:events (api/request c {:op :command :key "k1" :ws "ws" :command {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}})))
-              (is (:events (api/request c {:op :command :key "k2" :ws "ws" :command {:command :open-unit :unit "v" :project "p" :goal "g" :session-cwd "/tmp"} :input? true}))))
+              (is (:events (api/request c {:op :command :key "k1" :ws "ws" :command {:command :open-unit :unit "u" :project "p" :goal "g"}})))
+              (is (:events (api/request c {:op :command :key "k2" :ws "ws" :command {:command :open-unit :unit "v" :project "p" :goal "g"} :input? true}))))
             (testing "reads, from committed state"
               (is (= :open (get-in (api/request c {:op :state :ws "ws"}) [:state :units "u" :status])))
               (is (= {:workstreams ["ws"]} (api/request c {:op :workstreams}))))
