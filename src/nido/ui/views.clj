@@ -2274,8 +2274,9 @@
         [:span.prop-where title]]
        [:p.prop-sum ws-link " is parked at a gate, and the sweep waits until it is answered. "
         [:a {:href (ws-page-href project ws-id)} "open the gate"]]]
+      ;; a working hold is a run, which has no workstream page to link to
       :working
-      [:p.meta "Sweep working on " ws-link " — " title
+      [:p.meta "Sweep working on run " ws-id " — " title
        (when started-at (str " · started " (ago started-at)))])))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]]] :string]}

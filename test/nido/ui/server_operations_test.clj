@@ -290,7 +290,9 @@
                                                                :ended-at nil)])]
         (let [body (board)]
           (is (not (str/includes? body "sweep stuck")))
-          (is (str/includes? body "Sweep working on"))
+          (is (str/includes? body "Sweep working on run ws-20260911-b365db"))
+          (is (not (str/includes? body "/workstreams/nido/ws-20260911-b365db"))
+              "a run has no workstream page to link to")
           (is (str/includes? body "sweep waiting on you"))
           (is (str/includes? body "/workstreams/nido/ws-g") "pointing at the gate"))))))
 
