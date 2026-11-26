@@ -384,6 +384,11 @@
      names one on a ledger holding a design, the ref is stamped and the event skipped rather
      than guessed.
 
+     One mark per SHIPMENT, and a shipment is per design: a ref whose published design already
+     has a mark outstanding (no `:merged` after it) adds none, so a stack's layers mark it once,
+     while a rebuild under a newer design is marked though an earlier design's PR is still open —
+     the trail counts only marks citing the current design.
+
      `:opts` is OPTIONAL rather than a second arity: the two-arity form is a defaults chain, and
      `[:?]` describes the contract where `[:function …]` would describe the implementation."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ref :map]

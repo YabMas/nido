@@ -2428,13 +2428,28 @@
            last
            :under)))
 
+(defn- marked-under?
+  "Whether a :pr-opened written since the newest :merged already cites design `d`
+   (nil — no design — matching only a mark that cites none). Off the index's
+   `:under`, so it parses nothing. A legacy mark written before the citation was
+   mirrored carries no `:under`, and so reads as citing no design."
+  [w d]
+  (let [es      (:entries w)
+        landed  (or (some->> es (filter #(= :merged (:kind %))) seq (map :seq) (reduce max)) 0)]
+    (boolean (some #(and (= :pr-opened (:kind %)) (> (:seq %) landed) (= d (:under %))) es))))
+
 (defn- record-pr-opened!
-  "Append the :pr-opened event for a freshly-stamped :github ref, unless a
-   shipment is already OUTSTANDING — a :pr-opened with no :merged after it.
-   Stacks stamp one ref per layer but ship once, so the FIRST layer's ref is
-   that shipment's mark on the timeline and the rest are silent — the per-layer
-   detail already lives in the refs themselves and in
-   :implementation-completed's :artifacts.
+  "Append the :pr-opened event for a freshly-stamped :github ref, unless the
+   shipment of the design it publishes is already OUTSTANDING — a :pr-opened
+   citing that same design with no :merged after it. Stacks stamp one ref per
+   layer and ship once per design, so the FIRST layer's ref is that shipment's
+   mark on the timeline and the rest are silent — the per-layer detail already
+   lives in the refs themselves and in :implementation-completed's :artifacts.
+
+   Per DESIGN, because that is the unit the trail reads: `reentry/trail-standing`
+   counts only marks citing the current design. A workstream that redesigns and
+   rebuilds while an earlier design's PR is still open is on a new shipment, and
+   suppressing its mark would leave it owing publication for ever.
 
    Outstanding rather than \"carries one at all\", because `reopen!` keeps the
    entries: a workstream that landed and came back is on its NEXT shipment, and
@@ -2443,29 +2458,36 @@
    when no record of the new PR names a design yet — so the later landing would
    be skipped for naming none, after the workstream had already closed on it.
 
+   The one-per-design guarantee is over add-ref! calls made one after another:
+   a :pr-opened appended by hand, or two publishers stamping at once, can repeat
+   a design's mark, which repeats a fact and breaks nothing the trail reads.
+
    Skipped (loudly) without a :url and :title, which PrOpened requires, and on a
    ledger holding a design when nothing names the one the work was done under —
    the append would refuse it, and a guessed citation is the thing it refuses.
    The ref is already written by then: correlation is what the merge poller
    needs, and it must never be lost to a malformed event."
   [project w {:keys [url title] :as ref} {:keys [summary design]}]
-  (when-not (= :pr-opened (:kind (last (filter #(#{:pr-opened :merged} (:kind %))
-                                               (:entries w)))))
-    (let [d    (published-design w ref design)
-          skip (cond
-                 (or (str/blank? url) (str/blank? title))
-                 "carries no :url/:title"
-                 (and (nil? d) (holds-design? w))
-                 "names no :design, and no implementation record listing it does")]
-      (if skip
-        (binding [*err* *err*]
-          (.println ^java.io.PrintWriter *err*
-                    (str "WARN: github ref on " (:id w) " " skip
-                         "; skipping the :pr-opened ledger event")))
-        (append-entry! project (:id w) {:kind :pr-opened}
-                       (pr-str (cond-> {:format :pr-opened :url url :title title}
-                                 (not (str/blank? summary)) (assoc :summary summary)
-                                 d (assoc :design {:seq d}))))))))
+  (let [d    (published-design w ref design)
+        skip (cond
+               (or (str/blank? url) (str/blank? title))
+               "carries no :url/:title"
+               (and (nil? d) (holds-design? w))
+               "names no :design, and no implementation record listing it does")]
+    (cond
+      skip
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: github ref on " (:id w) " " skip
+                       "; skipping the :pr-opened ledger event")))
+
+      (marked-under? w d) nil
+
+      :else
+      (append-entry! project (:id w) {:kind :pr-opened}
+                     (pr-str (cond-> {:format :pr-opened :url url :title title}
+                               (not (str/blank? summary)) (assoc :summary summary)
+                               d (assoc :design {:seq d})))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map [:? [:maybe :map]]] :Workstream]}
   add-ref!

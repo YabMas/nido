@@ -10,6 +10,7 @@
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.record.workstream :as ws]
    [nido.core.client :as client]
    [nido.platform.io :as io]
@@ -1388,6 +1389,42 @@
         (is (nil? (opened none)) "nothing names one, so the event is skipped, not guessed")
         (is (= [pr] (:external-refs (ws/read-ws :brian none)))
             "and the ref the merge poller correlates on is stamped regardless")))))
+
+(deftest a-pr-under-a-newer-design-is-a-new-shipment
+  ;; An earlier design's PR still open does not swallow the mark of a rebuild
+  ;; under a newer one: the trail counts only marks citing the current design,
+  ;; so a suppressed mark would leave the workstream owing publication for ever.
+  ;; Layers of one design's stack still mark it once.
+  (with-tmp
+    (fn [_]
+      (let [w      (ws/create! :brian {:external-refs []})
+            id     (:id w)
+            pr     (fn [n] {:adapter :github :id (str "o/r#" n)
+                            :url (str "https://gh/" n) :title (str "layer " n)})
+            marks  (fn [] (mapv :under (filter #(= :pr-opened (:kind %))
+                                               (:entries (ws/read-ws :brian id)))))]
+        (seed-baseline! w)                                                      ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3 — D1
+        (decide! id 3)
+        (clear! id 3)
+        (ws/add-ref! :brian id (pr 1) {:design 3})
+        (ws/add-ref! :brian id (pr 2) {:design 3})
+        (is (= [3] (marks)) "a stack under one design marks its shipment once")
+        (let [d2 (inc (ws/latest-seq :brian id))]
+          (ws/append-entry! :brian id {:kind :design}                           ; D2
+                            (pr-str (assoc (design-citing 2)
+                                           :supersedes {:seq 3 :why "the shape could not hold"})))
+          (decide! id d2)
+          (clear! id d2)
+          (ws/add-ref! :brian id (pr 3) {:design d2})
+          (is (= [3 d2] (marks))
+              "the rebuild's PR, though D1's is still outstanding, is marked under D2")
+          (ws/add-ref! :brian id (pr 4) {:design d2})
+          (ws/add-ref! :brian id (pr 5) {:design 3})
+          (is (= [3 d2] (marks))
+              "and later layers of either design's stack add no second mark")
+          (is (contains? (:current (reentry/trail-standing (ws/read-ws :brian id) d2)) :pr-opened)
+              "so the trail reads the workstream as published under its current design"))))))
 
 (deftest a-trail-record-citing-something-that-is-not-a-design-is-refused
   (with-tmp
