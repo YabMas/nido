@@ -253,6 +253,8 @@
   (is (nil? (turn/probe-scope "/nonexistent/systemd-run" 8000)) "no such binary")
   (is (nil? (turn/probe-scope "false" 8000)) "a systemd-run whose manager does not answer")
   (is (= [] (turn/scope-argv nil "/r" "t" 1)))
+  (is (some #{"--expand-environment=no"} (turn/scope-argv {:systemd-run "systemd-run" :tasks-max 8} "/r" "t" 1))
+      "a scoped run's command reaches it verbatim: systemd-run expands no `$` in it")
   (is (= 8000 turn/run-tasks-max))
   (with-core [{:keys [s cmd! root]} {:scope nil}]
     ;; The core here is this JVM, so its run belongs in the cgroup this JVM is in — which is a

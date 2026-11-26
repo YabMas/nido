@@ -276,10 +276,12 @@
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] :string :string :int] [:sequential :string]]} scope-argv
   "What to run in front of the wrapper so the run in `rdir` (turn `turn`, run `run`) is in a scope
-   of its own with `scope`'s `:tasks-max`; empty without a scope."
+   of its own with `scope`'s `:tasks-max`; empty without a scope. The command after it reaches the
+   run verbatim: systemd-run otherwise expands `$NAME` and `$$` in it, rewriting any argument — an
+   agent's prompt — that holds a `$`."
   [scope rdir _turn _run]
   (if-let [{:keys [systemd-run tasks-max]} scope]
-    [systemd-run "--user" "--scope" "--quiet" "--collect"
+    [systemd-run "--user" "--scope" "--quiet" "--collect" "--expand-environment=no"
      (str "--unit=" (scope-unit rdir))
      "-p" (str "TasksMax=" tasks-max) "--"]
     []))
@@ -288,12 +290,14 @@
   "A scope for runs — {:systemd-run :tasks-max} — when `systemd-run` (a path, or nil for none on
    PATH) can start one under a user systemd manager; nil when it cannot, and runs start as they
    did before scopes: in the core's own cgroup, under its limits. Asked once, by starting a scope
-   that runs `true`, since a binary on PATH proves no manager answers."
+   that runs `true`, since a binary on PATH proves no manager answers — with every flag a run's
+   scope is started with, so a systemd too old to take one (`--expand-environment`, systemd 254)
+   starts runs unscoped rather than failing each."
   [systemd-run tasks-max]
   (when systemd-run
     (try
       (let [p (-> (ProcessBuilder. ^java.util.List [systemd-run "--user" "--scope" "--quiet" "--collect"
-                                                   "-p" (str "TasksMax=" tasks-max) "--" "true"])
+                                                   "--expand-environment=no" "-p" (str "TasksMax=" tasks-max) "--" "true"])
                   (.redirectErrorStream true)
                   (.redirectOutput java.lang.ProcessBuilder$Redirect/DISCARD)
                   (.start))]
