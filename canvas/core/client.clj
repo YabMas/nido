@@ -99,6 +99,11 @@
     "Send a request to the core and answer its reply, or Unavailable when the daemon does not answer."
     {:signature [:=> [:catn [:req CoreRequest]] [:or CommandOutcome ReadReply]]
      :delegates [api/connect api/request local/answer]})
+  (Operation workstreams
+    "The key of every workstream, run and journal the core holds, whatever project it names and
+     whether or not that project is still registered, as a ReadReply."
+    {:signature [:=> [:catn] ReadReply]
+     :delegates [request!]})
   (Operation state
     "A workstream's committed state, as a ReadReply."
     {:signature [:=> [:catn [:k :string]] ReadReply]
