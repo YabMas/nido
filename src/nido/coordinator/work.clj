@@ -1063,17 +1063,27 @@
    know what it may stop showing. A proposal a plan disposed `:file` or `:no-op`
    is finished — nothing landed and nothing is going to — and it records no
    landing precisely because nothing landed, so the board had no way to tell it
-   from a row nobody had got to and kept it in the backlog forever."
+   from a row nobody had got to and kept it in the backlog forever.
+
+   `:blocked` is `{:run :summary :needs}` when the latest claim run covering the proposal is over
+   and stopped on a blocker: what it asked a person, which nothing else shows — the claim reads as
+   tried, so the sweep never carries the proposal again by itself."
   [project]
   (let [pk       (keyword (name project))
-        reserved (into #{}
-                       (comp (filter :open?) (mapcat :addresses))
-                       (proposal/claim-attempts pk))
+        claims   (proposal/claim-attempts pk)
+        reserved (into #{} (comp (filter :open?) (mapcat :addresses)) claims)
+        blocked  (into {}
+                       (for [{:keys [ws-id blocker addresses]} (sort-by :started-at claims)
+                             a addresses]
+                         [a (when blocker
+                              (cond-> {:run ws-id :summary (:summary blocker)}
+                                (:needs blocker) (assoc :needs (:needs blocker))))]))
         disposed (proposal/dispositions-by-address (proposal/plans-of pk))]
     (mapv (fn [p]
             (let [addr (proposal/address p)]
               (cond-> p
                 (reserved addr)  (assoc :reserved? true)
+                (blocked addr)   (assoc :blocked (blocked addr))
                 (disposed addr)  (assoc :disposition (disposed addr)))))
           (proposal/of-project pk))))
 

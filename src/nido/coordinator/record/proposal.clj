@@ -224,8 +224,9 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   attempts
   "Every improvement attempt in `project` — a holder an improvement fire started
-   (`records/holders`) — as `{:address :ws-id :open? :outcome :title :started-at}`, `:ws-id` the
-   holder.
+   (`records/holders`) — as `{:address :ws-id :open? :outcome :title :started-at :blocker}`, `:ws-id`
+   the holder and `:blocker` the latest :blocker record of one that is over, when it recorded any:
+   what it stopped to ask a person.
 
    `:open?` is a run not yet over: NOT the presence of a failure record. That distinction is the whole hold: a session that crashes hard writes no tombstone, so
    a rule keyed on failure would read a dead attempt as no attempt and start a second one on top of
@@ -234,8 +235,10 @@
   (vec (for [r (records/holders project)
              :let [p (get-in r [:run :payload])]
              :when (= improvement-adapter (keyword (:adapter p)))]
-         {:address (:id p) :ws-id (:id r) :open? (not (:closed? r)) :outcome (run-outcome r)
-          :title (:title p) :started-at (get-in r [:run :fired-at])})))
+         (cond-> {:address (:id p) :ws-id (:id r) :open? (not (:closed? r)) :outcome (run-outcome r)
+                  :title (:title p) :started-at (get-in r [:run :fired-at])}
+           (:closed? r)
+           (assoc :blocker (last (filter #(= :blocker (:kind %)) (:records r))))))))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:maybe :map]]}
   next-to-implement

@@ -2346,7 +2346,7 @@
    for a decision about a claim while showing only the claim."
   [{:keys [project ws-id analysis-seq observation at-seq kind where summary evidence
            proposal run-id reviewed rounds status at decision landed disposition
-           reserved?] :as _p}]
+           reserved? blocked] :as _p}]
   (let [addr (str analysis-seq "." observation)
         base (str "/operations/" project "/" ws-id "/" analysis-seq "/" observation
                   "?entry=" at-seq)
@@ -2387,6 +2387,12 @@
         [:strong "declined too late"]
         " — a claim covering this proposal was already reserved, so the change lands anyway. "
         "The other proposals that claim covered return to the backlog."])
+     ;; The run is over, so it asks nothing any more: this row is the only place its question shows.
+     (when (and blocked (not landed) (not= :declined (:verdict decision)))
+       [:div.prop-note
+        [:strong "the run implementing this stopped for you"]
+        " — " (or (:needs blocked) (:summary blocked))
+        [:span.meta (str " · run " (:run blocked))]])
      ;; Decline is offered wherever nothing has landed, not only where nothing
      ;; has been decided. Approval is no longer what lets the sweep carry a
      ;; proposal — a decline is what stops it — so a veto that could not be
@@ -2421,16 +2427,20 @@
    landing, so the row stays in the backlog for as long as the ledger stands
    unless the disposition is read here.
 
+   A row whose implementing run stopped on a blocker is `:open` whatever was decided: the run
+   asked a person something, and nothing carries the row again until a person answers it.
+
    `:queued` is what a plan put in a `:land` claim. It is still owed — the sweep
    has not carried it — but it is not the reader's to answer: under the veto
    model it goes ahead unless declined. Counting it as open read 487 awaiting a
    person the day a hand-condensed plan queued 477 of them. `:open` plus
    `:queued` is the owed set."
-  [{:keys [decision landed disposition]}]
+  [{:keys [decision landed disposition blocked]}]
   (cond
     landed                            :settled
     (= :declined (:verdict decision)) :settled
     (#{:file :no-op} disposition)     :settled
+    blocked                           :open
     (= :land disposition)             :queued
     (nil? decision)                   :open
     :else                             :waiting))

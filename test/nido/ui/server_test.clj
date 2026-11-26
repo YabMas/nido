@@ -162,8 +162,9 @@
       (server/handle-request {:request-method :post
                               :uri "/workstreams/brian/ws-2/gate/option-b"
                               :query-string "entry=4"})
-      (Thread/sleep 50)
-      (is (= [["brian" "ws-1" :option-a 4] ["brian" "ws-2" :option-b 4]] @calls)
+      ;; Each resolves on a future of its own, so they finish in either order, and late under load.
+      (loop [n 100] (when (and (< (count @calls) 2) (pos? n)) (Thread/sleep 50) (recur (dec n))))
+      (is (= #{["brian" "ws-1" :option-a 4] ["brian" "ws-2" :option-b 4]} (set @calls))
           "both gate routes forward the position the button was rendered at —
            resolve-gate! refuses a letter whose report the ledger has moved past"))))
 

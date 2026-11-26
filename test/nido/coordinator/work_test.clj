@@ -3197,6 +3197,23 @@
                 "only the improvement run still running, only where a sweep is declared")
             (is (string? (:started-at (first (work/improvement-holds)))) "since its fire")))))))
 
+(deftest an-improvement-attempt-that-ended-carries-the-blocker-it-stopped-on
+  (with-tmp
+    (fn [_]
+      (let [mk (fn [id] (test-runs/run! :nido :improvement-claim
+                                        {:adapter :improvement :id id :title "improve: it"} :running))
+            blocked (mk "ws-p/1#0")
+            running (mk "ws-p/1#1")
+            k       (client/run-key :nido blocked)]
+        (records/append-to-run! (client/run-key :nido running)
+                                {:kind :blocker :summary "s" :needs "may I go on?" :after "a"})
+        (records/append-to-run! k {:kind :blocker :summary "s" :needs "may I change the schema?" :after "a"})
+        (client/command! k (str "end/" blocked)
+                         {:command :record-outcome :turn (str blocked " first") :outcome :completed})
+        (let [by (into {} (map (juxt :ws-id identity)) (proposal/attempts :nido))]
+          (is (= "may I change the schema?" (-> (by blocked) :blocker :needs)))
+          (is (nil? (:blocker (by running))) "a run still going asks through its own turn, not here"))))))
+
 ;; ── Phases ──────────────────────────────────────────────────────────────────
 
 (def ^:private phase-baseline

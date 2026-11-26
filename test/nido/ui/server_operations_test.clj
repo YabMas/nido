@@ -211,6 +211,24 @@
           (is (str/includes? body "return to the backlog")
               "and what happens to the proposals it was grouped with"))))))
 
+(deftest a-proposal-whose-run-stopped-on-a-blocker-awaits-you-with-its-question
+  ;; The run is over and asks nothing any more, and its claim reads as tried, so the sweep never
+  ;; carries the proposal again: the row is the only place the question shows.
+  (with-one-proposal
+    (fn [id]
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0 :verdict :approved :at-seq 0})
+      (with-redefs [nido.coordinator.record.proposal/claim-attempts
+                    (constantly [{:address "ws-p/1#0" :ws-id "improvement-c1" :open? false
+                                  :outcome :dropped :started-at "2026-11-26T09:00:00Z"
+                                  :blocker {:kind :blocker :summary "s" :needs "may I change the schema?"}
+                                  :addresses [(str id "/1.0")]}])
+                    work/improvement-holds (constantly [])]
+        (let [body (board)]
+          (is (str/includes? body "1 awaiting you") "approved, it is still the person's to answer")
+          (is (str/includes? body "the run implementing this stopped for you"))
+          (is (str/includes? body "may I change the schema?"))
+          (is (str/includes? body "run improvement-c1")))))))
+
 (deftest a-landing-nobody-decided-is-settled-not-awaiting-a-reader
   ;; The headline defect this replaces: the band asked `(nil? decision)` before
   ;; it asked what became of the row, and under the veto model most of what
