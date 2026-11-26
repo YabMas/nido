@@ -18,7 +18,7 @@
   (is (str/includes? (views/recovery-fragment nil) "could not be read")
       "a section with nothing in it would read as a machine with nothing failing"))
 
-(deftest a-parked-recovery-links-to-its-gate
+(deftest a-parked-recovery-says-what-it-needs
   (let [html (views/recovery-fragment
               {:counts {:owed 1 :recovering 0 :needs-you 1 :waiting 0 :restored 0}
                :causes [{:state :needs-you :cause "brian-1a4f" :gate-ws "ws-r" :ws-id "ws-r"
@@ -31,7 +31,8 @@
                       :events [{:at "2026-09-17T10:00:00Z" :kind :failure-kept :session "brian/impl-br-6346"
                                 :message "Advancing shared cluster failed"}]}})]
     (is (str/includes? html "needs you"))
-    (is (str/includes? html "/workstreams/nido/ws-r") "the person is sent to the gate that asks them")
+    (is (str/includes? html "run ws-r") "named by its run, which has no page of its own")
+    (is (not (str/includes? html "/workstreams/nido/ws-r")))
     (is (str/includes? html "project-defect"))
     (is (str/includes? html "https://github.com/o/r/pull/1"))
     (is (str/includes? html "Activity"))

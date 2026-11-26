@@ -20,9 +20,9 @@
    :error (when reason {:reason reason})
    :state-history [{:at started :state :queued} {:at ended :state state}]})
 
-(defn- recovery [ws-id cause & {:keys [closed named runs entries]}]
+(defn- recovery [ws-id cause & {:keys [closed named settled runs entries]}]
   {:ws-id ws-id :cause cause :closed closed :named (set named)
-   :settled #{} :runs (vec runs) :sessions []
+   :settled (set settled) :runs (vec runs)
    :entries (or entries {})})
 
 (defn- overview [failures recoveries & {:keys [feed-from]}]
@@ -93,9 +93,9 @@
 
 (deftest settled-causes-show-for-the-window-only
   (let [ov (overview [(failure "F1" "done") (failure "F2" "gone") (failure "F3" "old" :at "2026-09-01T00:00:00Z")]
-                     [(recovery "ws-done" "done" :named ["F1"] :closed {:at "2026-09-17T11:40:00Z" :outcome :done})
-                      (recovery "ws-gone" "gone" :named ["F2"] :closed {:at "2026-09-16T10:00:00Z" :outcome :dismissed})
-                      (recovery "ws-old" "old" :named ["F3"] :closed {:at "2026-09-02T00:00:00Z" :outcome :done})])]
+                     [(recovery "ws-done" "done" :named ["F1"] :settled ["F1"] :closed {:at "2026-09-17T11:40:00Z" :outcome :done})
+                      (recovery "ws-gone" "gone" :named ["F2"] :settled ["F2"] :closed {:at "2026-09-16T10:00:00Z" :outcome :dismissed})
+                      (recovery "ws-old" "old" :named ["F3"] :settled ["F3"] :closed {:at "2026-09-02T00:00:00Z" :outcome :done})])]
     (is (= :restored (state-of ov "done")))
     (is (= :dismissed (state-of ov "gone")))
     (is (nil? (state-of ov "old")) "a recovery that closed before the window is not a row")
@@ -127,7 +127,7 @@
                                           :merged [{:commit "abc" :url "u" :title "t" :at "2026-09-17T11:30:00Z"}]
                                           :session-restored [{:at "2026-09-17T11:45:00Z"
                                                               :outcomes [{:failure "F1" :outcome :restored}]}]})])]
-    (is (= [:closed :recovery-ended :restore :landed :parked :diagnosed :recovery-fired
+    (is (= [:recovery-ended :restore :landed :parked :diagnosed :recovery-fired
             :recovery-ended :recovery-fired :failure-kept :failure-kept]
            (mapv :kind (-> ov :feed :events))))
     (is (= :undiagnosed (:reason (first (filter #(and (= :recovery-ended (:kind %)) (= :failed (:state %)))

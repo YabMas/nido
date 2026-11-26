@@ -93,6 +93,11 @@
    :doc "Import every legacy ledger (workstream.edn and its entries) into the running core, reading the files only. A workstream the core already holds is left as it is, so a second run records nothing. Exits 1 when any ledger was refused."
    :task (nido-core/import-ledgers)}
 
+  nido:core:archive-background
+  {:requires ([tasks.nido-core :as nido-core])
+   :doc "Copy every record nido's background workstreams (review-analysis, improvement and session-recovery fires from before those ran as runs) hold into an archive journal of each workstream's own, where readers find them as holders. Re-runnable: what is archived already is not appended again. With :discard true, discard every background workstream whose every record is archived; the core keeps its events."
+   :task (apply nido-core/archive-background *command-line-args*)}
+
   nido:intake:run
   {:requires ([tasks.nido-intake :as nido-intake])
    :doc "Run the intake host in the foreground: the sources and triggers, each arrival turned into core commands [:poll-ms <n>]."

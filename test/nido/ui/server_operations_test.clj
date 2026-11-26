@@ -9,25 +9,24 @@
    [nido.platform.host :as host]
    [nido.coordinator.record.proposal]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.record.records :as records]
+   [nido.core.client :as client]
+   [nido.test.runs :as test-runs]
    [nido.ui.server :as server]))
 
 (defn- with-one-proposal
-  "A review-run workstream holding one analysis with one proposal, in a
+  "A review-analysis run holding one analysis with one proposal, in a
    throwaway root, plus the daemon-health seam stubbed so the rail renders."
   [f]
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     server/read-rail-daemon (constantly {:state :up})]
-        (let [id (:id (ws/create! :nido {:external-refs [{:adapter :review-run :id "r" :title "t"}]}))]
-          (ws/append-entry! :nido id {:kind :review-analysis}
-                            (pr-str {:format :review-analysis :verdict :degraded :run-id "r"
-                                     :status "clean" :rounds 1 :summary "the arc"
-                                     :observations [{:kind :waste :where "cache/record"
-                                                     :summary "the clean path forgets"
-                                                     :evidence "stages.clj:334"
-                                                     :proposal "record it there too"}]}))
-          (f id)))
+        (f (test-runs/analysis! :nido "r" [{:kind :waste :where "cache/record"
+                                             :summary "the clean path forgets"
+                                             :evidence "stages.clj:334"
+                                             :proposal "record it there too"}]
+                                {:summary "the arc"})))
       (finally (fs/delete-tree tmp)))))
 
 (defn- page [uri]
@@ -69,7 +68,7 @@
                               :uri (str "/operations/nido/" id "/1/0")
                               :query-string "entry=1&verdict=maybe&scope=nido"})
       (is (empty? (filter #(= :improvement-decision (:kind %))
-                          (:entries (ws/read-ws :nido id))))))))
+                          (records/of (records/journal :nido "improvement"))))))))
 
 (deftest the-page-is-a-rail-destination
   (with-one-proposal
@@ -234,13 +233,13 @@
   ;; it sits in the backlog for as long as the ledger stands.
   (with-one-proposal
     (fn [id]
-      (ws/append-entry! :nido id {:kind :improvement-plan}
-                        (pr-str {:format   :improvement-plan
+      (records/append-to-run! (client/run-key :nido id)
+                              {:kind     :improvement-plan
                                  :date     "2026-09-07"
                                  :frontier {:proposals [] :attempts []}
                                  :claims   [{:disposition :no-op
                                              :statement   "the record already says this"
-                                             :addresses   [(str id "/1.0")]}]}))
+                                             :addresses   [(str id "/1.0")]}]})
       (let [body (board)]
         (is (str/includes? body "0 awaiting you"))
         (is (str/includes? body "no change needed")
@@ -252,13 +251,13 @@
 (deftest a-proposal-a-plan-queued-to-land-is-not-awaiting-you
   (with-one-proposal
     (fn [id]
-      (ws/append-entry! :nido id {:kind :improvement-plan}
-                        (pr-str {:format   :improvement-plan
+      (records/append-to-run! (client/run-key :nido id)
+                              {:kind     :improvement-plan
                                  :date     "2026-09-29"
                                  :frontier {:proposals [] :attempts []}
                                  :claims   [{:disposition :land
                                              :statement   "carry it"
-                                             :addresses   [(str id "/1.0")]}]}))
+                                             :addresses   [(str id "/1.0")]}]})
       (with-redefs [work/improvement-holds (constantly [])]
         (doseq [body [(board) (page "/operations")]]
           (is (str/includes? body "0 awaiting you"))

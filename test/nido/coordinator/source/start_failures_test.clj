@@ -21,10 +21,10 @@
    :instance-id (str project "--" session) :origin origin
    :error [{:class "clojure.lang.ExceptionInfo" :message message}]})
 
-(defn- recovery [cause & {:keys [closed named settled runs sessions]}]
+(defn- recovery [cause & {:keys [closed named settled runs]}]
   {:ws-id (str "ws-" cause) :cause cause :closed closed
    :named (set named) :settled (set settled)
-   :runs (vec runs) :sessions (vec sessions)})
+   :runs (vec runs)})
 
 (defn- run [state ended-at]
   {:state state :state-history [{:at "2026-09-17T00:00:00Z" :state :queued}
@@ -36,15 +36,16 @@
 
 ;; ── owed ─────────────────────────────────────────────────────────────────────
 
-(deftest a-failure-is-owed-until-a-closed-recovery-named-it
+(deftest a-failure-is-owed-until-a-recovery-settled-it
   (let [a (kept "F1") b (kept "F2") c (kept "F3")
         cause (failure/cause a)]
     (is (= ["F2" "F3"]
-           (mapv :id (sf/owed [a b c] [(recovery cause :closed {:at "t" :outcome :done} :named ["F1"])])))
-        "only what the closed recovery named is settled")
+           (mapv :id (sf/owed [a b c] [(recovery cause :closed {:at "t" :outcome :done}
+                                                 :named ["F1" "F2"] :settled ["F1"])])))
+        "only what a recovery settled is settled")
     (is (= ["F1" "F2" "F3"]
            (mapv :id (sf/owed [a b c] [(recovery cause :named ["F1" "F2"])])))
-        "an open recovery settles nothing: a recovery that dies leaves its failures owed")))
+        "naming a failure settles nothing: a recovery that dies leaves its failures owed")))
 
 (deftest a-recoverys-own-failed-start-is-never-owed
   (let [own (kept "F9" :origin {:kind :run :run-id "R" :source-type :session-failure})]
@@ -54,15 +55,13 @@
 ;; ── in flight ────────────────────────────────────────────────────────────────
 
 (deftest a-cause-is-held-while-any-recovery-of-it-is-in-flight
-  (testing "a recovery run queued, preprocessing or running on any workstream of the cause, even a
-            closed one"
-    (doseq [state [:queued :preprocessing :running]]
-      (is (sf/in-flight? [(recovery "c" :closed {:at "t"} :runs [(run state "t")])] "c"))))
-  (testing "parked for review holds only on an open workstream — a person's close stopped it"
-    (is (sf/in-flight? [(recovery "c" :runs [(run :awaiting-review "t")])] "c"))
-    (is (not (sf/in-flight? [(recovery "c" :closed {:at "t"} :runs [(run :awaiting-review "t")])] "c"))))
-  (testing "finished runs and other causes hold nothing"
-    (is (not (sf/in-flight? [(recovery "c" :runs [(run :failed "t") (run :done "t")])] "c")))
+  (testing "a recovery run starting or running"
+    (doseq [state [:queued :running]]
+      (is (sf/in-flight? [(recovery "c" :runs [(run state "t")])] "c"))))
+  (testing "a run that ended holds nothing, parked for a person or not — it paces instead"
+    (is (not (sf/in-flight? [(recovery "c" :runs [(run :awaiting-review "t")])] "c")))
+    (is (not (sf/in-flight? [(recovery "c" :runs [(run :failed "t") (run :done "t")])] "c"))))
+  (testing "other causes hold nothing"
     (is (not (sf/in-flight? [(recovery "other" :runs [(run :running "t")])] "c")))))
 
 ;; ── pacing ───────────────────────────────────────────────────────────────────
@@ -114,9 +113,10 @@
                                     now pacing))
         "waiting: its last recovery failed less than a poll interval ago")
     (is (= 1 (count (sf/recovery-events
-                     [f] [(recovery cause :closed {:at "t"} :runs [(run :failed "2026-09-17T10:00:00Z")])]
+                     [f] [(recovery cause :runs [(run :failed "2026-09-17T10:00:00Z")
+                                                 (run :done "2026-09-17T10:00:00Z")])]
                      now pacing)))
-        "a closed workstream's failed runs do not pace the next episode")))
+        "a recovery that settled the cause ends the streak before it")))
 
 (deftest durations-read-as-milliseconds
   (is (= 120000 (sf/duration-ms "2m")))
@@ -128,9 +128,9 @@
     (with-redefs [failure/ids     (constantly ["F1" "F2" "F3"])
                   failure/failure (fn [id] (swap! opened conj id) (kept id))]
       (is (= ["F3"] (mapv :id (sf/undischarged-failures
-                               [(recovery "c" :closed {:at "t"} :named ["F1" "F2"])]))))
+                               [(recovery "c" :closed {:at "t"} :named ["F1" "F2"] :settled ["F1" "F2"])]))))
       (is (= ["F3"] @opened)
-          "the records a closed recovery named are known settled from their ids"))))
+          "the records a recovery settled are known settled from their ids"))))
 
 ;; ── recovery runs ────────────────────────────────────────────────────────────
 
@@ -184,9 +184,39 @@
                                           :after "a"})
           (end! done) (end! parked)
           (let [by (into {} (map (juxt :ws-id identity)) (filter #(= cause (:cause %)) (sf/recoveries :nido)))]
-            (is (= [true :done :done #{"F1" "F2"}]
-                   ((juxt :run? (comp :outcome :closed) (comp :state first :runs) :settled) (by done))))
+            (is (= [:done :done #{"F1" "F2"}]
+                   ((juxt (comp :outcome :closed) (comp :state first :runs) :settled) (by done))))
             (is (= :awaiting-review (-> (by parked) :runs first :state))
                 "a run that recorded a blocker and settled nothing stopped for a person")
             (is (= 1 (count (get-in (by parked) [:entries :blocker])))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-recovery-from-before-runs-settles-what-it-named-once-it-closed
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [from (fn [ws n ref] {:holder ws :seq n :ref ref})
+              ref  (fn [id] {:adapter :session-recovery :id id :title "recover"})]
+          (records/archive!
+           :nido
+           [{:kind :session-restored :at "2026-09-01T10:00:00Z"
+             :outcomes [{:failure "F2" :outcome :not-restored}]
+             :from (from "ws-a" 1 (ref "c@F1"))}
+            {:kind :closed :outcome :dismissed :at "2026-09-01T11:00:00Z" :by :person
+             :from (from "ws-a" 2 (ref "c@F1"))}
+            {:kind :session-restored :at "2026-09-02T10:00:00Z"
+             :outcomes [{:failure "F4" :outcome :restored} {:failure "F5" :outcome :not-restored}]
+             :from (from "ws-b" 1 (ref "d@F4"))}
+            {:kind :closed :outcome :done :at "2026-09-02T11:00:00Z" :by :person
+             :from (from "ws-b" 2 (ref "d@F4"))}
+            {:kind :reopened :at "2026-09-02T12:00:00Z" :by :person
+             :from (from "ws-b" 3 (ref "d@F4"))}])
+          (let [by (into {} (map (juxt :ws-id identity)) (sf/recoveries :nido))]
+            (is (= [#{"F1" "F2"} {:at "2026-09-01T11:00:00Z" :outcome :dismissed} :done]
+                   ((juxt :settled :closed (comp :state first :runs)) (by "ws-a")))
+                "closed, it settled every failure its fire and its restores named, as it closed")
+            (is (= #{"F4"} (:settled (by "ws-b")))
+                "reopened since, it settles only what it restored")
+            (is (= "c" (:cause (by "ws-a"))) "its cause read off its fire's id"))))
       (finally (fs/delete-tree tmp)))))

@@ -3,8 +3,8 @@
    what happened, in order.
 
    A pure read model over records it is handed — kept failures, each carrying its
-   cause, and the recovery source's own reading of the recoveries — runs, and the
-   workstreams from before runs — with what each recorded. It stores nothing and writes nothing: the feed is derived
+   cause, and the recovery source's own reading of the recoveries, with what each recorded. It
+   stores nothing and writes nothing: the feed is derived
    from the facts recovery already keeps, so it cannot disagree with them.
 
    The states are the recovery source's decisions, not a second reading of them.
@@ -42,8 +42,7 @@
   (sort-by #(or (some-> (k %) instant .toEpochMilli) 0) > xs))
 
 (defn- latest-ws
-  "The recovery workstream a cause's row reads: its open one, else the one closed
-   most recently."
+  "The recovery a cause's row reads: its one still running, else the one that ended most recently."
   [mine]
   (or (first (remove :closed mine))
       (first (by-time-desc (filter :closed mine) #(-> % :closed :at)))))
@@ -117,7 +116,6 @@
      (cause-state cause ctx)
      {:cause     cause
       :ws-id     (:ws-id ws)
-      :run?      (boolean (:run? ws))
       :needs     (some-> (last (entries ws :blocker)) (as-> b (or (:needs b) (:summary b))))
       :failures  (vec ids)
       :sessions  (vec (distinct (map #(str (:project %) "/" (:session %)) (reverse sample))))
@@ -158,8 +156,8 @@
        (mapv second)))
 
 (defn- events
-  "Recovery facts as feed events, each with its `:key`: every fact the recovery
-   workstreams hold, and one per failure record handed in."
+  "Recovery facts as feed events, each with its `:key`: every fact the recoveries hold, and one
+   per failure record handed in."
   [{:keys [failures recoveries ms-by-id]}]
   (let [evt (fn [ident m]
               (assoc m :key (event-key (or (when (= :failure-kept (:kind m)) (ms-by-id ident))
@@ -195,9 +193,7 @@
                 (evt (at-seq m) (merge base {:at (:at m) :kind :landed :commit (:commit m)
                                              :url (:url m) :text (:title m)})))
               (for [p (entries r :pr-opened)]
-                (evt (at-seq p) (merge base {:at (:at p) :kind :pr-opened :url (:url p) :text (:title p)})))
-              (when-let [c (when-not (:run? r) (:closed r))]
-                [(evt (:ws-id r) (merge base {:at (:at c) :kind :closed :outcome (:outcome c)}))]))]
+                (evt (at-seq p) (merge base {:at (:at p) :kind :pr-opened :url (:url p) :text (:title p)}))))]
        e))))
 
 (defn ^{:malli/schema [:=> [:cat :map [:maybe :string]] :map]}
@@ -226,8 +222,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
   shown?
-  "Whether recovery workstream `r` is shown as of `now`: open, or closed within
-   the window. A reader gathering what the overview needs reads the failures of
+  "Whether recovery `r` is shown as of `now`: running, or ended within the window. A reader gathering what the overview needs reads the failures of
    these and no others."
   [r now]
   (or (not (:closed r))
@@ -243,8 +238,7 @@
    undischarged one, the `row-sample` of every shown recovery's named failures,
    and every one `page-failure-ids` names for the page; `failure-index` is every kept failure's
    :id and :ms, without its record. `recoveries` are the recovery source's
-   readings of recovery workstreams, each carrying the ledger entries it holds
-   under :entries by kind. `now` is an Instant. `feed-from` is the feed position
+   readings of the recoveries, each carrying the records it holds under :entries by kind. `now` is an Instant. `feed-from` is the feed position
    to page from, nil for the newest.
 
    A cause is shown when it has an owed failure or an open recovery workstream,

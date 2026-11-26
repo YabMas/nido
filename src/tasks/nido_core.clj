@@ -6,6 +6,7 @@
      bb nido:core:status             which release runs, and whether it answers
      bb nido:core:start / stop       the supervised service
      bb nido:core:import-ledgers     import every legacy ledger into the core, read-only, once
+     bb nido:core:archive-background copy what background workstreams held into archive journals
 
    The service runs `clojure -M -m nido.core.release run <nido-dir>` in the nido home's
    `core/current`, so an upgrade only moves that link and restarts it."
@@ -15,6 +16,9 @@
             [clojure.string :as str]
             [nido.coordinator.daemon.supervisor :as supervisor]
             [nido.coordinator.record.legacy-ledger :as legacy]
+            [nido.coordinator.record.records :as records]
+            [nido.coordinator.record.workstream :as cws]
+            [nido.core.client :as client]
             [nido.core.release :as release]))
 
 (defn- nido-dir [] (str (fs/canonicalize (System/getProperty "user.dir"))))
@@ -86,6 +90,54 @@
   [& _]
   (when (seq (:refused (import-ledgers!)))
     (System/exit 1)))
+
+(def ^:private background-adapters
+  "The refs a fire minted a workstream by before its work ran as a run."
+  #{:review-run :improvement :session-recovery})
+
+(defn- background-records
+  "What `project`'s background workstreams hold, as archive records (`records/archive!`): each
+   typed entry, oldest workstream first and each in its order. Markdown entries are not records."
+  [project]
+  (for [w (sort-by (juxt #(str (:created-at %)) :id) (cws/project-records project))
+        :let [ref (some #(when (background-adapters (:adapter %)) %) (:external-refs w))]
+        :when ref
+        e (:entries w)
+        :when (= "edn" (:ext e))]
+    (-> (records/->record (edn/read-string (cws/entry-text w (:seq e))))
+        (assoc :at (:at e) :from {:holder (:id w) :seq (:seq e) :ref ref}))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]} archive-background
+  "bb nido:core:archive-background [:discard true]
+   Copy every record nido's background workstreams hold — those a review-analysis, improvement or
+   session-recovery fire minted before those fires ran as runs — into an archive journal of each
+   workstream's own, where readers find them as holders (`records/holders`). Re-runnable: what is
+   archived already is not appended again.
+   With :discard true, discard instead every background workstream whose every record is
+   archived — one holding none among them — so no reader finds it again; the core keeps its
+   events, and its directory is left as it is. One whose archive is short is named and kept."
+  [& args]
+  (let [opts (apply hash-map (map edn/read-string args))]
+    (if (:discard opts)
+      (let [kept (into {} (comp (filter :archived?) (map (juxt :id (comp count :records))))
+                       (records/holders :nido))
+            bg   (filter #(some (comp background-adapters :adapter) (:external-refs %))
+                         (cws/project-records :nido))
+            all? (fn [w] (= (count (filter #(= "edn" (:ext %)) (:entries w))) (kept (:id w) 0)))
+            held (map :id (filter all? bg))
+            _    (doseq [w (remove all? bg)] (println "    not archived whole, kept:" (:id w)))
+            outs (for [id held
+                       :let [k (client/ws-key :nido id)]]
+                   [id (client/command! k (str "discard/" k) {:command :discard-workstream})])
+            bad  (remove #(or (:events (second %)) (= :no-such-workstream (get-in (second %) [:refused :reason])))
+                         outs)]
+        (println (str "  discarded " (- (count held) (count bad)) " of " (count bg) " background workstreams"))
+        (doseq [[id o] (take 20 bad)] (println "    not discarded" id (pr-str (:refused o (:error o)))))
+        (when (seq bad) (System/exit 1)))
+      (let [rs (vec (background-records :nido))
+            n  (records/archive! :nido rs)]
+        (println (str "  archived " n " records of "
+                      (count (distinct (map #(get-in % [:from :holder]) rs))) " workstreams"))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]} install
   "Install this checkout as a release, point `current` at it, and install and start the core's

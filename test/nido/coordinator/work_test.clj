@@ -2700,18 +2700,12 @@
 
 
 (defn- with-analysis-ws
-  "A review-run workstream holding one analysis, in a throwaway nido root."
+  "A review-analysis run holding one analysis, in a throwaway nido root; `f` is given its id."
   [observations f]
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [w  (workstream/create! :nido {:external-refs [{:adapter :review-run :id "run-1" :title "t"}]})
-              id (:id w)]
-          (workstream/append-entry! :nido id {:kind :review-analysis}
-                            (pr-str {:format :review-analysis :verdict :degraded
-                                     :run-id "run-1" :status "clean" :rounds 2 :summary "s"
-                                     :observations observations}))
-          (f id)))
+        (f (test-runs/analysis! :nido "run-1" observations {:rounds 2})))
       (finally (fs/delete-tree tmp)))))
 
 (deftest a-proposal-is-addressed-by-where-it-sits
@@ -2891,20 +2885,14 @@
   (some #(when (= :closed (:kind %)) (:outcome %)) (records/of run-key)))
 
 (defn- seed-analysis!
-  "A workstream carrying one :review-analysis with `n` proposal-bearing
-   observations, as `of-project` derives proposals from."
+  "A review-analysis run holding one analysis with `n` proposal-bearing observations, as
+   `of-project` derives proposals from. Answers the run's id."
   [ws-id n]
-  (let [id (:id (workstream/create!
-                 :nido {:stage :in-progress
-                        :external-refs [{:adapter :review-run :id (str "run-" ws-id)}]}))]
-    (workstream/append-entry!
-     :nido id {:kind :review-analysis}
-     (pr-str {:format :review-analysis :verdict :degraded :run-id "r" :reviewed "nido/x"
-              :status "converged" :rounds 1 :summary "one analysis"
-              :observations (vec (for [i (range n)]
-                                   {:kind :waste :where "w" :summary (str "s" i)
-                                    :evidence "e" :proposal (str "p" i)}))}))
-    id))
+  (test-runs/analysis! :nido (str "run-" ws-id)
+                       (vec (for [i (range n)]
+                              {:kind :waste :where "w" :summary (str "s" i)
+                               :evidence "e" :proposal (str "p" i)}))
+                       {:reviewed "nido/x" :status "converged" :summary "one analysis"}))
 
 (deftest a-plan-covering-what-is-owed-is-recorded
   (with-tmp
@@ -3093,6 +3081,37 @@
           (is (= :recorded (:decision (work/decide-proposal! :nido id (assoc p :verdict :declined)))))
           (is (= :declined (get-in (first (work/proposals :nido)) [:decision :verdict]))))))))
 
+(deftest an-archived-analysis-is-proposed-at-the-address-it-was-written-at
+  ;; What a workstream held before runs did is in the archive, each record under its seq there:
+  ;; the address a decision or a plan names is unchanged, and a decision in the journal is newer
+  ;; than any the workstream held.
+  (with-tmp
+    (fn [_]
+      (let [ref  {:adapter :review-run :id "rr-1" :title "an old review"}
+            from (fn [n] {:holder "ws-old" :seq n :ref ref})
+            rs   [{:kind :review-analysis :verdict :degraded :run-id "rr-1" :status "clean" :rounds 1
+           :summary "s" :at "2026-09-01T10:00:00Z" :from (from 3)
+           :observations [{:kind :waste :where "w" :summary "s0" :evidence "e" :proposal "p0"}
+                          {:kind :waste :where "w" :summary "s1" :evidence "e" :proposal "p1"}]}
+          {:kind :improvement-decision :analysis-seq 3 :observation 0 :at-seq 3 :verdict :declined
+           :decided-by "x" :at "2026-09-02T10:00:00Z" :from (from 4)}
+          {:kind :improvement-decision :analysis-seq 3 :observation 1 :at-seq 4 :verdict :declined
+           :decided-by "x" :at "2026-09-02T11:00:00Z" :from (from 5)}]]
+        (is (= 2 (records/archive! :nido (take 2 rs))))
+        (is (= 1 (records/archive! :nido rs)) "a second run appends only what the first did not")
+        (is (zero? (records/archive! :nido rs)))
+        (let [ps (work/proposals :nido)]
+          (is (= ["ws-old/3.0" "ws-old/3.1"] (sort (map proposal/address ps))))
+          (is (= "an old review" (:title (first ps))) "titled by the ref its workstream was minted by")
+          (is (every? #(= :declined (get-in % [:decision :verdict])) ps)))
+        (is (= :recorded (:decision (work/decide-proposal!
+                                     :nido "ws-old"
+                                     (assoc (first (filter #(= 1 (:observation %)) (work/proposals :nido)))
+                                            :verdict :approved)))))
+        (is (= {0 :declined 1 :approved}
+               (into {} (map (juxt :observation (comp :verdict :decision))) (work/proposals :nido)))
+            "the journal's decision is the latest")))))
+
 (deftest a-claim-run-that-died-returns-its-addresses
   ;; A failed or cancelled run is the run dying, not the work given up: its addresses are owed
   ;; again. One whose turn completed without saying how its claim ended gave up: they are tried.
@@ -3155,12 +3174,6 @@
 
 ;; ── what holds the improvement sweep ────────────────────────────────────────
 
-(defn- improvement-ws!
-  "An :improvement workstream in `project`, the kind the sweep holds on."
-  [project address]
-  (:id (workstream/create! project {:external-refs [{:adapter :improvement :id address
-                                                     :title (str "improve: " address)}]})))
-
 (defn- with-sweep-declared-on-nido [f]
   (with-redefs [nido.platform.project/list-projects (constantly {"nido" {} "other" {}})
                 nido.coordinator.record.triggers/load-for-project
@@ -3169,50 +3182,20 @@
                            []))]
     (f)))
 
-(deftest improvement-holds-are-the-open-improvement-workstreams
+(deftest improvement-holds-are-the-improvement-runs-not-yet-over
   (with-tmp
     (fn [_]
       (with-sweep-declared-on-nido
         (fn []
-          (let [held   (improvement-ws! :nido "ws-p/1#0")
-                closed (improvement-ws! :nido "ws-p/1#1")
-                _      (workstream/close! :nido closed :done)
-                _      (workstream/create! :nido {:external-refs []})
-                _      (improvement-ws! :other "ws-q/1#0")]
-            (session/create! :nido held {:name "s" :weight :light :autonomy nil})
-            (fake-core/with-fake-core
-              (fn [c]
-                ;; The core running a unit's turn on the held workstream.
-                (fake-core/seed! c :nido held
-                                 [{:command :open-unit :unit "u" :project "nido" :goal "g" :session-cwd "/w"}
-                                  {:command :start-turn :turn "u1" :unit "u"
-                                   :spec {:executor :fake :instructions "i"}}])
-                (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: ws-p/1#0"
-                         :state :working
-                         :started-at (:created-at (workstream/read-ws :nido held))}]
-                       (work/improvement-holds))
-                    "only the open one, only where a sweep is declared, and a turn running is working")))))))))
-
-(deftest a-hold-no-live-session-works-on-is-stuck
-  ;; The wedge this exists for: a claim session ended its turn without closing
-  ;; its workstream, and the sweep waited ten days on a close nothing would write.
-  (with-tmp
-    (fn [_]
-      (with-sweep-declared-on-nido
-        (fn []
-          (let [ended   (improvement-ws! :nido "ws-p/1#0")
-                parked  (improvement-ws! :nido "ws-p/1#1")
-                never   (improvement-ws! :nido "plan/2026-09-21")
-                ;; What a parked improvement leaves: a halt only a person's answer clears.
-                _       (workstream/append-entry! :nido parked {:kind :blocker}
-                                                  (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
-                by-ws   (into {} (map (juxt :ws-id identity)) (work/improvement-holds))]
-            (is (= :stuck (:state (by-ws ended))))
-            (is (= :waiting-on-you (:state (by-ws parked)))
-                "a workstream halted at a gate is waiting on a person, not stuck")
-            (is (nil? (:ended-at (by-ws parked))))
-            (is (= :stuck (:state (by-ws never))))
-            (is (nil? (:ended-at (by-ws never))) "no run, so no end to report")))))))
+          (let [held (test-runs/run! :nido :improvement-claim
+                                     {:adapter :improvement :id "ws-p/1#0" :title "improve: it"} :running)]
+            (test-runs/run! :nido :improvement-claim {:adapter :improvement :id "ws-p/1#1"} :done)
+            (test-runs/run! :nido :review-analysis {:adapter :review-run :id "r"} :running)
+            (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: it"
+                     :state :working}]
+                   (map #(dissoc % :started-at) (work/improvement-holds)))
+                "only the improvement run still running, only where a sweep is declared")
+            (is (string? (:started-at (first (work/improvement-holds)))) "since its fire")))))))
 
 ;; ── Phases ──────────────────────────────────────────────────────────────────
 

@@ -2001,13 +2001,9 @@
         "a way back to the board, with this workstream selected")))
 
 (deftest links-naming-one-workstream-go-to-its-page
-  (let [holds (views/sweep-fragment [{:project "nido" :ws-id "ws-h" :title "t" :state :working}])
-        rec   (views/recovery-fragment {:causes [{:state :waiting :cause "c" :ws-id "ws-r" :gate-ws "ws-g"
-                                                 :sessions ["s"] :failures []}]})]
+  (let [holds (views/sweep-fragment [{:project "nido" :ws-id "ws-h" :title "t" :state :working}])]
     (is (str/includes? holds "href=\"/workstreams/nido/ws-h\""))
-    (is (str/includes? rec "href=\"/workstreams/nido/ws-r\""))
-    (is (str/includes? rec "href=\"/workstreams/nido/ws-g\""))
-    (is (not (str/includes? (str holds rec) "sel=")))))
+    (is (not (str/includes? holds "sel=")))))
 
 ;; ── The sidebar's rail: collapsed until the person opens it, the choice kept in the browser ──
 

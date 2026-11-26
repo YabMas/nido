@@ -1,7 +1,8 @@
 (ns nido.test.runs
   "Starting a run of a trigger in the in-process core the suite runs against, and taking it as far
    as a test needs, so a reader of runs (`nido.core.client/runs`) finds it."
-  (:require [nido.core.client :as client]))
+  (:require [nido.coordinator.record.records :as records]
+            [nido.core.client :as client]))
 
 (defn- send! [project id k command]
   (let [o (client/command! (client/run-key project id) (str k "/" id) command)]
@@ -26,4 +27,18 @@
        (send! project id "turn" {:command :start-turn :turn (str id " first") :unit id :spec spec})
        (when-let [outcome ({:done :completed :failed :failed :cancelled :cancelled} status)]
          (send! project id "end" {:command :record-outcome :turn (str id " first") :outcome outcome})))
+     id)))
+
+(defn ^{:malli/schema [:=> [:cat :keyword :string [:vector :map] [:? :map]] :string]} analysis!
+  "A review-analysis run of `project`, running, holding one analysis of review run `run-id` making
+   `observations` — record seq 1, so its proposals are addressed `<id>/1.<i>`. `extra` is merged
+   into the analysis. Answers the run's id."
+  ([project run-id observations] (analysis! project run-id observations {}))
+  ([project run-id observations extra]
+   (let [id (run! project :review-analysis {:adapter "review-run" :id run-id :title "t"} :running)]
+     (records/append-to-run! (client/run-key project id)
+                             (merge {:kind :review-analysis :verdict :degraded :run-id run-id
+                                     :status "clean" :rounds 1 :summary "s"
+                                     :observations observations}
+                                    extra))
      id)))

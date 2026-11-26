@@ -7,12 +7,13 @@
    sessions is one thing to recover, not five.
 
    A RECOVERY is one run of the recovery trigger, and what it records is what that run did: its
-   diagnosis, each restore's outcomes, a blocker, a landing. Recoveries from before runs are
-   workstreams carrying a :session-recovery ref, read beside them and never written.
+   diagnosis, each restore's outcomes, a blocker, a landing. A recovery from before runs is read
+   as one (`records/holders`).
 
-   OWED IS DERIVED on every poll, never stored: a failure stops being owed when a recovery run
-   records it :restored or :withdrawn, or when a recovery workstream closed having named it. A run
-   that ends without settling what it was fired for leaves it owed, as a recovery that dies does.
+   OWED IS DERIVED on every poll, never stored: a failure stops being owed when a recovery records
+   it :restored or :withdrawn, or when a recovery that named it closed — a `:closed` record, which
+   only a recovery from before runs holds. A run that ends without settling what it was fired for
+   leaves it owed, as a recovery that dies does.
 
    ONE RECOVERY OF A CAUSE AT A TIME, across refs: this source emits nothing for a cause while a
    recovery run of it is starting or running. The event's id is keyed by the cause, its earliest
@@ -27,14 +28,12 @@
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.records :as records]
-   [nido.coordinator.record.session :as session]
-   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.registry :as sources]
    [nido.coordinator.source.state :as sst]
    [nido.session.failure :as failure]))
 
 (def adapter
-  "The external-ref adapter a recovery workstream carries."
+  "The `:adapter` a recovery fire's payload carries, which is what makes a run a recovery."
   :session-recovery)
 
 (defn ^{:malli/schema [:=> [:cat :string] [:maybe :int]]}
@@ -62,22 +61,6 @@
 (defn- split-ids [s]
   (->> (str/split (str s) #",") (map str/trim) (remove str/blank?)))
 
-(defn- legacy-recoveries
-  "`project`'s recovery workstreams, from before recoveries were runs."
-  [project]
-  (for [{ws-id :id :as w} (ws/project-records project)
-        :let  [ref (some #(when (= adapter (:adapter %)) %) (:external-refs w))]
-        :when ref
-        :let  [[cause first-f] (str/split (str (:id ref)) #"@" 2)
-               outcomes (mapcat :outcomes (ws/entries-of project ws-id :session-restored))]]
-    {:ws-id    ws-id
-     :cause    cause
-     :closed   (ws/closure w)
-     :named    (into (set (some-> first-f (str/split #"#" 2) first vector)) (map :failure) outcomes)
-     :settled  (set (keep #(when (#{:restored :withdrawn} (:outcome %)) (:failure %)) outcomes))
-     :runs     []
-     :sessions (vec (session/list-sessions project ws-id))}))
-
 (defn- outcomes-of [records]
   (mapcat :outcomes (filter #(= :session-restored (:kind %)) records)))
 
@@ -97,40 +80,49 @@
                     :else                                     :failed)
     :failed))
 
-(defn- run-recoveries
-  "`project`'s recovery runs, oldest first, each read as a recovery."
-  [project]
-  (let [rs      (->> (records/runs project)
-                     (filter #(= adapter (-> % :run :payload :adapter)))
-                     (sort-by #(str (-> % :run :fired-at))))
-        settled (into #{} (mapcat (comp settled-by :records)) rs)]
-    (for [{:keys [id records] :as r} rs
-          :let [payload (-> r :run :payload)
-                named   (into (set (split-ids (:failures payload))) (map :failure) (outcomes-of records))
-                state   (run-state r (every? settled named))
-                fired   (-> r :run :fired-at)
-                last-at (or (some :at (reverse records)) fired)]]
-      {:ws-id    id
-       :run?     true
-       :cause    (str (or (:cause payload) (cause-of-ref (:id payload))))
-       :closed   (when-not (#{:queued :running} state)
-                   {:at last-at :outcome (if (= :done state) :done :dropped)})
-       :named    named
-       :settled  (settled-by records)
-       :runs     [{:id id :state state :event-payload payload :error (:detail r)
-                   :state-history [{:at fired :state :queued} {:at last-at :state state}]}]
-       :sessions []
-       :entries  (group-by :kind records)})))
+(defn- first-named
+  "The earliest failure a recovery's fire id `cause@failure[#n]` names, or nil."
+  [ref-id]
+  (some-> (second (str/split (str ref-id) #"@" 2)) (str/split #"#" 2) first))
+
+(defn- closed?
+  "Whether `records` end closed: their latest close or reopen is a close."
+  [records]
+  (= :closed (:kind (last (filter #(#{:closed :reopened} (:kind %)) records)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   recoveries
-  "Every recovery of `project` as data the rest of this namespace decides on: its cause, whether
-   and when it closed, the failures named on it, those it settled, its runs, and its sessions —
-   the recovery workstreams from before runs, then one per recovery run, oldest first. A run's
-   carries `:run? true`, is closed once the run is over, and holds its records under `:entries`
-   by kind. Throws when the core is unreachable."
+  "Every recovery of `project` as data the rest of this namespace decides on, oldest first: its
+   cause, whether and when it ended, the failures named on it, those it settled — every one it
+   named, once it closed — its runs, and its records under `:entries` by kind. Throws when the core
+   is unreachable."
   [project]
-  (into (vec (legacy-recoveries project)) (run-recoveries project)))
+  (let [rs      (->> (records/holders project)
+                     (filter #(= adapter (keyword (-> % :run :payload :adapter))))
+                     (sort-by #(str (-> % :run :fired-at))))
+        settled (into #{} (mapcat (comp settled-by :records)) rs)]
+    (vec
+     (for [{:keys [id records] :as r} rs
+          :let [payload (-> r :run :payload)
+                named   (-> (set (split-ids (:failures payload)))
+                            (into (some-> (first-named (:id payload)) vector))
+                            (into (map :failure) (outcomes-of records)))
+                closed  (closed? records)
+                mine    (if closed named (settled-by records))
+                state   (run-state r (every? (into settled mine) named))
+                fired   (-> r :run :fired-at)
+                last-at (or (some :at (reverse records)) fired)]]
+      {:ws-id    id
+       :cause    (str (or (:cause payload) (cause-of-ref (:id payload))))
+       :closed   (when-not (#{:queued :running} state)
+                   {:at last-at
+                    :outcome (or (when closed (some #(when (= :closed (:kind %)) (:outcome %)) (rseq records)))
+                                 (if (= :done state) :done :dropped))})
+       :named    named
+       :settled  mine
+       :runs     [{:id id :state state :event-payload payload :error (:detail r)
+                   :state-history [{:at fired :state :queued} {:at last-at :state state}]}]
+       :entries  (group-by :kind records)}))))
 
 (defn- fired-by-this-source? [f]
   (= :session-failure (-> f :origin :source-type)))
@@ -138,10 +130,10 @@
 (defn ^{:malli/schema [:=> [:cat [:vector :map]] [:set :string]]}
   discharged-ids
   "The ids of every failure settled, and never owed again: recorded :restored or :withdrawn by a
-   recovery run, or named by a recovery workstream that closed. Known from the recoveries alone,
-   which is what lets a reader skip those records without opening them."
+   recovery, or named by one that closed. Known from the recoveries alone, which is what lets a
+   reader skip those records without opening them."
   [recoveries]
-  (into #{} (mapcat (fn [r] (cond (:run? r) (:settled r) (:closed r) (:named r)))) recoveries))
+  (into #{} (mapcat :settled) recoveries))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:vector :map]]}
   owed
@@ -162,15 +154,11 @@
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] :string] :boolean]}
   in-flight?
-  "Whether a recovery of `cause` is in flight: a recovery run of it queued, preprocessing or
-   running, or one from before runs parked for review on a workstream still open."
+  "Whether a recovery of `cause` is in flight: a recovery run of it starting or running."
   [recoveries cause]
   (boolean
-   (some (fn [{:keys [closed runs] :as r}]
-           (and (= cause (:cause r))
-                (some #(or (#{:queued :preprocessing :running} (:state %))
-                           (and (= :awaiting-review (:state %)) (not closed)))
-                      runs)))
+   (some (fn [{:keys [runs] :as r}]
+           (and (= cause (:cause r)) (some #(#{:queued :running} (:state %)) runs)))
          recoveries)))
 
 (defn- ended-at [run]
@@ -185,20 +173,19 @@
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] :string] [:vector :map]]}
   pacing-runs
-  "The runs that pace `cause`, oldest first: every recovery run of it, and those on an open
-   recovery workstream from before runs. A run that settled the cause ends the streak before it,
-   so a cause recurring long after is not held back by what failed then."
+  "The runs that pace `cause`, oldest first: every recovery run of it. A run that settled the cause
+   ends the streak before it, so a cause recurring long after is not held back by what failed then."
   [recoveries cause]
   (->> recoveries
-       (filter #(and (= cause (:cause %)) (or (:run? %) (not (:closed %)))))
+       (filter #(= cause (:cause %)))
        (mapcat :runs)
        (sort-by #(str (-> % :state-history first :at)))
        vec))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] :map] :any]}
   due-at
-  "When a cause may next be recovered, given the recovery Runs on its open
-   workstream, oldest first, as an Instant — or nil when it may be recovered at any
+  "When a cause may next be recovered, given its recovery runs (`pacing-runs`), oldest first, as an
+   Instant — or nil when it may be recovered at any
    time, because the latest did not fail or its end time is unreadable. After k
    consecutive failures it is the last one's end plus one poll interval doubled
    k-1 times, capped at the ceiling."
@@ -234,7 +221,7 @@
    (for [[cause fs] (group-by failure/cause owed-failures)
          :let  [fs      (sort-by :id fs)
                 first-f (first fs)
-                tried   (count (filter #(and (:run? %) (= cause (:cause %))) recoveries))]
+                tried   (count (filter #(= cause (:cause %)) recoveries))]
          :when (and (not (in-flight? recoveries cause))
                     (due? (pacing-runs recoveries cause) now pacing))]
      {:adapter  adapter

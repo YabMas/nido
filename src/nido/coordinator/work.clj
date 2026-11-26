@@ -925,8 +925,7 @@
    recently settled cause, and the activity feed — see view.recoveries/overview.
 
    The door, not the derivation. It gathers what recovery keeps — each recovery of
-   every project that declares a :session-failure trigger, with what it recorded (a
-   run's own records; a workstream's ledger entries, from before runs), and the
+   every project that declares a :session-failure trigger, with what it recorded, and the
    pacing that trigger declares, so the waiting times shown are the ones the source
    fires on. Read on every call.
 
@@ -949,12 +948,7 @@
                      [pk t])
          recs      (vec (for [[pk _] declaring
                               r      (start-failures/recoveries pk)]
-                          (if (:run? r)
-                            r
-                            (assoc r :entries
-                                   (into {} (for [kind [:session-diagnosis :session-restored
-                                                        :blocker :merged :pr-opened]]
-                                              [kind (vec (cws/entries-of pk (:ws-id r) kind))]))))))]
+                          r))]
      (let [now   (or now (java.time.Instant/now))
            index (mapv (fn [id] {:id id :ms (failure/id-ms id)}) (failure/ids))
            gone  (start-failures/discharged-ids recs)
@@ -1027,74 +1021,25 @@
                                      (review-queue/apply-payload run-id)
                                      (review-queue/apply-key run-id))))
 
-(defn- hold-state
-  "What a hold's row — its engagement, so the sweep and the board read one activity, and the move
-   its position owes — means for the sweep it holds.
-   `:idle` and `:stalled` are the ones that matter: an open workstream nothing is
-   working on is one nothing will ever close, and a close is the only thing that
-   releases the sweep."
-  [{:keys [engagement position]}]
-  (case engagement
-    ;; Owed to a person by its position — a halt only their answer clears — is waiting on them
-    ;; even where nothing puts it on Needs you (a workstream the recipe does not run on, whose
-    ;; activity therefore says nobody owes it): the sweep's question is whether anything may still
-    ;; close it, and their answer may.
-    :idle           (if (awaiting-human position) :waiting-on-you :stuck)
-    :parked-at-gate :waiting-on-you
-    (:active :queued) :working
-    :stalled        :stuck
-    ;; Closed under the attempt, which the next read of the attempts lets go of.
-    :settled        :working))
-
-(defn- last-session-change
-  "The latest transition any of the workstream's runs recorded, or nil when there is none.
-   Compared as strings: run histories are ISO-8601 UTC by construction."
-  [project ws-id]
-  (->> (mapcat #(map :at (:state-history %)) (runs/runs-of project ws-id))
-       (remove nil?)
-       sort
-       last))
-
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   improvement-holds
-  "What holds each project's improvement sweep, as one map per open improvement attempt — a run, or
-   a workstream from before runs: `:project :ws-id :address :title :state :started-at`, and
-   `:ended-at` on a `:stuck` one. Empty when nothing holds any sweep.
+  "What holds each project's improvement sweep, as one map per open improvement attempt — a run
+   not yet over: `:project :ws-id :address :title :state :started-at`, `:ws-id` the run's id and
+   `:state` always `:working`, since a run's end is recorded whatever its agent did, so nothing is
+   waited on and nothing is stuck. Empty when nothing holds any sweep.
 
-   `:state` is `:working`, `:waiting-on-you` (a session is parked at a gate) or
-   `:stuck` (no live session, so nothing will close it). The sweep never tells
-   these apart — it waits on a close whatever the session is doing — so a hold
-   whose session died reads, from the sweep, exactly like one mid-edit.
-
-   Reads the open workstreams rather than the `:held-by` the sweep's poll
-   writes: those workstreams ARE the hold, and the poll's copy is up to an hour
-   stale and says nothing about whether anyone is still working. Only projects
-   whose triggers declare an :improvement-sweep source are read. Read on every
-   call."
+   Reads the attempts rather than the `:held-by` the sweep's poll writes: they ARE the hold, and
+   the poll's copy is up to an hour stale. Only projects whose triggers declare an
+   :improvement-sweep source are read. Read on every call."
   []
   (vec (for [[pname _] (project/list-projects)
              :let  [pk (keyword pname)]
              :when (some #(= :improvement-sweep (-> % :source :type))
                          (triggers/load-for-project pk))
-             {:keys [ws-id address open? run?] :as a} (proposal/attempts pk)
-             :when open?
-             :let  [w        (when-not run? (cws/read-ws pk ws-id))
-                    ;; A run holds while its turn runs: nobody is waited on, and its end is
-                    ;; recorded whatever its agent did, so it is never stuck.
-                    state    (if run?
-                               :working
-                               (hold-state (with-status pk (wsv/workstream-row pk w) true)))]]
-         (if run?
-           {:project pname :ws-id ws-id :address address :title (:title a) :state state
-            :started-at (:started-at a)}
-           (cond-> {:project    pname
-                  :ws-id      ws-id
-                  :address    address
-                  :title      (some #(when (= proposal/improvement-adapter (:adapter %)) (:title %))
-                                    (:external-refs w))
-                  :state      state
-                  :started-at (:created-at w)}
-             (= :stuck state) (assoc :ended-at (last-session-change pk ws-id)))))))
+             {:keys [ws-id address open? title started-at]} (proposal/attempts pk)
+             :when open?]
+         {:project pname :ws-id ws-id :address address :title title :state :working
+          :started-at started-at})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   proposals

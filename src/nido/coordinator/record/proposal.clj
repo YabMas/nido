@@ -18,9 +18,8 @@
    (`nido.coordinator.record.records`), the run's id their holder. A decision, a landing and a
    claim's reservation outlive the run they concern, so they are kept in the project's
    improvement journal, each naming its `:holder`, and a claim run's end is a `:closed` record on
-   that run. Records from before runs held them stay where they were written — on a workstream
-   the fire minted, the workstream their holder — and are read beside the new ones: an address is
-   `<holder>/<seq>.<obs>` either way, and the latest record about it wins wherever it is kept.
+   that run. A holder from before runs is read as a run (`records/holders`); the decisions and
+   landings it holds about its own analyses are older than the journal's, so the journal's win.
 
    Nothing here writes. The verbs that record a decision or a landing stay in
    the work vocabulary, where the surface reaches them."
@@ -99,49 +98,25 @@
     {:ledger w :entries (vec (:entries w))}
     {:ledger nil :entries []}))
 
-(defn- analysis-entries
-  "Oldest-first [seq entry-map] for every :review-analysis on this workstream,
-   parsed. Reads through the same entry->report every other reader uses, so a
-   record too old or too new for this reader degrades the same way it does
-   everywhere else rather than blanking the proposal list."
-  [project ws-id]
-  (let [{:keys [ledger entries]} (active-ledger project ws-id)]
-    (->> entries
-         (filter #(= :review-analysis (:kind %)))
-         (keep (fn [e]
-                 (let [r (entry->report ledger e)]
-                   (when (= :review-analysis (:format r)) r)))))))
-
-(defn- ws-records
-  "Oldest-first parsed entries of `kind` on workstream record `w`."
-  [w kind]
-  (->> (:entries w)
-       (filter #(= kind (:kind %)))
-       (keep (fn [e] (let [r (entry->report w e)] (when (= kind (:format r)) r))))))
-
 (defn- latest-by-address
-  "{[holder analysis-seq observation] -> record} of `kind`, latest wins: those on the legacy
-   workstreams `ws` (their holder the workstream), then the journal's, which are newer.
+  "{[holder analysis-seq observation] -> record} of `kind`, latest wins: those the holders `hs`
+   hold about their own analyses, then the journal's, which are newer.
 
    Latest because a decision is an append and nothing deletes one: changing your mind is a second
    record, and the one that counts is the one made last. A landing likewise — a proposal can land
    twice, carried in one change and corrected in another, and the row points at the one a reader
    should go read."
-  [ws journal kind]
+  [hs journal kind]
   (as-> {} m
-    (reduce (fn [m w] (reduce #(assoc %1 [(:id w) (:analysis-seq %2) (:observation %2)] %2)
-                              m (ws-records w kind)))
-            m ws)
+    (reduce (fn [m h] (reduce #(if (= kind (:kind %2))
+                                 (assoc %1 [(:id h) (:analysis-seq %2) (:observation %2)] %2)
+                                 %1)
+                              m (:records h)))
+            m hs)
     (reduce (fn [m r] (if (and (= kind (:kind r)) (:holder r))
                         (assoc m [(:holder r) (:analysis-seq r) (:observation r)] r)
                         m))
             m journal)))
-
-(defn- legacy-holders
-  "The workstreams a review analysis was minted on before runs held analyses."
-  [pk]
-  (filterv (fn [w] (some #(= :review-run (:adapter %)) (:external-refs w)))
-           (cws/project-records pk)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:vector :map]] [:set :string]]}
   declined
@@ -152,7 +127,7 @@
   (let [pk (keyword (name project))]
     (into #{}
           (keep (fn [[[holder s o] d]] (when (= :declined (:verdict d)) (str holder "/" s "." o))))
-          (latest-by-address (legacy-holders pk) journal :improvement-decision))))
+          (latest-by-address (records/holders pk) journal :improvement-decision))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   of-project
@@ -169,9 +144,8 @@
    to decide about an observation that proposes nothing; they stay legible in
    the analysis itself.
 
-   `:ws-id` is the proposal's holder — the run whose record the analysis is, or the workstream an
-   analysis from before runs was written on — and with `:analysis-seq` and `:observation` its
-   address.
+   `:ws-id` is the proposal's holder — the run whose record the analysis is (`records/holders`) —
+   and with `:analysis-seq` and `:observation` its address.
 
    `:at-seq` is the position a decision about this row must carry — how many records the
    improvement journal held when the row was built, NOT the analysis's own seq. A decision answers
@@ -183,20 +157,15 @@
    this surface used to render identically to a finished one."
   [project]
   (let [pk      (keyword (name project))
-        legacy  (legacy-holders pk)
+        hs      (records/holders pk)
         journal (journal-of pk)
-        decided (latest-by-address legacy journal :improvement-decision)
-        landed  (latest-by-address legacy journal :improvement-landed)
+        decided (latest-by-address hs journal :improvement-decision)
+        landed  (latest-by-address hs journal :improvement-landed)
         at-seq  (count journal)
-        held    (concat
-                 (for [w legacy
-                       :let [ref (some #(when (= :review-run (:adapter %)) %) (:external-refs w))]
-                       a (analysis-entries pk (:id w))]
-                   {:holder (:id w) :a a :title (:title ref)})
-                 (for [r (records/runs pk)
-                       a (filter #(= :review-analysis (:kind %)) (:records r))]
-                   {:holder (:id r) :a (assoc a :at (get-in r [:run :fired-at]))
-                    :title (get-in r [:run :payload :title])}))]
+        held    (for [r hs
+                      a (filter #(= :review-analysis (:kind %)) (:records r))]
+                  {:holder (:id r) :a (assoc a :at (get-in r [:run :fired-at]))
+                   :title (get-in r [:run :payload :title])})]
     (->> held
          (mapcat (fn [{:keys [holder a title]}]
                    (for [[i o] (map-indexed vector (:observations a))
@@ -228,12 +197,8 @@
 ;; ── What the improvement source asks ────────────────────────────────────────
 
 (def improvement-adapter
-  "The external-ref adapter an improvement workstream carries.
-
-   It is what makes 'is one already running' answerable without a registry: the
-   workstreams ARE the record, `spawn/ensure-workstream!` dedups on the ref, so
-   a re-emitted event lands back in the workstream that already holds the
-   attempt rather than starting a second one."
+  "The `:adapter` an improvement fire's payload carries, which is what makes a run an attempt:
+   'is one already running' is answered by the runs themselves, with no registry beside them."
   :improvement)
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
@@ -258,30 +223,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   attempts
-  "Every improvement attempt in `project` — a run a fire of the improvement sweep started, or a
-   workstream one minted before runs — as `{:address :ws-id :open? :outcome}`, `:ws-id` its holder;
-   a run's also `:run? true`, its fire's `:title` and `:started-at`.
+  "Every improvement attempt in `project` — a holder an improvement fire started
+   (`records/holders`) — as `{:address :ws-id :open? :outcome :title :started-at}`, `:ws-id` the
+   holder.
 
-   `:open?` is a run not yet over, or a workstream with no close: NOT the presence of a failure
-   record. That distinction is the whole hold: a session that crashes hard writes no tombstone, so
+   `:open?` is a run not yet over: NOT the presence of a failure record. That distinction is the whole hold: a session that crashes hard writes no tombstone, so
    a rule keyed on failure would read a dead attempt as no attempt and start a second one on top of
    the first. A run is over once its turn ended, which the core records whatever the agent wrote."
   [project]
-  (let [pk (keyword (name project))]
-    (into
-     (->> (cws/project-records pk)
-          (keep (fn [{ws-id :id :as w}]
-                  (when-let [ref (some #(when (= improvement-adapter (:adapter %)) %)
-                                       (:external-refs w))]
-                    (let [closed (cws/closure w)]
-                      {:address (:id ref) :ws-id ws-id :open? (nil? closed)
-                       :outcome (:outcome closed)}))))
-          vec)
-     (for [r (records/runs pk)
-           :let [p (get-in r [:run :payload])]
-           :when (= improvement-adapter (keyword (:adapter p)))]
-       {:address (:id p) :ws-id (:id r) :open? (not (:closed? r)) :outcome (run-outcome r)
-        :run? true :title (:title p) :started-at (get-in r [:run :fired-at])}))))
+  (vec (for [r (records/holders project)
+             :let [p (get-in r [:run :payload])]
+             :when (= improvement-adapter (keyword (:adapter p)))]
+         {:address (:id p) :ws-id (:id r) :open? (not (:closed? r)) :outcome (run-outcome r)
+          :title (:title p) :started-at (get-in r [:run :fired-at])})))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:maybe :map]]}
   next-to-implement
@@ -436,47 +390,29 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   plans-of
-  "Every `:improvement-plan` of this project — a plan run's record, or an entry on a ledger from
-   before runs — oldest first, each with its holder under `:ws-id` and the `:seq` it was appended
-   at.
+  "Every `:improvement-plan` of this project — a holder's record (`records/holders`) — oldest
+   first, each with its holder under `:ws-id` and the `:seq` it was appended at.
 
-   Scans every workstream rather than a known planning one, for the reason
-   `of-project` scans for analyses: which workstream holds a record is a fact
-   about how it arrived, and a reader that has to know it in advance breaks the
-   first time a plan is appended from somewhere else — by hand, by a migration,
-   by a second project. The ordering is what makes `dispositions-by-address`
-   latest-wins meaningful."
+   Every holder rather than the plan runs, because which holder a plan is on is a fact about how
+   it arrived. The ordering is what makes `dispositions-by-address` latest-wins meaningful."
   [project]
-  (let [pk (keyword (name project))]
-    (->> (cws/project-records pk)
-         (mapcat (fn [{ws-id :id :as ledger}]
-                   (let [entries (:entries ledger)]
-                     (->> entries
-                          (filter #(= :improvement-plan (:kind %)))
-                          (keep (fn [e]
-                                  (let [r (entry->report ledger e)]
-                                    (when (= :improvement-plan (:format r))
-                                      (assoc r :ws-id ws-id)))))))))
-         (into (for [r (records/runs pk)
-                     plan (filter #(= :improvement-plan (:kind %)) (:records r))]
-                 (assoc plan :ws-id (:id r) :at (get-in r [:run :fired-at]))))
-         (sort-by :at)
-         vec)))
+  (->> (for [r (records/holders project)
+             plan (filter #(= :improvement-plan (:kind %)) (:records r))]
+         (assoc plan :ws-id (:id r) :at (get-in r [:run :fired-at])))
+       (sort-by :at)
+       vec))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   claim-attempts
   "Every claim the sweep has attempted, as `{:address :ws-id :open? :outcome
    :addresses}`.
 
-   A claim workstream carries the SAME `:improvement` adapter a proposal-level
-   attempt carries, and only its id differs — `<ws>/<seq>#<n>` rather than
-   `<ws>/<seq>.<obs>`. That is what lets the one-at-a-time hold span its own
-   cutover: `attempts` reads by adapter, so a legacy proposal-level workstream
-   still open holds the sweep on the day it ships, with no migration and no
-   window in which the two are invisible to each other.
+   A claim's fire carries the SAME `:improvement` adapter a proposal-level attempt's carries, and
+   only its id differs — `<holder>/<seq>#<n>` rather than `<holder>/<seq>.<obs>` — so one
+   one-at-a-time hold spans both.
 
    `:addresses` is resolved from the plan the claim belongs to rather than
-   stored on the workstream, because the plan is where a claim's membership is
+   stored on the attempt, because the plan is where a claim's membership is
    decided and a second copy could disagree with it."
   [project]
   (let [pk    (keyword (name project))

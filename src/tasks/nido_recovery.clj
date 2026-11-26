@@ -13,7 +13,6 @@
    [clojure.string :as str]
    [nido.coordinator.lane.restore :as restore]
    [nido.coordinator.record.records :as records]
-   [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.source.start-failures :as start-failures]
    [nido.platform.task-args :as task-args]
    [nido.session.failure :as failure]
@@ -55,14 +54,12 @@
     (println (str "\nEarlier recoveries of cause " cause ": " (count mine)
                   "  (" (start-failures/failed-in-a-row (start-failures/pacing-runs (vec recs) cause))
                   " ended in a row leaving it owed)"))
-    (doseq [{:keys [ws-id run? closed runs named settled entries]} mine]
-      (println (str "  " (if run? "run " "workstream ") ws-id "  "
+    (doseq [{:keys [ws-id closed runs named settled entries]} mine]
+      (println (str "  run " ws-id "  "
                     (if closed (str "ended " (name (:outcome closed)) " " (:at closed)) "running")
-                    (when run? (str "  " (name (:state (first runs)))))
+                    "  " (name (:state (first runs)))
                     "  named " (count named) "  settled " (count settled)))
-      (when-let [d (if run?
-                     (last (:session-diagnosis entries))
-                     (cws/latest-entry :nido ws-id :session-diagnosis))]
+      (when-let [d (last (:session-diagnosis entries))]
         (println (str "    diagnosis: " (name (:verdict d)) " — " (:cause d))))
       (when-let [b (last (:blocker entries))]
         (println (str "    stopped for a person: " (:needs b (:summary b))))))))
@@ -71,7 +68,7 @@
   failures
   "bb nido:recovery:failures [:cause <key>] [:all true]
    Kept session-start failures with their evidence — the owed ones, or all of
-   them — and, for a cause, the recovery workstreams that already tried it."
+   them — and, for a cause, the recoveries that already tried it."
   [& args]
   (let [[_ opts] (task-args/split-args args)
         cause    (some-> (:cause opts) str)

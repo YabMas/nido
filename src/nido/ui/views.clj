@@ -2156,7 +2156,7 @@
       (into [:p.rec-did] (interpose " · " parts)))))
 
 (defn- recovery-row
-  [{:keys [state cause ws-id run? needs gate-ws sessions failures message first-at last-at runs
+  [{:keys [state cause ws-id needs sessions failures message first-at last-at runs
            due-at failed-in-a-row diagnosis closed] :as r}]
   [:div {:class (str "prop rec" (when (#{:restored :dismissed} state) " settled"))}
    [:div.prop-head
@@ -2169,7 +2169,7 @@
      [:p.prop-fix [:b (name (:verdict diagnosis))] " — " (:cause diagnosis)
       (when-let [remedy (:remedy diagnosis)] [:span.meta (str " · " remedy)])])
    (recovery-did r)
-   (when (and run? needs (= :needs-you state)) [:p.prop-fix [:b "needs you"] " — " needs])
+   (when (and needs (= :needs-you state)) [:p.prop-fix [:b "needs you"] " — " needs])
    [:div.prop-meta
     [:span.mono (str "cause " cause)]
     (when (= :waiting state)
@@ -2179,8 +2179,7 @@
     (when closed [:span (str "closed " (name (:outcome closed)) " " (ago (:at closed)))])
     (when first-at [:span (str "first " (ago first-at))])
     ;; A run has no page of its own: its id is shown, and what it asks is above.
-    (when (and gate-ws (not run?)) [:a {:href (ws-page-href "nido" gate-ws)} "open the gate"])
-    (when ws-id (if run? [:span.mono (str "run " ws-id)] [:a {:href (ws-page-href "nido" ws-id)} ws-id]))]])
+    (when ws-id [:span.mono (str "run " ws-id)])]])
 
 (defn- feed-href
   "The recovery page at feed position `pos`; the newest page when nil."
