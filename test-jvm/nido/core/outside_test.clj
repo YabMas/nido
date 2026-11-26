@@ -240,16 +240,38 @@
 
 (deftest the-hook-allows-only-the-resolved-call
   (let [rdir (temp-dir)]
-    (is (= "defer" (get-in (claude/hook-decision rdir {:tool_use_id "toolu_1" :tool_input {}})
+    (is (= "defer" (get-in (claude/hook-decision rdir {:tool_use_id "toolu_1" :tool_input {:question "Go?"}})
                            [:hookSpecificOutput :permissionDecision]))
         "an ask with no resolution ends the run")
     (spit (io/file rdir "resolution.edn") (pr-str {:call "toolu_1" :text "Answer: yes"}))
     (is (= {:permissionDecision "allow" :updatedInput {:question "q" :answer "Answer: yes"}}
            (select-keys (:hookSpecificOutput (claude/hook-decision rdir {:tool_use_id "toolu_1" :tool_input {:question "q"}}))
                         [:permissionDecision :updatedInput])))
-    (is (= "defer" (get-in (claude/hook-decision rdir {:tool_use_id "toolu_2" :tool_input {}})
+    (is (= "defer" (get-in (claude/hook-decision rdir {:tool_use_id "toolu_2" :tool_input {:question "Go?"}})
                            [:hookSpecificOutput :permissionDecision]))
         "a later ask in the resumed run is not answered by the earlier resolution")))
+
+(deftest the-hook-denies-a-malformed-ask-back-to-its-author
+  (let [rdir (temp-dir)
+        decide #(:hookSpecificOutput (claude/hook-decision rdir {:tool_use_id "toolu_1" :tool_input %}))]
+    (testing "a question over the cap is denied, the reason naming the field"
+      (let [h (decide {:question (str (apply str (repeat 241 "x")) "?") :explored "x"})]
+        (is (= "deny" (:permissionDecision h)))
+        (is (str/includes? (:permissionDecisionReason h) "`question` is 242 characters"))))
+    (testing "an entry of questions on two lines is denied, naming the entry"
+      (let [h (decide {:question "Two decisions?" :explored "x"
+                       :questions [{:question "A?" :options [{:option "a"}]}
+                                   {:question "The review loop stopped.\nB?" :options [{:option "b"}]}]})]
+        (is (= "deny" (:permissionDecision h)))
+        (is (str/includes? (:permissionDecisionReason h) "`questions` entry 2"))
+        (is (not (str/includes? (:permissionDecisionReason h) "entry 1")))))
+    (testing "a question with no '?' is denied"
+      (is (= "deny" (:permissionDecision (decide {:question "Pick one" :explored "x"})))))
+    (testing "a well-formed ask with no recommendation is deferred"
+      (is (= "defer" (:permissionDecision (decide {:question "Go?" :explored "x" :options [{:option "y"}]})))))
+    (testing "the resolved call is allowed as before, whatever its form"
+      (spit (io/file rdir "resolution.edn") (pr-str {:call "toolu_1" :text "yes"}))
+      (is (= "allow" (:permissionDecision (decide {:question "Go?"})))))))
 
 (deftest the-ask-tool-refuses-without-an-answer
   (is (= ["ask"] (map :name (get-in (ask-tool/respond {:id 1 :method "tools/list"}) [:result :tools]))))

@@ -271,11 +271,10 @@
      "Act ONLY through the nido conductor tools (mcp__nido-conductor__*); read the workstream with the state tool."
      ""
      "Rules:"
-     "- Every ask a unit's turn raised is disposed of exactly once: answer_call, return_call (send it to explore further), or raise_operator_ask (bind its call; you may consolidate asks of several units). Raising a unit's ask, carry its questions and options over as the unit wrote them; consolidating, give each decision its own entry in `questions`."
+     "- Every ask a unit's turn raised is disposed of exactly once: answer_call, return_call (send it to explore further), or raise_operator_ask (bind its call; you may consolidate asks of several units), written to the asking rules below."
      "- Answer a unit yourself only when the answer follows from the goal and what is recorded. Anything that is the person's to decide goes to them."
      "- For a decision of your own that only the person can make (a new unit, a change of goal, a trade-off), ask with mcp__nido__ask as the ONLY tool call in its turn. A new unit is proposed that way and opened only once granted."
-     "- Every ask you raise states what was explored, the options with their consequences, and a recommendation."
-     (str "- How an ask is written: " ask-tool/guidance)
+     (str "- How an ask is written and read, for every ask you raise or make:\n\n" (ask-tool/briefing) "\n")
      "- Directing a unit to ask several product questions, tell it to give each its own entry in the ask's `questions`."
      "- A unit with an unknown runs nothing until you settle it (settle_unknown) by observing what happened."
      "- Never ask the person whether to land. Once the implementation review converges the workstream is a release candidate, and the person lands it with its Land button; you hear it when they do."
@@ -295,7 +294,8 @@
 ;; ── the conductor tools ──────────────────────────────────────────────────────
 
 (def ^:private tools
-  "Each tool: its input schema, and the command its arguments become."
+  "Each tool: its input schema, and the command its arguments become. A description that is a fn is
+   read when the tools are listed, so it carries the asking briefing as it is on disk then."
   {"state"                 {:description "The workstream's committed state, as EDN."
                             :properties {} :required []}
    "answer_call"           {:description "Answer a unit turn's pending call; the turn resumes with the answer."
@@ -304,11 +304,11 @@
    "return_call"           {:description "Send a unit turn's ask back for further exploration, with instructions."
                             :properties {:turn {:type "string"} :instructions {:type "string"}} :required ["turn" "instructions"]
                             :command (fn [{:keys [turn instructions]}] {:command :return-call :turn turn :instructions instructions})}
-   "raise_operator_ask"    {:description (str "Put a decision to the person, bound to the pending calls of the unit turns it answers. "
-                                               ask-tool/guidance)
+   "raise_operator_ask"    {:description #(str "Put a decision to the person, bound to the pending calls of the unit turns it answers.\n\n"
+                                                (ask-tool/briefing))
                             :properties (assoc ask-tool/properties
                                                :binds {:type "array" :items {:type "string"}} :concerns {:type "string"})
-                            :required ["binds" "question" "explored" "recommendation"]
+                            :required ["binds" "question" "explored"]
                             :command (fn [{:keys [binds concerns] :as args}]
                                        {:command :raise-operator-ask :ask (str "ask " (random-uuid)) :binds binds
                                         :concerns (not-empty concerns)
@@ -361,7 +361,7 @@
       "initialize" (ok {:protocolVersion (get params :protocolVersion "2025-06-18")
                         :capabilities {:tools {}} :serverInfo {:name "nido-conductor" :version "1"}})
       "tools/list" (ok {:tools (for [[n {:keys [description properties required]}] (sort tools)]
-                                 {:name n :description description
+                                 {:name n :description (if (fn? description) (description) description)
                                   :inputSchema {:type "object" :properties properties :required required}})})
       "tools/call" (let [conn (api/connect socket)]
                      (try

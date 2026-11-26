@@ -3,9 +3,10 @@
             [clojure.test.check :as tc]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [clojure.string :as str]
             [nido.core.domain :as d]))
 
-(def ready {:explored "tried A and B" :options [{:option "A" :consequence "x"}] :recommendation "A"})
+(def ready {:question "Go?" :explored "tried A and B" :options [{:option "A" :consequence "x"}] :recommendation "A"})
 (def spec {:executor :fake :instructions "do the thing"})
 
 (defn resolve-command
@@ -34,7 +35,7 @@
 (deftest an-ask-halts-the-unit
   (let [[s] (run (conj two-units
                        {:command :start-turn :turn "t1" :unit "brian" :spec spec}
-                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1"}}))]
+                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1" :question "Go?"}}))]
     (testing "an asked turn is active, so no further turn starts on its unit"
       (is (= :unit-has-active-turn (refusal s {:command :start-turn :turn "t2" :unit "brian" :spec spec}))))
     (testing "a sibling unit is unaffected"
@@ -45,7 +46,7 @@
 (deftest the-buffer-disposes-of-a-unit-ask-in-exactly-one-way
   (let [[s] (run (conj two-units
                        {:command :start-turn :turn "t1" :unit "brian" :spec spec}
-                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1"}}))
+                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1" :question "Go?"}}))
         [s2] (d/step s {:command :answer-call :turn "t1" :answer "yes"})]
     (is (= :resolved (get-in s2 [:turns "t1" :status])) "answering records the resolution")
     (is (= {:answered "yes"} (get-in s2 [:turns "t1" :resolution])))
@@ -59,7 +60,7 @@
 
 (deftest a-resolved-conductor-turn-waits-for-the-conductor
   (let [[s] (run [{:command :start-turn :turn "k1" :unit nil :spec spec}
-                  {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c"}}
+                  {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c" :question "Go?"}}
                   {:command :raise-operator-ask :ask "a1" :binds ["k1"] :content ready}
                   {:command :start-turn :turn "k2" :unit nil :spec spec}
                   {:command :answer-operator-ask :ask "a1" :answer "x"}])]
@@ -70,7 +71,7 @@
 
 (deftest a-conductor-ask-goes-to-the-person
   (let [[s] (run [{:command :start-turn :turn "k1" :unit nil :spec spec}
-                  {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c"}}])]
+                  {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c" :question "Go?"}}])]
     (is (= :conductor-ask-goes-to-the-person (refusal s {:command :answer-call :turn "k1" :answer "x"})))
     (is (= :conductor-ask-goes-to-the-person (refusal s {:command :return-call :turn "k1" :instructions "x"})))
     (testing "an asked conductor turn does not count against the conductor's one running turn"
@@ -82,8 +83,8 @@
   (let [[s] (run (conj two-units
                        {:command :start-turn :turn "t1" :unit "brian" :spec spec}
                        {:command :start-turn :turn "t2" :unit "babel" :spec spec}
-                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1"}}
-                       {:command :record-outcome :turn "t2" :outcome :asked :call {:id "c2"}}
+                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1" :question "Go?"}}
+                       {:command :record-outcome :turn "t2" :outcome :asked :call {:id "c2" :question "Go?"}}
                        {:command :raise-operator-ask :ask "a1" :binds ["t1" "t2"] :content ready}))]
     (testing "a bound call is the person's, not the buffer's"
       (is (= :call-bound-by-operator-ask (refusal s {:command :answer-call :turn "t1" :answer "x"}))))
@@ -99,10 +100,14 @@
       (is (= :ask-binds-no-call (refusal s {:command :raise-operator-ask :ask "a2" :binds [] :content ready})))
       (let [[s3] (run (conj two-units
                             {:command :start-turn :turn "t9" :unit "brian" :spec spec}
-                            {:command :record-outcome :turn "t9" :outcome :asked :call {:id "c"}}))]
+                            {:command :record-outcome :turn "t9" :outcome :asked :call {:id "c" :question "Go?"}}))]
+        (is (nil? (refusal s3 {:command :raise-operator-ask :ask "a3" :binds ["t9"]
+                               :content (dissoc ready :recommendation)}))
+            "a recommendation is optional")
         (is (= :ask-not-decision-ready
                (refusal s3 {:command :raise-operator-ask :ask "a3" :binds ["t9"]
-                            :content (dissoc ready :recommendation)})))
+                            :content (dissoc ready :explored)}))
+            "what the answer depends on is not")
         (testing "several decisions are ready as questions of their own, each with a question"
           (let [several (-> ready (dissoc :options)
                             (assoc :questions [{:question "a?" :options [{:option "x"}]} {:question "b?"}]))]
@@ -111,10 +116,49 @@
                    (refusal s3 {:command :raise-operator-ask :ask "a3" :binds ["t9"]
                                 :content (assoc several :questions [{:question " "}])})))))))))
 
+(deftest a-malformed-ask-never-reaches-the-person
+  (let [long-q (str (apply str (repeat 240 "x")) "?")]
+    (testing "ask-problems names each field whose question breaks the form, and none when all hold"
+      (is (= [] (d/ask-problems ready)))
+      (is (= [] (d/ask-problems (assoc ready :question (str (apply str (repeat 239 "x")) "?")))) "240 is the cap, inclusive")
+      (is (re-find #"^`question` is 241 characters" (first (d/ask-problems (assoc ready :question long-q)))))
+      (is (re-find #"^`question` is more than one line" (first (d/ask-problems (assoc ready :question "The loop stopped.\nGo?")))))
+      (is (re-find #"^`question` does not end in '\?'" (first (d/ask-problems (assoc ready :question "Pick one")))))
+      (is (re-find #"^`question` is missing" (first (d/ask-problems (dissoc ready :question)))))
+      (is (= 1 (count (d/ask-problems {:question "Two?" :questions [{:question "A?"} {:question "b"}]}))))
+      (is (re-find #"^`questions` entry 2" (first (d/ask-problems {:question "Two?" :questions [{:question "A?"} {:question "b"}]})))))
+    (let [[s] (run (conj two-units {:command :start-turn :turn "t1" :unit "brian" :spec spec}))]
+      (testing "a turn reporting an ask whose question breaks the form ended :failed, its problems in the detail"
+        (let [[s2 es] (d/step s {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c" :question long-q}})]
+          (is (= :failed (get-in s2 [:turns "t1" :status])))
+          (is (= :ask-malformed (get-in (first es) [:detail :reason])))
+          (is (re-find #"`question`" (first (get-in (first es) [:detail :problems]))))))
+      (testing "a well-formed one with no recommendation asks"
+        (let [[s2] (d/step s {:command :record-outcome :turn "t1" :outcome :asked
+                              :call {:id "c" :question "Go?" :explored "x" :options [{:option "y"}]}})]
+          (is (= :asked (get-in s2 [:turns "t1" :status]))))))
+    (let [[s] (run (conj two-units
+                         {:command :start-turn :turn "t1" :unit "brian" :spec spec}
+                         {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c" :question "Go?"}}))
+          raised (fn [content] (nth (d/step s {:command :raise-operator-ask :ask "a" :binds ["t1"] :content content}) 2))]
+      (testing "decide refuses a malformed operator ask, naming each field under :problems"
+        (let [r (raised (-> ready (assoc :question long-q) (dissoc :explored :options)))]
+          (is (= :ask-not-decision-ready (:reason r)))
+          (is (= 3 (count (:problems r))))
+          (is (some #(str/starts-with? % "`question`") (:problems r)))
+          (is (some #(str/starts-with? % "`explored`") (:problems r)))
+          (is (some #(str/includes? % "`options`") (:problems r)))))
+      (testing "and admits a well-formed one without a recommendation"
+        (is (nil? (raised (dissoc ready :recommendation))))))
+    (testing "decide refuses a malformed conductor stop the same way"
+      (let [r (nth (d/step d/empty-state {:command :raise-conductor-stop :ask "s" :content (assoc ready :question "Wake it")}) 2)]
+        (is (= :ask-not-decision-ready (:reason r)))
+        (is (re-find #"^`question`" (first (:problems r))))))))
+
 (deftest an-ask-about-a-unit-holds-it
   (let [[s] (run (conj two-units
                        {:command :start-turn :turn "k1" :unit nil :spec spec}
-                       {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c"}}
+                       {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c" :question "Go?"}}
                        {:command :raise-operator-ask :ask "a1" :binds ["k1"] :concerns "babel" :content ready}))]
     (is (= :unit-has-open-operator-ask (refusal s {:command :start-turn :turn "t1" :unit "babel" :spec spec})))
     (is (nil? (refusal s {:command :start-turn :turn "t1" :unit "brian" :spec spec})))))
@@ -123,8 +167,8 @@
   (let [[s] (run (conj two-units
                        {:command :start-turn :turn "t1" :unit "brian" :spec spec}
                        {:command :start-turn :turn "t2" :unit "babel" :spec spec}
-                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1"}}
-                       {:command :record-outcome :turn "t2" :outcome :asked :call {:id "c2"}}
+                       {:command :record-outcome :turn "t1" :outcome :asked :call {:id "c1" :question "Go?"}}
+                       {:command :record-outcome :turn "t2" :outcome :asked :call {:id "c2" :question "Go?"}}
                        {:command :raise-operator-ask :ask "a1" :binds ["t1" "t2"] :content ready}))
         [s2 events] (d/step s {:command :hold-unit :unit "brian"})]
     (is (= [{:event :unit-held :unit "brian"}] events) "the event records the input alone")
@@ -231,7 +275,7 @@
 (deftest an-outcome-names-its-run-and-an-unknown-run-stops-the-unit
   (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                   {:command :start-turn :turn "t" :unit "u" :spec spec}
-                  {:command :record-outcome :turn "t" :run 1 :outcome :asked :call {:id "c"}}
+                  {:command :record-outcome :turn "t" :run 1 :outcome :asked :call {:id "c" :question "Go?"}}
                   {:command :answer-call :turn "t" :answer "yes"}
                   {:command :resume-turn :turn "t"}])]
     (is (= 2 (get-in s [:turns "t" :run])) "a resumption is the turn's next run")
@@ -277,7 +321,7 @@
                   {:command :open-unit :unit "y" :project "p" :goal "g" :session-cwd "/w"}
                   {:command :start-turn :turn "tx" :unit "x" :spec spec}
                   {:command :start-turn :turn "ty" :unit "y" :spec spec}
-                  {:command :record-outcome :turn "ty" :outcome :asked :call {:id "c"}}])]
+                  {:command :record-outcome :turn "ty" :outcome :asked :call {:id "c" :question "Go?"}}])]
     (testing "an ask naming x cancels x's running turn"
       (let [[s2] (d/step s {:command :raise-operator-ask :ask "a" :binds ["ty"] :concerns "x" :content ready})]
         (is (= {:status :cancelled :ended-by :concerned-ask} (select-keys (get-in s2 [:turns "tx"]) [:status :ended-by])))
@@ -468,7 +512,7 @@
     (is (every? d/machine-ask? (d/awaiting-person s)))
     (testing "a question beside it is asked as well: the failure still stands, and is not the only ask"
       (let [[s2] (run [{:command :start-turn :turn "k1" :unit nil :spec spec}
-                       {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c"}}
+                       {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c" :question "Go?"}}
                        {:command :raise-operator-ask :ask "a1" :binds ["k1"] :content ready}
                        stop])]
         (is (= {:kind :asking :failed? true} (d/activity s2)))
@@ -524,7 +568,7 @@
 
 (deftest a-run-that-asks-failed
   (let [[s] (d/step (run-up) {:command :record-outcome :turn "review-queue-ab12 first" :outcome :asked
-                              :call {:id "c"}})]
+                              :call {:id "c" :question "Go?"}})]
     (is (= :failed (d/run-status s)))
     (is (= {:reason :asked-in-a-run} (get-in s [:turns "review-queue-ab12 first" :detail])))
     (is (empty? (d/awaiting-person s)))))

@@ -557,19 +557,47 @@
       (seq (active-turns state unit-id))   :unit-has-active-turn
       (concerns-open-ask? state unit-id)   :unit-has-open-operator-ask)))
 
-(def decision-ready-keys
-  "What every operator ask states besides its options: what was explored, and a recommendation."
-  [:explored :recommendation])
+(def ^{:malli/schema :int} question-max
+  "The longest a core ask's question may be written: the cap resources/asking/ask.md states, which
+   a test holds this and the ledger's own check to."
+  240)
 
-(defn- decision-ready?
-  "Whether `content` puts a decision to the person: what was explored, a recommendation, and
-   either the options of one decision or several questions, each a question of its own."
+(defn- question-problem
+  "What is wrong with `q` as one question for the person, as the end of an instruction, or nil."
+  [q]
+  (let [t (str/trim (str q))]
+    (cond
+      (str/blank? t)               "is missing — write the question"
+      (str/includes? t "\n")       "is more than one line — the question alone, on one line"
+      (> (count t) question-max)   (str "is " (count t) " characters, over " question-max
+                                        " — the question alone; move its situation and reasoning to the context")
+      (not (str/ends-with? t "?")) "does not end in '?' — write it as the question it asks")))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:sequential :string]]} ask-problems
+  "The question-form problems of an ask's `content` — its headline `question` and each entry of its
+   `questions` — each an instruction naming its field: one line of at most `question-max`
+   characters ending in '?'. Empty when every question is well formed."
   [content]
-  (and (map? content)
-       (every? #(some? (get content %)) decision-ready-keys)
-       (or (seq (:options content))
-           (and (seq (:questions content))
-                (every? #(and (map? %) (not (str/blank? (str (:question %))))) (:questions content))))))
+  (vec (concat
+        (when-let [p (question-problem (:question content))]
+          [(str "`question` " p)])
+        (keep-indexed (fn [i e]
+                        (when-let [p (question-problem (when (map? e) (:question e)))]
+                          (str "`questions` entry " (inc i) " (its `question`) " p)))
+                      (:questions content)))))
+
+(defn- decision-problems
+  "Why `content` does not put a decision to the person, each an instruction naming its field:
+   the question-form problems (`ask-problems`), the context its answer depends on missing, or
+   neither the options of one decision nor several questions. Empty when it does."
+  [content]
+  (if-not (map? content)
+    ["the ask has no content"]
+    (cond-> (ask-problems content)
+      (str/blank? (str (:explored content)))
+      (conj "`explored` is missing — the context the answer depends on")
+      (and (empty? (:options content)) (empty? (:questions content)))
+      (conj "neither `options` nor `questions` — give the branches of the decision, or one entry per decision"))))
 
 (defmulti ^{:malli/schema [:=> [:cat :map :map] [:or [:map [:events [:vector :map]]] [:map [:refused :map]]]]} decide
   "Decide `command` against the whole workstream `state`: {:events [...]} when it is admitted,
@@ -706,10 +734,15 @@
       ;; A run has nobody to ask: its turn is offered no ask tool, and one that asks anyway failed.
       (and (:run state) (= outcome :asked))
       (accept {:event :turn-ended :turn turn :outcome :failed :detail {:reason :asked-in-a-run}})
+      (and (= outcome :asked) (not (:id call)))
+      (refuse :ask-needs-a-call)
+      ;; An ask whose question breaks the form never reaches the person: the turn that wrote it
+      ;; failed, with what was wrong, for its conductor to hear.
+      (and (= outcome :asked) (seq (ask-problems call)))
+      (accept {:event :turn-ended :turn turn :outcome :failed
+               :detail {:reason :ask-malformed :problems (ask-problems call)}})
       (= outcome :asked)
-      (if (:id call)
-        (accept {:event :turn-asked :turn turn :call call})
-        (refuse :ask-needs-a-call))
+      (accept {:event :turn-asked :turn turn :call call})
       (#{:completed :failed :cancelled} outcome)
       (let [ended (cond-> {:event :turn-ended :turn turn :outcome outcome}
                     detail           (assoc :detail detail)
@@ -758,7 +791,8 @@
       (refuse :conductor-ask-binds-only-its-own-call)
       (and concerns (not= :open (get-in state [:units concerns :status])))
       (refuse :concerns-no-open-unit :unit concerns)
-      (not (decision-ready? content))               (refuse :ask-not-decision-ready)
+      (seq (decision-problems content))
+      (refuse :ask-not-decision-ready :problems (decision-problems content))
       :else (accept {:event :operator-ask-raised :ask ask :binds (vec binds)
                      :concerns concerns :content content}))))
 
@@ -779,7 +813,8 @@
   (cond
     (:conductor-stopped? state)               (refuse :conductor-already-stopped)
     (contains? (:operator-asks state) ask)    (refuse :ask-exists :ask ask)
-    (not (decision-ready? content))           (refuse :ask-not-decision-ready)
+    (seq (decision-problems content))
+    (refuse :ask-not-decision-ready :problems (decision-problems content))
     :else (accept {:event :conductor-stop-raised :ask ask :content content})))
 
 (defmethod decide :give-grant [state {:keys [grant by]}]

@@ -24,7 +24,9 @@
     "The Claude Code executor, for the turn port."
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation hook-decision
-    "The PreToolUse hook's answer: allow the resolved call with its resolution, defer any other."
+    "The PreToolUse hook's answer: allow the resolved call with its resolution; deny any other whose
+     question breaks the form, the reason the instructions core-domain's ask-problems gives; defer
+     the rest."
     {:signature [:=> [:catn [:run-dir :string] [:event :map]] :map]})
   (Operation supervise
     "Run a Claude command line with its output passed through, ending it and everything it started

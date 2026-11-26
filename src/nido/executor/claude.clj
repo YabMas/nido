@@ -7,6 +7,8 @@
    deferred call. The agent asks through nido's ask tool (`nido.core.ask-tool`), and a PreToolUse
    hook on that tool decides it:
      - the call is the turn's resolved call: allow it, with the resolution as its answer
+     - a call whose question breaks the form (`nido.core.domain/ask-problems`): deny it, with
+       what is wrong in each field as the reason, so the agent writes it again
      - any other call: defer it, which ends the run with the call pending
    The hook is this namespace's -main, run under bb, and reads only the run's own directory.
 
@@ -33,7 +35,8 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [nido.core.ask-tool :as ask-tool])
+            [nido.core.ask-tool :as ask-tool]
+            [nido.core.domain :as d])
   (:import [java.lang ProcessHandle]
            [java.util UUID]))
 
@@ -231,16 +234,28 @@
 ;; ── the hook ─────────────────────────────────────────────────────────────────
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :map]} hook-decision
-  "The PreToolUse hook's answer for `event` (Claude's hook input) in run directory `run-dir`."
+  "The PreToolUse hook's answer for `event` (Claude's hook input) in run directory `run-dir`: the
+   turn's resolved call allowed with its resolution; any other call denied, its reason the
+   instructions `ask-problems` gives, when its question breaks the form; else deferred."
   [run-dir event]
   (let [{:keys [tool_use_id tool_input]} event
         f (resolution-file run-dir)
-        r (when (.exists f) (edn/read-string (slurp f)))]
+        r (when (.exists f) (edn/read-string (slurp f)))
+        problems (d/ask-problems (ask-tool/content tool_input))]
     {:hookSpecificOutput
      (merge {:hookEventName "PreToolUse"}
-            (if (and r (= tool_use_id (:call r)))
+            (cond
+              (and r (= tool_use_id (:call r)))
               {:permissionDecision "allow"
                :updatedInput (assoc tool_input :answer (:text r))}
+
+              (seq problems)
+              {:permissionDecision "deny"
+               :permissionDecisionReason
+               (str "nido refused this ask: " (str/join "; " problems)
+                    ". Fix those fields and call ask again, as the only tool call in its turn.")}
+
+              :else
               {:permissionDecision "defer"
                :permissionDecisionReason "nido holds this ask"}))}))
 

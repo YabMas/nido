@@ -71,7 +71,7 @@
    {:command :start-turn :turn "c1" :unit nil :spec {:executor :fake :instructions "i"}}
    {:command :record-outcome :turn "c1" :run 1 :outcome :asked :call {:id "call-1" :question "q?"}}
    {:command :raise-operator-ask :ask "a1" :binds #{"c1"}
-    :content {:question "Two decisions about pictures" :explored "Read the code."
+    :content {:question "Two decisions about pictures?" :explored "Read the code."
               :questions [{:question "Drop the question or keep it without its picture?"
                            :context "Creation drops it."
                            :options [{:option "Drop it" :consequence "Fewer questions." :recommended true}
@@ -87,7 +87,7 @@
       (fake-core/seed! c :brian ws-id several)
       (let [[g] (work/gates :brian)
             ask (:ask g)]
-        (is (= "Two decisions about pictures" (:question ask)))
+        (is (= "Two decisions about pictures?" (:question ask)))
         (is (= ["Drop the question or keep it without its picture?" "Tell the teacher?"]
                (map :question (:questions ask))) "each decision is a question of its own")
         (is (= [["Read the code." "Creation drops it."] []] (map :context (:questions ask)))

@@ -30,12 +30,19 @@
    A journal is the third: records kept across runs, and nothing else. A record is one
    polymorphic shape, a map with a keyword :kind, which is all the core reads of it; each kind's
    fields are its writer's to check. Records are only ever appended, each after the record seq its
-   author read."
+   author read.
+
+   It publishes ask-problems, the question-form problems of an ask's content, which its admission
+   applies and the ask tool's hook applies before the ask reaches decide."
   (Operation decide
     "Decide a command against the whole workstream: the events it yields, or a refusal naming
      why, which changes nothing."
     {:signature [:=> [:catn [:state :map] [:command :map]]
                  [:or [:map [:events [:vector :map]]] [:map [:refused :map]]]]})
+  (Operation ask-problems
+    "The question-form problems of an ask's content — its question and each entry of its questions
+     — each an instruction naming its field; none when every question is well formed."
+    {:signature [:=> [:catn [:content [:maybe :map]]] [:sequential :string]]})
   (Operation evolve
     "Fold one event into a workstream's state."
     {:signature [:=> [:catn [:state :map] [:event :map]] :map]})

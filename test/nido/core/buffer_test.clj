@@ -24,7 +24,7 @@
 (deftest an-outcome-wakes-the-conductor-to-hear-the-whole-inbox
   (let [s (state-after [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                         {:command :start-turn :turn "t" :unit "u" :spec spec}
-                        {:command :record-outcome :turn "t" :outcome :asked :call {:id "c"}}])
+                        {:command :record-outcome :turn "t" :outcome :asked :call {:id "c" :question "Go?"}}])
         [wake & more] (b/decisions opts "ws" s 7)]
     (is (nil? more))
     (is (= {:key "buffer/wake/conductor-7" :ws "ws"
@@ -51,9 +51,9 @@
   (let [qs [{:question "a?" :options [{:option "x" :recommended true}]} {:question "b?" :options [{:option "y"}]}]
         s  (state-after [{:command :start-turn :turn "k" :unit nil :spec spec}
                          {:command :record-outcome :turn "k" :outcome :asked
-                          :call {:id "c" :question "two" :explored "x" :questions qs :recommendation "x"}}])
+                          :call {:id "c" :question "Two decisions?" :explored "x" :questions qs :recommendation "x"}}])
         [raise] (b/decisions opts "ws" s 3)]
-    (is (= {:question "two" :explored "x" :questions qs :recommendation "x"}
+    (is (= {:question "Two decisions?" :explored "x" :questions qs :recommendation "x"}
            (get-in raise [:command :content])))))
 
 (deftest failing-conductor-turns-stop-the-waking
@@ -236,8 +236,10 @@
         (is (re-find #"(?m)the person withdrawn operator ask ask k c$" (b/brief "ws" s3 [w])))))))
 
 (deftest askers-are-told-a-comment-may-push-back
-  (doseq [[where text] [["ask guidance" ask-tool/guidance]
-                        ["conductor brief" (b/brief "ws" d/empty-state [])]]]
+  (doseq [[where text] [["ask briefing" (ask-tool/briefing)]
+                        ["conductor brief" (b/brief "ws" d/empty-state [])]]
+          ;; Where the markdown wraps a line says nothing about what it says.
+          :let [text (str/replace text #"\s+" " ")]]
     (testing where
       (is (str/includes? text "comment on a question") "an answer may carry a per-question comment")
       (is (str/includes? text "with or without an option chosen"))

@@ -163,14 +163,14 @@
 
 (deftest the-feed-shows-as-awaiting-exactly-the-open-operator-asks
   (let [f (feed/create)
-        ready {:explored "x" :options ["a" "b"] :recommendation "a"}]
+        ready {:question "Go?" :explored "x" :options ["a" "b"] :recommendation "a"}]
     (with-writer [w s db {:publish #(feed/publish! f %)}]
       (let [r (store/open-reader db)
             sub (feed/subscribe! f r 0 {})]
         (is (:caught-up (feed/take! sub 100)) "nothing committed yet: caught up at once")
         (doseq [[k c] [["1" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}]
                        ["2" {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}}]
-                       ["3" {:command :record-outcome :turn "t" :outcome :asked :call {:id "c" :question "q"}}]]]
+                       ["3" {:command :record-outcome :turn "t" :outcome :asked :call {:id "c" :question "Go?"}}]]]
           (answer (writer/submit! w {:key k :ws "ws" :command c})))
         (let [ms (repeatedly 3 #(feed/take! sub 1000))]
           (is (every? (comp empty? :awaiting) ms) "a unit's call is not shown as awaiting the person"))
