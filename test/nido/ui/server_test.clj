@@ -93,7 +93,7 @@
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/needs"})]
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
-      (is (str/includes? (:body resp) "rail-needs-count")))))   ; rail patched too
+      (is (str/includes? (:body resp) "rail-needs-ask")))))   ; rail patched too
 
 (deftest a-gate-link-opens-its-workstream
   (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
@@ -315,6 +315,31 @@
       (Thread/sleep 50)
       (is (nil? (dev/current-app-state "brian/ws-notion-ok")))
       (finally (dev/clear-app-state! "brian/ws-notion-ok")))))
+
+(deftest one-tally-counts-lists-and-marks-every-kind
+  ;; An unread chat is side-chat's unseen anchor, counted under its workstream's project; the
+  ;; top bar's counts, the home sections and the drop-down's marks all come from one tally.
+  (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:ws-id "a" :project "brian" :needs :ask :origin :notion
+                                                                  :stage :triage :label "BR-1" :report nil :actions [] :session nil}
+                                                                 {:ws-id "b" :project "foo" :needs :landing :origin :notion
+                                                                  :stage :triage :label "FOO-1" :report nil :actions [] :session nil}]
+                                                         :unavailable {}})
+                nido.ui.side-chat/unseen (fn [] #{{:project "brian" :ws-id "c"}})
+                nido.coordinator.work/list-workstreams (fn [_] [{:ws-id "c" :project "brian" :label "Chatty one"}])
+                nido.coordinator.work/all-grouped (fn [] [])
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})
+                project/list-projects (fn [] {"brian" {:directory "/x"} "foo" {:directory "/y"}})]
+    (let [body (:body (server/handle-request {:request-method :get :uri "/" :query-string "scope=brian"}))]
+      (is (str/includes? body "id=\"rail-needs-ask\">1<"))
+      (is (str/includes? body "id=\"rail-needs-chat\">1<") "the unread chat is counted under brian")
+      (is (str/includes? body "id=\"rail-needs-landing\">0<") "foo's landing is not brian's")
+      (is (str/includes? body "Chatty one") "the chat is listed as its workstream's row")
+      (is (re-find #"id=\"switcher-needs-brian\".*?>2<" body) "brian's entry sums its kinds")
+      (is (re-find #"id=\"switcher-needs-foo\".*?>1<" body) "foo's entry carries its landing"))
+    (let [body (:body (server/handle-request {:request-method :get :uri "/_fragment/rail" :query-string "scope=foo"}))]
+      (is (str/includes? body "id=\"rail-needs-landing\">1<") "the rail's own poll counts the focus")
+      (is (str/includes? body "id=\"rail-needs-chat\">0<")))))
 
 (deftest needs-lists-only-the-focused-project
   (with-redefs [nido.coordinator.work/read-gates (fn [] {:gates [{:ws-id "a" :project "brian" :origin :notion :stage :triage
@@ -656,12 +681,12 @@
     (let [scoped   (server/handle-request {:request-method :get :uri "/_fragment/ops"
                                            :query-string "scope=brian"})
           unscoped (server/handle-request {:request-method :get :uri "/_fragment/ops"})]
-      (is (str/includes? (:body scoped) "id=\"rail-needs-count\">2<") "brian's two gates")
+      (is (str/includes? (:body scoped) "id=\"rail-needs-ask\">2<") "brian's two gates")
       (is (str/includes? (:body (server/handle-request {:request-method :get :uri "/_fragment/ops"
                                                         :query-string "scope=fukan"}))
-                         "id=\"rail-needs-count\">1<")
+                         "id=\"rail-needs-ask\">1<")
           "fukan's one")
-      (is (str/includes? (:body unscoped) "rail-needs-count") "with no focus named, the first project's"))))
+      (is (str/includes? (:body unscoped) "rail-needs-ask") "with no focus named, the first project's"))))
 
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]

@@ -50,11 +50,37 @@
     [:span {:id id :class "rail-badge unread" :title (str "not fully read: " unread)} (str n "?")]
     [:span {:id id :class (str "rail-badge" (when (zero? n) " zero"))} n]))
 
-(defn- rail-needs-badge
-  "The Needs-you count: every kind's items the tally holds for the focused project."
-  [{:keys [tally scope]}]
-  (count-badge "rail-needs-count" (kinds-count tally scope state/needs-kinds)
-               (unread-reason tally scope)))
+(defn- kind-badge
+  "The top bar's count of kind `kind` for the focused project. A gate kind of a project whose gates
+   could not be read is counted as not fully read."
+  [{:keys [tally scope]} kind]
+  (count-badge (str "rail-needs-" (name kind)) (count (tally-items tally scope kind))
+               (when (gate-kind? kind) (unread-reason tally scope))))
+
+(defn- kind-links
+  "The top bar's needs kinds: one icon per kind, in needs-kinds' order, each beside the focused
+   project's count of that kind alone and linking to the home page's list of that kind. An icon
+   is always shown; one whose count has the zero style is dimmed (the stylesheet reads the badge),
+   so a patch of the badges alone keeps the dimming true."
+  [{:keys [active kind scope] :as ctx}]
+  (for [k state/needs-kinds]
+    [:a {:class (str "topbar-link kind-link" (when (and (= :needs active) (= k kind)) " active"))
+         :href  (str "/?scope=" scope "&kind=" (name k))
+         :aria-label (state/needs-kind-heading k)}
+     (state/kind-mark k) (kind-badge ctx k)]))
+
+(defn- switcher-mark
+  "What a drop-down entry says of its project: the needs-you dot and its count summed over the
+   kinds while it has any item, nothing when it has none — and, for a project whose gates could
+   not be read, its count marked as not fully read."
+  [tally project]
+  (let [n      (kinds-count tally project state/needs-kinds)
+        unread (unread-reason tally project)]
+    [:span {:id (str "switcher-needs-" project) :class "switcher-needs"}
+     (when (pos? n) (state/needs-mark (str n " need you")))
+     (cond
+       unread    [:span {:class "switcher-count unread" :title (str "not fully read: " unread)} (str n "?")]
+       (pos? n)  [:span.switcher-count n])]))
 
 (defn- rail-health [{:keys [state]}]
   (let [s (name (or state :down))]
@@ -88,30 +114,31 @@
 
 (defn- project-switcher
   "Which project the sidebar is about. Picking one stays on the slice you are
-   reading; from a page that is not a slice it opens the board, since Needs you and
-   the menu's pages are the same whatever is focused. A selection is dropped: it
-   names a workstream of the project being left."
-  [{:keys [active scope projects]}]
+   reading; from a page that is not a slice it opens the board. A selection is
+   dropped: it names a workstream of the project being left. Each entry says where
+   the person is needed in its project (`switcher-mark`), from the request's tally."
+  [{:keys [active scope projects tally]}]
   (let [path (slice-path active "/workstreams")]
     [:details.switcher {"data-on:click__outside" "el.open = false"}
      [:summary {:title "focused project"} [:span scope] " ▾"]
      [:div.menu
       (for [p projects]
-        [:a {:href (str path "?scope=" p) :class (when (= p scope) "active")} p])]]))
+        [:a {:href (str path "?scope=" p) :class (when (= p scope) "active")}
+         [:span.switcher-name p] (switcher-mark tally p)])]]))
 
 (defn- topbar
-  "What spans every project: the project switcher, Needs you — every category the person is
-   needed in, a landing among them — as an icon and its count, and the menu holding nido's own
-   pages."
-  [{:keys [active] :as ctx}]
-  [:header.topbar
+  "The top bar: the project switcher, what needs the person in the focused project — one icon
+   and count per kind — and the menu holding nido's own pages. A page whose own list poll does
+   not patch the counts (`:rail-polled?`) gets a poll of its own for them."
+  [{:keys [active scope rail-polled?] :as ctx}]
+  [:header (cond-> {:class "topbar"}
+             (not rail-polled?)
+             (assoc :data-on-interval__duration.5s (str "@get('/_fragment/rail?scope=" scope "')")))
    [:a.topbar-brand {:href "/" :title "nido"}
     [:img.topbar-logo {:src "/nido-logo.png" :alt "nido" :width 44 :height 44}]]
    (project-switcher ctx)
    [:div.topbar-gap]
-   [:a {:class (str "topbar-link" (when (= :needs active) " active")) :href "/#needs-you"
-        :title "Needs you" :aria-label "Needs you"}
-    [:span.topbar-icon (state/kind-mark :ask "Needs you")] (rail-needs-badge ctx)]
+   (kind-links ctx)
    [:details.gear {"data-on:click__outside" "el.open = false"}
     [:summary {:title "menu" :aria-label "menu"} "⚙"]
     [:div.menu
@@ -157,9 +184,13 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   rail-status-fragment
-  "The live top-bar elements, for SSE patching alongside a surface fragment."
-  [{:keys [daemon] :as ctx}]
-  (str (h/html (rail-needs-badge ctx))
+  "The live top-bar elements, for SSE patching alongside a surface fragment: the focused
+   project's count of each kind, each drop-down entry's mark, and the daemon's health — all from
+   the one `:tally` the request counted. Patched by id, so a link's place and the drop-down's
+   being open are left as the page has them."
+  [{:keys [daemon tally projects] :as ctx}]
+  (str (h/html (for [k state/needs-kinds] (kind-badge ctx k)))
+       (h/html (for [p projects] (switcher-mark tally p)))
        (h/html (rail-health daemon))))
 
 (defn ^{:malli/schema [:=> [:cat :any :keyword] :string]}
@@ -300,7 +331,8 @@
   "Page chrome: top bar, sidebar, content area. `ctx` carries
    {:active :title :tally :kind :daemon :scope :projects}, where :scope is the
    focused project — always one project, never \"all\" — :tally what needs the person, by
-   project and kind, as the server counted it for the request, and :bleed?, true for a page
+   project and kind, as the server counted it for the request, :rail-polled? true on a page whose
+   own list poll patches the top bar's counts, and :bleed?, true for a page
    that fills the content area edge to edge and scrolls within itself, and :side-chat, the chat's
    side panel (hiccup) when the page carries one — the grid gives it a column; `content` is hiccup.
    The top bar's counts are the focused project's, so the ops poll that patches them carries its
@@ -1472,7 +1504,7 @@
   (let [q (screen-query screen (when-let [id (:ws-id selection)]
                                  {:sel (str (:project selection) ":" id)}))]
     (shell
-     (assoc ctx :active :needs :title "Needs you")
+     (assoc ctx :active :needs :title "Needs you" :rail-polled? true)
      [:div.gate-wrap
       [:div.queue-col
        [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" q "')")}
@@ -2136,7 +2168,7 @@
         q       (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))
         project (:scope screen)]
     (shell
-     (assoc ctx :active :workstreams :title (slice-label :workstreams))
+     (assoc ctx :active :workstreams :title (slice-label :workstreams) :rail-polled? true)
      ;; Section-fold signals are declared here, on the stable page chrome that the
      ;; 5s poll never replaces (the poll only patches #workstreams inside .inbox).
      ;; __ifmissing seeds them from localStorage on load without clobbering live

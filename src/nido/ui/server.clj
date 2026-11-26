@@ -1049,6 +1049,11 @@
       ["_fragment" "operations" "review-queue"]
       (review-queue-fragment-response)
 
+      ;; GET /_fragment/rail — the top bar's live bits alone: the poll of a page whose own
+      ;; list poll does not patch them (views/topbar).
+      ["_fragment" "rail"]
+      (sse-response (sse-fragment (rail-status (:scope (view-state req)) (read-tally))))
+
       ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
       ;; Scope rides ?scope=, parsed the same way every other view-state is —
       ;; so the shell's poll (see views/shell) patches the focused project's counts

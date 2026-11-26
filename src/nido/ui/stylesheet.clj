@@ -322,6 +322,16 @@
                     color:var(--text-muted); }
      .topbar-link:hover { background:var(--surface-hover); text-decoration:none; }
      .topbar-link.active { background:var(--surface); color:var(--text-strong); }
+     /* A needs kind's icon and count; dimmed while its count has the zero style, which is the
+        badge a poll patches — so the dimming follows the count without the link being redrawn. */
+     .kind-link { gap:var(--space-6); padding:var(--space-7) var(--space-8); }
+     .kind-link .kind-mark svg { width:18px; height:18px; }
+     .kind-link:has(.rail-badge.zero) { opacity:.4; }
+     .menu a .switcher-name { flex:1; }
+     .menu a:has(.switcher-needs) { display:flex; align-items:center; gap:var(--space-6); }
+     .switcher-needs { display:inline-flex; align-items:center; gap:var(--space-4); }
+     .switcher-count { font-size:var(--fs-xs); color:var(--needs); }
+     .switcher-count.unread { color:var(--accent-strong); font-style:italic; }
      .switcher, .gear { position:relative; }
      .switcher summary, .gear summary { list-style:none; cursor:pointer; padding:var(--space-7) var(--space-12); border-radius:var(--radius-5);
                                         color:var(--text-strong); }
@@ -370,8 +380,8 @@
      .rail-badge { background:var(--accent-bg); color:var(--accent-strong); border-radius:var(--radius-9);
                    padding:0 var(--space-7); font-size:var(--fs-xs); min-width:18px; text-align:center; }
      .rail-badge.zero { background:var(--neutral-bg); color:var(--text-faint); }
-     .topbar-icon { font-size:var(--fs-md); line-height:1; }
-     .inbox-head { margin:var(--space-12) var(--space-16) var(--space-4); font-size:var(--fs-sm); color:var(--text-muted); }
+     .inbox-head { margin:var(--space-12) var(--space-16) var(--space-4); font-size:var(--fs-sm); color:var(--text-muted);
+                   display:flex; align-items:center; gap:var(--space-6); }
      /* A merge's words: muted, a stuck one red. No dot — a merge waiting its turn runs nothing. */
      .doing-badge { color:var(--working-dim); }
      .doing-badge.ship-blocked { color:var(--failed); font-weight:600; }

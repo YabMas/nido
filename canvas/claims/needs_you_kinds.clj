@@ -9,7 +9,8 @@
             [canvas.coordinator.work :refer [read-gates Gate all-gates]]
             [canvas.boot.attention :refer [boot-attention]]
             [canvas.ui.side-chat :refer [ui-side-chat unseen]]
-            [canvas.ui.surface :refer [ui-components-state ui-components-row needs-page needs-fragment]]))
+            [canvas.ui.surface :refer [ui-components-state ui-components-row needs-page needs-fragment
+                                       ui-server ui-views shell rail-status-fragment]]))
 
 (Claim kind-marks-in-state-level
   "Each kind has one mark in the marks level, and every surface says that kind with it: a raised hand for an ask, a rocket for a landing, an octagon with an exclamation for a system error, and a speech bubble for an unread chat. Each is a 24-unit stroked SVG in currentColor, coloured --needs, titled with the kind's needs-words."
@@ -30,3 +31,19 @@
 (Claim notifications-read-all-gates
   "Desktop notifications are announced by the daemon from all-gates, every project's, and read nothing of the dashboard: no focus, no scope, no tally and no side chat's news reaches them."
   {:about [boot-attention all-gates] :evidence "round"})
+
+(Claim one-tally
+  "On every page and fragment handed the tally, what needs the person was counted once for that request, by ui-server, into a tally by project and kind; every kind's top-bar count, every home section and every drop-down mark rendered there is read from it, and rail-status-fragment patches the counts and the drop-down marks from the same tally."
+  {:about [ui-server shell rail-status-fragment] :evidence "round"})
+
+(Claim icon-per-kind
+  "Wherever a page is handed the tally, the top bar shows four icons — ask, landing, system error, unread chat, in that order — each beside the focused project's count of that kind alone and linking to the home page's list of that kind for that project. An icon is always shown, dimmed with the zero-style count when its kind has nothing."
+  {:about [shell ui-views] :evidence "round"})
+
+(Claim switcher-marks-needs
+  "Where shell is handed the projects and the tally, each drop-down entry for a project with at least one item of any of the four kinds carries the --needs needs-you dot and that project's count summed over the kinds; an entry for a project with none carries no dot."
+  {:about [ui-views] :evidence "round"})
+
+(Claim unreadable-is-never-zero
+  "A project whose gates could not be read is never shown as having nothing for the person: wherever its gate kinds' counts or its drop-down entry are shown, they are marked not fully read (a trailing ?), and its home list names it as not loaded."
+  {:about [rail-status-fragment needs-fragment ui-views] :evidence "round"})

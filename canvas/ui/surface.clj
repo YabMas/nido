@@ -232,8 +232,10 @@
    sharing this boundary with the pages, and the reason is in the design that moved the others
    out — a card is read from a ledger record's shape, and reading twenty of those apart is a
    different job from the blocks a person iterates on. Its rows listing workstreams, on the board
-   and on Needs you, say which workstreams have a side chat with news."
-  (Operation rail-status-fragment "The top bar's live bits: what needs you, and how the daemon is."
+   and on Needs you, say which workstreams have a side chat with news. The top bar's layout is
+   its: one icon and count per needs kind for the focused project, and a project drop-down whose
+   entries say where the person is needed, all read from the tally the server hands it."
+  (Operation rail-status-fragment "The top bar's live bits, from the request's tally: the focused project's count of each needs kind, each drop-down entry's mark, and how the daemon is."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation fire-signal "The signal name for one field of a fire form."
     {:signature [:=> [:catn [:trigger-name :any] [:k :keyword]] :string]})
@@ -242,8 +244,9 @@
   (Operation ops-panel-fragment "The ambient ops chrome: daemon, halt, breakers, triggers, fleet."
     {:signature [:=> [:catn [:ctx :map]] :any] :delegates [fleet-card fire-signal]})
   (Operation shell
-    "The page chrome every page sits inside: a top bar for what spans projects, a sidebar of the
-     focused project's slices."
+    "The page chrome every page sits inside: a top bar — the project drop-down, marking each project
+     the person is needed in, and the focused project's needs kinds, an icon and count each — and a
+     sidebar of the focused project's slices."
     {:signature [:=> [:catn [:ctx :map] [:body :any]] :any] :delegates [assembled-stylesheet lib/script]})
   (Operation needs-fragment "The home column: what needs the person in the focused project, one section per kind — or the one kind the request names — each headed by its mark and count."
     {:signature [:=> [:catn [:ctx :map]] :any]})

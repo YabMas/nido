@@ -298,9 +298,10 @@
 
 (deftest needs-page-has-shell-master-detail-and-poll
   (let [html (views/needs-page {:active :needs :daemon {:state :up} :scope "brian" :projects []
-                                :tally (tally-of [sample-gate])}
-                               (needs-screen [sample-gate] :selection {:project "brian" :ws-id "ws-1"}))]
-    (is (str/includes? html "topbar-link active"))      ; chrome present + Needs you active
+                                :kind :ask :tally (tally-of [sample-gate])}
+                               (needs-screen [sample-gate] :kind :ask :selection {:project "brian" :ws-id "ws-1"}))]
+    (is (str/includes? html "topbar-link kind-link active")) ; chrome present + the named kind active
+    (is (str/includes? html "/_fragment/needs?scope=brian&amp;kind=ask")) ; its poll keeps the kind
     (is (str/includes? html "/_fragment/needs"))         ; polls the renamed fragment
     (is (str/includes? html "BR-7"))))                   ; the selected gate fills the pane
 
@@ -619,8 +620,7 @@
                            :tally (tally-of [sample-gate sample-gate sample-gate])
                            :daemon {:state :up} :scope "brian" :projects ["brian" "nido"]}
                           [:p "body-here"])]
-    ;; the top bar: Needs you, the menu with Operations and Development
-    (is (str/includes? html "Needs you"))
+    ;; the top bar: the needs kinds, the menu with Operations and Development
     (is (str/includes? html "href=\"/operations\""))
     (is (str/includes? html "href=\"/development\""))
     ;; the sidebar: every slice, the active one highlighted
@@ -628,9 +628,8 @@
       (is (str/includes? html label)))
     (is (str/includes? html "side-link active"))
     (is (not (str/includes? html "All projects")) "there is no all-project view")
-    ;; live needs badge + count
-    (is (str/includes? html "id=\"rail-needs-count\""))
-    (is (str/includes? html ">3<"))
+    ;; live needs badges + counts
+    (is (str/includes? html "id=\"rail-needs-ask\">3<"))
     ;; daemon dot
     (is (str/includes? html "id=\"rail-health\""))
     (is (str/includes? html "dot-up"))
@@ -646,10 +645,66 @@
 (deftest rail-status-fragment-has-both-live-bits
   (let [html (views/rail-status-fragment {:scope "brian" :tally (tally-of [sample-gate sample-gate])
                                           :daemon {:state :halted}})]
-    (is (str/includes? html "id=\"rail-needs-count\""))
-    (is (str/includes? html ">2<"))
+    (is (str/includes? html "id=\"rail-needs-ask\">2<"))
     (is (str/includes? html "id=\"rail-health\""))
     (is (str/includes? html "dot-halted"))))
+
+(def ^:private two-projects
+  "A tally over two projects: brian has an ask, two landings and an unread chat; nido has a system
+   error; fukan has nothing."
+  (tally-of [sample-gate
+             (assoc sample-gate :ws-id "ws-2" :needs :landing)
+             (assoc sample-gate :ws-id "ws-3" :needs :landing)
+             (assoc sample-gate :project "nido" :ws-id "ws-4" :needs :system-error)]
+            :unseen #{{:project "brian" :ws-id "ws-5"}}))
+
+(deftest the-top-bar-shows-an-icon-per-kind-for-the-focused-project
+  (let [html (views/shell {:active :workstreams :title "t" :tally two-projects
+                           :daemon {:state :up} :scope "brian" :projects ["brian" "nido" "fukan"]}
+                          [:p "body"])
+        links (re-seq #"<a aria-label=\"([^\"]+)\" class=\"topbar-link kind-link\" href=\"([^\"]+)\">(.*?)</a>" html)]
+    (is (= ["Asks" "Landings" "System errors" "Unread chats"] (map second links)) "four icons, in order")
+    (is (= ["/?scope=brian&amp;kind=ask" "/?scope=brian&amp;kind=landing"
+            "/?scope=brian&amp;kind=system-error" "/?scope=brian&amp;kind=chat"]
+           (map #(nth % 2) links))
+        "each links to its kind's list for the focused project")
+    (doseq [[k n] {:ask 1 :landing 2 :system-error 0 :chat 1}]
+      (is (str/includes? html (str "id=\"rail-needs-" (name k) "\">" n "<"))
+          "each counts the focused project's items of its kind alone"))
+    (is (str/includes? html "class=\"rail-badge zero\" id=\"rail-needs-system-error\"")
+        "an empty kind keeps its icon, with the zero-style count")
+    (doseq [k [:ask :landing :system-error :chat]]
+      (is (str/includes? html (str "kind-mark kind-" (name k)))))))
+
+(deftest the-drop-down-marks-each-project-the-person-is-needed-in
+  (let [html (views/shell {:active :workstreams :title "t" :tally two-projects
+                           :daemon {:state :up} :scope "brian" :projects ["brian" "nido" "fukan"]}
+                          [:p "body"])
+        entry #(second (re-find (re-pattern (str "(?s)id=\"switcher-needs-" % "\">(.*?)</span></a>")) html))]
+    (is (str/includes? (entry "brian") "class=\"needs\"") "a project with items carries the dot")
+    (is (str/includes? (entry "brian") ">4<") "and its count summed over the kinds")
+    (is (str/includes? (entry "nido") ">1<"))
+    (is (not (str/includes? (str (entry "fukan")) "needs")) "a project with none carries no dot"))
+  (let [html (views/shell {:active :workstreams :title "t"
+                           :tally (tally-of [] :unavailable {"nido" "no core"})
+                           :daemon {:state :up} :scope "brian" :projects ["brian" "nido"]}
+                          [:p "body"])]
+    (is (re-find #"id=\"switcher-needs-nido\".*?switcher-count unread[^>]*>0\?<" html)
+        "an unread project's entry is marked not fully read")))
+
+(deftest the-live-bits-patch-every-count-and-entry-from-the-tally
+  (let [html (views/rail-status-fragment {:scope "brian" :tally two-projects :projects ["brian" "nido"]
+                                          :daemon {:state :up}})]
+    (doseq [k [:ask :landing :system-error :chat]]
+      (is (str/includes? html (str "id=\"rail-needs-" (name k) "\""))))
+    (is (str/includes? html "id=\"switcher-needs-brian\""))
+    (is (str/includes? html "id=\"switcher-needs-nido\""))))
+
+(deftest a-page-whose-list-does-not-patch-the-counts-polls-them
+  (let [ctx {:daemon {:state :up} :scope "brian" :projects [] :tally (tally-of [])}]
+    (is (str/includes? (views/development-page ctx) "/_fragment/rail?scope=brian"))
+    (is (not (str/includes? (views/needs-page ctx (needs-screen [])) "/_fragment/rail"))
+        "Needs you's own poll patches them")))
 
 (deftest sidebar-links-carry-the-focus
   (let [html (str (h/html (#'views/sidebar {:active :needs :scope "brian"})))]
