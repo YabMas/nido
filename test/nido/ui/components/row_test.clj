@@ -21,6 +21,21 @@
     (is (not (str/includes? src "\"needs you\""))
         "the needs-you mark's words are the state module's")))
 
+(deftest a-mark-saying-one-kind-is-that-kinds-mark
+  (doseq [k [:ask :landing :system-error]
+          :let [km (str "kind-mark kind-" (name k))]]
+    (testing k
+      (is (str/includes? (str (h/html (block/render row/gate-row "w"
+                                                     {:gate {:project "nido" :label "L" :stage :triage :needs k}
+                                                      :href "#"}
+                                                     {} (fn [& _] "#"))))
+                         km)
+          "a needs-you row")
+      (is (str/includes? (str (h/html (state/state-mark {:needs-you true :needs k} nil))) km)
+          "a board row's state mark")
+      (is (str/includes? (str (h/html (state/arc-mark :current :awaiting k))) km)
+          "an awaiting arc stage"))))
+
 (deftest the-needs-you-rows-carry-the-state-modules-mark
   (let [mark (str (h/html (state/needs-mark)))]
     (testing "a board row whose next move is the person's"

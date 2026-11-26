@@ -87,7 +87,7 @@
                   {:keys [project stage label tag report ask note session resume-error pending? error-msg
                           doing status needs denials selected?]} :gate} :props}]
   [:a (merge (part :root) {:class (str "gate-card" (when selected? " sel")) :href href})
-   [:div.gate-top (status-slot (state/needs-mark (state/needs-words needs))) [:span.lbl label] (when chat? chat-mark)]
+   [:div.gate-top (status-slot (state/needs-kind-mark needs)) [:span.lbl label] (when chat? chat-mark)]
    (tag-line tag)
    [:div.gate-sub [:span project] (state/stage-chip stage)
     [:span (state/gate-standing {:pending? pending? :session session :needs needs})]

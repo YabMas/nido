@@ -552,7 +552,8 @@
    list and stays /, or a reload would open the board instead; anywhere else — the
    board — the selection rides ?sel=. And the `?scope=` the location states stays, read from the location
    because the pane does not know it: without it parse would focus the selection's
-   project, and a reload would draw another project's board beside the pane.
+   project, and a reload would draw another project's board beside the pane. The `?kind=`
+   stays the same way: Needs you named to one kind would otherwise reload to all four.
 
    One expression, no statements: Datastar splits an expression on semicolons."
   [{:keys [project ws-id] :as pos}]
@@ -560,7 +561,9 @@
         own?  (str "location.pathname === '" own "'")
         home? "location.pathname === '/'"
         scope "new URLSearchParams(location.search).get('scope')"
+        kind  "new URLSearchParams(location.search).get('kind')"
         ps    (concat [(str "(" scope " ? 'scope=' + encodeURIComponent(" scope ") : '')")
+                       (str "(" kind " ? 'kind=' + encodeURIComponent(" kind ") : '')")
                        (str "(" own? " ? '' : 'sel=" project ":" ws-id "')")]
                       (map #(str "'" % "'") (position-params pos)))]
     (str "history.replaceState(history.state, '', [" own? " ? '" own "' : " home? " ? '/' : '/workstreams', ["

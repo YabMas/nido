@@ -2114,6 +2114,14 @@
     (is (str/includes? js "'entry=3'"))
     (is (not (str/includes? js ";")) "one expression: Datastar splits on semicolons")))
 
+(deftest the-pane-location-keeps-the-kind-the-location-states
+  ;; Needs you named to one kind (/?kind=landing&sel=…) must reload to that kind alone: the pane
+  ;; rewrites the location on every render, so it reads the kind off it as it does the scope.
+  (let [js (#'views/pane-location {:project "brian" :ws-id "ws-1"})]
+    (is (str/includes? js "new URLSearchParams(location.search).get('kind')"))
+    (is (str/includes? js "'kind=' + encodeURIComponent("))
+    (is (not (str/includes? js ";")) "one expression: Datastar splits on semicolons")))
+
 (deftest pane-links-to-its-page
   ;; Wherever the pane is drawn it offers its workstream's own page; it is told nothing
   ;; about which page holds it — the page hides the link by a stylesheet rule.

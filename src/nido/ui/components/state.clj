@@ -128,7 +128,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Whether anything is happening in it
 
-(declare needs-mark)
+(declare needs-mark needs-kind-mark)
 
 (def ^:private needs-label
   "The words for each kind the person is needed in, one set every surface says them in: the three
@@ -193,8 +193,8 @@
   "Whether anything is happening in a workstream, as one mark and no words — the one mark every
    surface puts beside a workstream, read off its activity (`status`: the activity's :needs-you,
    :paused, :stalled, :live and :owed-by) and what is underway (`doing`):
-     the needs-you dot while the person owes the next move, titled with the category they are
-       needed in (`needs-words`), and a merge's words (`doing-badge`) while a merge is underway —
+     the mark of the category the person is needed in (`needs-kind-mark`) while they owe the
+       next move, titled with its `needs-words`, and a merge's words (`doing-badge`) while a merge is underway —
        a blocked merge has to read red on a board that is scanned rather than read — both side by
        side when both hold;
    and where neither holds, in precedence:
@@ -212,7 +212,7 @@
         tip  (str/join " · " (remove nil? [what (when owed-by (str "owed by " (owed-label owed-by (name owed-by))))]))]
     (cond
       (or needs-you (= :merge (:source doing)))
-      (let [dot   (when needs-you (needs-mark (str (needs-words needs) (when what (str " · " what)))))
+      (let [dot   (when needs-you (needs-kind-mark needs (str (needs-words needs) (when what (str " · " what)))))
             badge (when (= :merge (:source doing)) (doing-badge doing))]
         (if (and dot badge) (list dot " " badge) (or dot badge)))
       paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
@@ -305,8 +305,10 @@
 
 (defn ^{:malli/schema [:=> [:cat [:? :string]] :any]}
   needs-mark
-  "The needs-you mark: the dot in the colour that says the next move is a person's. `title` is
-   what hovering it reads, \"needs you\" unless the caller says how this one waits."
+  "The needs-you mark: the dot in the colour that says the next move is a person's, in no kind
+   in particular — an aggregate, or a category nothing names. A mark saying one kind is that
+   kind's (`needs-kind-mark`). `title` is what hovering it reads, \"needs you\" unless the caller
+   says how this one waits."
   ([] (needs-mark "needs you"))
   ([title] [:span.needs {:title title}]))
 
@@ -343,6 +345,15 @@
                  :stroke-linecap "round" :stroke-linejoin "round" :aria-hidden "true"}]
           (map (fn [d] [:path {:d d}]) (get kind-paths kind)))]))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :keyword] [:? :string]] :any]}
+  needs-kind-mark
+  "The mark of a person being needed in category `needs`: that kind's own mark when it names one,
+   the needs-you dot for an unnamed one. `title` is what hovering it reads, the category's
+   needs-words unless the caller says how this one waits."
+  ([needs] (needs-kind-mark needs (needs-words needs)))
+  ([needs title]
+   (if (contains? kind-paths needs) (kind-mark needs title) (needs-mark title))))
+
 (defn ^{:malli/schema [:=> [:cat [:? :string]] :any]}
   error-mark
   "The error mark: the machine stopped on a failure, and the person's move is its recovery — the
@@ -356,12 +367,12 @@
   "The mark for one arc stage: what is happening there right now if anything is — a person being
    waited on, or an agent working — and otherwise what the stage's records amount to. `now`
    outranks `state` because a stage waiting on a person is the one fact a reader scans an arc
-   for. Both are dots, in the two hues that tell a person's move from an agent's: the needs-you
-   dot the board rows carry, titled with the category the person is needed in (`needs`), and a
-   breathing dot in the working colour."
+   for. They are in the two hues that tell a person's move from an agent's: the mark of the
+   category the person is needed in (`needs`) that the board rows carry, and a breathing dot in
+   the working colour."
   ([state now] (arc-mark state now nil))
   ([state now needs]
    (case now
-     :awaiting (needs-mark (needs-words needs))
+     :awaiting (needs-kind-mark needs)
      :running  [:span.arc-live {:title "an agent is working"}]
      (get arc-glyph state "·"))))

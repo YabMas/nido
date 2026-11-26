@@ -657,6 +657,7 @@
         .kind-mark { display:inline-flex; color:var(--needs); flex:none; }
         .kind-mark svg { width:1em; height:1em; }
         .gate-top .kind-mark svg { width:13px; height:13px; }
+        .row-st .kind-mark svg { width:12px; height:12px; }
         /* The catalog scenes' own layout, for a scene that sets several calls of one function
            side by side or pairs an input with what it renders as. */
         .scene-rail { display:flex; flex-wrap:wrap; gap:var(--space-18); align-items:flex-start; }

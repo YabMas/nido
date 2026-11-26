@@ -142,11 +142,10 @@
               :render #(list (state/phase-chip {:current 2 :of 3}) " "
                              (or (state/phase-chip {}) [:span.scene-empty "unphased: nothing"]))}]}
    {:name "needs-mark"
-    :note "The next move is a person's. The one mark a board is scanned for, so it is the same dot
-           on a board row, a needs-you row and an arc stage, with only its title saying how."
+    :note "The next move is a person's, in no kind in particular: the dot an aggregate — a
+           project's drop-down entry — carries, and the mark of a category nothing names."
     :scenes [{:title "plain, and titled by its caller"
-              :note "Hover each: a row's dot reads its default title, an arc stage's says what it
-                     waits on."
+              :note "Hover each: the first reads its default title, the second its caller's."
               :render #(list (state/needs-mark) " " (state/needs-mark "waiting on you"))}]}
    {:name "error-mark"
     :note "The machine stopped on a failure and the person's move is its recovery: the mark that
@@ -159,6 +158,11 @@
     :scenes [{:title "each kind"
               :note "Hover each: the title is the kind's needs-words."
               :render #(rail str state/needs-kinds (fn [k] (state/kind-mark k)))}]}
+   {:name "needs-kind-mark"
+    :note "The mark a board row, a needs-you row and an arc stage say the person is needed with:
+           the kind's own mark, and the plain needs-you dot for a category no kind names."
+    :scenes [{:title "each category, and an unnamed one"
+              :render #(rail str [:ask :landing :system-error :chat nil] state/needs-kind-mark)}]}
    {:name "needs-kinds"
     :note "The kinds, in the order the top bar's icons and the home page's sections list them."
     :scenes [{:title "in order"
@@ -175,7 +179,7 @@
               :note "One concept, three kinds: the title tells a question from a landing from a
                      failure, so a scan of the dots can be followed by a hover that sorts them."
               :render #(rail str [:ask :landing :system-error :chat nil]
-                             (fn [n] [:span (state/needs-mark (state/needs-words n)) " "
+                             (fn [n] [:span (state/needs-kind-mark n) " "
                                       (state/needs-words n)]))}]}
    {:name "gate-standing"
     :note "Where a needs-you card's request stands, in words: its resolve running, the session it
