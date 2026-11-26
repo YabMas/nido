@@ -82,7 +82,7 @@
   [ps]
   (when-let [raw (some (fn [[k v]] (when (= k "stage") v)) ps)]
     (let [k (keyword (decode raw))]
-      (when (some #{k} work/arc-stages) k))))
+      (when (some #{k} work/arc-rows) k))))
 
 (defn- history?
   "`?history=1` -> true: whether the pane's raw ledger index is expanded. Absent

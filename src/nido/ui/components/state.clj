@@ -251,7 +251,9 @@
   {:intent         "Intent"
    :baseline       "Baseline"
    :design         "Design"
-   :implementation "Implementation"})
+   :implementation "Implementation"
+   ;; Not a stage: the Land rung the pane draws past the arc's stages.
+   :land           "Land"})
 
 (def ^:private arc-glyph
   "Stage state -> its mark. Five marks because there are five states, and no two
@@ -260,6 +262,28 @@
    the ledger no longer stands behind — owed again rather than behind you, which
    is the distinction a ✓ there would destroy."
   {:done "✓" :current "●" :stale "↺" :skipped "⊘" :ahead "·"})
+
+(defn- land-step-word
+  "One recorded landing step, as the Land rung's line says it."
+  [{:keys [format step pr reason]}]
+  (if (= :merged format)
+    "merged"
+    (case step
+      :submitted (str "submitted" (when-let [n (some->> pr (re-find #"#(\d+)$") second)] (str " #" n)))
+      :refused   "refused"
+      :queued    "queued"
+      :ejected   (str "ejected" (when reason (str " (" reason ")")))
+      (some-> step name))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
+  land-trail
+  "The words of the Land rung's line: `granted` while the core holds the person's grant, then each
+   step the landing recorded, oldest first — `granted · submitted #57 · queued · ejected (CI
+   failed) · queued`. An ejection keeps its place after the re-queue that follows it. Nothing for
+   a landing with neither."
+  [{:keys [granted? steps]}]
+  (let [words (cond->> (keep land-step-word steps) granted? (cons "granted"))]
+    (when (seq words) (str/join " · " words))))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   arc-name

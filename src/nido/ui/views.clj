@@ -1398,6 +1398,7 @@
      :triage-accepted          (triage-accepted-card report)
      :pr-opened                (pr-opened-card report)
      :merged                   (merged-card report)
+     :landing                  (md/render (report/report->markdown report))
      :ship-submitted           (ship-submitted-card report)
      :baseline-review          (baseline-review-card report)
      :design-decision          (design-decision-card report)
@@ -1688,8 +1689,12 @@
    it does the viewer renders inside the expansion, next to the row that opened
    it; when it does not, the entry was reached from the raw index and the viewer
    renders down there instead. One viewer either way — reading an entry twice on
-   one page is worse than reaching it from two places."
-  [pos {:keys [stages excursions past]} entries report report-here? doing-label]
+   one page is worse than reaching it from two places.
+
+   After the stages, the Land rung — no stage, but drawn and opened like one. While it is
+   current it says what the arc carries past its stages, so the :past lines are not drawn again;
+   otherwise they are drawn below it."
+  [pos {:keys [stages excursions past land]} entries report report-here? doing-label]
   [:div
    (into [:div.arc]
          (mapcat (fn [{:keys [stage seqs] :as facet}]
@@ -1704,14 +1709,14 @@
                             (when report-here?
                               (report-viewer pos (first (filter #(= (:entry pos) (:seq %)) entries))
                                              report))])))
-                 stages))
+                 (cond-> stages land (conj land))))
    ;; The person awaited past the spine — a landing, or a blocker after the implementation —
    ;; where no stage is the one the work is in, so the arc still says what the activity does.
-   (when-let [n (:needs past)]
+   (when-let [n (when-not (= :current (:state land)) (:needs past))]
      [:div.arc-past (state/arc-mark nil :awaiting n) [:span (state/needs-words n)]])
    ;; A merge underway lies past the spine as well: the arc says it in the mark's own words —
    ;; the merge badge alone, read off no status, so it can light no working dot.
-   (when-let [d (:doing past)]
+   (when-let [d (when-not (= :current (:state land)) (:doing past))]
      [:div.arc-past (state/state-mark nil d)])
    (when (seq excursions)
      [:p.meta "off the arc · "
@@ -1925,7 +1930,7 @@
          in-stage? (boolean (and report selected-seq open-stage
                                  (some #(and (= open-stage (:stage %))
                                              (some #{selected-seq} (:seqs %)))
-                                       (:stages arc))))]
+                                       (conj (:stages arc) (:land arc)))))]
      (str
       (h/html
        (if-not label

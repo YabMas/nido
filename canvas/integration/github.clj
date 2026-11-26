@@ -28,6 +28,12 @@
      refuses auto-merge — an enqueue on its merge queue by the node id it reads itself.
      {:status :ok :via :auto|:queue} or {:error :auth|:gh :detail}, gh's refusal in :detail."
     {:signature [:=> [:catn [:repo :string] [:number :int]] :map] :delegates [sh!]})
+  (Operation merge-queue-timeline
+    "One pull request: whether it is merged, and every add to and removal from its merge queue
+     with the event's id and time (and a removal's reason), oldest first, read page by page from
+     the start — the merged flag from the last page's request, made after every event read.
+     {:status :ok :merged? :events} or {:error :auth|:gh :detail}."
+    {:signature [:=> [:catn [:repo :string] [:number :int]] :map] :delegates [sh!]})
   (Operation squash-pr!
     "Squash-merge one pull request into its base branch now, marking a draft ready first:
      {:status :ok :via :squash} or {:error :auth|:gh :detail}, gh's refusal in :detail."

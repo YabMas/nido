@@ -362,6 +362,10 @@
      its open units and close it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any] [:payload [:? :any]]]
                  [:maybe :map]]})
+  (Operation core-landing?
+    "Whether the core holds a workstream's :merge grant — the person's Land, which a merge spends
+     — so its landing is under way."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]})
   (Operation core-merged!
     "Tell the core that what a workstream's open units built has landed, keyed by the landing so a
      retry is answered rather than repeated, and close it. Whether it is closed."

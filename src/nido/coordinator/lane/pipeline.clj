@@ -198,7 +198,7 @@
     :implementation-plan :implementation-completed
     :review :review-analysis :improvement-decision :improvement-landed
     :blocker :blocker-answered :retraction
-    :findings :pr-opened :ship-submitted :merged :phase-gate :layer-completed})
+    :findings :pr-opened :ship-submitted :landing :merged :phase-gate :layer-completed})
 
 (def ^:private stage-of-kind
   "Which stage of the arc each entry kind belongs to.
@@ -254,6 +254,9 @@
    ;; of the workstream still wants Publication and Shipping apart.
    :pr-opened       :publication
    :ship-submitted  :shipping
+   ;; A landing's observed steps lie where its merge does: the Land rung past the arc is the
+   ;; work plane's projection of them, never a stage of this arc.
+   :landing         :shipping
    :merged          :shipping
    ;; Opens the next landing, so it belongs where landings do.
    :phase-gate      :shipping})

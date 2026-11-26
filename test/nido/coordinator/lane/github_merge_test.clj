@@ -594,3 +594,90 @@
           (gm/poll-and-react! :brian cfg))
         (is (nil? (ws/latest-entry :brian (:id w) :merged)) "and nothing retries the record")
         (is (nil? (:unrecorded (sstate/read-state "github-brian"))))))))
+
+(defn- landing-steps [id]
+  (->> (ws/entries-of :brian id :landing) (remove #(= :submitted (:step %))) (mapv #(dissoc % :seq :at))))
+
+(defn- submitted! [id pr]
+  (ws/append-entry! :brian id {:kind :landing} (pr-str {:format :landing :step :submitted :pr pr :via :queue})))
+
+(deftest a-landing-workstreams-queue-steps-are-recorded-once-each
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [landing (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#7"}]})
+            idle    (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#8"}]})
+            _       (submitted! (:id landing) "brian-study/brian#7")
+            _       (submitted! (:id idle) "brian-study/brian#8")
+            reads   (atom [])
+            tl      {:status :ok :merged? false
+                     :events [{:type :added :id "A1" :at "t1"}
+                              {:type :removed :id "R1" :at "t2" :reason "CI failed"}
+                              {:type :added :id "A2" :at "t3"}]}
+            core    {:open? (constantly true) :merged! (constantly true)
+                     :landing? (fn [_ id] (= id (:id landing)))}]
+        (with-redefs [gh/list-merged-prs        (fn [_] {:status :ok :prs []})
+                      gh/merge-queue-timeline   (fn [repo n] (swap! reads conj [repo n]) tl)]
+          (gm/poll-and-react! :brian cfg core)
+          (gm/poll-and-react! :brian cfg core)
+          (is (= [["brian-study/brian" 7] ["brian-study/brian" 7]] @reads)
+              "only the workstream the core says is landing has its queue read")
+          (is (= [{:format :landing :step :queued :pr "brian-study/brian#7" :event-id "A1" :event-at "t1"}
+                  {:format :landing :step :ejected :pr "brian-study/brian#7" :event-id "R1" :event-at "t2"
+                   :reason "CI failed"}
+                  {:format :landing :step :queued :pr "brian-study/brian#7" :event-id "A2" :event-at "t3"}]
+                 (landing-steps (:id landing)))
+              "each event once, however many polls read it; the ejection kept beside the re-queue")
+          (is (empty? (landing-steps (:id idle)))))))))
+
+(deftest a-removal-beside-the-merge-is-not-an-ejection
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w    (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#9"}]})
+            _    (submitted! (:id w) "brian-study/brian#9")
+            core {:open? (constantly true) :merged! (constantly true) :landing? (constantly true)}]
+        (with-redefs [gh/list-merged-prs      (fn [_] {:status :ok :prs []})
+                      gh/merge-queue-timeline (fn [_ _] {:status :ok :merged? true
+                                                         :events [{:type :added :id "A1" :at "t1"}
+                                                                  {:type :removed :id "R1" :at "t2" :reason "CI failed"}]})]
+          (gm/poll-and-react! :brian cfg core)
+          (is (= [:queued :ejected] (map :step (landing-steps (:id w))))
+              "an ejection the PR merged after is still an ejection, read on the same poll as the merge"))
+        (with-redefs [gh/list-merged-prs      (fn [_] {:status :ok :prs []})
+                      gh/merge-queue-timeline (fn [_ _] {:status :ok :merged? false
+                                                         :events [{:type :removed :id "R2" :at "t3" :reason "MERGED"}]})]
+          (gm/poll-and-react! :brian cfg core)
+          (is (= [:queued :ejected] (map :step (landing-steps (:id w))))
+              "a removal GitHub says was the merge is not an ejection, even read before the merge"))))))
+
+(deftest only-the-current-landings-pr-has-its-queue-read
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w     (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#3"}
+                                                      {:adapter :github :id "brian-study/brian#4"}]})
+            reads (atom [])
+            core  {:open? (constantly true) :merged! (constantly true) :landing? (constantly true)}
+            poll! #(with-redefs [gh/list-merged-prs      (fn [_] {:status :ok :prs []})
+                                 gh/merge-queue-timeline (fn [repo n] (swap! reads conj n)
+                                                           {:status :ok :merged? false :events []})]
+                     (gm/poll-and-react! :brian cfg core))]
+        (poll!)
+        (is (empty? @reads) "a landing that submitted nothing has no PR to read")
+        (submitted! (:id w) "brian-study/brian#3")
+        (ws/append-entry! :brian (:id w) {:kind :reopened} (pr-str {:format :reopened}))
+        (poll!)
+        (is (empty? @reads) "a PR an earlier landing submitted is never read again")
+        (submitted! (:id w) "brian-study/brian#4")
+        (poll!)
+        (is (= [4] @reads) "only the PR the current landing submitted")))))
+
+(deftest no-landing-reading-reads-no-queue
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#9"}]})
+      (with-redefs [gh/list-merged-prs      (fn [_] {:status :ok :prs []})
+                    gh/merge-queue-timeline (fn [_ _] (throw (ex-info "read" {})))]
+        (is (nil? (gm/poll-and-react! :brian cfg)))))))

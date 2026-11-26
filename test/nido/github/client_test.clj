@@ -1,5 +1,6 @@
 (ns nido.github.client-test
   (:require
+   [cheshire.core :as json]
    [clojure.test :refer [deftest is]]
    [nido.github.client :as gh]))
 
@@ -76,3 +77,45 @@
                            (case (nth args 2) "view" {:exit 0 :out "false"} {:exit 1 :err "not mergeable"}))]
       (is (= {:error :gh :detail "not mergeable"} (gh/squash-pr! "o/r" 5)) "gh's refusal in its own words")
       (is (= ["view" "merge"] @calls) "a ready PR is not readied"))))
+
+(deftest merge-queue-timeline-reads-the-merged-flag-and-queue-events-in-one-read
+  (let [calls (atom [])]
+    (with-redefs [gh/sh! (fn [args] (swap! calls conj args)
+                           {:exit 0
+                            :out  (str "{\"data\":{\"repository\":{\"pullRequest\":{\"merged\":false,\"timelineItems\":{\"nodes\":["
+                                       "{\"__typename\":\"AddedToMergeQueueEvent\",\"id\":\"A1\",\"createdAt\":\"t1\"},"
+                                       "{\"__typename\":\"RemovedFromMergeQueueEvent\",\"id\":\"R1\",\"createdAt\":\"t2\",\"reason\":\"CI failed\"},"
+                                       "{\"__typename\":\"RemovedFromMergeQueueEvent\",\"id\":\"R2\",\"createdAt\":\"t3\",\"reason\":null}]}}}}}")})]
+      (is (= {:status :ok :merged? false
+              :events [{:type :added :id "A1" :at "t1"}
+                       {:type :removed :id "R1" :at "t2" :reason "CI failed"}
+                       {:type :removed :id "R2" :at "t3"}]}
+             (gh/merge-queue-timeline "o/r" 5)))
+      (is (= 1 (count @calls)) "one request answers both")
+      (is (some #{"owner=o"} (first @calls)))
+      (is (some #{"number=5"} (first @calls)))))
+  (with-redefs [gh/sh! (fn [_] {:exit 1 :out "" :err "gh auth login required"})]
+    (is (= :auth (:error (gh/merge-queue-timeline "o/r" 5))))))
+
+(deftest merge-queue-timeline-reads-every-page-of-the-queue-history
+  (let [calls (atom [])
+        page  (fn [merged nodes next-cursor]
+                {:exit 0
+                 :out  (json/generate-string
+                        {:data {:repository {:pullRequest
+                                             {:merged merged
+                                              :timelineItems {:nodes    nodes
+                                                              :pageInfo {:hasNextPage (some? next-cursor)
+                                                                         :endCursor   next-cursor}}}}}})})]
+    (with-redefs [gh/sh! (fn [args]
+                           (swap! calls conj args)
+                           (if (some #{"cursor=C1"} args)
+                             (page true [{:__typename "RemovedFromMergeQueueEvent" :id "R1" :createdAt "t2" :reason "CI failed"}] nil)
+                             (page false [{:__typename "AddedToMergeQueueEvent" :id "A1" :createdAt "t1"}] "C1")))]
+      (is (= {:status :ok :merged? true
+              :events [{:type :added :id "A1" :at "t1"}
+                       {:type :removed :id "R1" :at "t2" :reason "CI failed"}]}
+             (gh/merge-queue-timeline "o/r" 5))
+          "every page's events, oldest first, and the merged flag of the newest read")
+      (is (= 2 (count @calls)))
+      (is (not-any? #(re-find #"^cursor=" %) (first @calls)) "the first page asks from the start"))))

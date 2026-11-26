@@ -176,6 +176,9 @@
      [:span.arc-g (state/arc-mark state now needs)]
      [:span.arc-n (state/arc-name stage)]
      (when-let [m (arc-meta facet)] [:span.arc-m m])
+     ;; The Land rung's line: the landing's trail, and a merge underway in the merge's own words.
+     (when-let [t (state/land-trail (:trail facet))] [:span.arc-d (str "· " t)])
+     (when-let [d (:doing facet)] [:span.arc-d (state/state-mark nil d)])
      (when (and (= :running now) round-label) [:span.arc-d (str "· " round-label)])
      (when (> visits 1)
        [:span.arc-v {:title "the work left this stage and came back"}
@@ -359,5 +362,27 @@
      {:title "ahead, and unclickable"
       :note  "An empty stage offers no click at all: offering one would promise a section that
               opens empty."
-      :props (arc {:stage :implementation :state :ahead :visits 0 :entries 0})}]}))
+      :props (arc {:stage :implementation :state :ahead :visits 0 :entries 0})}
+     {:title "landing under way"
+      :note  "The Land rung past the stages while the person's grant stands: its line says the steps
+              observed so far, an ejection kept after the re-queue that followed it, and a merge
+              waiting its turn in the merge's own words."
+      :props (arc {:stage :land :state :current :visits 1 :entries 4
+                   :doing {:source :merge :phase :queued}
+                   :trail {:granted? true
+                           :steps [{:format :landing :step :submitted :pr "o/r#57"}
+                                   {:format :landing :step :queued}
+                                   {:format :landing :step :ejected :reason "CI failed"}
+                                   {:format :landing :step :queued}]}})}
+     {:title "landing waits on you"
+      :note  "The person awaited past the stages, said on the rung that is current."
+      :props (arc {:stage :land :state :current :visits 1 :entries 1 :now :awaiting :needs :ask
+                   :trail {:granted? true :steps [{:format :landing :step :submitted :pr "o/r#57"}]}})}
+     {:title "landed"
+      :note  "The merge spent the grant, so the line holds only what was recorded."
+      :props (arc {:stage :land :state :done :visits 1 :entries 3
+                   :trail {:granted? false
+                           :steps [{:format :landing :step :submitted :pr "o/r#57"}
+                                   {:format :landing :step :queued}
+                                   {:format :merged}]}})}]}))
 

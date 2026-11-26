@@ -91,9 +91,10 @@
     "Land the change of the workstream of the session this runs in by its project's procedure,
      through lane-landing — where that landing names a PR (landing/names-pr?), the workstream's own
      pull request, the :github ref :pr names; refused, landing nothing, for a PR the workstream has
-     no ref for."
+     no ref for. What land! answered for a PR is recorded as the landing's :submitted or :refused
+     step; a :push-main landing records none here, since bb nido:land records its :merged."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [workstream/own-pr landing/names-pr? landing/land!]})
+     :delegates [workstream/own-pr landing/names-pr? landing/land! workstream/append-entry!]})
   (Operation pr-land-cmd
     "bb nido:workstream:pr:land — the entry point for `pr-land*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

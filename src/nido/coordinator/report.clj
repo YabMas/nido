@@ -2153,6 +2153,47 @@
    [:fn {:error/message "a landing names the pull request it merged or the commit it landed as — exactly one"}
     #(= 1 (count (filter % [:pr :commit])))]])
 
+(def landing-vias
+  "How a landing's PR was handed to GitHub — landing/land!'s :via for a PR procedure."
+  [:enum :auto :queue :squash])
+
+(def Landing
+  "One step of a landing, as nido observed it at a moment — written by whatever observed it,
+   never by a seat's account of what it did. Between the person's grant (core state, never
+   copied here) and the :merged that ends it.
+
+     :submitted  pr:land handed the PR to GitHub, and land! answered ok — :via says how
+     :refused    pr:land's land! refused the landing, in its own :words
+     :queued     the merge poller saw the PR added to its merge queue — GitHub's event :event-id
+     :ejected    the merge poller saw the PR removed from its merge queue while it stayed unmerged
+
+   A queue step carries the GitHub timeline event it was read from, by id, which is what keeps
+   it written once however many polls see it. Flat at rest, like Merged: the step is a field."
+  [:multi {:dispatch :step}
+   [:submitted [:map {:closed true}
+                [:format [:= :landing]]
+                [:step   [:= :submitted]]
+                [:pr     [:string {:min 1}]]
+                [:via    landing-vias]]]
+   [:refused   [:map {:closed true}
+                [:format [:= :landing]]
+                [:step   [:= :refused]]
+                [:pr     [:string {:min 1}]]
+                [:words  [:string {:min 1}]]]]
+   [:queued    [:map {:closed true}
+                [:format   [:= :landing]]
+                [:step     [:= :queued]]
+                [:pr       [:string {:min 1}]]
+                [:event-id [:string {:min 1}]]
+                [:event-at [:string {:min 1}]]]]
+   [:ejected   [:map {:closed true}
+                [:format   [:= :landing]]
+                [:step     [:= :ejected]]
+                [:pr       [:string {:min 1}]]
+                [:event-id [:string {:min 1}]]
+                [:event-at [:string {:min 1}]]
+                [:reason   {:optional true} [:string {:min 1}]]]]])
+
 (def PhaseGate
   "A phase's gate met, and the next phase of the plan opened on the strength of it.
 
@@ -4450,6 +4491,7 @@
    :triage-accepted          TriageAccepted
    :pr-opened                PrOpened
    :merged                   Merged
+   :landing                  Landing
    :phase-gate               PhaseGate
    :ship-submitted           ShipSubmitted
    :review                   ReviewReport
@@ -5341,6 +5383,21 @@
                                 (when (or bookmark commit)
                                   (str/join " · " (remove nil? [(when bookmark (str "`" bookmark "`")) commit])))])))
 
+(defn- landing-step-words
+  "One landing step as a line: what was observed, of which PR."
+  [{:keys [step pr via words reason]}]
+  (case step
+    :submitted (str "Submitted `" pr "`" (case via :auto " for auto-merge" :queue " to its merge queue"
+                                              :squash ", squash-merged" ""))
+    :refused   (str "Landing `" pr "` refused: " words)
+    :queued    (str "`" pr "` queued to merge")
+    :ejected   (str "`" pr "` ejected from the merge queue" (when reason (str " (" reason ")")))
+    (str (some-> step name) " `" pr "`")))
+
+(defn- landing->markdown [{:keys [event-at] :as report}]
+  (str/join "\n" (remove nil? ["# Landing" (landing-step-words report)
+                                (when event-at (str "GitHub: " event-at))])))
+
 (defn- merged->markdown [{:keys [pr commit url title merged-at]}]
   (str/join "\n"
     (remove nil? ["# Merged"
@@ -6132,6 +6189,7 @@
     :triage-accepted          (triage-accepted->markdown report)
     :pr-opened                (pr-opened->markdown report)
     :merged                   (merged->markdown report)
+    :landing                  (landing->markdown report)
     :phase-gate               (phase-gate->markdown report)
     :ship-submitted           (ship-submitted->markdown report)
     :review-report            (review->markdown report)
@@ -6212,6 +6270,7 @@
     :closed                   (str "Closed: " (name (:outcome report)))
     :reopened                 (str "Reopened" (some->> (:stage report) name (str " at ")))
     :stage-set                (str "Stage set: " (name (:stage report)))
+    :landing                  (str "Landing: " (landing-step-words report))
     :findings-resolved        (str "Findings round " (:round report) ": "
                                    (count (:items report)) " resolved")
     :scratch                  "One-off"

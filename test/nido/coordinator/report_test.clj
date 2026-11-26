@@ -654,6 +654,30 @@
   (is (nil? (report/report-title {:format :merged :pr "org/repo#42" :url "u" :title "t"})))
   (is (= "Ship submitted" (report/report-title {:format :ship-submitted :session "s"}))))
 
+(deftest a-landing-step-carries-its-own-fields
+  (let [q {:format :landing :step :queued :pr "org/repo#42" :event-id "AQE_1" :event-at "2026-11-24T10:00:00Z"}]
+    (is (= q (report/validate-event :landing q)))
+    (is (= (assoc q :step :ejected :reason "CI failed")
+           (report/validate-event :landing (assoc q :step :ejected :reason "CI failed"))))
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :landing (dissoc q :event-id)))
+        "a queue step names the GitHub event it was read from")
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :landing (assoc q :step :granted)))
+        "the grant is the core's, never a ledger step"))
+  (let [s {:format :landing :step :submitted :pr "org/repo#42" :via :queue}]
+    (is (= s (report/validate-event :landing s)))
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :landing (dissoc s :via))))
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :landing (assoc s :words "x")))
+        "each step is closed over its own fields"))
+  (is (= {:format :landing :step :refused :pr "org/repo#42" :words "checks failing"}
+         (report/validate-event :landing {:format :landing :step :refused :pr "org/repo#42" :words "checks failing"}))))
+
+(deftest a-landing-step-renders
+  (is (str/includes? (report/report->markdown {:format :landing :step :ejected :pr "org/repo#42"
+                                               :event-id "E" :event-at "t" :reason "CI failed"})
+                     "ejected from the merge queue (CI failed)"))
+  (is (= "Landing: Submitted `org/repo#42` to its merge queue"
+         (report/report-title {:format :landing :step :submitted :pr "org/repo#42" :via :queue}))))
+
 (deftest entry-payload-accepts-pr-opened
   (let [edn (pr-str {:format :pr-opened
                      :url "https://github.com/brian-study/brian/pull/412"

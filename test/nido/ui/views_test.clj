@@ -1648,6 +1648,47 @@
     (is (re-find #"merging · queued" arc) "in the merge badge's words")
     (is (not (re-find #"st-mark\.live" arc)) "with no working dot")))
 
+(deftest the-land-rung-says-the-landings-trail
+  (is (= "granted · submitted #57 · queued · ejected (CI failed) · queued"
+         (state/land-trail {:granted? true
+                            :steps [{:format :landing :step :submitted :pr "o/r#57"}
+                                    {:format :landing :step :queued}
+                                    {:format :landing :step :ejected :reason "CI failed"}
+                                    {:format :landing :step :queued}]})))
+  (is (= "submitted #57 · merged"
+         (state/land-trail {:granted? false :steps [{:format :landing :step :submitted :pr "o/r#57"}
+                                                    {:format :merged}]}))
+      "no grant, no granted step")
+  (is (nil? (state/land-trail {:granted? false :steps []})))
+  (is (str/includes? (str (block/render row/arc-row "x:land"
+                                        {:facet {:stage :land :state :current :visits 1 :entries 0
+                                                 :trail {:granted? true :steps []}}
+                                         :open? false}
+                                        {} (fn [& _] "u")))
+                     "granted")
+      "the arc row shows the trail in its detail slot"))
+
+(deftest the-arc-draws-the-land-rung-and-says-the-past-on-it-while-current
+  (let [doing   {:source :merge :phase :queued}
+        render  #(pr-str (#'views/arc-block {:ws-id "w"} % [] nil false nil))
+        current (render {:stages [] :excursions [] :past {:doing doing :needs :ask}
+                         :land {:stage :land :state :current :visits 0 :entries 0
+                                :now :awaiting :needs :ask :doing doing
+                                :trail {:granted? true :steps []}}})
+        ahead   (render {:stages [] :excursions [] :past {:doing doing}
+                         :land {:stage :land :state :ahead :visits 0 :entries 0
+                                :trail {:granted? false :steps []}}})]
+    (is (re-find #"Land" current) "the rung is drawn")
+    (is (not (re-find #"arc-past" current)) "a current rung says the past; no separate line")
+    (is (re-find #"merging · queued" current) "the merge's words on the rung's line")
+    (is (re-find #"arc-past" ahead) "a rung not reached leaves main's past lines where they are")))
+
+(deftest the-heading-keeps-the-position-through-a-landing
+  (is (= "Status — Landing" (state/status-heading {:at :land-granted})))
+  (is (= "Status — Merged" (state/status-heading {:at :shipped})) "a landing that ends the plan")
+  (is (= "Status — Awaiting gate" (state/status-heading {:at :awaiting-gate}))
+      "a phase landing keeps its position's label; the label is never replaced"))
+
 (deftest a-merge-that-needs-you-shows-both-marks
   (let [doing  {:source :merge :phase :queued}
         status {:owed-by :person :live false :stalled false :paused false :needs-you true :needs :ask}

@@ -3334,6 +3334,69 @@
           (is (zero? (:entries impl)) "phase 1's implementation is not phase 2's")
           (is (empty? (:excursions arc)) "nor are its landing or the gate"))))))
 
+(defn- land-rung [id] (:land (:arc (work/workstream :brian id))))
+
+(deftest the-land-rung-follows-a-landing-from-the-grant-to-the-merge
+  (with-tmp
+    (fn [_]
+      (let [id    (:id (workstream/create! :brian {:external-refs [{:adapter :github :id "o/r#57"}]}))
+            step! #(workstream/append-entry! :brian id {:kind :landing}
+                                             (pr-str (merge {:format :landing :pr "o/r#57"} %)))]
+        (is (= :ahead (:state (land-rung id))) "never granted: not reached")
+        (is (= {:granted? false :steps []} (:trail (land-rung id))))
+        (is (= work/arc-stages (mapv :stage (:stages (:arc (work/workstream :brian id)))))
+            "the arc's stages stay the unit's: the rung is past them, never one of them")
+        (with-redefs [work/core-of (fn [_ _] {:state {:grants #{:merge}}})]
+          (is (= :current (:state (land-rung id))) "the person's grant makes the rung current")
+          (step! {:step :submitted :via :queue})
+          (step! {:step :queued :event-id "A1" :event-at "t1"})
+          (step! {:step :ejected :event-id "R1" :event-at "t2" :reason "CI failed"})
+          (step! {:step :queued :event-id "A2" :event-at "t3"})
+          (let [{:keys [trail entries seqs]} (land-rung id)]
+            (is (= 4 entries))
+            (is (= 4 (count seqs)) "its records open like a stage's")
+            (is (:granted? trail) "granted is read from the grant")
+            (is (= [:submitted :queued :ejected :queued] (mapv :step (:steps trail)))
+                "every step, the ejection kept after the re-queue")))
+        (workstream/append-entry! :brian id {:kind :merged}
+                                  (pr-str {:format :merged :pr "o/r#57" :url "u" :title "t"}))
+        (let [{:keys [state trail]} (land-rung id)]
+          (is (= :done state) "the merge is recorded: the rung is done")
+          (is (not (:granted? trail)) "and the spent grant is no longer a step")
+          (is (= [:landing :landing :landing :landing :merged] (mapv :format (:steps trail)))))))))
+
+(deftest a-merge-nobody-landed-still-reads-done
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {}))]
+        (workstream/append-entry! :brian id {:kind :merged}
+                                  (pr-str {:format :merged :pr "o/r#9" :url "u" :title "t"}))
+        (is (= :done (:state (land-rung id))) "whoever merged it")))))
+
+(deftest the-land-rung-carries-only-what-the-arc-says-past-its-stages
+  (let [rung (fn [arc & {:keys [live? granted?] :or {granted? true}}]
+               (#'work/land-rung {} [] arc {:at :land-granted} live? granted?))
+        bare {:stages [{:stage :implementation :state :done}]}]
+    (is (= [:awaiting :ask] ((juxt :now :needs) (rung (assoc bare :past {:needs :ask}))))
+        "the person awaited past the stages is awaited on the rung")
+    (is (= :running (:now (rung bare :live? true))) "a live landing runs on the rung")
+    (is (nil? (:now (rung {:stages [{:stage :implementation :state :current :now :running}]} :live? true)))
+        "where a stage carries the mark, the rung carries none")
+    (is (= {:source :merge :phase :queued}
+           (:doing (rung (assoc bare :past {:doing {:source :merge :phase :queued}}))))
+        "a merge underway rides on the rung in its own words")
+    (let [r (rung (assoc bare :past {:needs :landing :doing {:source :merge :phase :queued}}) :granted? false)]
+      (is (= :ahead (:state r)) "no grant: not reached")
+      (is (not-any? r [:now :needs :doing]) "and a rung that is not current carries no mark"))))
+
+(deftest a-phase-landed-between-phases-reads-the-land-rung-done
+  (with-tmp
+    (fn [_]
+      (let [id (landed-between-phases!)
+            d  (work/workstream :brian id)]
+        (is (= :done (:state (land-rung id))))
+        (is (= :awaiting-gate (get-in d [:position :at])))))))
+
 (deftest an-unphased-detail-has-no-plan
   (with-tmp
     (fn [_]

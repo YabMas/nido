@@ -310,6 +310,30 @@
                                 (task/pr-land* {:pr "412"})))
           (is (= 2 (count @landed)) "outside every workstream, nothing lands"))))))
 
+(deftest pr-land-records-what-land-answered-as-the-landing-step
+  (with-tmp
+    (fn [_]
+      (let [w     (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#412"}]})
+            steps #(mapv (fn [e] (dissoc e :seq :at)) (ws/entries-of :brian (:id w) :landing))]
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian (:id w)])
+                      nido.github.client/land-pr! (fn [_ _] {:status :ok :via :queue})]
+          (task/pr-land* {:pr "412"})
+          (is (= [{:format :landing :step :submitted :pr "brian-study/brian#412" :via :queue}] (steps))))
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian (:id w)])
+                      nido.github.client/land-pr! (fn [_ _] {:error :gh :detail "required checks are failing"})]
+          (task/pr-land* {:pr "412"})
+          (is (= {:format :landing :step :refused :pr "brian-study/brian#412" :words "required checks are failing"}
+                 (last (steps)))))
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian (:id w)])
+                      nido.coordinator.lane.landing/names-pr? (constantly false)
+                      nido.coordinator.lane.landing/land!     (fn [_ _ _] {:status :ok :via :push :procedure :push-main})]
+          (task/pr-land* {})
+          (is (= 2 (count (steps))) "a :push-main landing records no step here — bb nido:land records its :merged"))
+        (with-redefs [nido.review.stages/project+ws-from-cwd (fn [_] [:brian (:id w)])
+                      nido.github.client/land-pr! (fn [_ _] {:status :ok :via :auto})]
+          (is (thrown? clojure.lang.ExceptionInfo (task/pr-land* {:pr "999"})))
+          (is (= 2 (count (steps))) "a PR refused before land! runs records nothing"))))))
+
 (deftest pr-land-runs-the-declared-procedure
   (with-tmp
     (fn [_]

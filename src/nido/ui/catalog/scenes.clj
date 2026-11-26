@@ -206,6 +206,25 @@
                              (fn [[_ d]] (if-let [l (state/round-label d)]
                                            [:span l]
                                            [:span.scene-empty "nothing"])))}]}
+   {:name "land-trail"
+    :note "The words of the Land rung's line: the person's grant while the core holds it, then each
+           step the landing recorded, oldest first. An ejection keeps its place after the
+           re-queue."
+    :scenes [{:title "under way, ejected and re-queued, merged, and nothing"
+              :render #(rail first
+                             [["granted" {:granted? true :steps []}]
+                              ["under way" {:granted? true
+                                            :steps [{:format :landing :step :submitted :pr "o/r#57"}
+                                                    {:format :landing :step :queued}
+                                                    {:format :landing :step :ejected :reason "CI failed"}
+                                                    {:format :landing :step :queued}]}]
+                              ["merged" {:granted? false
+                                         :steps [{:format :landing :step :submitted :pr "o/r#57"}
+                                                 {:format :merged}]}]
+                              ["never granted" {:granted? false :steps []}]]
+                             (fn [[_ t]] (if-let [l (state/land-trail t)]
+                                           [:span l]
+                                           [:span.scene-empty "nothing"])))}]}
    {:name "status-heading"
     :note "The Status section's heading, carrying the position itself. A string, not markup —
            the pane wraps it."
@@ -220,10 +239,10 @@
                                 [:span (state/status-heading (when p {:at p}))]]))}]}
    {:name "arc-name"
     :note "An arc stage's heading."
-    :scenes [{:title "the four stages, and an unknown one"
+    :scenes [{:title "the four stages, the Land rung, and an unknown one"
               :note "An unknown stage prints its own keyword rather than vanishing: an arc
                      written by a newer nido should degrade to something a person can act on."
-              :render #(rail str [:intent :baseline :design :implementation :rebaseline]
+              :render #(rail str [:intent :baseline :design :implementation :land :rebaseline]
                              (fn [s] [:span (state/arc-name s)]))}]}
    {:name "arc-mark"
     :note "The mark for one arc stage. What is happening now outranks what the records say."

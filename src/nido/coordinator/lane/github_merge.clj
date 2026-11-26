@@ -1,8 +1,9 @@
 (ns nido.coordinator.lane.github-merge
   "Coordinator housekeeping: poll a project's GitHub repo for merged PRs and
    react (close the matching workstream, append its terminal :merged ledger
-   event, nudge its Notion ticket). No agent session is spawned — this is a
-   direct state mutation, parallel to reclaim.
+   event, nudge its Notion ticket) — and, for a workstream the core says is
+   landing, record its PR's merge-queue steps as :landing entries. No agent
+   session is spawned — this is a direct state mutation, parallel to reclaim.
 
    Correlation is by the workstream's :github external-ref, stamped at
    PR-creation time by the prepare-draft-pr skill, AND by the branch the PR
@@ -263,6 +264,68 @@
                              (:id ref) ") with no resolvable page-id — closed on " id
                              ", but the ticket was NOT nudged."))))))))
 
+(defn- landing-pr
+  "The number of the pull request on `repo` that workstream `w`'s current landing submitted: the PR
+   its newest :landing :submitted names, when that entry was written after the workstream's newest
+   :phase-gate and :reopened — an earlier landing's PR is never read again. nil when the current
+   landing has submitted none, or one on another repo."
+  [project repo w]
+  (let [newest (fn [k] (->> (:entries w) (filter #(= k (:kind %))) (map :seq) (reduce max 0)))
+        cut    (max (newest :phase-gate) (newest :reopened))
+        sub    (->> (ws/entries-of project (:id w) :landing)
+                    (filter #(and (= :submitted (:step %)) (> (:seq %) cut)))
+                    last)
+        prefix (str (str/lower-case repo) "#")
+        id     (some-> (:pr sub) str/lower-case)]
+    (when (and id (str/starts-with? id prefix))
+      (parse-long (subs id (count prefix))))))
+
+(defn- record-step!
+  "Append one queue step of a landing — once per GitHub event id."
+  [project ws-id step]
+  (ws/append-entry-once! project ws-id {:kind :landing} (pr-str step)
+                         #(= (:event-id step) (:event-id %))))
+
+(defn- merge-removal?
+  "Whether a merge-queue removal is the PR's own merge leaving the queue, by the reason GitHub gives."
+  [{:keys [reason]}]
+  (= "merged" (some-> reason str/lower-case)))
+
+(defn- record-queue-steps!
+  "The landing steps GitHub's merge-queue timeline shows for the PR workstream `w`'s current
+   landing submitted on `repo` (`landing-pr`): :queued for each add, :ejected for each removal
+   whose reason is not the PR's merge — whether or not this read found it merged, since an
+   ejection followed by a merge before the next poll is still an ejection."
+  [project repo w]
+  (when-let [n (landing-pr project repo w)]
+    (let [id  (pr-id repo n)
+          res (gh/merge-queue-timeline repo n)]
+      (if (:error res)
+        (warn (str "github-merge: merge-queue timeline of " id " unread — " (:error res) " " (:detail res)))
+        (doseq [{:keys [type] :as e} (:events res)
+                :when (or (= :added type) (not (merge-removal? e)))]
+          (try
+            (record-step! project (:id w)
+                          (cond-> {:format   :landing
+                                   :step     (if (= :added type) :queued :ejected)
+                                   :pr       id
+                                   :event-id (:id e)
+                                   :event-at (:at e)}
+                            (and (= :removed type) (:reason e)) (assoc :reason (:reason e))))
+            (catch Throwable t
+              (warn (str "github-merge: landing step of " id " unrecorded on " (:id w) " — " (.getMessage t))))))))))
+
+(defn- observe-landings!
+  "Record the merge-queue steps of every open workstream the core reports, at this poll, as
+   landing — holding the person's :merge grant — for the PR its current landing submitted.
+   `landing?` is that reading, `(fn [project ws-id])`; nothing is read without it. Writes nothing outside the ledger."
+  [project repo landing?]
+  (when landing?
+    (doseq [w (ws/project-records project)
+            :when (and (not (ws/closure w))
+                       (try (landing? project (:id w)) (catch Throwable _ false)))]
+      (record-queue-steps! project repo w))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   poll-and-react!
   "One poll for a project. Lists merged PRs, dedups against the snapshot
@@ -281,7 +344,9 @@
    broken `gh` auth backs off to one retry per cooldown instead of warning every
    poll, and self-heals once the token is fixed.
 
-   `core` is what `react-to-merge!` reads closure from and tells the merge to."
+   `core` is what `react-to-merge!` reads closure from and tells the merge to, and its
+   `:landing?` which workstreams are landing, whose PRs' merge-queue steps the poll records
+   (`observe-landings!`) — none, without it."
   [project {:keys [repo on-merge base]} & [core]]
   (let [k     (state-key project)
         prior (sstate/read-state k)]
@@ -301,6 +366,9 @@
           (let [ids    (into #{} (map #(pr-id repo (:number %))) (:prs res))
                 first? (nil? prior)
                 seen   (or (:reacted prior) #{})]
+            ;; Before the merges: a removal read now beside the merge it was is answered by the
+            ;; same read's merged flag, and the merge then spends the grant this reads.
+            (observe-landings! project repo (:landing? core))
             (when-not first?
               (doseq [pr (:prs res)
                       :when (not (contains? seen (pr-id repo (:number pr))))]

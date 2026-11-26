@@ -131,3 +131,47 @@
                         "-f" "query=mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position state}}}"
                         "-f" (str "id=" id)])]
             (if (zero? (:exit q)) {:status :ok :via :queue} (fail q))))))))
+
+(def ^:private queue-timeline-query
+  "A pull request's merged flag and one page of its merge-queue adds and removals, oldest first,
+   from `$cursor` on (from the start when it is absent)."
+  (str "query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){"
+       "pullRequest(number:$number){merged timelineItems(first:100,after:$cursor,itemTypes:"
+       "[ADDED_TO_MERGE_QUEUE_EVENT,REMOVED_FROM_MERGE_QUEUE_EVENT]){pageInfo{hasNextPage endCursor} "
+       "nodes{__typename "
+       "... on AddedToMergeQueueEvent{id createdAt} "
+       "... on RemovedFromMergeQueueEvent{id createdAt reason}}}}}}"))
+
+(defn ^{:malli/schema [:=> [:cat :string :int] :map]}
+  merge-queue-timeline
+  "Pull request `number` of `repo`: whether it is merged, and its whole merge-queue timeline,
+   oldest first — {:status :ok :merged? bool :events [{:type :added|:removed :id :at
+   (:reason)}]} or {:error :auth|:gh :detail}. The timeline is read page by page from its start;
+   :merged? is the flag of the last page's request, which was made after every event read, so a
+   caller reading a removal knows whether the PR had merged by the time it was seen."
+  [repo number]
+  (let [[owner name] (str/split repo #"/" 2)
+        page (fn [cursor]
+               (sh! (cond-> ["gh" "api" "graphql"
+                             "-f" (str "query=" queue-timeline-query)
+                             "-f" (str "owner=" owner) "-f" (str "name=" name)
+                             "-F" (str "number=" number)]
+                      cursor (conj "-f" (str "cursor=" cursor)))))
+        event (fn [{:keys [__typename id createdAt reason]}]
+                (when-let [t (case __typename
+                               "AddedToMergeQueueEvent"     :added
+                               "RemovedFromMergeQueueEvent" :removed
+                               nil)]
+                  (cond-> {:type t :id id :at createdAt}
+                    (not (str/blank? reason)) (assoc :reason reason))))]
+    (loop [cursor nil events []]
+      (let [{:keys [exit out err]} (page cursor)]
+        (if-not (zero? exit)
+          {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))}
+          (let [pr     (get-in (json/parse-string out true) [:data :repository :pullRequest])
+                items  (:timelineItems pr)
+                events (into events (keep event) (:nodes items))
+                {:keys [hasNextPage endCursor]} (:pageInfo items)]
+            (if (and hasNextPage (not (str/blank? endCursor)))
+              (recur endCursor events)
+              {:status :ok :merged? (boolean (:merged pr)) :events events})))))))

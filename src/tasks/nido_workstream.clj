@@ -517,6 +517,22 @@
   (let [wt (fs/path cwd "worktree")]
     (if (fs/exists? wt) (str (fs/canonicalize wt)) cwd)))
 
+(defn- record-landing-step!
+  "Append what land! answered for PR `pr` as the landing's step: :submitted, with how the PR was
+   handed over, or :refused, in land!'s words. Best-effort — the landing has already happened or
+   not, and a record that could not be written is warned about, never a reason to report it
+   otherwise. A :push-main landing records none here: bb nido:land records its :merged itself."
+  [project ws-id pr {:keys [status via detail]}]
+  (try
+    (ws/append-entry! project ws-id {:kind :landing}
+                      (pr-str (if (= :ok status)
+                                {:format :landing :step :submitted :pr pr :via via}
+                                {:format :landing :step :refused :pr pr
+                                 :words (if (str/blank? (str detail)) "refused, with no reason given" (str detail))})))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println (str "pr:land · the landing step could not be recorded: " (ex-message e)))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   pr-land*
   "Land the change of the workstream of the session this runs in, by its project's declared
@@ -545,7 +561,8 @@
                                             (map :id) seq (str/join ", "))
                                    "none"))
                           {:reason :not-own :pr pr :ws-id id})))
-        (landing/land! p id {:pr (:id ref)}))
+        (doto (landing/land! p id {:pr (:id ref)})
+          (->> (record-landing-step! p id (:id ref)))))
       (landing/land! p id {:dir (worktree-of cwd)}))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

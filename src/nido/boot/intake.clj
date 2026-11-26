@@ -115,9 +115,11 @@
     :else (doseq [routed (events/route env triggers-by-project)] (route-fire! routed))))
 
 (def ^:private core-settlement
-  "How a merge poll and a ticket sync read and settle a workstream: in the core."
+  "How a merge poll and a ticket sync read and settle a workstream — and whether it is landing: in
+   the core."
   {:open?   (fn [project ws-id] (work/core-open? project ws-id))
    :merged! (fn [project ws-id] (work/core-merged! project ws-id "github"))
+   :landing? (fn [project ws-id] (work/core-landing? project ws-id))
    :close!  (fn [project ws-id outcome]
               (work/core-resolve! project ws-id (if (= :done outcome) :done :drop) nil))})
 

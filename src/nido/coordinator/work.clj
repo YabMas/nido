@@ -1356,17 +1356,26 @@
 
 (def ^:private phase-trail-kinds
   "What a phase's own landing leaves behind — the kinds a gate puts behind the next phase."
-  #{:implementation-completed :review :pr-opened :ship-submitted :merged})
+  #{:implementation-completed :review :pr-opened :ship-submitted :landing :merged})
+
+(def ^:private landing-kinds
+  "What one landing leaves behind — the records the Land rung holds, of the newest landing only."
+  #{:landing :merged})
 
 (defn- current-phase-entries
   "`entries` as the arc reads them: a :phase-gate drops, and so does the implementation
    trail written before the newest one — that was the landed phase's work, and the arc
-   draws the phase underway. Every entry stays in the index; the Plan section is where
-   earlier phases and their gates are read."
+   draws the phase underway. A landing's records written before the newest :reopened drop
+   too: the workstream was reopened past that landing, so the Land rung holds only the newest
+   one. Every entry stays in the index; the Plan section is where earlier phases and their
+   gates are read."
   [entries]
-  (let [g (->> entries (filter #(= :phase-gate (:kind %))) (map :seq) (reduce max 0))]
+  (let [newest (fn [k] (->> entries (filter #(= k (:kind %))) (map :seq) (reduce max 0)))
+        g      (newest :phase-gate)
+        r      (newest :reopened)]
     (remove #(or (= :phase-gate (:kind %))
-                 (and (< (:seq %) g) (phase-trail-kinds (:kind %))))
+                 (and (< (:seq %) g) (phase-trail-kinds (:kind %)))
+                 (and (< (:seq %) r) (landing-kinds (:kind %))))
             entries)))
 
 (declare gate error pause-of)
@@ -1395,6 +1404,49 @@
               (update :stages (fn [ss] (mapv #(cond-> % (= :awaiting (:now %)) (assoc :needs needs)) ss))))
     (and needs (nil? (:stage position))) (assoc-in [:past :needs] needs)
     (= :merge (:source doing))           (assoc-in [:past :doing] doing)))
+
+(defn- land-trail
+  "The Land rung's trail: `:granted?` — read from the core's grant at this moment, never a
+   record — and the landing's recorded steps, oldest first, read from the snapshot `entries`
+   already holds for `seqs`."
+  [ledger entries seqs granted?]
+  (let [by-seq (into {} (map (juxt :seq identity)) entries)]
+    {:granted? (boolean granted?)
+     :steps    (vec (for [s seqs
+                          :let [r (some->> (get by-seq s) (entry->report ledger))]
+                          :when (landing-kinds (:format r))]
+                      (select-keys r [:format :step :pr :via :words :reason :event-at :commit])))}))
+
+(defn- land-rung
+  "The Land rung past `arc`'s stages — a projection of the row's activity, its position and the
+   core's grant, never a stage the arc is read at. It holds the newest landing's records (the
+   :landing and :merged entries the arc's phase cut keeps) and reads :done once they hold a merge,
+   whoever merged it, or while the position is :awaiting-gate, which only a landing's close (or a
+   findings round re-settling the landed phase) places; else :current while the core holds the
+   person's :merge grant (`granted?`); else :ahead.
+
+   While :current it carries what `arc` says past its stages and only that: the person awaited
+   (`:past :needs`), a merge underway (`:past :doing`, its words on the rung's line), and running
+   while the activity is `live?` and no stage of the arc carries a mark. Where the position names
+   a spine stage, that stage keeps its marks and the rung carries none."
+  [ledger entries arc position live? granted?]
+  (let [recs    (filter #(landing-kinds (:kind %)) (current-phase-entries entries))
+        seqs    (mapv :seq recs)
+        state   (cond (or (some #(= :merged (:kind %)) recs) (= :awaiting-gate (:at position))) :done
+                      granted?                                                                 :current
+                      :else                                                                    :ahead)
+        {:keys [needs doing]} (when (= :current state) (:past arc))
+        marked? (some :now (:stages arc))]
+    (cond-> {:stage   :land
+             :state   state
+             :entries (count seqs)
+             :visits  (if (seq seqs) 1 0)
+             :trail   (land-trail ledger entries seqs granted?)}
+      (seq seqs)                                        (assoc :seqs seqs :last-seq (peek seqs)
+                                                               :last-at (:at (last recs)))
+      needs                                             (assoc :now :awaiting :needs needs)
+      (and (= :current state) (not needs) live? (not marked?)) (assoc :now :running)
+      doing                                             (assoc :doing doing))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
   workstream
@@ -1449,7 +1501,11 @@
            ;; moment, and a heading clamped back to the approval above an arc
            ;; that still called implementation done is exactly the disagreement
            ;; the clamp exists to remove.
-           position (or (:position row) (pipeline/of project ws-id))]
+           position (or (:position row) (pipeline/of project ws-id))
+           ;; The person's Land, as the core holds it until a merge spends it — read where the
+           ;; row's :land-granted placing reads it, and never from the ledger.
+           granted? (contains? (get-in (core-of project ws-id) [:state :grants]) :merge)
+           arc      (arc-at entries position (:doing row) (get-in row [:status :live]) (get-in row [:status :needs]))]
        {:ws-id        ws-id
         ;; Who owes the next move and whether anything is live — status's, as the board row
         ;; carries it, so the pane and the row cannot say different things.
@@ -1481,7 +1537,9 @@
         ;; The stage the work is in comes off the position read above, so the
         ;; heading and the arc under it are one reading and cannot disagree.
         ;; What is running rides beside it, on the stage it is running in.
-        :arc          (arc-at entries position (:doing row) (get-in row [:status :live]) (get-in row [:status :needs]))
+        ;; Past the stages, the Land rung: a projection of the same reading, never a stage.
+        :arc          (assoc arc :land (land-rung ledger entries arc position
+                                                  (get-in row [:status :live]) granted?))
         ;; This workstream's card on the needs-you list, when it holds one: its question, the
         ;; actions that answer it and the session a reply reaches, which the pane renders through
         ;; the question card. Read from the core as the list's is, so the two cannot ask different
@@ -3396,6 +3454,13 @@
   (let [s (wcore/state project ws-id)]
     (boolean (and (seq (:units s)) (not (:closed? s))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
+  core-landing?
+  "Whether the core holds workstream `ws-id`'s :merge grant — the person's Land, which a merge
+   spends — so its landing is under way."
+  [project ws-id]
+  (contains? (:grants (wcore/state project ws-id)) :merge))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :boolean]}
   core-merged!
   "Tell the core that what `ws-id`'s open units built has landed — `landing` names the landing, so
@@ -4289,6 +4354,11 @@
    deciding whether a key is a stage should ask the work plane, not the lane that happens to
    compute the arc today."
   pipeline/unit-stages)
+
+(def arc-rows
+  "The rows the pane's arc block draws, in order: the arc's stages, then the Land rung past
+   them — which is no stage. What a surface checks a row key it was handed against."
+  (conj arc-stages :land))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
   pickup!

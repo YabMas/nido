@@ -118,6 +118,11 @@
      other activity — which is why it answers with a string or nothing, where every other member
      here answers with markup."
     {:signature [:=> [:catn [:doing [:maybe :map]]] [:maybe :string]]})
+  (Operation land-trail
+    "The words of the Land rung's line, of round-label's kind: `granted` while the core holds the
+     person's grant, then each step the landing recorded, oldest first — an ejection kept after the
+     re-queue that follows it — or nothing for a landing with neither."
+    {:signature [:=> [:catn [:trail [:maybe :map]]] [:maybe :string]]})
   (Operation phase-chip "Which landing of a phased plan a row is in, or nothing."
     {:signature [:=> [:catn [:phase [:maybe :map]]] :any]})
   (Operation status-heading "The status section's heading: the position label, which nothing replaces

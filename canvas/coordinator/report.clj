@@ -44,7 +44,12 @@
 
 (Module coordinator-report
   "The ledger's typed vocabulary: what may be written, what may be read back, and how each event
-   renders."
+   renders.
+
+   A landing's observed steps are one kind, `:landing`, a tagged union on `:step`: `:submitted`
+   carries the PR and how land! handed it over (`:via`), `:refused` the PR and land!'s words,
+   `:queued` and `:ejected` the PR and the GitHub timeline event's id and time. The grant that
+   opens a landing is core state and is never one of them."
 
   {:child [EntryKind LedgerEvent Invariant]}
   (Operation validate-event

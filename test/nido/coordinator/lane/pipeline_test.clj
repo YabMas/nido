@@ -971,10 +971,12 @@
   ;; landing kinds keep saying which landing they are — a workstream reader wants
   ;; Publication and Shipping apart, and a single :landing stage would have hidden
   ;; that from both readings to keep it from one.
-  (is (= [:publication :shipping :shipping]
-         (map p/stage-of [:pr-opened :ship-submitted :merged])))
-  (is (not-any? (set p/unit-stages) (map p/stage-of [:pr-opened :ship-submitted :merged]))
-      "and no stage on the unit's spine is one a landing maps to"))
+  (is (= [:publication :shipping :shipping :shipping]
+         (map p/stage-of [:pr-opened :ship-submitted :landing :merged])))
+  (is (not-any? (set p/unit-stages) (map p/stage-of [:pr-opened :ship-submitted :landing :merged]))
+      "and no stage on the unit's spine is one a landing maps to — a landing's steps included")
+  (is (not-any? #{:land} (mapv :stage (:stages (p/arc (kinds->entries [:intent :landing :merged])))))
+      "a merge is no stage of the arc"))
 
 (deftest a-cleared-design-hands-straight-to-the-implementation
   ;; The gate stops being unconditional. A round decided it, its declarations
