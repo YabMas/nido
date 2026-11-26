@@ -83,7 +83,7 @@
     {:signature [:=> [:catn [:state :map] [:unit :map]] [:maybe :keyword]]})
   (Operation sessions-owed
     "Every unit whose session is not what it should be and has no attempt pending, with the want. A
-     failed bring-up is not owed again until it is retried."
+     failed bring-up is not owed again until it is retried; a refused destroy is never owed again."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
   (Operation attempts-pending
     "Every provisioning attempt recorded and not yet resolved."

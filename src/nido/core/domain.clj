@@ -58,8 +58,10 @@
   "A stream before its first event: a workstream until `:start-run` makes it a run."
   {:units         {}    ; unit-id -> {:id :project :goal :status #{:open :merged :retracted :finished}
                         ;             :held? bool :unknowns #{key} :landing? bool :session session}
-                        ; session: {:status #{:none :ready :failed :stopped :destroyed}
+                        ; session: {:status #{:none :ready :failed :stopped :destroyed :refused}
                         ;           :cwd str|nil :attempt {:id :want}|nil :detail}
+                        ; :refused: its destroy was refused because its working copy is not the
+                        ; session's own to remove; terminal, never attempted again
    :turns         {}    ; turn-id -> {:id :unit (nil = conductor) :status :spec :run
                         ;             :call :resolution :resolved-call :ended-by :detail}
                         ; :spec {:executor kw :instructions str ...} is what the executor runs;
@@ -128,12 +130,14 @@
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} sessions-owed
   "Every unit of `state` whose session is not what it should be and has no attempt pending, with
    the want: [{:unit :want}]. A failed bring-up is not owed again until it is retried: the
-   conductor hears the failure and decides."
+   conductor hears the failure and decides. A refused destroy is owed nothing ever again: the
+   refusal is deterministic, and retrying it would only refuse again."
   [state]
   (for [u (sort-by :id (vals (:units state)))
         :let [want (session-want state u)
               {:keys [status attempt]} (:session u)]
         :when (and (nil? attempt)
+                   (not= :refused status)
                    (not= (reached want) status)
                    ;; a session is never taken down under a turn still active in it
                    (or (= :up want) (empty? (active-turns state (:id u))))
@@ -355,7 +359,7 @@
 
 (defmethod evolve :provision-recorded [state {:keys [unit outcome cwd detail unit-ready?]}]
   (let [want (get-in state [:units unit :session :attempt :want])
-        status (if (= :failed outcome) :failed (reached want))]
+        status (case outcome :failed :failed :refused :refused (reached want))]
     (cond-> (update-in state [:units unit :session]
                        #(cond-> (-> % (dissoc :attempt :detail) (assoc :status status))
                           cwd    (assoc :cwd cwd)
@@ -687,7 +691,11 @@
   (let [a (get-in state [:units unit :session :attempt])]
     (cond
       (not= attempt (:id a))                    (refuse :no-such-attempt :unit unit :attempt attempt)
-      (not (#{:done :failed} outcome))          (refuse :unknown-outcome :outcome outcome)
+      (not (#{:done :failed :refused} outcome)) (refuse :unknown-outcome :outcome outcome)
+      ;; Only a destroy is refused as not the session's own to remove: any other attempt that
+      ;; meets the refusal reports it :failed.
+      (and (= :refused outcome) (not= :destroyed (:want a)))
+      (refuse :refused-is-a-destroys :unit unit :want (:want a))
       (and (= :done outcome) (= :up (:want a)) (not (string? cwd)))
       (refuse :ready-needs-a-cwd)
       :else (accept (cond-> {:event :provision-recorded :unit unit :attempt attempt :outcome outcome}

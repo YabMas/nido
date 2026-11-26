@@ -246,7 +246,7 @@
       (gen/fmap (fn [[u w]] {:command :record-provision-attempt :unit u :attempt (str "p-" u) :want w})
                 (gen/tuple unit (gen/elements [:up :stopped :destroyed])))
       (gen/fmap (fn [[u o]] {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome o :cwd "/w"})
-                (gen/tuple unit (gen/elements [:done :failed])))
+                (gen/tuple unit (gen/elements [:done :failed :refused])))
       (gen/fmap (fn [u] {:command :retry-provision :unit u}) unit)
       (gen/fmap (fn [g] {:command :give-grant :grant g :by "p"}) (gen/elements [:merge :intent]))
       (gen/fmap (fn [g] {:command :spend-grant :grant g}) (gen/elements [:merge :intent]))
@@ -648,3 +648,54 @@
   (let [cs [a-journal {:command :append-record :record {:kind :k} :after 0}]
         [s events] (reduce (fn [[st evs] c] (let [[st' e] (d/step st c)] [st' (into evs e)])) [d/empty-state []] cs)]
     (is (= s (d/fold events)))))
+
+;; ── a refused destroy ───────────────────────────────────────────────────────
+
+(defn- unit-ready-at
+  "Commands opening unit `u` and recording its session up at `cwd`."
+  [u cwd]
+  [{:command :open-unit :unit u :project "p" :goal "g"}
+   {:command :record-provision-attempt :unit u :attempt (str "up-" u) :want :up}
+   {:command :record-provision-outcome :unit u :attempt (str "up-" u) :outcome :done :cwd cwd}])
+
+(def ^:private refusal-detail
+  "Refusing to destroy session p: /src/p is not its own to remove — it is the project directory /src/p")
+
+(deftest a-refused-destroy-is-terminal-and-never-reads-destroyed
+  (doseq [[how ends] [[:closed [{:command :record-merge :unit "u"} {:command :close-workstream}]]
+                      [:discarded [{:command :retract-unit-goal :unit "u"} {:command :discard-workstream}]]]]
+    (testing (str "on a " (name how) " workstream")
+      (let [begin (cons {:command :create-workstream :identity id*} (unit-ready-at "u" "/src/p"))
+            [s0] (run (into (vec begin) ends))
+            _    (is (= [{:unit "u" :want :destroyed}] (d/sessions-owed s0)))
+            [s]  (run (into (into (vec begin) ends)
+                            [{:command :record-provision-attempt :unit "u" :attempt "d1" :want :destroyed}
+                             {:command :record-provision-outcome :unit "u" :attempt "d1" :outcome :refused
+                              :detail refusal-detail}]))
+            sess (get-in s [:units "u" :session])]
+        (is (= :refused (:status sess)) "never :destroyed, never :failed")
+        (is (= "/src/p" (:cwd sess)) "the path kept stays on the session")
+        (is (= refusal-detail (:detail sess)) "with the refusal's detail")
+        (is (empty? (d/sessions-owed s)) "and nothing is owed for it again")
+        (is (= :session-not-owed
+               (refusal s {:command :record-provision-attempt :unit "u" :attempt "d2" :want :destroyed}))
+            "so no second attempt is admitted")
+        (is (= :session-not-failed (refusal s {:command :retry-provision :unit "u"}))
+            "nor a retry")
+        (is (not-any? #(= :session-failed (:kind %)) (vals (:inbox s))) "a refusal is no failure")))))
+
+(deftest only-a-destroy-is-recorded-refused
+  (doseq [want [:up :stopped]]
+    (let [[s] (run (cond-> [{:command :open-unit :unit "u" :project "p" :goal "g"}]
+                     (= :stopped want) (into [{:command :record-provision-attempt :unit "u" :attempt "a" :want :up}
+                                              {:command :record-provision-outcome :unit "u" :attempt "a"
+                                               :outcome :done :cwd "/w"}
+                                              {:command :retract-unit-goal :unit "u"}])
+                     true (conj {:command :record-provision-attempt :unit "u" :attempt "b" :want want})))]
+      (is (= :refused-is-a-destroys
+             (refusal s {:command :record-provision-outcome :unit "u" :attempt "b" :outcome :refused
+                         :detail "x"}))
+          (str "refused for a " want " attempt"))
+      (is (nil? (refusal s {:command :record-provision-outcome :unit "u" :attempt "b" :outcome :failed
+                            :detail "x"}))
+          (str "a " want " attempt that met the refusal records it :failed")))))
