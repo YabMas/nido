@@ -27,6 +27,22 @@
 
 (defn- answer [p] (deref p 10000 ::no-answer))
 
+(defn- within
+  "Whether `pred` holds within ten seconds, polled: for what a test sees only some time after the
+   call that caused it."
+  [pred]
+  (let [deadline (+ (System/currentTimeMillis) 10000)]
+    (loop []
+      (cond (pred) true
+            (> (System/currentTimeMillis) deadline) false
+            :else (do (Thread/sleep 10) (recur))))))
+
+(defn- next-within
+  "The next message on `conn`, or ::no-message when none comes within ten seconds — so a stream
+   that ends short fails its test instead of hanging the suite."
+  [conn]
+  (deref (future (api/next-message conn)) 10000 ::no-message))
+
 (deftest a-command-is-answered-with-what-committed-and-a-repeat-with-the-same
   (with-writer [w s db {}]
     (let [first-answer (answer (writer/submit! w (open-unit "ws" "k1" "u")))]
@@ -61,7 +77,9 @@
             (answer p)
             (is (some? (store/command-outcome r (str "k" i))) "a caller is answered only once its outcome is durable"))
           (store/close r)
-          (is (seq @seen))
+          ;; A batch is published after its callers are answered, so the last publish may still
+          ;; be on its way when the last answer is.
+          (is (within #(seq @seen)) "each commit is published")
           (is (every? #(every? true? (nth % 2)) @seen) "a published change is the committed state"))
         (finally (writer/stop! w) (store/close s))))))
 
@@ -186,6 +204,9 @@
         (try
           (let [c (api/connect sock) sub (api/connect sock)]
             (api/subscribe sub 0)
+            ;; Nothing is committed yet, so the catch-up is empty and its marker comes at once —
+            ;; which is also what says the subscription is registered before anything commits.
+            (is (:caught-up (next-within sub)) "the subscription says where its catch-up ends")
             (testing "commands, through the writer"
               (is (:events (api/request c {:op :command :key "k1" :ws "ws" :command {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"}})))
               (is (:events (api/request c {:op :command :key "k2" :ws "ws" :command {:command :open-unit :unit "v" :project "p" :goal "g" :session-cwd "/tmp"} :input? true}))))
@@ -198,12 +219,10 @@
               (.flush ^java.io.BufferedWriter (:writer c))
               (is (= {:error :malformed} (api/next-message c)))
               (is (= {:workstreams ["ws"]} (api/request c {:op :workstreams}))))
-            (testing "the subscription says where its catch-up ends, then streams each commit"
-              ;; The first commit may land before the server reads the subscription, and is then
-              ;; its catch-up: the marker comes after it rather than first. Once, either way.
-              (let [ms (vec (repeatedly 3 #(api/next-message sub)))]
-                (is (= 1 (count (filter :caught-up ms))))
+            (testing "the subscription streams each commit after its catch-up"
+              (let [ms (vec (repeatedly 2 #(next-within sub)))]
+                (is (not-any? #(and (map? %) (:caught-up %)) ms) "the catch-up ends once")
                 (is (= [#{"u"} #{"u" "v"}]
-                       (for [m ms :when (not (:caught-up m))] (set (keys (:units (:state m)))))))))
+                       (for [m ms] (when (map? m) (set (keys (:units (:state m))))))))))
             (api/disconnect c) (api/disconnect sub))
           (finally (api/close! srv)))))))

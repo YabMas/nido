@@ -205,16 +205,39 @@
         (is (= ["one"] (map :text (:items (chat/transcript c)))))
         (is (not (some #(= [:close] %) @calls)))))))
 
+(defn- within
+  "Whether `pred` holds within ten seconds, polled."
+  [pred]
+  (let [deadline (+ (System/currentTimeMillis) 10000)]
+    (loop []
+      (cond (pred) true
+            (> (System/currentTimeMillis) deadline) false
+            :else (do (Thread/sleep 5) (recur))))))
+
 (deftest a-reset-while-a-send-is-loading-its-conversation-is-refused
-  (let [{:keys [redefs]} (fake-acp "x")]
+  ;; The load is held until the reset is seen waiting for it, and the turn's prompt until the reset
+  ;; has answered, so the reset meets the send mid-load however the threads are scheduled.
+  (let [{:keys [redefs]} (fake-acp "x")
+        loading (promise)
+        loaded  (promise)
+        reset   (promise)
+        tester  (Thread/currentThread)]
     (fs/create-dirs (fs/parent (id-file)))
     (spit (id-file) (pr-str {:acp-session-id "acp-old"}))
-    (with-redefs-fn (update redefs #'acp/load-session! (fn [f] (fn [& args] (Thread/sleep 200) (apply f args))))
+    (with-redefs-fn (-> redefs
+                        (update #'acp/load-session! (fn [f] (fn [& args]
+                                                              (deliver loading true)
+                                                              (deref loaded 10000 nil)
+                                                              (apply f args))))
+                        (update #'acp/prompt! (fn [f] (fn [& args] (deref reset 10000 nil) (apply f args)))))
       (fn []
         (chat/send! c "and now" [] [])
-        (Thread/sleep 50)
+        (is (deref loading 10000 false) "the send begins loading its conversation")
         (is (:busy? (chat/transcript c)) "the accepted send is busy while its conversation loads")
+        ;; A reset waits for a start to finish: the load ends once the reset is blocked on it.
+        (future (within #(= "BLOCKED" (str (.getState tester)))) (deliver loaded true))
         (is (nil? (chat/reset! c)) "an accepted send is not lost under a reset")
+        (deliver reset true)
         (await-idle c)
         (Thread/sleep 50)
         (is (fs/exists? (id-file)))))))

@@ -14,13 +14,15 @@
     d))
 
 (defn- settled
-  "The handle's address once it stops answering `:starting`, or `:starting` after ~5s."
+  "The handle's address once it stops answering `:starting`, or `:starting` after 20s — generous,
+   since a loaded host can take seconds to start the stand-in and notice it exit."
   [h]
-  (loop [n 50]
-    (let [a (explorer/address h)]
-      (if (and (= :starting (:status a)) (pos? n))
-        (do (Thread/sleep 100) (recur (dec n)))
-        a))))
+  (let [deadline (+ (System/currentTimeMillis) 20000)]
+    (loop []
+      (let [a (explorer/address h)]
+        (if (and (= :starting (:status a)) (< (System/currentTimeMillis) deadline))
+          (do (Thread/sleep 50) (recur))
+          a)))))
 
 (deftest the-announced-port-is-where-it-serves
   (let [d (canvas-dir)]
