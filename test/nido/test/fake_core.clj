@@ -4,7 +4,8 @@
    What a surface reads of it is what the feed would have delivered — each workstream's state and
    the asks awaiting the person in it."
   (:require [nido.core.domain :as d]
-            [nido.coordinator.work.core :as wcore]))
+            [nido.coordinator.work.core :as wcore]
+            [nido.test.sessions :as sessions]))
 
 (defn- answer [{:keys [states outcomes sent]} {:keys [op ws command key] :as req}]
   (case op
@@ -32,13 +33,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :any :string [:sequential :map]] :map]} seed!
   "Commit `commands` on workstream `ws-id` of `project` in fake `core`, as the daemon's own rules
-   would; throws on a refusal. Answers the state after them."
+   would; throws on a refusal. Answers the state after them. An :open-unit naming a :session-cwd
+   is its unit come up there, nothing owed for it (`sessions/settle`)."
   [core project ws-id commands]
   (let [k (wcore/ws-key project ws-id)]
-    (doseq [c commands]
-      (let [[s2 _ r] (d/step (get @(:states core) k d/empty-state) c)]
-        (when r (throw (ex-info (str "seed refused: " (pr-str r)) {:command c})))
-        (swap! (:states core) assoc k s2)))
+    (swap! (:states core) assoc k (sessions/settle (get @(:states core) k d/empty-state) commands))
     (get @(:states core) k)))
 
 (def ^{:doc "Commands that leave a workstream with a unit whose conductor turn asks the person."}

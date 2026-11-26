@@ -326,6 +326,7 @@
   (fn [_state event] (:event event)))
 
 (defmethod evolve :unit-opened [state {:keys [unit project goal session-cwd trigger first-turn]}]
+  ;; :session-cwd is no longer admitted; a unit folded from an event that adopted one keeps it.
   (assoc-in state [:units unit] (cond-> {:id unit :project project :goal goal :status :open
                                          :held? false :unknowns #{} :landing? false
                                          :session (if session-cwd
@@ -640,6 +641,9 @@
 
 (defmethod decide :open-unit [state {:keys [unit project goal session-cwd trigger first-turn]}]
   (cond
+    ;; A unit's session is the core's to provision: its cwd is set only by an :up outcome. One
+    ;; opened over a working copy the core did not make is one its destroy could not tell apart.
+    (some? session-cwd)                    (refuse :session-cwd-not-accepted)
     (:closed? state)                       (refuse :workstream-closed)
     (contains? (:units state) unit)        (refuse :unit-exists :unit unit)
     (or (nil? project) (nil? goal))        (refuse :unit-needs-project-and-goal)
@@ -647,7 +651,6 @@
                               (string? (get-in first-turn [:spec :instructions])))))
     (refuse :turn-needs-executor-and-instructions)
     :else (accept (cond-> {:event :unit-opened :unit unit :project project :goal goal}
-                    session-cwd (assoc :session-cwd session-cwd)
                     trigger     (assoc :trigger trigger)
                     first-turn  (assoc :first-turn first-turn)))))
 

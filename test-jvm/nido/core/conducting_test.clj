@@ -63,6 +63,14 @@
       (body-fn {:s s :cmd! #(deref (writer/submit! w {:key (str "person-" (swap! n inc)) :ws "ws" :command %}) 10000 nil)})
       (finally (buffer/stop! b) (turn/stop! r) (api/close! srv) (writer/stop! w) (store/close s))))))
 
+(defn- open-up!
+  "Open unit `u` with `first-turn-spec` as its first turn and record its session up: the core's
+   buffer then starts that turn, as `\"u first\"`. A unit is never opened over a working copy."
+  [cmd! u goal first-turn-spec]
+  (cmd! {:command :open-unit :unit u :project "p" :goal goal :first-turn {:spec first-turn-spec}})
+  (cmd! {:command :record-provision-attempt :unit u :attempt "up" :want :up})
+  (cmd! {:command :record-provision-outcome :unit u :attempt "up" :outcome :done :cwd "/tmp"}))
+
 (defn- d-awaiting [s] (filter #(= :open (:status %)) (vals (:operator-asks (store/state s "ws")))))
 
 (defn- conductor-turns [s] (filter #(nil? (:unit %)) (vals (get-in (store/state s "ws") [:turns]))))
@@ -74,13 +82,12 @@
                               (tool-line sock ws t "answer_call" {:turn (:turn i) :answer "use Postgres"}))
                             ["echo '{:outcome :completed}'"])))
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "pick a database" :session-cwd "/tmp"})
-     (cmd! {:command :start-turn :turn "t" :unit "u"
-            :spec {:executor :fake :instructions "echo '{:outcome :asked :call {:id \"c\" :question \"which db?\"}}'"
-                   :on-resume "echo \"{:outcome :completed :detail {:summary \\\"done\\\"}}\""}})
-     (is (await-until #(= :completed (get-in (store/state s "ws") [:turns "t" :status])) 30000)
+     (open-up! cmd! "u" "pick a database"
+               {:executor :fake :instructions "echo '{:outcome :asked :call {:id \"c\" :question \"which db?\"}}'"
+                :on-resume "echo \"{:outcome :completed :detail {:summary \\\"done\\\"}}\""})
+     (is (await-until #(= :completed (get-in (store/state s "ws") [:turns "u first" :status])) 30000)
          "the unit turn asked, the conductor answered, the rules resumed it, and it finished")
-     (is (= {:answered "use Postgres"} (get-in (store/state s "ws") [:turns "t" :resolution])))
+     (is (= {:answered "use Postgres"} (get-in (store/state s "ws") [:turns "u first" :resolution])))
      (is (await-until #(and (empty? (:inbox (store/state s "ws")))
                             (every? (comp #{:completed} :status) (conductor-turns s))
                             (= 2 (count (conductor-turns s))))
@@ -93,8 +100,7 @@
    (fn [_sock _ws _t _state _items]
      "echo '{:outcome :asked :call {:id \"c\" :question \"open unit b?\" :explored \"x\" :options [\"yes\" \"no\"] :recommendation \"yes\"}}'")
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
-     (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
+     (open-up! cmd! "u" "g" {:executor :fake :instructions "echo '{:outcome :completed}'"})
      (is (await-until #(seq (d-awaiting s)) 30000) "the rules raised the conductor's ask to the person")
      (let [[a] (d-awaiting s)]
        (is (= "open unit b?" (get-in a [:content :question])))
@@ -106,8 +112,7 @@
   (run-core
    (fn [& _] "echo 'not an outcome'")
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
-     (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
+     (open-up! cmd! "u" "g" {:executor :fake :instructions "echo '{:outcome :completed}'"})
      (is (await-until #(= 3 (:conductor-failures (store/state s "ws"))) 30000))
      (Thread/sleep 1000)
      (is (= 3 (count (conductor-turns s))) "no fourth wake")

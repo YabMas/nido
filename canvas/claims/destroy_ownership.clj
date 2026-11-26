@@ -38,3 +38,11 @@
 (Claim refused-is-shown
   "Every unit whose session is :refused, on any workstream including closed and discarded ones, is listed on the Operations page with its workstream, unit and kept path, for as long as it reads :refused."
   {:about [coordinator-work] :evidence "test"})
+
+(Claim no-adopted-session
+  "decide :open-unit refuses a command carrying :session-cwd; a unit's session cwd is set only by a :done :up outcome. Units already folded from an adopted :session-cwd keep it."
+  {:about [decide] :evidence "test"})
+
+(Claim verification-owed
+  "The build lands with tests that run destroy! through the provision verb's :want destroyed against a temp source-checkout layout (:path the project directory, a directory holding .jj/repo or .git, a path outside the worktrees dir) and find it present and the call refused; that destroy a jj-workspace worktree under the worktrees dir and find it removed; and that show :open-unit with :session-cwd refused — and with bb nido:test and bb nido:design:check passing."
+  {:about [destroy! decide] :evidence "test"})
