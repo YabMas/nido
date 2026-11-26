@@ -12,6 +12,7 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.pipeline :as p]
    [nido.platform.project :as project]
+   [nido.ui.components.state]
    [tasks.nido-workstream :as tw]))
 
 (defn with-tmp [f]
@@ -327,3 +328,25 @@
             (is (= :qa-failed (:at (p/of :brian id))))
             (add! :qa-plan (none-plan d))
             (is (= :release-candidate (:at (p/of :brian id))) "go by the newest plan")))))))
+
+;; ── the spine ──────────────────────────────────────────────────────────────
+
+(deftest the-spine-ends-at-qa-and-draws-it-off-where-qa-does-not-apply
+  (is (= [:intent :baseline :design :implementation :qa] p/unit-stages))
+  (testing "a plan belongs to the design, a walk to QA"
+    (is (= :design (p/stage-of :qa-plan)))
+    (is (= :qa (p/stage-of :qa-walk))))
+  (let [es    [{:kind :intent :seq 1} {:kind :qa-plan :seq 2} {:kind :qa-walk :seq 3}]
+        state (fn [opts] (->> (:stages (p/arc es opts)) (filter #(= :qa (:stage %))) first :state))
+        held  (fn [opts st] (->> (:stages (p/arc es opts)) (filter #(= st (:stage %))) first :entries))]
+    (is (= 1 (held {} :design)))
+    (is (= 1 (held {} :qa)))
+    (is (= :off (state {:at :implementation :qa-off? true})) "never :skipped or :ahead")
+    (is (= :off (state {:at nil :qa-off? true})))
+    (is (= :stale (state {:at :implementation})) "otherwise the arc's own rule")
+    (is (= :current (state {:at :qa})))))
+
+(deftest the-off-mark-is-the-marks-own
+  (let [m (nido.ui.components.state/arc-mark :off nil)]
+    (is (= :span.arc-off (first m)))
+    (is (= "QA" (nido.ui.components.state/arc-name :qa)))))

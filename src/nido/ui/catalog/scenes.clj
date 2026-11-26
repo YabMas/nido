@@ -258,18 +258,18 @@
                                 [:span (state/status-heading (when p {:at p}))]]))}]}
    {:name "arc-name"
     :note "An arc stage's heading."
-    :scenes [{:title "the four stages, the Land rung, and an unknown one"
+    :scenes [{:title "the five stages, the Land rung, and an unknown one"
               :note "An unknown stage prints its own keyword rather than vanishing: an arc
                      written by a newer nido should degrade to something a person can act on."
-              :render #(rail str [:intent :baseline :design :implementation :land :rebaseline]
+              :render #(rail str [:intent :baseline :design :implementation :qa :land :rebaseline]
                              (fn [s] [:span (state/arc-name s)]))}]}
    {:name "arc-mark"
     :note "The mark for one arc stage. What is happening now outranks what the records say."
     :scenes [{:title "every record state"
-              :note "Five marks because there are five states and no two mean the same thing: ⊘
+              :note "Five record marks and the greyed – of a stage that does not apply: ⊘
                      is a stage the work went past without writing one, · one it has not reached,
                      ↺ one whose records the ledger no longer stands behind."
-              :render #(rail str [:done :current :stale :skipped :ahead]
+              :render #(rail str [:done :current :stale :skipped :ahead :off]
                              (fn [s] (state/arc-mark s nil)))}
              {:title "what is happening now"
               :note "Waiting on a person — the needs-you dot, yellow — and an agent working — a

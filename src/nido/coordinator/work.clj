@@ -1399,6 +1399,8 @@
   [entries position doing live? needs]
   (cond-> (-> (pipeline/arc (current-phase-entries entries)
                             {:at       (:stage position)
+                             ;; QA that does not apply draws the :qa stage :off.
+                             :qa-off?  (contains? #{:off :not-applicable} (get-in position [:qa :state]))
                              :active   (when live? (pipeline/stage-active position doing))
                              :awaiting (when needs (:stage position))})
               (update :stages (fn [ss] (mapv #(cond-> % (= :awaiting (:now %)) (assoc :needs needs)) ss))))
@@ -1502,6 +1504,10 @@
            ;; that still called implementation done is exactly the disagreement
            ;; the clamp exists to remove.
            position (or (:position row) (pipeline/of project ws-id))
+           ;; The QA reading rides on `of`'s answer; a position the core placed carries none, so
+           ;; it is asked for — the arc draws the :qa stage by it.
+           position (cond-> position
+                      (nil? (:qa position)) (assoc :qa (pipeline/qa project ws-id)))
            ;; The person's Land, as the core holds it until a merge spends it — read where the
            ;; row's :land-granted placing reads it, and never from the ledger.
            granted? (contains? (get-in (core-of project ws-id) [:state :grants]) :merge)

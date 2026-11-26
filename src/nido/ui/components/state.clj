@@ -270,6 +270,7 @@
    :baseline       "Baseline"
    :design         "Design"
    :implementation "Implementation"
+   :qa             "QA"
    ;; Not a stage: the Land rung the pane draws past the arc's stages.
    :land           "Land"})
 
@@ -381,4 +382,8 @@
    (case now
      :awaiting (needs-kind-mark needs)
      :running  [:span.arc-live {:title "an agent is working"}]
-     (get arc-glyph state "·"))))
+     (if (= :off state)
+       ;; Not a record state: the stage is no part of this workstream's arc. Greyed by its own
+       ;; mark, so no row colours it.
+       [:span.arc-off {:title "does not apply to this workstream"} "–"]
+       (get arc-glyph state "·")))))

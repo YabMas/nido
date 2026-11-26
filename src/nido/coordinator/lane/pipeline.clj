@@ -206,7 +206,8 @@
     :implementation-plan :implementation-completed
     :review :review-analysis :improvement-decision :improvement-landed
     :blocker :blocker-answered :retraction
-    :findings :pr-opened :ship-submitted :landing :merged :phase-gate :layer-completed})
+    :findings :pr-opened :ship-submitted :landing :merged :phase-gate :layer-completed
+    :qa-plan :qa-walk})
 
 (def ^:private stage-of-kind
   "Which stage of the arc each entry kind belongs to.
@@ -241,6 +242,10 @@
    :implementation-plan      :implementation
    :layer-completed          :implementation
    :implementation-completed :implementation
+   ;; A plan is the design's in product terms, whichever action wrote it; a walk is the QA
+   ;; stage's own record.
+   :qa-plan                  :design
+   :qa-walk                  :qa
    ;; A stage's review belongs to the stage it reviews. `:baseline-review` and
    ;; `:design-decision` already folded that way; `:review` was the one held out,
    ;; and the only reason it was is that its subject is a working copy rather
@@ -305,7 +310,7 @@
    That is why this is a vector rather than the key set of `stage-of-kind` — a
    halt is something that happens TO a unit, not a place it got to, and a line
    that put it in sequence would say a blocked unit had advanced to blocked."
-  [:intent :baseline :design :implementation])
+  [:intent :baseline :design :implementation :qa])
 
 (def ^:private stage-of-next
   "The spine stage each next action is work IN — where the unit is, read off what
@@ -382,6 +387,9 @@
      :stale    above `:at`, holding records: they happened, and the work has
                come back beneath them, so they no longer stand
      :ahead    above `:at`, holding none
+     :off      the :qa stage of a workstream whose QA reads :off or :not-applicable
+               (`:qa-off?`): QA is no stage this workstream travels, which is neither
+               skipped nor ahead
 
    :stale follows from the position rather than from a second derivation of what
    moved: `place` reads a stage as passed only while a record of the current
@@ -402,7 +410,7 @@
    left design and come back. A design its decision round sent back to the
    baseline shows two visits to baseline."
   ([entries] (arc entries {}))
-  ([entries {:keys [at active awaiting]}]
+  ([entries {:keys [at active awaiting qa-off?]}]
    (let [staged    (keep (fn [e]
                            (when-let [st (stage-of (:kind e))]
                              (assoc e :stage st)))
@@ -423,6 +431,7 @@
                             i  (idx st)]
                         (cond-> (assoc (facet st es)
                                :state (cond
+                                        (and qa-off? (= :qa st))    :off
                                         (= i here)                  :current
                                         (and here (> i here))       (if (seq es) :stale :ahead)
                                         (seq es)                    :done

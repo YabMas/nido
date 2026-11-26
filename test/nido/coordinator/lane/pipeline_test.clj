@@ -452,7 +452,7 @@
   ;; Intent, baseline, design, implementation — the unit's internals. Approval
   ;; is a halt on the design when a person is owed one, and a landing is the
   ;; workstream's, so neither is a rung here.
-  (is (= [:intent :baseline :design :implementation] p/unit-stages))
+  (is (= [:intent :baseline :design :implementation :qa] p/unit-stages))
   (is (= p/unit-stages (mapv :stage (:stages (p/arc (kinds->entries [:intent])))))
       "every stage renders, in order, whether or not it holds anything"))
 
@@ -469,7 +469,7 @@
   ;; design, and a baseline re-reviewed after the decision put it on the baseline.
   (let [es (kinds->entries [:intent :baseline :design :design-decision
                             :implementation-completed :review :design-verdict])]
-    (is (= [:done :done :done :current] (states es :implementation)))
+    (is (= [:done :done :done :current :ahead] (states es :implementation)))
     (is (= :current (:state ((stage-map es :design) :design)))
         "and the same ledger read at the design marks the design, whatever came last")))
 
@@ -478,9 +478,9 @@
   ;; under the design being built now — they happened, and are owed again.
   (let [es (kinds->entries [:intent :baseline :design :design-decision
                             :implementation-completed :baseline])]
-    (is (= [:done :current :stale :stale] (states es :baseline))))
+    (is (= [:done :current :stale :stale :ahead] (states es :baseline))))
   (let [es (kinds->entries [:intent :baseline :design])]
-    (is (= [:done :done :current :ahead] (states es :design))
+    (is (= [:done :done :current :ahead :ahead] (states es :design))
         "a stage the work never reached is ahead, not stale")))
 
 (deftest arc-tells-a-skipped-stage-from-one-not-yet-reached
@@ -492,7 +492,7 @@
 (deftest work-past-the-spine-has-nothing-current-or-ahead
   ;; A published or merged unit, or a closed workstream: `of` names no stage.
   (let [es (kinds->entries [:intent :baseline :design :pr-opened])]
-    (is (= [:done :done :done :skipped] (states es nil)))))
+    (is (= [:done :done :done :skipped :skipped] (states es nil)))))
 
 (deftest a-running-round-rides-on-its-stage-beside-the-position
   ;; A diff review over an implementation the latest design unseated: the round
@@ -507,7 +507,7 @@
     (let [a (p/arc (kinds->entries [:intent :baseline :design :implementation-completed
                                     :review :design])
                    {:at :design :active :implementation})]
-      (is (= [:done :done :current :stale] (mapv :state (:stages a)))
+      (is (= [:done :done :current :stale :ahead] (mapv :state (:stages a)))
           "the position still decides every state")
       (is (= [[:implementation :running]] (keep #(when (:now %) [(:stage %) (:now %)]) (:stages a)))
           "and the running round is flagged on its own stage"))))
@@ -566,7 +566,7 @@
 
 (deftest arc-survives-a-ledger-it-can-place-nothing-in
   (let [a (p/arc [] {:at :intent})]
-    (is (= [:current :ahead :ahead :ahead] (mapv :state (:stages a))))
+    (is (= [:current :ahead :ahead :ahead :ahead] (mapv :state (:stages a))))
     (is (empty? (:excursions a)))))
 
 (deftest arc-carries-the-seqs-a-reader-would-open
@@ -927,7 +927,7 @@
           (let [r (p/of :brian id)
                 a (p/arc (:entries (ws/read-ws :brian id)) {:at (:stage r)})]
             (is (= :baseline (:stage r)))
-            (is (= [:done :current :stale :stale] (mapv :state (:stages a)))))))
+            (is (= [:done :current :stale :stale :ahead] (mapv :state (:stages a)))))))
       (testing "a published unit is past the spine"
         (let [[id add!] (ledger)
               [_ d] (cleared-and-implemented! add!)]

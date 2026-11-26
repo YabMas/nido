@@ -227,6 +227,7 @@
         .arc-row.live { cursor:pointer; }
         .arc-row.live:hover { background:var(--surface-hover); }
         .arc-row.open { background:var(--surface-hover); }
+        .arc-off { color:var(--text-faint); opacity:.5; }
         .arc-g { width:12px; text-align:center; color:var(--text-faint); font-size:var(--fs-xs); }
         .arc-n { min-width:118px; font-size:var(--fs-sm); color:var(--text-muted); }
         .arc-m { font-size:var(--fs-xs); color:var(--text-faint); }
