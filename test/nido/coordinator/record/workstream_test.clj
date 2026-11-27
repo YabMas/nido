@@ -1937,22 +1937,20 @@
     (is (nil? (ws/own-pr w "BR-9")) "a ref of another adapter is no PR")
     (is (nil? (ws/own-pr {:external-refs []} "412")))))
 
-(deftest delete-leaves-the-legacy-ledger-files-untouched
+(deftest delete-removes-the-workstream-directory
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:external-refs []})
-            d   (cstate/workstream-dir :brian (:id w))
-            leg {"workstream.edn" "{:id \"x\"}" "entries/0001-intent.edn" "{}"
-                 "entries.meta/0001-intent.edn" "{}"}]
-        (doseq [[f c] leg]
-          (fs/create-dirs (fs/parent (fs/path d f)))
-          (spit (str (fs/path d f)) c))
+      (let [w (ws/create! :brian {:external-refs []})
+            d (cstate/workstream-dir :brian (:id w))]
         (fs/create-dirs (fs/path d "sessions" "s1"))
+        (fs/create-dirs (fs/path d "runs"))
+        (spit (str (fs/path d "runs" "run-1")) "")
+        (spit (str (fs/path d "anything-else.edn")) "{}")
         (ws/delete! :brian (:id w))
-        (is (nil? (ws/read-ws :brian (:id w))))
-        (is (not (fs/exists? (fs/path d "sessions"))))
-        (doseq [[f c] leg]
-          (is (= c (slurp (str (fs/path d f)))) f))))))
+        (is (nil? (ws/read-ws :brian (:id w))) "the core holds it discarded")
+        (is (not (fs/exists? d)) "and its directory is gone, with everything in it")
+        (ws/delete! :brian (:id w))
+        (is (not (fs/exists? d)) "and a second discard is a no-op")))))
 
 (deftest turn-ws-reads-the-core-turns-environment
   (is (= [:brian "ws-1"] (ws/turn-ws {"NIDO_CORE_WS" "brian/ws-1"})))

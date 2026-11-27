@@ -2492,28 +2492,19 @@
            (record-pr-opened! project w' ref opts))
          w')))))
 
-(def ^:private legacy-ledger-files
-  "The names under a workstream's directory that hold its legacy ledger, which nothing writes."
-  #{"workstream.edn" "entries" "entries.meta"})
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   delete!
   "Discard a workstream — an orphan minted by a failed spawn — so no reader finds it again, and
-   remove what its directory holds beside the legacy ledger files (its sessions and Runs).
-   Idempotent — no-op if absent. The core keeps what was recorded of it. An open unit or a turn
-   still running on it stops the discard — a merged or retracted unit does not: the
-   core refuses, the refusal is thrown, and nothing is removed. The legacy files — workstream.edn, entries/ and entries.meta/
-   — are the import's source and are never touched."
+   then remove its directory and everything in it (its sessions and Runs). Idempotent — no-op if
+   absent. The core keeps what was recorded of it. An open unit or a turn still running on it
+   stops the discard — a merged or retracted unit does not: the core refuses, the refusal is
+   thrown, and nothing is removed."
   [project ws-id]
   (when (read-ws project ws-id)
     (create-command! project ws-id (str "discard/" (client/ws-key project ws-id))
                      {:command :discard-workstream}))
   (let [d (cstate/workstream-dir project ws-id)]
-    (when (fs/exists? d)
-      (doseq [f (fs/list-dir d)
-              :when (not (legacy-ledger-files (str (fs/file-name f))))]
-        (fs/delete-tree f))
-      (when (empty? (fs/list-dir d)) (fs/delete d)))))
+    (when (fs/exists? d) (fs/delete-tree d))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :keyword :string] [:maybe :Workstream]]}
   find-by-ref

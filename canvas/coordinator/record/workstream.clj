@@ -324,8 +324,8 @@
     {:signature [:=> [:catn [:project ProjectName]] [:vector WorkstreamId]]
      :delegates [client/states]})
   (Operation delete!
-    "Discard a workstream in the core and remove its sessions and Runs, leaving the legacy ledger
-     files where they are. Idempotent. An open unit or a turn still running on it stops the
+    "Discard a workstream in the core, then remove its directory and everything in it — its
+     sessions and Runs. Idempotent. An open unit or a turn still running on it stops the
      discard — a merged or retracted unit does not: the core refuses, the refusal is
      thrown, and nothing is removed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
