@@ -5800,13 +5800,20 @@
                         (when falsified-by (str "\n    refuted by: " falsified-by)))))))
          "\n\n")))
 
+(defn- sh-quote
+  "`s` as one shell word, byte for byte, so a path with a space or quote in it reaches the command
+   as the one argument it is."
+  [s]
+  (str "'" (str/replace (str s) "'" "'\\''") "'"))
+
 (defn- amend-check-cmd
   "The shell command that dry-runs the answer at `out-path` as a `kind` record on this ledger —
-   through nido's own bb.edn, because an amender runs in the reviewed project's tree."
+   through nido's own bb.edn, because an amender runs in the reviewed project's tree. Every value
+   is one quoted shell word, so the dry-run refuses only for what it reads, never for a path."
   [project ws-id kind out-path]
-  (str "bb --config " (fs/path (core/nido-source-dir) "bb.edn")
-       " nido:review:amend:check :project " (name project) " :ws-id " ws-id
-       " :kind " (name kind) " :file " out-path))
+  (str "bb --config " (sh-quote (fs/path (core/nido-source-dir) "bb.edn"))
+       " nido:review:amend:check :project " (sh-quote (name project)) " :ws-id " (sh-quote ws-id)
+       " :kind " (sh-quote (name kind)) " :file " (sh-quote out-path)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   refusal-prompt
@@ -9525,16 +9532,25 @@
       (if (some? content) (spit (str f) content) (spit (str f ".absent") "")))
     (str dir)))
 
+(defn- amender-canvas
+  "What the run dir keeps of the amender's canvas: every path in `left` whose content its own
+   writes are known to have made, whether or not it is put back — a path someone changed since is
+   left alone in the worktree, and what the amender wrote there is still the case to list again.
+   The one source both the copy and every report of where it is derive from."
+  [left]
+  (into {} (remove (comp #{::stages/unknown} val)) left))
+
 (defn- put-back-canvas!
   "Put back every declaration path the amender wrote this round to what it held before the amender
    launched (`before`, from `canvas-files`), and keep what it left under the run dir. A path that no
    longer holds what the amender left (`left`, path → what its own writes made it, replayed from its
-   transcript, or ::stages/unknown) was changed by someone else, and is left alone. Answers what the report keeps of it, or nil
-   when the amender wrote nothing there."
+   transcript, or ::stages/unknown) was changed by someone else, and is left alone. What is kept
+   is `amender-canvas`, put back or not. Answers what the report keeps of it, or nil when the
+   amender wrote nothing there."
   [cwd before left kept-dir]
   (when (seq left)
     (let [{mine true theirs false} (group-by (fn [[path content]] (= content (holds cwd path))) left)
-          kept (keep-canvas! kept-dir (into {} mine))]
+          kept (keep-canvas! kept-dir (amender-canvas left))]
       (doseq [[path _] mine
               :let [f (fs/path cwd path) was (get before path)]]
         (if (some? was)
@@ -9605,7 +9621,7 @@
                               (cond
                                 (= :listed (:status reading)) nil
                                 (canvas-unverified-causes (:cause reading))
-                                {:halt (canvas-unverified-stop reading (when (seq @left) kept-dir))}
+                                {:halt (canvas-unverified-stop reading (when (seq (amender-canvas @left)) kept-dir))}
                                 listed-before? {:err (canvas-refusal reading)}
                                 :else nil))))))
         settle    (fn [out]

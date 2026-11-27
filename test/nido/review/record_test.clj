@@ -6,6 +6,7 @@
   (:require
    [babashka.fs :as fs]
    [cheshire.core :as json]
+   [clojure.java.shell :as shell]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [malli.core :as m]
@@ -3682,6 +3683,34 @@
     (is (empty? appended))
     (is (str/starts-with? canvas theirs) "the person's edit survives the refused amendment")
     (is (= ["canvas/review/core.clj"] (get-in out [:canvas-put-back :changed-since])))))
+
+(deftest a-timed-out-listing-keeps-the-amenders-canvas-a-person-changed-since
+  ;; The person's edit is not put back, but what the amender wrote there is still the case to list
+  ;; again against fukan, and the run dir the report names holds it.
+  (let [theirs (str (renamed canvas-module) ";; the person's\n")
+        calls  (atom 0)
+        listed (fn [_ _ & _]
+                 (if (= 1 (swap! calls inc))
+                   {:status :listed :elements []}
+                   {:status :undecidable :cause :timeout :limit-ms 180000 :error "did not finish"}))
+        {:keys [out canvas kept-core]}
+        (canvas-round {:elements listed
+                       :amend  (fn [wt _ _]
+                                 (spit (str (fs/path wt "canvas/review/core.clj")) (renamed canvas-module))
+                                 amended)
+                       :person (fn [wt _] (spit (str (fs/path wt "canvas/review/core.clj")) theirs))})]
+    (is (= :canvas-unverified (:status out)))
+    (is (= theirs canvas) "the person's edit is left alone")
+    (is (some? (get-in out [:canvas-check :kept])))
+    (is (= (renamed canvas-module) kept-core) "the run dir keeps the canvas as the amender left it")))
+
+(deftest the-amend-dry-run-command-hands-each-path-over-whole
+  (with-redefs [nido.platform.core/nido-source-dir (constantly "/src dir/it's")]
+    (let [cmd (#'record/amend-check-cmd :nido "ws 1" :design "/run dir/it's/a.edn")
+          {:keys [out]} (shell/sh "sh" "-c" (str "set -- " (subs cmd 3) "; printf '%s\\n' \"$@\""))]
+      (is (= ["--config" "/src dir/it's/bb.edn" "nido:review:amend:check" ":project" "nido"
+              ":ws-id" "ws 1" ":kind" "design" ":file" "/run dir/it's/a.edn"]
+             (str/split-lines out))))))
 
 (deftest a-throw-after-the-amender-still-puts-its-canvas-back
   ;; A stage that throws past the amender's launch appends nothing, so its canvas edit goes back.

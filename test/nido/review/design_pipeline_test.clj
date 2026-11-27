@@ -1083,7 +1083,7 @@
   (let [prompts (atom [])]
     (with-amend {:prompts prompts} (ctx :findings [(check :relation-honest :broken)]
                                         :record (decision :amend)))
-    (is (re-find #"nido:review:amend:check :project nido :ws-id ws-1 :kind design :file \S+design-amend-round-1\.edn"
+    (is (re-find #"nido:review:amend:check :project 'nido' :ws-id 'ws-1' :kind 'design' :file '\S+design-amend-round-1\.edn'"
                  (first @prompts)))))
 
 (deftest the-judge-says-what-a-moved-boundary-breaks
