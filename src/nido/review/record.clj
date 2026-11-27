@@ -9539,7 +9539,12 @@
    list again. `left` is path → {:content :mine?}: what the amender's own writes made the path
    (::stages/unknown only when they cannot be replayed), and whether nobody else wrote it this
    round. The one source both the copy and every report of where it is derive from; which paths
-   are put back is `put-back-canvas!`'s, from the same record."
+   are put back is `put-back-canvas!`'s, from the same record.
+
+   A known limit: a path whose content the amender's writes cannot be replayed into, such as an
+   Edit whose old text does not match or a notebook edit with no later full Write, is not in the
+   copy. The run dir then holds only part of the amender's canvas. This was accepted as the
+   limit of reading what the amender left from its own writes."
   [left]
   (into {} (keep (fn [[path {:keys [content]}]]
                    (when-not (= ::stages/unknown content) [path content])))
