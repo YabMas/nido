@@ -600,6 +600,63 @@
                    :else         (str "nothing reached " id "'s conductor: " (str/join ", " (:refused m)))))
     m))
 
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  send-back*
+  "Record that the person's :words sent the workstream back for rework from a landing — placed
+   :release-candidate, :published or :land-granted, the last when the core holds their Land — as
+   its :sent-back, and in the same core commit withdraw the operator asks :asks names (ids, which
+   the rework makes moot) and spend the :merge grant the core held when the position was read. Run
+   by the conductor's send_back tool, which decides that the word sends the work back.
+
+   Answers {:sent-back seq :from position :withdrew [ask-id] :spent? bool}, or {:refused reason
+   …} having written nothing: at any other position, with no words, when the ledger moved since the
+   position was read, or when the core refused the commit — a named ask not open, or one that is a
+   machine failure. A refusal at the position sends the core nothing."
+  [{:keys [words asks] :as opts}]
+  (let [[p id] (here opts)
+        ;; The ledger first: the writer refuses once it has moved past what was read here, so a
+        ;; position read off a newer ledger than this one is never written against.
+        after  (count (:entries (ws/read-ws p id)))
+        at     (:at (pipeline/of p id))
+        held   (get-in (wcore/state p id) [:grants :merge])
+        ;; The person's Land the core holds places a landing :land-granted, as the board places it.
+        from   (if (and held (#{:release-candidate :published} at)) :land-granted at)
+        asks   (vec (distinct (map str (if (sequential? asks) asks (when (some? asks) [asks])))))]
+    (cond
+      (str/blank? (str words))
+      {:refused :no-words}
+
+      (not (contains? report/sent-back-positions from))
+      {:refused :not-at-a-landing :at from}
+
+      :else
+      (let [r (ws/append-sent-back! p id after {:format :sent-back :words (str words) :from from}
+                                    {:asks asks
+                                     :reason (str "The person sent the workstream back for rework"
+                                                  " (its :sent-back, entry " (inc after) ")")
+                                     :merge-occurrence (:occurrence held)})]
+        (if (int? r)
+          {:sent-back r :from from :withdrew asks :spent? (some? held)}
+          (let [why (:refused r)]
+            (if (map? why)
+              (assoc why :refused (:reason why))
+              {:refused why :latest (:latest r)})))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  send-back-cmd
+  "bb nido:workstream:send-back :project <p> :ws-id <id> :words \"…\" [:asks '[\"ask …\" …]'] —
+   print what `send-back*` answered; a refusal exits 1, naming it."
+  [& args]
+  (let [[_ opts] (task-args/split-args args #{:words})
+        r        (send-back* opts)]
+    (if (:sent-back r)
+      (println (str "sent back from " (name (:from r)) " at entry " (:sent-back r)
+                    (when (seq (:withdrew r)) (str "; withdrew " (str/join ", " (:withdrew r))))
+                    (when (:spent? r) "; the person's Land is spent")))
+      (do (binding [*out* *err*]
+            (println (str "send-back REFUSED · " (pr-str r))))
+          (System/exit 1)))))
+
 (defn- worktree-of
   "The worktree a session's directory `cwd` stands for: its `worktree/` when `cwd` is the
    session's home, else `cwd` itself."

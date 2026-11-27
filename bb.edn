@@ -687,6 +687,11 @@
    :doc "Start work on a goal from anywhere: a new workstream handed to the core, whose unit's session — named <session> — the core provisions and whose first turn is the brief. How an exploration becomes nido's work. :project <p> <session> (:brief-file <path> | :brief \"…\"). Prints the workstream's id."
    :task (apply nido-session/start *command-line-args*)}
 
+  nido:workstream:send-back
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "The conductor's send_back tool runs this: record that the person's word sent the workstream back for rework from a landing (release candidate, published draft, granted Land) as its :sent-back, withdrawing in the same commit the operator asks named and spending the person's Land. :project <p> :ws-id <id> :words \"…\" [:asks '[\"ask …\"]']. Refused, writing nothing, at any other position."
+   :task (apply nido-workstream/send-back-cmd *command-line-args*)}
+
   nido:workstream:tell
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "From a workstream's chat, pass word on to that workstream's conductor: :text \"…\" [:images <digest>,<digest>] [:grants merge|intent|[merge intent]] [:project <p> :ws-id <id>] — :images only the digests the person's message carried, :grants only when the person's word hands the seats that act. Answers the ask awaiting the person when one does. Resolves the workstream from cwd unless named."

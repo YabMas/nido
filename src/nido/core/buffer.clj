@@ -23,8 +23,10 @@
    The JUDGEMENT is the conductor turn's: an agent with the conductor tools (this namespace's
    -main), which act only through core-api: answer or return a unit's call, raise an operator ask
    (decision-ready, binding the calls it consolidates), withdraw one whose premise moved, open a
-   unit the person granted, start a unit's turn, settle an unknown. Anything only the person can
-   decide it asks through the ask tool, and the first rule raises that.
+   unit the person granted, start a unit's turn, settle an unknown. One reaches the ledger: when
+   the person's word sends a landing back for rework, send_back records it by running nido's
+   send-back verb, which commits it through the core with the asks it supersedes. Anything only
+   the person can decide it asks through the ask tool, and the first rule raises that.
 
    Asleep, nothing here runs: the rules run per commit, and a conductor turn per wake. Loads under
    bb as well, because the tools run under bb."
@@ -362,6 +364,7 @@
      "- Directing a unit to ask several product questions, tell it to give each its own entry in the ask's `questions`."
      "- A unit with an unknown runs nothing until you settle it (settle_unknown) by observing what happened."
      "- Never ask the person whether to land. Once the implementation review converges and its QA passes or does not apply, the workstream is a release candidate, and the person lands it with its Land button; you hear it when they do."
+     "- While the workstream is a release candidate, a published draft or a granted Land, you decide whether the person's word sends the work back for rework. When it does, record that with send_back BEFORE you direct any unit to the rework, naming in `asks` every open operator ask about landing or about the candidate it sends back, and none about a decision the rework leaves standing. A word that only asks a question, or says to land, sends nothing back. send_back is the one record you write; units write every other."
      "- Start a unit's next turn with start_unit_turn when its goal needs more work; it runs in the unit's own session. Stop when there is nothing left to decide."
      chat-rule
      ""]
@@ -435,18 +438,56 @@
                             :properties {:text {:type "string"}} :required ["text"]
                             :command (fn [{:keys [text]} turn]
                                        {:command :reply-chat :message (str "reply " (random-uuid)) :text text :turn turn})}
+   "send_back"             {:description (str "Record that the person's word sent the workstream back for rework from a landing — a release "
+                                               "candidate, a published draft or a granted Land. Appends its :sent-back, and in the same commit "
+                                               "withdraws the open operator asks named in `asks` (those the rework makes moot) and spends the "
+                                               "person's Land, so the workstream is work underway again. Refused, changing nothing, at any other "
+                                               "position, or when a named ask is not open. `words` are the person's.")
+                            :properties {:words {:type "string"} :asks {:type "array" :items {:type "string"}}}
+                            :required ["words"]
+                            :verb true}
    "settle_unknown"        {:description "Settle an unknown on a unit, saying how you established what happened."
                             :properties {:unit {:type "string"} :key {:type "string"} :how {:type "string"}}
                             :required ["unit" "key" "how"]
                             :command (fn [{:keys [unit key how]}] {:command :settle-unknown :unit unit :key key :how how})}})
 
-(defn ^{:malli/schema [:=> [:cat :map :string :string :string :map] :string]} call-tool
+(defn ^{:malli/schema [:=> [:cat :map :string :map] [:vector :string]]} send-back-argv
+  "The argv send_back runs: nido's send-back verb, in the checkout `nido-dir`, for core workstream
+   `ws` (\"<project>/<ws-id>\"), with the person's `words` and the `asks` it withdraws."
+  [{:keys [bb-bin nido-dir]} ws {:keys [words asks]}]
+  (let [[project ws-id] (str/split ws #"/" 2)]
+    [(or bb-bin "bb") "--config" (str nido-dir "/bb.edn") "nido:workstream:send-back"
+     ":project" project ":ws-id" ws-id ":words" (str words) ":asks" (pr-str (vec (map str asks)))]))
+
+(defn- run-argv
+  "Run `argv` to its end, or for at most `timeout-ms`; answers {:exit n :out str}, the two streams
+   together, or {:exit nil :out …} when it did not end in time."
+  [argv timeout-ms]
+  (let [p   (.start (doto (ProcessBuilder. ^java.util.List argv) (.redirectErrorStream true)))
+        out (future (slurp (.getInputStream p)))]
+    (if (.waitFor p timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+      {:exit (.exitValue p) :out (deref out 5000 "")}
+      (do (.destroyForcibly p) {:exit nil :out "did not finish in time"}))))
+
+(defn- send-back!
+  "Run send_back with `args` on `ws` through nido's verb (`send-back-argv`), and answer what the
+   agent reads back. The one conductor tool that reaches the ledger, which the core may not
+   require: it runs the verb as the owed reader runs `nido:owed`."
+  [{:keys [nido-dir] :as opts} ws args]
+  (if-not nido-dir
+    "send_back is unavailable: this conductor was not given nido's checkout to run the verb in"
+    (let [{:keys [exit out]} (run-argv (send-back-argv opts ws args) 120000)]
+      (str (if (= 0 exit) "ok: " "refused: ") (str/trim (str out))))))
+
+(defn ^{:malli/schema [:=> [:cat :any :string :string :string :map [:? :map]] :string]} call-tool
   "Run conductor tool `tool` with `args` for conductor turn `turn` of `ws`, through `conn` (an
-   `nido.core.api` connection). Answers what the agent reads back."
-  [conn ws turn tool args]
+   `nido.core.api` connection). `opts` {:nido-dir :bb-bin} is where send_back runs nido's verb.
+   Answers what the agent reads back."
+  [conn ws turn tool args & [opts]]
   (let [{:keys [command]} (get tools tool)]
     (cond
       (= "state" tool) (pr-str (:state (api/request conn {:op :state :ws ws})))
+      (= "send_back" tool) (send-back! opts ws args)
       command (pr-str (api/request conn {:op :command :ws ws
                                          :key (str "conductor/" turn "/" (random-uuid))
                                          :command (if (= "reply_chat" tool) (command args turn) (command args))}))
@@ -454,7 +495,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :map] [:maybe :map]]} respond
   "The MCP response to `msg`, the conductor tools for the turn `ctx` {:socket :ws :turn} names."
-  [{:keys [socket ws turn]} {:keys [id method params]}]
+  [{:keys [socket ws turn] :as ctx} {:keys [id method params]}]
   (let [ok #(hash-map :jsonrpc "2.0" :id id :result %)]
     (case method
       "initialize" (ok {:protocolVersion (get params :protocolVersion "2025-06-18")
@@ -465,7 +506,8 @@
       "tools/call" (let [conn (api/connect socket)]
                      (try
                        (ok {:content [{:type "text"
-                                       :text (call-tool conn ws turn (:name params) (:arguments params))}]})
+                                       :text (call-tool conn ws turn (:name params) (:arguments params)
+                                                        (select-keys ctx [:nido-dir :bb-bin]))}]})
                        (finally (api/disconnect conn))))
       (when id (ok {})))))
 
@@ -477,19 +519,23 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} mcp-server
   "The conductor tools as an MCP server entry an executor can hand its agent. :src defaults to the
-   source root this namespace loaded from, :bb-bin to `bb`."
-  [{:keys [bb-bin src socket ws turn]}]
+   source root this namespace loaded from, :bb-bin to `bb`. :nido-dir is the nido checkout whose
+   bb.edn holds the send-back verb send_back runs; without it send_back answers it is unavailable."
+  [{:keys [bb-bin src socket ws turn nido-dir]}]
   {:command (or bb-bin "bb")
-   :args ["--classpath" (or src (src-dir)) "-m" "nido.core.buffer" "tools" socket ws turn]})
+   :args (cond-> ["--classpath" (or src (src-dir)) "-m" "nido.core.buffer" "tools" socket ws turn]
+           nido-dir (conj nido-dir (or bb-bin "bb")))})
 
 (defn ^:export -main
-  "`tools <socket> <ws> <turn>`: serve the conductor tools over stdio.
+  "`tools <socket> <ws> <turn> [<nido-dir> <bb-bin>]`: serve the conductor tools over stdio, send_back
+   running nido's verb in `nido-dir` with `bb-bin`.
    `tool <socket> <ws> <turn> <name> <json-args>`: run one, printing what an agent would read."
   [& [cmd socket ws turn tool args]]
   (case cmd
     "tools" (doseq [line (line-seq (java.io.BufferedReader. *in*))
                     :when (seq (str/trim line))]
-              (when-let [r (respond {:socket socket :ws ws :turn turn} (json/read-str line :key-fn keyword))]
+              (when-let [r (respond {:socket socket :ws ws :turn turn :nido-dir tool :bb-bin args}
+                                    (json/read-str line :key-fn keyword))]
                 (println (json/write-str r))
                 (flush)))
     "tool"  (let [conn (api/connect socket)]
@@ -543,8 +589,9 @@
    which the executor puts in its prompt. `owed`, (fn [ws]) -> `bb nido:owed`'s answer or nil, is
    asked only where the brief says what the recipe owes (`owed-wanted?`). `drain-brief`, (fn [ws]) ->
    the drain's coordinator brief or nil, is asked only for a drain (`drain?`), whose turn is told
-   `drain-brief` in place of `brief`; when it gives none the spec is nil, and the wake is withheld."
-  [{:keys [executor model socket src bb-bin ws-dir owed] read-brief :drain-brief :or {executor :claude}}]
+   `drain-brief` in place of `brief`; when it gives none the spec is nil, and the wake is withheld.
+   `nido-dir` is the checkout send_back runs nido's send-back verb in (`mcp-server`)."
+  [{:keys [executor model socket src bb-bin ws-dir owed nido-dir] read-brief :drain-brief :or {executor :claude}}]
   (fn [ws turn state items]
     (let [images (vec (distinct (mapcat :images (filter #(= :chat (:kind %)) items))))
           owed   (when (and owed (owed-wanted? state)) (owed ws))
@@ -553,7 +600,8 @@
         (cond-> {:executor executor
                  :instructions (if (drain? state) (drain-brief coord state items owed) (brief ws state items owed))
                  :cwd (ws-dir ws)
-                 :mcp-servers {"nido-conductor" (mcp-server {:bb-bin bb-bin :src src :socket socket :ws ws :turn turn})}}
+                 :mcp-servers {"nido-conductor" (mcp-server {:bb-bin bb-bin :src src :socket socket :ws ws :turn turn
+                                                             :nido-dir nido-dir})}}
           (seq images) (assoc :images images)
           model (assoc :model model))))))
 

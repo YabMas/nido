@@ -105,6 +105,17 @@
   (Operation pr-land-cmd
     "bb nido:workstream:pr:land — the entry point for `pr-land*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation send-back*
+    "Record that the person's word sent the workstream back for rework from a landing — placed
+     :release-candidate, :published or :land-granted — as its :sent-back, withdrawing in the same
+     core commit the operator asks named and spending the :merge grant the core held when the
+     position was read. Refused at any other position, sending the core nothing."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [workstream/append-sent-back!]})
+  (Operation send-back-cmd
+    "bb nido:workstream:send-back — the entry point for `send-back*`, which the conductor's
+     send_back tool runs; a refusal exits non-zero, naming it."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation tell-cmd
     "bb nido:workstream:tell — the entry point for `tell*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

@@ -38,8 +38,14 @@
      is not the core's to require."
     {:signature [:=> [:catn [:opts :map]] fn?]})
   (Operation call-tool
-    "Run one conductor tool for a conductor turn, through core-api; answers what the agent reads back."
-    {:signature [:=> [:catn [:conn :map] [:ws :string] [:turn :string] [:tool :string] [:args :map]] :string]})
+    "Run one conductor tool for a conductor turn; answers what the agent reads back. Each is a core
+     command or a read of core state, through core-api, but send_back, which runs nido's send-back
+     verb as a subprocess and is the one conductor tool that reaches the ledger."
+    {:signature [:=> [:catn [:conn :any] [:ws :string] [:turn :string] [:tool :string] [:args :map] [:opts [:? :map]]] :string]})
+  (Operation send-back-argv
+    "The argv send_back runs: nido's send-back verb in the nido checkout, for one workstream, with
+     the person's words and the asks it withdraws."
+    {:signature [:=> [:catn [:opts :map] [:ws :string] [:args :map]] [:vector :string]]})
   (Operation respond
     "The MCP response to one message, for the conductor tools of one turn."
     {:signature [:=> [:catn [:ctx :map] [:msg :map]] [:maybe :map]]})

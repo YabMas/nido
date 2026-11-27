@@ -184,6 +184,9 @@
                              ;; from the release it loaded, as the executor's hook and ask tool do —
                              ;; not from the checkout, which moves ahead of it on every landing.
                              {:socket (:socket ps) :bb-bin bb-bin
+                              ;; send_back runs nido's send-back verb in the checkout, as the owed
+                              ;; reader runs nido:owed there.
+                              :nido-dir nido-dir
                               ;; What the recipe owes past clearance is the pipeline's reading, asked
                               ;; of nido's own verb in the checkout, as the session verb is.
                               :owed (when nido-dir

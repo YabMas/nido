@@ -37,9 +37,14 @@
     {:signature [:=> [:catn [:design-standing [:maybe :map]] [:baseline-standing [:maybe :map]]
                       [:intent-standing [:maybe :map]]]
                  [:maybe :map]]})
+  (Operation restart
+    "The :seq of the newest restart on a workstream — a :phase-gate, a :findings or a :sent-back —
+     or nil. Each puts a workstream that carried a trail back to work, so a trail record written
+     before it is history, never a stage passed."
+    {:signature [:=> [:catn [:w :any]] [:maybe :int]]})
   (Operation standing-trail-records
-    "The trail records that stand since the newest :phase-gate or :findings, oldest first, or nil
-     when there is neither — the records `standing-trail` is the kinds of, so the record that
+    "The trail records that stand since the newest restart (`restart`), oldest first, or nil
+     when there is none — the records `standing-trail` is the kinds of, so the record that
      placed a trail position is nameable."
     {:signature [:=> [:catn [:w Workstream] [:design [:maybe :map]]] [:maybe [:vector :map]]]
      :delegates [trail-standing]})

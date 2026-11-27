@@ -255,6 +255,14 @@
      generation's opening hold — so what it decides from that read stays true while it runs."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:f [:=> [:cat Workstream] :any]]] :any]
      :delegates [append-lock-path read-ws]})
+  (Operation append-sent-back!
+    "Append a :sent-back — the person's word sending a landing back for rework — only if the
+     ledger's latest entry is still the one the send-back verb read the position at, through the
+     core's one :send-back commit that also withdraws the operator asks named and spends the :merge
+     grant the verb read held. The kind's one writer: every generic append refuses it. Answers the
+     seq committed, or a refusal — the ledger moved, or the core refused — having written nothing."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:expected-seq :int] [:sent-back :map] [:opts :map]] [:or :int :map]]
+     :delegates [append-lock-path read-ws client/command! report/entry-payload]})
   (Operation open-phase!
     "Append a :phase-gate and reopen the workstream, under its lock and in one write of the
      record — the kind's one writer. Refused unless the workstream is closed :between-phases, the evidence is not blank, and the
@@ -343,7 +351,7 @@
      (:kind) and the :seq of the entry that gave it: the :grants of its :blocker-answered and
      :grant entries that are the person's own acts — not an answer nido recorded for an act, an
      entry nido wrote, or a grant a design round carried forward — each unspent until an entry of
-     its act's spending kind follows it (:intent by an :intent, :merge by a :merged). The one
+     its act's spending kind follows it (:intent by an :intent, :merge by a :merged or a :sent-back). The one
      reading of a grant's spending: the conductor's refusal and instruction and the pipeline's
      position all read it here."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]]

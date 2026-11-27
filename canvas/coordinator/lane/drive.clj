@@ -59,10 +59,11 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
      :delegates [standing/governing-design standing/proceeding?]})
   (Operation implementation-review-passed?
-    "Whether the newest review over the implementation passed, with nothing built since — what
-     makes a workstream a release candidate once its QA passes or does not apply. With `reviews`,
-     the review is the newest among those records — the fold's clamped trail — while the newest
-     build is still the whole workstream's, as record-standing reads it."
+    "Whether the newest review over the implementation written after the newest restart passed,
+     with nothing built since — what makes a workstream a release candidate once its QA passes or
+     does not apply, so a candidate sent back is one again only once a review after the send-back
+     passes. With `reviews`, the review is the newest among those records — the fold's clamped
+     trail — while the newest build is still the whole workstream's, as record-standing reads it."
     {:signature [:function
                  [:=> [:catn [:w :any]] :boolean]
                  [:=> [:catn [:w :any] [:reviews :any]] :boolean]]
