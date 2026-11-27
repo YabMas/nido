@@ -249,9 +249,12 @@
        (str "  Owed now: the QA plan — at " at ". The implementation review converged, and no QA plan with steps "
             "is recorded for the governing design. Direct the unit holding the change to record one with `" nido-verb
             " nido:workstream:entry:add :project " (some-> project name) " :ws-id " ws-id " :kind :qa-plan :file <edn>`: "
-            "a :qa-plan citing the design ({:design {:seq N}}), in docs/reference/qa-brief.md's sections — :surface "
-            ":product with :steps ({:id :action :expected}), or :surface :none with the :reason nothing a user sees "
-            "changes. It is no release candidate yet.")
+            "a :qa-plan citing the design ({:design {:seq N}}), in ~/Code/nido/docs/reference/qa-brief.md's sections — "
+            ":surface :product with :steps ({:id :action :expected}), or :surface :none with the :reason nothing a user "
+            "sees changes. Every step, and everything its Before you start asks for, must be something the walk can do "
+            "in the session's own running web app. No Student App runs against a session's local backend, so no step "
+            "or precondition may need the Student App: a check that would is left out of the plan. Naming a visual "
+            "the web app draws after the Student App is not needing it. It is no release candidate yet.")
 
        (= :walk-qa stage)
        (str "  Owed now: the QA walk — at " at ". Direct the unit holding the change to walk the QA plan `" nido-verb
@@ -259,6 +262,8 @@
             "(the app port its briefing names); to keep a screenshot of every step with `" nido-verb
             " nido:workstream:screenshot:add :file <path>`; and to record one :qa-walk citing the plan "
             "({:plan {:seq N}}) with, for every step id, a :pass, :fail or :blocked result and its screenshot digests. "
+            "A step that needs the Student App is not walked and recorded :blocked: the unit first records a newer "
+            ":qa-plan citing the same design without that step, and walks that plan. "
             "It is no release candidate until a walk passes; direct no landing.")
 
        (= :address-qa stage)

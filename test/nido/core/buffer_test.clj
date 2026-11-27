@@ -263,6 +263,11 @@
         (is (re-find #"nido:workstream:screenshot:add" walk))
         (is (re-find #"Owed now: the QA plan — at qa-unplanned" plan))
         (is (re-find #":kind :qa-plan" plan))
+        (is (re-find #"~/Code/nido/docs/reference/qa-brief\.md" plan))
+        (is (re-find #"Every step, and everything its Before you start asks for, must be something the walk can do in the session's own running web app" plan))
+        (is (re-find #"no step or precondition may need the Student App: a check that would is left out of the plan" plan))
+        (is (re-find #"Naming a visual the web app draws after the Student App is not needing it" plan))
+        (is (re-find #"A step that needs the Student App is not walked and recorded :blocked: the unit first records a newer :qa-plan citing the same design without that step, and walks that plan" walk))
         (is (re-find #"Owed now: what the QA walk found — at qa-failed" fix))
         (doseq [t [walk plan fix]
                 :let [line (re-find #"Owed now: [^\n]*" t)]]

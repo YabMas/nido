@@ -37,7 +37,17 @@ the brief says in its own words.
 At landing, `/land` writes no brief of its own: it renders the workstream's
 recorded QA plan — the `:qa-plan` the QA walk exercised — which `bb
 nido:workstream:show` prints under `── landing QA brief ──`, or writes none.
-The plan's author writes the plan to this page. When grooming, `/review-queue`
+The plan's author writes the plan to this page.
+
+A recorded plan is walked by an agent before it lands, so every step of it,
+and everything its Before you start asks for, must be something the walk can
+do in the session's own running web app. No Student App runs against a
+session's local backend, so no step or precondition may need the Student App —
+not "keep the Student App open", not "compare with the Student App". A check
+that would is left out of the plan. Naming a visual the web app draws after the
+Student App ("the Student App ring") is not needing it.
+
+When grooming, `/review-queue`
 draws from the change's own record: the PR's layer briefs (Claims, Verify,
 Out of scope), the ticket and its comments, the design record — then translate
 every item into what a user does and sees. A check with no user-visible form (a
