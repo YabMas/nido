@@ -86,6 +86,17 @@
     "Every pid file an instance holds. One left after its session was stopped names a process the
      stop could not show was gone."
     {:signature [:=> [:catn [:instance-id InstanceId]] [:vector Path]] :delegates [instance-state-dir]})
+  (Operation front-config-file
+    "What the front of an on-demand :process service is told at its start. Its presence is what
+     keeps the front running: the service's stop removes it."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:service-name :any]] Path]
+     :delegates [instance-state-dir]})
+  (Operation repl-socket-path
+    "The filesystem socket an on-demand JVM's nREPL listens on — under the instance's state, or
+     the temp dir when that path is too long for a socket address. It has no TCP port, so nothing
+     but its front and nido's own app start reach it."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:service-name :any]] Path]
+     :delegates [instance-state-dir]})
   (Operation pg-data-dir "An instance's own Postgres data directory."
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [instance-state-dir]})
   (Operation sessions-root "The session-home root."
@@ -181,6 +192,11 @@
      Every session verb mutates this one file — up, down, destroy, reclaim, the daemon adopting
      an orphan — so it is the most contended state here, and the read happens inside the lock."
     {:signature [:=> [:catn [:project-dir Path] [:entry :map]] :any]
+     :delegates [io/update-edn!]})
+  (Operation update-runtime-entries!
+    "Apply a function to every entry of a session on one runtime, in one locked write — the
+     sessions sharing a runtime each carry its facts, an on-demand JVM's pid among them."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:f [:=> [:cat :map] :map]]] :any]
      :delegates [io/update-edn!]})
   (Operation remove-from-registry! "Drop one worktree's entry."
     {:signature [:=> [:catn [:project-dir Path]] :any] :delegates [io/update-edn!]})

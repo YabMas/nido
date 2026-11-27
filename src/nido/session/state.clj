@@ -100,6 +100,26 @@
   [instance-id service-name]
   (str (fs/path (instance-state-dir instance-id) (str (name service-name) ".pid"))))
 
+(defn ^{:malli/schema [:=> [:cat :InstanceId :any] :Path]}
+  front-config-file
+  "What the front of an on-demand :process service is told at its start:
+   ~/.nido/state/<instance-id>/<name>-front.edn. Its presence is also what keeps the front
+   running — the service's stop removes it, and a front that finds it gone exits."
+  [instance-id service-name]
+  (str (fs/path (instance-state-dir instance-id) (str (name service-name) "-front.edn"))))
+
+(defn ^{:malli/schema [:=> [:cat :InstanceId :any] :Path]}
+  repl-socket-path
+  "The filesystem socket an on-demand JVM's nREPL listens on, which only its front and nido's own
+   app start reach: ~/.nido/state/<instance-id>/<name>.sock, or a path under the temp dir when that
+   one is longer than a socket address may be (104 bytes on macOS)."
+  [instance-id service-name]
+  (let [p (str (fs/path (instance-state-dir instance-id) (str (name service-name) ".sock")))]
+    (if (< (count (.getBytes p "UTF-8")) 100)
+      p
+      (str (fs/path (System/getProperty "java.io.tmpdir")
+                    (str "nido-" (Integer/toHexString (hash p)) ".sock"))))))
+
 (defn ^{:malli/schema [:=> [:cat :InstanceId] [:vector :Path]]}
   pid-files
   "Every pid file an instance holds, whatever service wrote it; [] when it has
@@ -442,6 +462,15 @@
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
   upsert-registry! [project-dir entry]
   (update-registry! #(assoc % project-dir entry)))
+
+(defn ^{:malli/schema [:=> [:cat :InstanceId [:=> [:cat :map] :map]] :any]}
+  update-runtime-entries!
+  "Apply `f` to every registry entry of a session on runtime `instance-id`, as one locked write —
+   the sessions sharing a runtime each carry its facts in an entry of their own."
+  [instance-id f]
+  (update-registry!
+   (fn [reg]
+     (into {} (map (fn [[k e]] [k (if (= instance-id (:instance-id e)) (f e) e)])) reg))))
 
 (defn- prune-legacy-registry!
   "Drop `k` from any legacy registry that still carries it. read-registry merges

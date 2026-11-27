@@ -56,6 +56,11 @@
   (Operation remove-symlink-worktree!
     "Delete the symlink. Refuses to recurse, because following it would delete the checkout."
     {:signature [:=> [:catn [:wt-path Path]] :any]})
+  (Operation with-runtime-lock
+    "Run a function holding one runtime's lifecycle lock, the one every verb that starts or stops
+     its services takes — for what changes a runtime's services outside a verb: an on-demand
+     front starting or stopping its JVM."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:verb :keyword] [:f [:=> [:cat] :any]]] :any]})
   (Operation session-coords "A named session's worktree path and instance id."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :map]
      :delegates [resolve-project worktree-path]})

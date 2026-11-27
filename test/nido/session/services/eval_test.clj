@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process]
+   [bencode.core]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.process]
@@ -285,3 +286,35 @@
                 (str/split (get-in @seen [:opts :extra-env "PATH"]) #":"))
           "the child's PATH carries the script's directory")
       (finally (fs/delete-tree home)))))
+
+(defn- silent-nrepl!
+  "A filesystem-socket nREPL that reads every message sent it and answers none — when
+   `clones?`, none but the session clone, so an eval never returns. Returns a fn that stops it."
+  [path clones?]
+  (fs/delete-if-exists path)
+  (let [ss (java.nio.channels.ServerSocketChannel/open java.net.StandardProtocolFamily/UNIX)]
+    (.bind ss (java.net.UnixDomainSocketAddress/of (str path)))
+    (future
+      (try
+        (let [c   (.accept ss)
+              in  (java.io.PushbackInputStream. (java.nio.channels.Channels/newInputStream c))
+              out (java.nio.channels.Channels/newOutputStream c)]
+          (bencode.core/read-bencode in)
+          (when clones?
+            (bencode.core/write-bencode out {"id" "nido-clone" "new-session" "s1" "status" ["done"]})
+            (.flush out))
+          (loop [] (bencode.core/read-bencode in) (recur)))
+        (catch Exception _ nil)))
+    (fn [] (.close ss) (fs/delete-if-exists path))))
+
+(deftest an-eval-over-a-socket-that-never-answers-ends-at-its-timeout
+  (doseq [clones? [true false]]
+    (let [path (str (fs/path (str (fs/create-temp-dir)) "repl.sock"))
+          stop (silent-nrepl! path clones?)]
+      (try
+        (let [r (deref (future (#'eval/eval-over-socket path 300 "(Thread/sleep 100000)")) 5000 ::stuck)]
+          (is (not= ::stuck r)
+              (str "the eval ends at its timeout, not when the JVM answers — "
+                   (if clones? "an eval" "the session clone") " it never answers"))
+          (is (str/includes? (str (:out r)) @#'eval/eval-timeout-signature)))
+        (finally (stop))))))

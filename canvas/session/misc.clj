@@ -14,7 +14,10 @@
   "The application service, driven over nREPL.
 
    Started by evaluating the project's declared start form in the session's own REPL rather than
-   by spawning a process — which is why the app can be restarted without the session going down."
+   by spawning a process — which is why the app can be restarted without the session going down.
+   The :eval service's start reserves the app port and boots the app, and its stop evaluates the
+   app's stop form, only when its JVM is not declared on demand; an on-demand JVM's front calls
+   start-app! and stop-app! itself, over the JVM's own filesystem socket."
   (Operation start-app! "Evaluate the service's start form and wait for it."
     {:signature [:=> [:catn [:service-def :map] [:saved-state :any] [:session-ctx :map]] :any]})
   (Operation stop-app! "Evaluate the service's stop form."

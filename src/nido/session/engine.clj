@@ -298,20 +298,50 @@
                (:jvm-extra-opts opts) (assoc :extra-opts (:jvm-extra-opts opts)))]
     (ctx/prepare-jvm (merge base flat (:jvm opts)))))
 
+(defn- on-demand-repls
+  "The names of the :process services in `services` that declare their JVM `:on-demand`."
+  [services]
+  (into #{} (comp (filter #(and (= :process (:type %)) (:on-demand %))) (map :name)) services))
+
+(defn- allocate-port [seed [low high]]
+  (proc/find-available-port (proc/deterministic-port seed low high) (- high low)))
+
 (defn- pre-allocate-ports
   "Pre-allocate ports for services that need their port known by other
    services BEFORE they run (e.g. the :eval service's app port is
    referenced from the :config-file template, which runs first). Seeds
-   `(keyword svc-name)` → {:port N} into the context."
+   `(keyword svc-name)` → {:port N :bind-port N} into the context: `:port` is the session's
+   app port, `:bind-port` the port the app itself binds, which a config file tells it.
+
+   For a JVM declared `:on-demand` the front holds the session's ports, so they are allocated
+   here too, before anything starts: the :process service's nREPL port, and for each :eval
+   service on it a second port, the one the app binds behind the front. The JVM's own nREPL
+   listens on a filesystem socket and has no port at all. An eval service on an on-demand JVM
+   is also named under its :process service's `:front-apps`, which is how the front learns
+   which app port it holds."
   [services project-dir]
-  (reduce (fn [acc svc-def]
-            (if (and (= :eval (:type svc-def)) (:name svc-def))
-              (let [[low high] (or (:port-range svc-def) [3100 5100])
-                    pref (proc/deterministic-port project-dir low high)
-                    port (proc/find-available-port pref (- high low))]
-                (assoc acc (keyword (:name svc-def)) {:port port}))
-              acc))
-          {} services))
+  (let [on-demand (on-demand-repls services)]
+    (reduce (fn [acc svc-def]
+              (cond
+                (and (= :eval (:type svc-def)) (:name svc-def))
+                (let [rng  (or (:port-range svc-def) [3100 5100])
+                      port (allocate-port project-dir rng)
+                      repl (some-> (:repl-service svc-def) keyword)]
+                  (if (contains? on-demand repl)
+                    (let [bind (proc/find-available-port (inc port) (- (second rng) (first rng)))]
+                      (-> acc
+                          (assoc (keyword (:name svc-def)) {:port port :bind-port bind})
+                          (update-in [repl :front-apps] (fnil conj [])
+                                     {:service (:name svc-def) :port port :bind-port bind})))
+                    (assoc acc (keyword (:name svc-def)) {:port port :bind-port port})))
+
+                (contains? on-demand (:name svc-def))
+                (assoc-in acc [(keyword (:name svc-def)) :port]
+                          (allocate-port (str project-dir "#" (name (:name svc-def)))
+                                         (or (get-in svc-def [:on-demand :port-range]) [5100 5500])))
+
+                :else acc))
+            {} services)))
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   filter-services
@@ -778,7 +808,8 @@
   (doseq [svc-def (:service-defs existing)
           :when   (= :eval (:type svc-def))
           :let    [saved-state (get (:service-states existing) (:name svc-def))]
-          :when   saved-state]
+          ;; An app on an on-demand JVM is the front's to start, with the JVM.
+          :when   (and saved-state (not (:on-demand? saved-state)))]
     (eval-svc/start-app! svc-def saved-state (:context existing))))
 
 (defn ^{:malli/schema [:=> [:cat :Path [:maybe :InstanceId]] [:sequential :string]]}

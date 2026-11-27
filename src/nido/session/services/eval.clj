@@ -1,12 +1,20 @@
 (ns nido.session.services.eval
-  "App toggle via nREPL eval. The session owns the JVM (via the :process
-   service); this service owns the application's mount/start state on top of
-   that JVM. Lazy by design: `start-service!` only reserves the port and
-   publishes the URL into context — it does NOT boot the app. Use
-   `start-app!` / `stop-app!` to toggle the app at runtime (called by
-   lifecycle bb tasks and the UI)."
+  "The application, started and stopped by evaluating the project's declared forms over the
+   session's nREPL rather than run as a process of its own. The :process service owns the JVM;
+   this service owns the application's mount state inside it.
+
+   `start-service!` reserves the app port and boots the app, so a runtime start brings the app up
+   with it — unless the JVM is declared `:on-demand`, when no JVM runs yet: then it only reserves
+   the ports, and the :process service's front starts the app after the JVM
+   (`nido.session.front`). `stop-service!` stops the app likewise only when its JVM is not on
+   demand, and then over the JVM's own socket, never through the front, which would start a JVM
+   to stop an app.
+
+   `start-app!` / `stop-app!` reach the nREPL over its TCP port, or over a filesystem socket when
+   the saved state names one (an on-demand JVM's)."
   (:require
    [babashka.fs :as fs]
+   [bencode.core :as bencode]
    [babashka.process :refer [shell]]
    [clojure.string :as str]
    [nido.platform.core :as core]
@@ -176,22 +184,88 @@
     {:exe  exe
      :path (str/join ":" (cons path extras))}))
 
+(defn- bytes->str [v]
+  (if (bytes? v) (String. ^bytes v "UTF-8") (str v)))
+
+(defn- socket-connectable?
+  "Whether an nREPL server answers on filesystem socket `path`."
+  [path]
+  (boolean
+   (when (and path (fs/exists? path))
+     (try
+       (with-open [_ (java.nio.channels.SocketChannel/open
+                      (java.net.UnixDomainSocketAddress/of (str path)))]
+         true)
+       (catch Exception _ false)))))
+
+(defn- eval-over-socket
+  "Evaluate `form` on the nREPL at filesystem socket `path`, as clj-nrepl-eval would over TCP:
+   {:exit :out :err}, the eval's printed output and values on :out and what it wrote to stderr —
+   a thrown exception's `Execution error …` among it — on :err. clj-nrepl-eval speaks TCP only,
+   which is why this exists: an on-demand JVM's nREPL listens on no TCP port. When `timeout-ms`
+   elapses — the session's clone included — the eval is interrupted, the connection closed and
+   :out carries `eval-timeout-signature`, as clj-nrepl-eval reports it."
+  [path timeout-ms form]
+  (try
+    (with-open [ch (java.nio.channels.SocketChannel/open
+                    (java.net.UnixDomainSocketAddress/of (str path)))]
+      (let [out  (java.io.BufferedOutputStream. (java.nio.channels.Channels/newOutputStream ch))
+            in   (java.io.PushbackInputStream. (java.nio.channels.Channels/newInputStream ch))
+            send (fn [m] (bencode/write-bencode out m) (.flush out))
+            recv (fn [] (bencode/read-bencode in))
+            sid  (atom nil)
+            outs (StringBuilder.)
+            errs (StringBuilder.)
+            done (future
+                   (send {"op" "clone" "id" "nido-clone"})
+                   (let [s (loop [] (let [m (recv)]
+                                      (or (some-> (get m "new-session") bytes->str) (recur))))]
+                     (send {"op" "eval" "code" form "id" "nido-eval" "session" s})
+                     (reset! sid s))
+                   (loop []
+                     (let [m (recv)]
+                       (when-let [v (get m "out")]   (.append outs (bytes->str v)))
+                       (when-let [v (get m "value")] (.append outs (str (bytes->str v) "\n")))
+                       (when-let [v (get m "err")]   (.append errs (bytes->str v)))
+                       (when-let [v (get m "ex")]
+                         (when-not (str/includes? (str errs) "Execution error")
+                           (.append errs (str "Execution error (" (bytes->str v) ")\n"))))
+                       (if (some #(= "done" (bytes->str %)) (get m "status"))
+                         :done
+                         (recur)))))
+            r    (try (deref done timeout-ms ::timeout)
+                      (catch java.util.concurrent.ExecutionException e (throw (or (.getCause e) e))))]
+        (when (= ::timeout r)
+          ;; Only once the eval was sent, so nothing else is writing; a JVM that never answered
+          ;; the clone has no eval to interrupt, and the close below ends the wait on it.
+          (when-let [s @sid]
+            (try (send {"op" "interrupt" "session" s "interrupt-id" "nido-eval" "id" "nido-int"})
+                 (catch Exception _ nil)))
+          (future-cancel done)
+          (.append outs (str "\n" eval-timeout-signature "\n")))
+        {:exit 0 :out (str outs) :err (str errs)}))
+    (catch Exception e
+      {:exit 1 :out "" :err (str "Could not reach nREPL on socket " path ": " (ex-message e))})))
+
 (defn- eval-on-repl!
-  "Send `form` to the nREPL on `nrepl-port`, capturing both stdout and
-   stderr. Persists the exchange to the session's eval.log (visible in
+  "Send `form` to the nREPL `nrepl` names — a TCP port, or a filesystem socket's path — capturing
+   both stdout and stderr. Persists the exchange to the session's eval.log (visible in
    the UI). Throws if the shell itself failed, if `timeout-ms` elapsed and
    the eval was interrupted, OR if the eval returned
    content that looks like a thrown exception — with the first
    meaningful error line attached as :error-msg so callers can surface
    it on the :failed state."
-  [instance-id project-name nrepl-port timeout-ms form]
-  (let [{:keys [exe path]} (nrepl-eval-command)
-        result (shell {:continue true :out :string :err :string
-                       :extra-env {"PATH" path}}
-                      exe
-                      "-p" (str nrepl-port)
-                      "--timeout" (str timeout-ms)
-                      form)
+  [instance-id project-name nrepl timeout-ms form]
+  (let [result (if (string? nrepl)
+                 (eval-over-socket nrepl timeout-ms form)
+                 (let [{:keys [exe path]} (nrepl-eval-command)]
+                   (shell {:continue true :out :string :err :string
+                           :extra-env {"PATH" path}}
+                          exe
+                          "-p" (str nrepl)
+                          "--timeout" (str timeout-ms)
+                          form)))
+        nrepl-port nrepl
         out (:out result)
         err (:err result)
         ;; A thrown exception arrives on stderr. Read stdout alone and a boot
@@ -297,22 +371,41 @@
 ;; Public: app toggle (called from lifecycle + UI, NOT from start-service!)
 ;; ---------------------------------------------------------------------------
 
+(defn- nrepl-of
+  "Where the nREPL `saved-state` names is: its filesystem socket when it has one (an on-demand
+   JVM's), else its TCP port."
+  [{:keys [socket nrepl-port]}]
+  (or socket nrepl-port))
+
+(defn- nrepl-answers? [nrepl]
+  (if (string? nrepl)
+    (socket-connectable? nrepl)
+    (and (pos-int? nrepl) (proc/tcp-open? nrepl))))
+
+(defn- bound-port
+  "The port the app itself binds: `:bind-port` when its JVM is on demand — the front holds the
+   session's app port, `:app-port` — else the session's app port."
+  [{:keys [bind-port app-port]}]
+  (or bind-port app-port))
+
 (defn ^{:malli/schema [:=> [:cat :map :any :map] :any]}
   start-app!
-  "Eval the service's :start-form over nREPL and wait for the app's HTTP
-   port to open. Idempotent: if the app is already listening, returns
-   immediately without re-evaling."
+  "Eval the service's :start-form over nREPL and wait for the port the app binds to open.
+   Idempotent: if the app is already listening, returns immediately without re-evaling. The form
+   is substituted with `app.port` and `app.bind-port` both naming the port the app binds."
   [service-def saved-state session-ctx]
   (let [{:keys [start-form eval-timeout-ms health-check-timeout-ms]
          :or {eval-timeout-ms 180000 health-check-timeout-ms 180000}} service-def
-        {:keys [app-port nrepl-port host]} saved-state]
+        {:keys [host]} saved-state
+        nrepl    (nrepl-of saved-state)
+        app-port (bound-port saved-state)]
     (cond
       (not start-form)
       (throw (ex-info "Service has no :start-form" {:service (:name service-def)}))
 
-      (not (and (pos-int? nrepl-port) (proc/tcp-open? nrepl-port)))
+      (not (nrepl-answers? nrepl))
       (throw (ex-info "nREPL is not listening — session may not be up"
-                      {:nrepl-port nrepl-port}))
+                      {:nrepl-port nrepl}))
 
       (proc/tcp-open? app-port)
       (do (core/log-step (str "App already listening on " host ":" app-port)) true)
@@ -320,12 +413,12 @@
       :else
       (let [instance-id (or (:instance-id saved-state)
                             (get-in session-ctx [:session :instance-id]))
-            local-ctx (assoc session-ctx :app {:port app-port})
+            local-ctx (assoc session-ctx :app {:port app-port :bind-port app-port})
             resolved-start-form (ctx/substitute-value local-ctx start-form)]
         (core/log-step (str "Starting app on " host ":" app-port " (via nREPL eval)..."))
         (try
           (eval-on-repl! instance-id (get-in session-ctx [:session :project-name])
-                         nrepl-port eval-timeout-ms resolved-start-form)
+                         nrepl eval-timeout-ms resolved-start-form)
           (catch clojure.lang.ExceptionInfo e
             (let [project-dir (get-in session-ctx [:session :project-dir])]
               (throw (if (stale-working-copy? project-dir)
@@ -349,12 +442,14 @@
    leaving the JVM running. Idempotent."
   [service-def saved-state]
   (let [{:keys [stop-form]} service-def
-        {:keys [nrepl-port app-port host]} saved-state]
+        {:keys [host]} saved-state
+        nrepl    (nrepl-of saved-state)
+        app-port (bound-port saved-state)]
     (cond
       (not stop-form)
       (core/log-step "Service has no :stop-form — skipping app stop")
 
-      (not (and (pos-int? nrepl-port) (proc/tcp-open? nrepl-port)))
+      (not (nrepl-answers? nrepl))
       (core/log-step "nREPL not listening — nothing to stop")
 
       (not (proc/tcp-open? app-port))
@@ -364,7 +459,7 @@
       (let [instance-id (:instance-id saved-state)]
         (core/log-step (str "Stopping app on " host ":" app-port " (via nREPL eval)..."))
         (try
-          (eval-on-repl! instance-id (:project-name saved-state) nrepl-port 30000 stop-form)
+          (eval-on-repl! instance-id (:project-name saved-state) nrepl 30000 stop-form)
           (catch Exception e
             (println "warning: could not stop app via nREPL:" (ex-message e))))))))
 
@@ -378,43 +473,56 @@
          :keys [repl-service port-range]
          :or {port-range [3100 5100]}} service-def
         project-dir (get-in session-ctx [:session :project-dir])
-        repl-port (get-in session-ctx [(keyword repl-service) :port])
+        repl (get session-ctx (keyword repl-service))
+        repl-port (:port repl)
         _ (when-not repl-port
             (throw (ex-info "REPL port not found in context"
                             {:repl-service repl-service
                              :available-keys (keys session-ctx)})))
-        pre-allocated (when svc-name (get-in session-ctx [(keyword svc-name) :port]))
-        app-port (or pre-allocated
+        pre-allocated (when svc-name (get session-ctx (keyword svc-name)))
+        app-port (or (:port pre-allocated)
                      (let [[low high] port-range
                            preferred-port (proc/deterministic-port project-dir low high)]
                        (proc/find-available-port preferred-port (- high low))))
+        on-demand? (boolean (:on-demand repl))
         project-name (get-in session-ctx [:session :project-name])
         instance-id (get-in session-ctx [:session :instance-id])
         host (friendly-host project-name (get-in session-ctx [:session :runtime-key]))
         url (str "http://" host ":" app-port)
-        saved-state {:app-port app-port :nrepl-port repl-port :host host
-                     :instance-id instance-id :project-name project-name}]
-    (core/log-step (str "App port reserved on " host ":" app-port " — starting app"))
-    ;; Session lifecycle is now single-phase: init always boots the app.
-    ;; Any exception here propagates → whole session start fails → engine
-    ;; tears down upstream services. That's the desired contract.
-    (start-app! service-def saved-state session-ctx)
+        saved-state (cond-> {:app-port app-port :nrepl-port repl-port :host host
+                             :instance-id instance-id :project-name project-name}
+                      on-demand? (assoc :on-demand? true
+                                        :bind-port (:bind-port pre-allocated)
+                                        :socket (:socket repl)))]
+    (if on-demand?
+      ;; No JVM runs yet: the front starts the app once the JVM it starts answers.
+      (core/log-step (str "App port reserved on " host ":" app-port
+                          " — the app starts with its on-demand JVM"))
+      (do
+        (core/log-step (str "App port reserved on " host ":" app-port " — starting app"))
+        ;; Any exception here propagates → whole session start fails → engine
+        ;; tears down upstream services. That's the desired contract.
+        (start-app! service-def saved-state session-ctx)))
     {:state saved-state
-     :context {:port app-port
-               :host host
-               :url url}}))
+     :context (cond-> {:port app-port
+                       :bind-port (or (:bind-port saved-state) app-port)
+                       :host host
+                       :url url}
+                on-demand? (assoc :on-demand true))}))
 
 (defmethod service/stop-service! :eval
-  [service-def saved-state]
   ;; Called at session teardown. Runs the stop-form if the app happens to
-  ;; be running — otherwise a no-op.
+  ;; be running — otherwise a no-op. An on-demand JVM's app is reached over the JVM's own socket,
+  ;; which answers only while the JVM runs, so a stopped JVM is not started to stop its app.
+  [service-def saved-state]
   (stop-app! service-def saved-state))
 
 (defmethod service/service-status :eval
   [_service-def saved-state]
   (let [{:keys [app-port]} saved-state
-        listening? (and (pos-int? app-port) (proc/tcp-open? app-port))]
+        listening? (and (pos-int? app-port) (proc/tcp-open? app-port))
+        running?   (let [p (bound-port saved-state)] (and (pos-int? p) (proc/tcp-open? p)))]
     {:alive? listening?
      :listening? listening?
      :port app-port
-     :app-state (if listening? :running :idle)}))
+     :app-state (if running? :running :idle)}))

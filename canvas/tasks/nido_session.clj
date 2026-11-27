@@ -61,6 +61,10 @@
   (Operation list-sessions
     "List every session for a project."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation cold-starts
+    "Print a project's on-demand JVM cold starts — one session's when named — each with how it
+     ended and how long it took, read from the two instants it records."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation isolate
     "Switch a session to a private Postgres clone so it can run destructive"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

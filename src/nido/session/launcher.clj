@@ -828,9 +828,22 @@
        (not= (str (fs/normalize (fs/absolutize worktree)))
              (str (fs/normalize (fs/absolutize runtime-dir))))))
 
+(defn- on-demand-jvm-note
+  "What an agent on an on-demand runtime is told about its JVM: it starts on the first call, which
+   waits for it. Nothing for the agent to do first — the call is the start."
+  [nrepl-port]
+  (str "### The JVM starts on your first call\n\n"
+       "This session's JVM is started on demand: it is not running until a client first\n"
+       "uses the nREPL or app port, and it is stopped again after a while unused. Use\n"
+       "`clj-nrepl-eval -p " nrepl-port " '<form>'` as you would against a running nREPL — the\n"
+       "first call starts the JVM, waits for its nREPL (seconds), then runs and returns its\n"
+       "result. The app starts after it and takes longer; the app port's first request waits\n"
+       "for it. If a first call times out, call again: the start goes on without it. Use\n"
+       "this port, never another one a JVM is listening on.\n\n"))
+
 (defn- render-context
   [{:keys [project-name session-name worktree source-dir runtime-dir checkout
-           app-port app-url nrepl-port pg-port
+           app-port app-url nrepl-port pg-port jvm-on-demand?
            profile links project-briefing
            workstream-id br-id design-scope]}]
   ;; Services are said to be running only once a port is known: a session whose
@@ -854,7 +867,8 @@
      "\n"
      (case services
        :running
-       "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
+       (str "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
+            (when (and jvm-on-demand? nrepl-port) (on-demand-jvm-note nrepl-port)))
        :starting
        (str "## Services are starting\n\nThe REPL, app server, and database for this worktree are managed by\nnido and are still booting in the background — a minute or so for a\nlarge app. Don't run project-local scripts that spin up a REPL/app/DB.\n`nido session:status " session-name "` shows whether they are up and\nlists their ports once they are; until then there is no nREPL to\nconnect to and no postgres MCP in this session.\n\n")
        :lite
@@ -1251,6 +1265,7 @@
                                                :app-port         (get-in ctx [:app :port])
                                                :app-url          (get-in ctx [:app :url])
                                                :nrepl-port       (get-in ctx [:repl :port])
+                                               :jvm-on-demand?   (boolean (get-in ctx [:repl :on-demand]))
                                                :pg-port          pg-port
                                                :profile          profile
                                                :links            link-entries
@@ -1345,7 +1360,8 @@
         nrepl-port (get-in ctx [:repl :port])
         app-port   (get-in ctx [:app :port])
         app-url    (get-in ctx [:app :url])
-        pg-port    (get-in ctx [:pg :port])]
+        pg-port    (get-in ctx [:pg :port])
+        on-demand? (boolean (get-in ctx [:repl :on-demand]))]
     (when (or nrepl-port app-port pg-port)
       (str
        "# This worktree is a live nido session\n"
@@ -1367,15 +1383,24 @@
        "above; a service not listed is one this session does not provision.\n"
        (when nrepl-port
          (str "\n"
-              "## The JVM is already warm\n"
-              "\n"
-              "`clj-nrepl-eval -p " nrepl-port " '<form>'` evaluates against the running\n"
-              "nREPL (it reads stdin too, for a long form). Use it to reload a namespace\n"
-              "you changed and to exercise it.\n"
+              (if on-demand?
+                (str "## The JVM starts on your first call\n"
+                     "\n"
+                     "`clj-nrepl-eval -p " nrepl-port " '<form>'` evaluates against this session's\n"
+                     "nREPL (it reads stdin too, for a long form). The JVM is started on demand:\n"
+                     "the first call starts it and the app and waits for them, then runs and\n"
+                     "returns its result. A first call that times out can simply be made again;\n"
+                     "the start goes on without it. Use it to reload a namespace you changed and\n"
+                     "to exercise it.\n")
+                (str "## The JVM is already warm\n"
+                     "\n"
+                     "`clj-nrepl-eval -p " nrepl-port " '<form>'` evaluates against the running\n"
+                     "nREPL (it reads stdin too, for a long form). Use it to reload a namespace\n"
+                     "you changed and to exercise it.\n"))
               "\n"
               "A `clojure -M:...`, `lein` or `bb` run starts a SECOND JVM and pays its\n"
               "startup and classpath resolution every time — tens of seconds before any\n"
-              "of your code runs. Reach for one only for what the warm JVM cannot answer,\n"
+              "of your code runs. Reach for one only for what the session's JVM cannot answer,\n"
               "and where this project's own guidance names a path for full suites, follow\n"
               "that: this rule is about not starting a JVM the session already has, not\n"
               "about how this project runs its tests.\n"
@@ -1427,6 +1452,7 @@
              :app-port         (get-in ctx [:app :port])
              :app-url          (get-in ctx [:app :url])
              :nrepl-port       (get-in ctx [:repl :port])
+             :jvm-on-demand?   (boolean (get-in ctx [:repl :on-demand]))
              :pg-port          (get-in ctx [:pg :port])
              :profile          profile
              :links            link-entries

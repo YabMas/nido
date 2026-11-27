@@ -148,6 +148,16 @@
    :doc "Session status: :project <p> <session>"
    :task (apply nido-session/status *command-line-args*)}
 
+  nido:session:cold-starts
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "An on-demand JVM's cold starts, oldest first, with how each ended and how long it took: :project <p> [<session>]"
+   :task (apply nido-session/cold-starts *command-line-args*)}
+
+  nido:session:front
+  {:requires ([nido.session.front :as front])
+   :doc "Internal — the front of an on-demand JVM, started by its :process service: <instance-id> <service>"
+   :task (front/main *command-line-args*)}
+
   nido:session:list
   {:requires ([tasks.nido-session :as nido-session])
    :doc "List sessions: :project <p>"

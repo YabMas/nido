@@ -1,0 +1,451 @@
+(ns nido.session.front
+  "The front of an on-demand JVM: one detached process per runtime that holds the session's nREPL
+   and app ports while no JVM runs behind them, and starts the JVM when a client first sends it a
+   byte.
+
+   It hides whether a JVM runs. A connection is accepted and read; one that closes having sent
+   nothing — a port probe, `tcp-open?` — starts nothing. The first byte starts the runtime's
+   on-demand group once, under the runtime's lifecycle lock: the JVM, its nREPL on a filesystem
+   socket, then each app on it, by its start form over that socket. What the client sent meanwhile
+   is held, and relayed in order once its target answers — the nREPL as soon as the JVM's socket
+   does, an app port once its app does — and the replies come back unchanged, so the client speaks
+   to the front as it would to the JVM. A client that gives up first sees its call fail; the start
+   goes on.
+
+   Once no byte has passed through the nREPL port for the declared idle period and no connection
+   is open through any port, the group is stopped — the app's stop form, then the JVM — and
+   nothing else: the runtime, its ports and every other service stay, and the next byte starts
+   the JVM again.
+
+   Every start is recorded in the project's cold-start log (`nido.session.cold-starts`), and one
+   that fails is kept under ~/.nido/failures/ as a failed session start, the connections it held
+   closed.
+
+   The front lives with its runtime: it exits when the service's stop removes its config file,
+   when the runtime record it was started for goes, or when that record names another front."
+  (:require
+   [babashka.fs :as fs]
+   [clojure.string :as str]
+   [nido.platform.core :as core]
+   [nido.platform.io :as io]
+   [nido.platform.process :as proc]
+   [nido.session.cold-starts :as cold-starts]
+   [nido.session.failure :as failure]
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.services.eval :as eval-svc]
+   [nido.session.services.process :as process]
+   [nido.session.state :as state])
+  (:import
+   [java.net InetSocketAddress ServerSocket Socket UnixDomainSocketAddress]
+   [java.nio ByteBuffer]
+   [java.nio.channels SocketChannel]))
+
+(def ^:private tick-ms 2000)
+
+(def ^:private unowned-limit-ms
+  "How long a front waits for the runtime it was started for to be recorded as running it — longer
+   than any runtime start, since the record is written only after every service is up."
+  (* 20 60 1000))
+
+;; ---------------------------------------------------------------------------
+;; Runtime facts the front keeps in step with its JVM
+;; ---------------------------------------------------------------------------
+
+(defn- port-file [{:keys [project-dir port-file]}]
+  (when (and project-dir port-file) (str (fs/path project-dir port-file))))
+
+(defn- assert-port-file!
+  "Make the runtime's `.nrepl-port` name the front's port. The JVM's nREPL writes the file too —
+   empty, since it listens on a socket — and removes it at exit, so this is asserted again on
+   every tick rather than once."
+  [cfg]
+  (when-let [f (port-file cfg)]
+    (let [want (str (:nrepl-port cfg))]
+      (when (and (fs/exists? (fs/parent f))
+                 (not= want (try (str/trim (slurp f)) (catch Exception _ nil))))
+        (try (spit f want) (catch Exception _ nil))))))
+
+(defn- note-jvm!
+  "Record that the runtime's on-demand JVM runs as `pid`, or that none does (nil): in the runtime
+   record, and on every registry entry of a session on it, which the fleet charges memory by."
+  [{:keys [instance-id service]} pid]
+  (when-let [s (state/read-session instance-id)]
+    (state/write-session! instance-id
+                          (-> s
+                              (assoc-in [:service-states service :jvm-pid] pid)
+                              (assoc-in [:context (keyword service) :pid] pid))))
+  (state/update-runtime-entries! instance-id
+                                 #(if pid (assoc % :repl-pid pid) (dissoc % :repl-pid))))
+
+(defn- app-services
+  "Each app service on this JVM, with the state its runtime saved for it."
+  [{:keys [apps]} session]
+  (for [{:keys [service]} apps
+        :let [d (some #(when (= service (:name %)) %) (:service-defs session))
+              s (get (:service-states session) service)]
+        :when (and d s)]
+    [d s]))
+
+(defn- session-name [cfg session]
+  (or (:name session) (first (vals (state/members session))) (:instance-id cfg)))
+
+;; ---------------------------------------------------------------------------
+;; The on-demand group: one start, one stop, under the runtime's lock
+;; ---------------------------------------------------------------------------
+
+(defn- now-ms [] (System/currentTimeMillis))
+
+(defn- record-start!
+  "Append the start that just ended to the project's cold-start log; a failure to write it is
+   logged, never thrown, so it cannot take the front down."
+  [front outcome cause]
+  (let [{:keys [cfg start]} @front
+        session (state/read-session (:instance-id cfg))]
+    (try
+      (cold-starts/record!
+       (cond-> {:project      (:project-name cfg)
+                :session      (session-name cfg session)
+                :instance-id  (:instance-id cfg)
+                :port         (:port start)
+                :requested-at (:requested-at start)
+                :ended-at     (core/now-iso)
+                :outcome      (if (and (= :ready outcome) (:gave-up? start)) :ready-after-give-up outcome)
+                ;; No start through the front is admitted against the fleet's memory budget.
+                :admission    :bypassed}
+         cause (assoc :cause cause)))
+      (catch Exception e
+        (core/log-step (str "warning: could not record the cold start: " (ex-message e)))))))
+
+(defn- keep-failure!
+  "Keep failed start `e` under ~/.nido/failures/, as a failed session start whose origin is the
+   on-demand trigger, so it reaches session recovery."
+  [front e]
+  (let [{:keys [cfg start]} @front
+        session (state/read-session (:instance-id cfg))]
+    (failure/record! {:verb              :on-demand
+                      :session           (session-name cfg session)
+                      :project           (:project-name cfg)
+                      :instance-id       (:instance-id cfg)
+                      :opts              {}
+                      :worktree-existed? true
+                      :origin            {:kind :on-demand :port (:port start)}}
+                     e)))
+
+(defn- roll-back-start!
+  "Undo what a failed start made on the runtime — the JVM, if it came up, and its pid. Called
+   holding the runtime's lock, so no verb sees the half-made start."
+  [front]
+  (let [{:keys [cfg]} @front]
+    (try (process/stop-jvm! cfg) (catch Exception e2 (core/log-step (str "warning: " (ex-message e2)))))
+    (try (note-jvm! cfg nil) (catch Exception _ nil))))
+
+(defn- run-start!
+  "Start the runtime's on-demand group — the JVM, then each app on it — delivering each port's
+   readiness as it comes, and record the start however it ends. A start that fails is rolled back
+   under the same hold of the runtime's lock it was made under."
+  [front]
+  (let [{:keys [cfg ready]} @front
+        {:keys [instance-id]} cfg]
+    (try
+      (lifecycle/with-runtime-lock instance-id :on-demand-start
+        (fn []
+          (try
+            (let [session (or (state/read-session instance-id)
+                              (throw (ex-info (str "Runtime " instance-id " is not up") {:instance-id instance-id})))
+                  pid     (process/start-jvm! cfg)]
+              (swap! front assoc :jvm-pid pid)
+              (note-jvm! cfg pid)
+              (assert-port-file! cfg)
+              (deliver (:repl ready) {:ok true})
+              (doseq [[d s] (app-services cfg session)]
+                (when-not (eval-svc/start-app! d s (:context session))
+                  (throw (ex-info (str "The app " (name (:name d)) " did not open port " (:bind-port s)
+                                       " after its start form")
+                                  {:service (:name d) :bind-port (:bind-port s)}))))
+              (deliver (:app ready) {:ok true})
+              (swap! front assoc :phase :running :last-traffic (now-ms))
+              (record-start! front :ready nil))
+            (catch Throwable e
+              (roll-back-start! front)
+              (throw e)))))
+      (catch Throwable e
+        (core/log-step (str "On-demand start failed: " (ex-message e)))
+        (try (keep-failure! front e)
+             (catch Exception e2 (core/log-step (str "warning: could not keep the failed start: " (ex-message e2)))))
+        (record-start! front :failed (or (ex-message e) (str (class e))))
+        ;; The front's own reading only, after the record, which reads this start's :start.
+        (swap! front assoc :phase :absent :jvm-pid nil)
+        (deliver (:repl ready) {:error e})
+        (deliver (:app ready) {:error e})))))
+
+(defn- demand!
+  "The readiness `kind` (:repl or :app) waits on for connection `conn`: a promise delivered
+   {:ok true} once its target answers, or {:error e}. Starts the group when none runs — once, for
+   however many connections ask — and waits out a stop in progress before starting it again."
+  [front kind conn]
+  (locking front
+    (case (:phase @front)
+      (:running :starting) (get-in @front [:ready kind])
+      :absent  (let [ready {:repl (promise) :app (promise)}]
+                 (swap! front assoc :phase :starting :ready ready
+                        :start {:requested-at (core/now-iso) :port kind :first conn :gave-up? false})
+                 (future (run-start! front))
+                 (get ready kind))
+      :stopping (let [p (promise) stopped (:stopped @front)]
+                  (future (deref stopped) (deliver p @(demand! front kind conn)))
+                  p))))
+
+(defn- idle?
+  [{:keys [phase conns last-traffic cfg]} now]
+  (and (= :running phase) (zero? conns) (>= (- now last-traffic) (:idle-ms cfg))))
+
+(defn- forget-dead-jvm!
+  "When the JVM the front reads as running has exited on its own, clear its record and read it as
+   absent, so the next byte starts it again rather than being relayed to a socket nothing listens
+   on. Under the runtime's lock, and only while the front still reads that same JVM as running,
+   so no start made meanwhile is undone."
+  [front]
+  (let [{:keys [phase jvm-pid cfg]} @front]
+    (when (and (= :running phase) jvm-pid (not (proc/process-alive? jvm-pid)))
+      (core/log-step "The JVM exited on its own — the next call starts it again")
+      (try
+        (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-jvm-exited
+          (fn []
+            (when (locking front
+                    (let [f @front]
+                      (when (and (= :running (:phase f)) (= jvm-pid (:jvm-pid f)))
+                        (swap! front assoc :phase :stopping :stopped (promise))
+                        true)))
+              (try (process/stop-jvm! cfg)
+                   (note-jvm! cfg nil)
+                   (finally
+                     (let [stopped (:stopped @front)]
+                       (swap! front assoc :phase :absent :jvm-pid nil)
+                       (deliver stopped true)))))))
+        (catch Throwable e (core/log-step (str "warning: " (ex-message e))))))))
+
+(defn- stop-idle!
+  "Stop the group when it is idle (`idle?`): each app's stop form over the JVM's socket, then the
+   JVM. Nothing else of the runtime is touched."
+  [front]
+  (when-let [stopped (locking front
+                       (when (idle? @front (now-ms))
+                         (let [p (promise)]
+                           (swap! front assoc :phase :stopping :stopped p)
+                           p)))]
+    (let [{:keys [cfg]} @front
+          entered? (atom false)]
+      (core/log-step (str "No nREPL traffic for " (quot (:idle-ms cfg) 1000) "s and no connection open — stopping the JVM"))
+      (try
+        (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-idle-stop
+          (fn []
+            (reset! entered? true)
+            (when-let [session (state/read-session (:instance-id cfg))]
+              (doseq [[d s] (app-services cfg session)]
+                (try (eval-svc/stop-app! d s) (catch Exception _ nil))))
+            (process/stop-jvm! cfg)
+            (note-jvm! cfg nil)))
+        (catch Throwable e
+          (core/log-step (str "warning: idle stop: " (ex-message e))))
+        (finally
+          ;; A lock never taken stopped nothing: the JVM still runs, and is read as running.
+          (if @entered?
+            (swap! front assoc :phase :absent :jvm-pid nil)
+            (swap! front assoc :phase :running))
+          (deliver stopped true))))))
+
+;; ---------------------------------------------------------------------------
+;; The relay
+;; ---------------------------------------------------------------------------
+
+(defn- connect-inner
+  "Open a connection to what listener `l` fronts: the JVM's nREPL socket, or the port an app
+   binds. Returns {:read :write :shutdown-output :close} over it."
+  [cfg l]
+  (if (= :repl (:kind l))
+    (let [ch (SocketChannel/open (UnixDomainSocketAddress/of (str (:socket cfg))))]
+      {:read            (fn [^bytes b] (.read ch (ByteBuffer/wrap b)))
+       :write           (fn [^bytes b n] (let [bb (ByteBuffer/wrap b 0 n)]
+                                           (while (.hasRemaining bb) (.write ch bb))))
+       :shutdown-output #(.shutdownOutput ch)
+       :close           #(.close ch)})
+    (let [s (Socket.)]
+      (.connect s (InetSocketAddress. "127.0.0.1" (int (:bind-port l))) 5000)
+      (let [in (.getInputStream s) out (.getOutputStream s)]
+        {:read            (fn [^bytes b] (.read in b))
+         :write           (fn [^bytes b n] (.write out b 0 (int n)) (.flush out))
+         :shutdown-output #(.shutdownOutput s)
+         :close           #(.close s)}))))
+
+(defn- traffic! [front kind]
+  (when (= :repl kind) (swap! front assoc :last-traffic (now-ms))))
+
+(defn- pump-client!
+  "Client to JVM: what the client sends is held until `inner` is connected, written through
+   after. The client's end of sending is passed on as the end of sending to `inner` — at once when
+   it is connected, else once it is (`client-eof?`) — and is never the end of the connection, which
+   a client may half-close and go on reading its reply from; `end!` says this direction is done.
+   An end before `inner` is connected is read as the start's first client giving up, when it is
+   the connection that started it: a half-close cannot be told from a close."
+  [front conn ^java.io.InputStream in held inner client-eof? end! close!]
+  (try
+    (let [b (byte-array 65536)]
+      (loop []
+        (let [n (.read in b)]
+          (if (neg? n)
+            (do (locking held
+                  (if-let [i @inner]
+                    ((:shutdown-output i))
+                    (do (reset! client-eof? true)
+                        (swap! front (fn [f]
+                                       (cond-> f
+                                         (= conn (get-in f [:start :first])) (assoc-in [:start :gave-up?] true)))))))
+                (end!))
+            (do (traffic! front (:kind conn))
+                (locking held
+                  (if-let [i @inner]
+                    ((:write i) b n)
+                    (.write ^java.io.ByteArrayOutputStream held b 0 (int n))))
+                (recur))))))
+    (catch Exception _ (close!))))
+
+(defn- pump-inner!
+  "JVM to client, unchanged. The JVM's end of sending is passed on as the end of sending to the
+   client, and `end!` says this direction is done."
+  [front conn i ^Socket client end! close!]
+  (try
+    (let [out (.getOutputStream client)
+          b   (byte-array 65536)]
+      (loop []
+        (let [n ((:read i) b)]
+          (if (neg? n)
+            (do (.shutdownOutput client) (end!))
+            (do (traffic! front (:kind conn))
+                (.write out b 0 (int n))
+                (.flush out)
+                (recur))))))
+    (catch Exception _ (close!))))
+
+(defn- serve!
+  "Relay one accepted client connection on listener `l`. It stays open — and counted among the
+   front's open connections — until both directions have ended, or either fails."
+  [front l ^Socket client]
+  (let [conn        {:kind (:kind l) :id (Object.)}
+        in          (.getInputStream client)
+        held        (java.io.ByteArrayOutputStream.)
+        inner       (atom nil)
+        client-eof? (atom false)
+        closed?     (atom false)
+        close!      (fn []
+                      (when (compare-and-set! closed? false true)
+                        (try (.close client) (catch Exception _ nil))
+                        (when-let [i @inner] (try ((:close i)) (catch Exception _ nil)))
+                        (swap! front update :conns dec)))
+        ended       (atom 0)
+        end!        #(when (= 2 (swap! ended inc)) (close!))]
+    (swap! front update :conns inc)
+    (try
+      (let [buf (byte-array 65536)
+            n   (.read in buf)]
+        (if (neg? n)
+          (close!)
+          (do
+            (traffic! front (:kind conn))
+            (.write held buf 0 n)
+            (let [ready (demand! front (:kind conn) conn)]
+              (future (pump-client! front conn in held inner client-eof? end! close!))
+              (let [r @ready]
+                (if (or (:error r) @closed?)
+                  (close!)
+                  (let [i (connect-inner (:cfg @front) l)]
+                    (locking held
+                      (reset! inner i)
+                      (let [bs (.toByteArray held)] ((:write i) bs (count bs)))
+                      (when @client-eof? ((:shutdown-output i))))
+                    (when @closed? (try ((:close i)) (catch Exception _ nil)))
+                    (pump-inner! front conn i client end! close!))))))))
+      (catch Exception _ (close!)))))
+
+(defn- listen!
+  "Bind listener `l`'s port: the nREPL on loopback, as nREPL binds by default; an app on every
+   address, as an app server does."
+  ^ServerSocket [l]
+  (doto (ServerSocket.)
+    (.setReuseAddress true)
+    (.bind (if (= :repl (:kind l))
+             (InetSocketAddress. "127.0.0.1" (int (:port l)))
+             (InetSocketAddress. (int (:port l))))
+           128)))
+
+;; ---------------------------------------------------------------------------
+;; Lifetime
+;; ---------------------------------------------------------------------------
+
+(defn- exit!
+  "Stop the JVM this front started, if one runs, and exit: no JVM outlives its front. The stop is
+   made under the runtime's lock, so it waits out a start in progress rather than interleaving
+   with it; when the lock cannot be had in its wait, the JVM is stopped all the same, since a JVM
+   left behind would outlive its front."
+  [front why]
+  (core/log-step (str "Front exiting: " why))
+  (let [{:keys [cfg]} @front
+        stop! #(try (process/stop-jvm! cfg) (catch Exception _ nil))]
+    (try (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-exit stop!)
+         (catch Throwable e
+           (core/log-step (str "warning: front exit without the runtime's lock: " (ex-message e)))
+           (stop!))))
+  (System/exit 0))
+
+(defn- watch!
+  "Every tick: exit when the front's runtime is gone, keep `.nrepl-port` naming the front, and
+   stop the group when it has gone idle."
+  [front instance-id svc-name]
+  (let [own   (.pid (java.lang.ProcessHandle/current))
+        born  (now-ms)
+        cfg-f (state/front-config-file instance-id svc-name)]
+    (loop [owned? false]
+      (Thread/sleep tick-ms)
+      (let [session (state/read-session instance-id)
+            pid     (get-in session [:service-states (:service (:cfg @front)) :pid])
+            mine?   (= own pid)]
+        (cond
+          (not (fs/exists? cfg-f))                     (exit! front "its service was stopped")
+          (and owned? (nil? session))                  (exit! front "its runtime is gone")
+          (and owned? (some? pid) (not mine?))         (exit! front "its runtime names another front")
+          (and (not owned?) (not mine?)
+               (> (- (now-ms) born) unowned-limit-ms)) (exit! front "its runtime never recorded it")
+          :else
+          (do (assert-port-file! (:cfg @front))
+              (try (forget-dead-jvm! front)
+                   (stop-idle! front)
+                   (catch Throwable e (core/log-step (str "warning: " (ex-message e)))))
+              (recur (or owned? mine?))))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  main
+  "Run the front of runtime `instance-id`'s on-demand :process service `svc-name`, as its config
+   file says, until its runtime goes. The `nido:session:front` task; the :process service starts
+   it."
+  [[instance-id svc-name]]
+  (let [cfg       (io/read-edn (state/front-config-file instance-id svc-name))
+        _         (when-not cfg (throw (ex-info "No front config" {:instance-id instance-id :service svc-name})))
+        listeners (cons {:kind :repl :port (:nrepl-port cfg)}
+                        (map #(assoc % :kind :app) (:apps cfg)))
+        front     (atom {:cfg cfg :phase :absent :conns 0 :last-traffic (now-ms)})
+        servers   (mapv (fn [l] [l (listen! l)]) listeners)]
+    (core/log-step (str "Front of " instance-id " holds "
+                        (str/join ", " (map (fn [[l _]] (str (name (:kind l)) " " (:port l))) servers))))
+    (assert-port-file! cfg)
+    (.addShutdownHook (Runtime/getRuntime)
+                      (Thread. (fn []
+                                 (when-let [f (port-file cfg)]
+                                   (when (= (str (:nrepl-port cfg))
+                                            (try (str/trim (slurp f)) (catch Exception _ nil)))
+                                     (fs/delete-if-exists f))))))
+    (doseq [[l ^ServerSocket ss] servers]
+      (future
+        (loop []
+          (let [c (.accept ss)]
+            (future (serve! front l c))
+            (recur)))))
+    (watch! front instance-id svc-name)))

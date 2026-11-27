@@ -697,6 +697,15 @@
           f))
       (finally (.unlock l)))))
 
+(defn ^{:malli/schema [:=> [:cat :InstanceId :keyword [:=> [:cat] :any]] :any]}
+  with-runtime-lock
+  "Run `f` holding runtime `instance-id`'s lifecycle lock — the one every verb that starts or
+   stops its services takes — waiting while another holds it. For what changes a runtime's
+   services outside a verb: an on-demand front starting or stopping its JVM, so no up, down, sync
+   or join of the runtime interleaves with it."
+  [instance-id verb f]
+  (with-session-lock instance-id verb f))
+
 (defn- with-lifecycle-locks
   "Run `(f ctx)` holding every lifecycle lock a verb on the session `name` needs, taken in one
    order by every verb: the session's own lock first, then — `ctx` read under it, so the runtime

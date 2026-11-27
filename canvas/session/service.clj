@@ -28,8 +28,10 @@
      names it — a start that never wrote session.edn. A type keeping no such record does nothing."
     {:signature [:=> [:catn [:service-def :map] [:instance-id :string]] :any]}))
 
-;; `nido.session.services.config-file` and `nido.session.services.process` carry ONLY defmethods
-;; of the operations above. They are the protocol's implementations and declare no public
+;; `nido.session.services.config-file` carries ONLY defmethods of the operations above, and
+;; `nido.session.services.process` little more: the three functions an on-demand JVM's front
+;; calls to start and stop it (`front-config`, `start-jvm!`, `stop-jvm!`), which are that
+;; service's own and reach no other module. They are the protocol's implementations and declare no public
 ;; function of their own, so there is nothing here to model: a Module for either would be a
 ;; Module with no operations, asserting a boundary that holds nothing.
 ;;

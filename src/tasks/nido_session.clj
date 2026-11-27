@@ -44,6 +44,7 @@
    [nido.platform.project :as project]
    [nido.platform.task-args :as task-args]
    [nido.session.casualties :as casualties]
+   [nido.session.cold-starts :as cold-starts]
    [nido.session.fleet :as fleet]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.revive :as revive]
@@ -554,6 +555,28 @@
         _project (require-project opts)]
     (require-no-positional pos)
     (lifecycle/list-all opts)))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  cold-starts
+  "Print a project's on-demand JVM cold starts, oldest first — one session's when it is named:
+   when each was asked for, how it ended, how long it took, read from its two instants, and that
+   it was not admitted against the fleet's memory budget.
+   Usage: bb nido:session:cold-starts :project <p> [<session>]"
+  [& args]
+  (let [[pos opts] (task-args/split-args args)
+        project (require-project opts)
+        session (first pos)
+        rows    (cold-starts/starts project (some-> session str))]
+    (if (empty? rows)
+      (println (str "No on-demand JVM start recorded for " project (when session (str "/" session))))
+      (do (println "On-demand JVM starts are not admitted against the fleet's memory budget.")
+          (doseq [{:keys [session port requested-at outcome cause admission] :as r} rows
+                  :let [ms (cold-starts/duration-ms r)]]
+            (println (str requested-at "  " session "  " (name (or port :repl)) "  "
+                          (name outcome) "  "
+                          (if ms (format "%.1fs" (/ ms 1000.0)) "?")
+                          "  admission " (name (or admission :bypassed))
+                          (when cause (str "  — " cause)))))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   isolate
