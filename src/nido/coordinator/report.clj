@@ -2216,6 +2216,25 @@
    [:opens    [:string {:min 1}]]
    [:evidence [:string {:min 1}]]])
 
+(def sent-back-positions
+  "The positions a workstream is sent back from: those at which a landing is requested of the
+   person or granted by them."
+  #{:release-candidate :published :land-granted})
+
+(def SentBack
+  "The person's word sent the workstream back for rework from a landing position. :words are
+   theirs, as the conductor heard them; :from is the position it was sent back from.
+
+   A restart for the position's trail (`lane.reentry/restart`): what it owes — the rework, its
+   review and, on a PR-landing project, its publication — is written after it, so nothing before
+   it is a stage passed. It spends the person's :merge grant (`record.workstream/unspent-grants`).
+   Written only by `record.workstream/append-sent-back!`, which the generic appends refuse to
+   stand in for."
+  [:map {:closed true}
+   [:format [:= :sent-back]]
+   [:words  [:string {:min 1}]]
+   [:from   (into [:enum] (sort sent-back-positions))]])
+
 (def ShipSubmitted
   "The branch handed to the merge lane by `nido ship`. Carries no judgement — the
    session name is the whole fact — but it is load-bearing twice over: it marks
@@ -4647,6 +4666,7 @@
    :merged                   Merged
    :landing                  Landing
    :phase-gate               PhaseGate
+   :sent-back                SentBack
    :ship-submitted           ShipSubmitted
    :review                   ReviewReport
    :review-settled           ReviewSettled
@@ -5668,6 +5688,13 @@
                   ""
                   (str "**Evidence** — " evidence)]))
 
+(defn- sent-back->markdown [{:keys [words from]}]
+  (str/join "\n" ["# Sent back for rework"
+                  ""
+                  (str "From **" (name from) "**, in the person's words:")
+                  ""
+                  (str "> " (str/replace words "\n" "\n> "))]))
+
 (defn- ship-submitted->markdown [{:keys [session]}]
   (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))
 
@@ -6443,6 +6470,7 @@
     :merged                   (merged->markdown report)
     :landing                  (landing->markdown report)
     :phase-gate               (phase-gate->markdown report)
+    :sent-back                (sent-back->markdown report)
     :ship-submitted           (ship-submitted->markdown report)
     :review-report            (review->markdown report)
     :baseline-review          (baseline-review->markdown report)
@@ -6611,4 +6639,5 @@
      :exit-observed            (str "Exit observed at census " (:census report))
      :start-refused            (str "Start of plan " (:plan report) " refused: " (first-line (:detail report)))
      :phase-gate               (str "Phase gate met — opens " (first-line (:opens report)))
+     :sent-back                (str "Sent back for rework: " (first-line (:words report)))
      nil)))

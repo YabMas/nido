@@ -1318,8 +1318,8 @@
 
 (defn- refuse-unguarded-gate!
   "A `:phase-gate` goes through `open-phase!`, a `:generation` through `open-generation!`, a
-   `:design-decision` through `append-decision!`, and a stamped kind through `append-stamped!` —
-   none through a generic append.
+   `:design-decision` through `append-decision!`, a `:sent-back` through `append-sent-back!`, and a
+   stamped kind through `append-stamped!` — none through a generic append.
 
    A decision is the judgement a decision round reached, and a clearance trusts any proceeding one
    on the ledger; taken from a generic append, a decision anyone wrote would admit a design no
@@ -1335,6 +1335,8 @@
     :design-decision (throw (ex-info "A :design-decision is appended only through append-decision!, which a decision round calls"
                                      {:kind kind}))
     :phase-gate (throw (ex-info "A :phase-gate is appended only through open-phase!" {:kind kind}))
+    :sent-back (throw (ex-info "A :sent-back is appended only through append-sent-back!, which the send-back verb calls"
+                               {:kind kind}))
     :generation (throw (ex-info "A :generation is appended only through open-generation!" {:kind kind}))
     (cond
       (contains? stamped-kinds kind)
@@ -1994,6 +1996,48 @@
           {:existing (:seq indexed)}
           {:appended (append-locked! project ws-id w entry content)})))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :map] [:or :int :map]]}
+  append-sent-back!
+  "Append `sent-back` — a `:sent-back` payload — only if `expected-seq` is still the ledger's
+   latest entry, and in the same core commit withdraw the operator asks `:asks` names, with
+   `:reason`, and spend the :merge grant the core holds when it is the `:merge-occurrence` named.
+   The kind's one writer, which the send-back verb alone calls: every generic append refuses it.
+
+   `expected-seq` is the ledger the verb read the position at; the verb, not this, judged that
+   position a landing one, so a ledger that moved since is refused rather than re-read. Returns the
+   seq the core committed the entry at, {:refused :stale :latest <seq>} when the ledger moved, or
+   the core's own refusal as {:refused <reason map>} — in which case nothing was written."
+  [project ws-id expected-seq sent-back {:keys [asks reason merge-occurrence]}]
+  (when-not (= :sent-back (:format sent-back))
+    (throw (ex-info "append-sent-back! takes a :sent-back" {:ws-id ws-id})))
+  (locked project ws-id
+    (fn []
+      (let [w      (or (read-ws project ws-id)
+                       (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+            latest (count (:entries w))]
+        (if (not= expected-seq latest)
+          {:refused :stale :latest latest}
+          (let [[ext payload] (report/entry-payload :sent-back (pr-str sent-back))
+                _     (check-append! project w :sent-back payload)
+                after (or (:seq (peek (vec (:entries w)))) 0)
+                k     (client/ws-key project ws-id)
+                o     (client/command! k (str "send-back/" k "/" (random-uuid))
+                                       {:command          :send-back
+                                        :after            after
+                                        :row              (index-row {:kind :sent-back} payload ext)
+                                        :content          payload
+                                        :asks             (vec asks)
+                                        :reason           reason
+                                        :merge-occurrence merge-occurrence})]
+            (forget! project ws-id)
+            (when (client/unavailable? o) (client/value! o :events))
+            (cond
+              (contains? o :events) (:seq (:row (first (:events o))))
+              (:refused o)          {:refused (:refused o)}
+              :else (throw (ex-info (str "The core did not take the send-back on " ws-id ": "
+                                         (pr-str (:error o)))
+                                    {:ws-id ws-id :outcome o})))))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   open-phase!
   "Append `gate` — a `:phase-gate` payload — which reopens the workstream (`closure` stops at a
@@ -2274,12 +2318,13 @@
 
 
 (def ^:private grant-spent-by
-  "The ledger kind whose append spends each grantable act (report/grantable-kinds): :intent is
+  "The ledger kinds whose append spends each grantable act (report/grantable-kinds): :intent is
    spent by the goal amendment the seat appends; :merge by the landing's :merged — whoever
    records it, the merge poller included — so one grant is one landing, however many times a
-   seat must enqueue before a queue takes it."
-  {:intent :intent
-   :merge  :merged})
+   seat must enqueue before a queue takes it — and by a :sent-back, the person's word taking the
+   candidate they granted back for rework."
+  {:intent #{:intent}
+   :merge  #{:merged :sent-back}})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential [:map [:kind :keyword] [:seq :int]]]]}
   unspent-grants
@@ -2296,7 +2341,7 @@
              k (:grants a)
              :let [spent-by (grant-spent-by k)]
              :when (and spent-by
-                        (not-any? #(> (:seq %) (:seq a)) (entries-of project ws-id spent-by)))]
+                        (not-any? #(> (:seq %) (:seq a)) (mapcat #(entries-of project ws-id %) spent-by)))]
          {:kind k :seq (:seq a)})
        (sort-by :seq)
        vec))

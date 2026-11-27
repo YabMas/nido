@@ -90,18 +90,23 @@
   [design-seqs n]
   (last (take-while #(< % n) design-seqs)))
 
-(defn- restart
-  "The :seq of the newest `:phase-gate` or `:findings` on `w`, or nil.
+(def ^:private restart-kinds
+  "The entry kinds that put a workstream carrying a trail back to work (`restart`)."
+  #{:phase-gate :findings :sent-back})
 
-   Both put a workstream that already carried a trail back to work: a gate opens
-   the next phase, a findings round reopens the landed one. What either owes is
-   written after it, so a trail record from before it is history, never a stage
-   passed — without this the phase that just landed would read as the next
-   phase's implementation, review and publication, and a resolved findings round
-   as a landing."
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :int]]} restart
+  "The :seq of the newest `:phase-gate`, `:findings` or `:sent-back` on `w`, or nil.
+
+   Each puts a workstream that already carried a trail back to work: a gate opens
+   the next phase, a findings round reopens the landed one, and the person's word
+   sends a landing back for rework. What each owes is written after it, so a trail
+   record from before it is history, never a stage passed — without this the
+   phase that just landed would read as the next phase's implementation, review
+   and publication, a resolved findings round as a landing, and a candidate sent
+   back as a candidate still."
   [w]
   (some->> (:entries w)
-           (filter #(#{:phase-gate :findings} (:kind %)))
+           (filter #(restart-kinds (:kind %)))
            (map :seq)
            seq
            (reduce max)))
@@ -179,8 +184,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map]] [:maybe [:set :keyword]]]}
   standing-trail
-  "The trail kinds that stand on `w` since its newest `:phase-gate` or `:findings`,
-   or nil when it holds neither — nil meaning the whole index may be read, as it
+  "The trail kinds that stand on `w` since its newest restart (`restart`), or nil
+   when it holds none — nil meaning the whole index may be read, as it
    always could.
 
    A set, possibly empty: empty is the answer for a phase just opened or a round

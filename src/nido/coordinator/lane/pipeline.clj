@@ -206,7 +206,7 @@
     :review :review-analysis :improvement-decision :improvement-landed
     :blocker :blocker-answered :retraction
     :findings :pr-opened :ship-submitted :landing :merged :phase-gate :layer-completed
-    :qa-plan :qa-walk})
+    :qa-plan :qa-walk :sent-back})
 
 (def ^:private stage-of-kind
   "Which stage of the arc each entry kind belongs to.
@@ -608,10 +608,12 @@
 
 (defn ^{:malli/schema [:function [:=> [:cat :any] :boolean] [:=> [:cat :any :any] :boolean]]}
   implementation-review-passed?
-  "Whether `w`'s newest :review over the implementation passed — its status :clean or :converged —
-   and no build was recorded after it, so it judged the change as it stands. A newer review that
-   ended otherwise withdraws an older pass. Read off the whole workstream, so a workstream of
-   several units is ready only once the review over all of their work passed.
+  "Whether `w`'s newest :review over the implementation written after its newest restart
+   (`reentry/restart`) passed — its status :clean or :converged — and no build was recorded
+   after it, so it judged the change as it stands. A newer review that ended otherwise withdraws
+   an older pass, and a restart withdraws every review before it: a candidate sent back is a
+   candidate again only once a review after the send-back passes. Read off the whole workstream,
+   so a workstream of several units is ready only once the review over all of their work passed.
 
    With `reviews`, the review is the newest among those records — the fold passes its clamped
    trail, so only a review that stands counts — while the newest build is still `w`'s, read
@@ -619,7 +621,8 @@
    such as a layer built to fix a failed walk, still withdraws the pass."
   ([w] (implementation-review-passed? w (:entries w)))
   ([w reviews]
-  (let [review (last (filter #(= :review (:kind %)) reviews))
+  (let [since  (or (reentry/restart w) 0)
+        review (last (filter #(and (= :review (:kind %)) (> (:seq %) since)) reviews))
         built  (standing/newest-build w)]
     (boolean (and review
                   (or (nil? built) (> (:seq review) (:seq built)))
@@ -784,7 +787,7 @@
 
 (defn- trail-records
   "The records `place`'s trail clauses read, oldest first: what a re-entry says still stands, else
-   what stands since the newest restart — a :phase-gate or :findings — else every entry but those
+   what stands since the newest restart — a :phase-gate, :findings or :sent-back — else every entry but those
    made under a design older than `design`. With no re-entry no stage is held by such records
    alone, so dropping them changes no kind the clauses see; it changes which record placed one.
    The one selection both the position and the record that placed it (`placed-by`) are read from."
