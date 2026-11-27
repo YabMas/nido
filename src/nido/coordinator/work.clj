@@ -2791,7 +2791,7 @@
              [ws run? sm] (concat
                            (for [[k sm] (sort-by key (core-client/value! (core-client/summaries pname) :summaries))]
                              [(or (second (core-client/split-key k)) k) false sm])
-                           (for [[id sm] (sort-by key (core-client/value! (core-client/runs pname) :runs))]
+                           (for [{:keys [id] :as sm} (sort-by :id (records/runs pname))]
                              [id true sm]))
              {:keys [unit cwd detail]} (:refused-sessions sm)]
          {:project    (name pname)

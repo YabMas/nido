@@ -7,6 +7,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.records :as records]
+   [nido.coordinator.record.review-queue :as review-queue]
    [nido.coordinator.source.start-failures :as start-failures]
    [nido.coordinator.work :as work]
    [nido.core.client :as client]
@@ -76,6 +77,8 @@
                               (proposal/attempts :nido)
                               (proposal/plans-of :nido)
                               (start-failures/recoveries :nido)
+                              (work/refused-sessions)
+                              (review-queue/plan-runs :nido)
                               (records/holders :nido))))))))
       (testing "a nested request read shares the outer one"
         (is (= 1 (:runs (counting

@@ -270,10 +270,11 @@
          (rail-status (:scope screen) (:tally screen))))))
 
 (defn- workstreams-fragment-response [screen]
-  (sse-response
-   (sse-fragment
-    (str (views/workstreams-fragment screen)
-         (rail-status (:scope screen) (:tally screen))))))
+  (work/with-request-read
+   #(sse-response
+     (sse-fragment
+      (str (views/workstreams-fragment screen)
+           (rail-status (:scope screen) (:tally screen)))))))
 
 (defn- fleet-context
   "The fleet card's facts, or nil if they could not be gathered.
@@ -390,8 +391,9 @@
     (set (keys @review-queue-requested))))
 
 (defn- review-queue-fragment-response []
-  (let [qs (review-queues)]
-    (sse-response (sse-fragment (views/review-queue-fragment qs (requested-projects qs))))))
+  (work/with-request-read
+   #(let [qs (review-queues)]
+      (sse-response (sse-fragment (views/review-queue-fragment qs (requested-projects qs)))))))
 
 ;; ── the host ─────────────────────────────────────────────────────────────────
 
@@ -459,14 +461,32 @@
   "The ops panel, with the top bar's live bits for the project `req` is focused on — the poll that
    keeps them live on a page that polls no list."
   [req]
-  (sse-response
-   (sse-fragment
-    (let [scope (:scope (view-state req))]
-      (str (views/ops-panel-fragment (ops-context scope))
-           (rail-status scope (read-tally)))))))
+  (work/with-request-read
+   #(sse-response
+     (sse-fragment
+      (let [scope (:scope (view-state req))]
+        (str (views/ops-panel-fragment (ops-context scope))
+             (rail-status scope (read-tally))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Routing
+
+(defn- ws-pane-fragment
+  "The workstream pane `ws-pane-fragment-response` answers, rendered."
+  [project ws-id entry rounds stage history?]
+  (let [ws  (work/workstream project ws-id entry)
+        k   (str project "/" ws-id)
+        err (get (dev/failed-ws-errors) k)]
+    (sse-response
+     (sse-fragment
+      (views/workstream-pane (cond-> ws
+                               rounds   (assoc :open-rounds rounds)
+                               stage    (assoc :open-stage stage)
+                               history? (assoc :history? true)
+                               err      (assoc :error-msg err)
+                               (contains? (dev/pending-resolve-keys) k) (assoc :pending? true))
+                             (dev/ws-session-dev-states project ws)
+                             (work/machine-facts project (map :name (:sessions ws))))))))
 
 (defn- ws-pane-fragment-response
   "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
@@ -480,19 +500,7 @@
   ([project ws-id] (ws-pane-fragment-response project ws-id nil))
   ([project ws-id {:keys [entry rounds stage history?]}]
    (work/refresh-selected! project ws-id)
-   (let [ws  (work/workstream project ws-id entry)
-         k   (str project "/" ws-id)
-         err (get (dev/failed-ws-errors) k)]
-     (sse-response
-      (sse-fragment
-       (views/workstream-pane (cond-> ws
-                                rounds   (assoc :open-rounds rounds)
-                                stage    (assoc :open-stage stage)
-                                history? (assoc :history? true)
-                                err      (assoc :error-msg err)
-                                (contains? (dev/pending-resolve-keys) k) (assoc :pending? true))
-                              (dev/ws-session-dev-states project ws)
-                              (work/machine-facts project (map :name (:sessions ws)))))))))
+   (work/with-request-read #(ws-pane-fragment project ws-id entry rounds stage history?))))
 
 (defn- parse-json-body
   "Read a Datastar JSON signal body into a map, or {} when absent/unparseable."
@@ -857,8 +865,10 @@
                         :verdict      verdict
                         :at-seq       (:entry vs)})
                       {:decision :stale :latest nil})]
-        (sse-response (sse-fragment
-                       (views/proposal-result-fragment result (all-proposals)))))
+        ;; After the decision is written: the render is a read, and shares one.
+        (work/with-request-read
+         #(sse-response (sse-fragment
+                         (views/proposal-result-fragment result (all-proposals))))))
 
       ;; POST /drains/start — the person starts a drain: the exit criterion and what established
       ;; the pattern ride the JSON signal body; the project is the focused one, or the one the
@@ -875,7 +885,8 @@
                                {:exit                  (:drain_exit b)
                                 :established-by-ws     (when-not commit? (:drain_established_ws b))
                                 :established-by-commit (when commit? (:drain_established_commit b))})]
-        (sse-response (sse-fragment (views/drains-fragment (work/drains scope) refused scope))))
+        (work/with-request-read
+         #(sse-response (sse-fragment (views/drains-fragment (work/drains scope) refused scope)))))
 
       ;; POST /drains/:project/:ws-id/:act[/:arg] — the person's acts on a drain: approve a
       ;; recipe proposal, land a slice, close the drain. Answers the refreshed list under the
@@ -884,7 +895,8 @@
       (let [[_ project ws-id act arg] segs
             scope (:scope (view-state/parse req))
             {:keys [refused]} (work/drain-act! project ws-id (keyword act) arg)]
-        (sse-response (sse-fragment (views/drains-fragment (work/drains scope) refused scope))))
+        (work/with-request-read
+         #(sse-response (sse-fragment (views/drains-fragment (work/drains scope) refused scope)))))
 
       ;; POST /ops/... — ambient ops levers (halt/resume, breaker clear, fire).
       ;; Every lever responds with the refreshed ops fragment + rail status.

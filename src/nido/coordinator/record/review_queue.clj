@@ -15,8 +15,8 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.records :as records]
    [nido.coordinator.record.state :as cstate]
-   [nido.core.client :as client]
    [nido.platform.io :as io]))
 
 (def plan-trigger
@@ -149,7 +149,7 @@
    (`nido.core.domain/summary`'s :run — :id :payload :fired-at …) with its :status and :detail.
    Throws when the core cannot be read, so a page says so rather than showing no grooming."
   [project trigger]
-  (->> (vals (client/value! (client/runs project) :runs))
+  (->> (records/runs project)
        (filter #(= (name trigger) (get-in % [:run :trigger])))
        (map (fn [sm] (assoc (:run sm) :status (:status sm) :detail (:detail sm))))
        (sort-by :fired-at #(compare %2 %1))

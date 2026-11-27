@@ -61,10 +61,18 @@
 ;; ---------------------------------------------------------------------------
 ;; The census: every page the dashboard lists, as a browser loads it
 
-(def ^:private census-budget-ms
-  "The whole census's wall clock. A load is not started once it is spent; what was not taken is
-   reported as not measured, never dropped. Under the ten minutes a census must end within."
+(def ^:private census-wall-ms
+  "The whole census's wall clock, from its start to the browser closed: starting the browser, every
+   load and closing it each wait only for what is left of it. A load is not started once the loads'
+   share is spent; what was not taken is reported as not measured, never dropped. Under the ten
+   minutes a census must end within."
   (* 9 60 1000))
+
+(def ^:private close-reserve-ms
+  "What of `census-wall-ms` the loads leave for closing the browser."
+  30000)
+
+(defn- now-ms [] (System/currentTimeMillis))
 
 (def ^:private nav-timing-js
   "The browser's navigation timing of the document it is showing, as JSON."
@@ -106,8 +114,8 @@
       (= ::timed-out o) {:error :timed-out}
       (map? o)          {:error (::failed o)}
       :else
-      (let [left (max 5000 (- ms (- (System/currentTimeMillis) t0)))
-            raw  (browser session left "eval" nav-timing-js)
+      (let [left (- ms (- (System/currentTimeMillis) t0))
+            raw  (if (pos? left) (browser session left "eval" nav-timing-js) ::timed-out)
             e    (when (string? raw)
                    (try (some-> (json/parse-string (json/parse-string raw)) not-empty)
                         (catch Exception _ nil)))]
@@ -191,7 +199,8 @@
    the instance it names for :project, default nido), each loaded :loads times (default and least
    3) in a browser driven through agent-browser, printed as one overview: each page's median of
    the loads' navigation timing (loadEventEnd), and its samples. Every load has a deadline
-   (:deadline-s, default 90) and the census a nine-minute budget; a page whose load missed one is
+   (:deadline-s, default 90) and the whole census, browser start and close included, a nine-minute
+   wall clock; a page whose load missed one is
    reported with the samples it has. :out also writes the rows as EDN. The census loads every page
    the list holds and leaves out only what the list names as left out."
   [& args]
@@ -202,15 +211,16 @@
         base    (str "http://localhost:" port)
         deadline (* 1000 (or (:deadline-s opts) 90))
         session {:name (str "nido-census-" port) :timeout-ms deadline}
-        t0      (System/currentTimeMillis)
-        _       (browser session 60000 "open" "about:blank")
+        t0      (now-ms)
+        left    #(- (+ t0 census-wall-ms) (now-ms))
+        _       (browser session (min 60000 (- (left) close-reserve-ms)) "open" "about:blank")
         rows    (try
                   (census* {:base base :loads loads :project project
                             :deadline-ms deadline
-                            :budget-ms census-budget-ms}
+                            :budget-ms (- (left) close-reserve-ms)}
                            (partial load-once session))
-                  (finally (browser session 30000 "close")))
-        elapsed (- (System/currentTimeMillis) t0)]
+                  (finally (browser session (max 1 (left)) "close")))
+        elapsed (- (now-ms) t0)]
     (print-census rows {:base base :loads loads :elapsed-ms elapsed})
     (when-let [out (:out opts)]
       (spit (str out) (pr-str {:base base :loads loads :elapsed-ms elapsed

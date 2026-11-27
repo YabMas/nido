@@ -58,6 +58,17 @@
                            "The page moved")
             "the same click again is refused and says why — its own decision moved the journal")))))
 
+(deftest a-decisions-answer-renders-inside-one-request-read
+  ;; The decision is written first; the proposals the answer shows are a render, and share one read.
+  (with-one-proposal
+    (fn [id]
+      (let [open? (atom [])
+            real  @#'server/all-proposals]
+        (with-redefs [server/all-proposals (fn [] (swap! open? conj (some? @#'records/*request-read*)) (real))]
+          (server/handle-request {:request-method :post :uri (str "/operations/nido/" id "/1/0")
+                                  :query-string "entry=0&verdict=approved&scope=nido"}))
+        (is (= [true] @open?))))))
+
 (deftest a-verdict-the-surface-never-offered-records-nothing
   ;; The buttons post a fixed verdict, so anything else arrived by hand. It is
   ;; refused rather than coerced: a decision is a durable claim about what a

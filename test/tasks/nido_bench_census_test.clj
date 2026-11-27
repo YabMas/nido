@@ -49,3 +49,27 @@
                               (fn [_ _] (throw (ex-info "no load may start" {}))))]
       (is (= 4 (count rows)))
       (is (= #{:not-measured :no-instance} (set (map :status rows)))))))
+
+(deftest a-load-never-waits-past-its-deadline
+  (let [asked (atom [])]
+    (with-redefs [bench/browser (fn [_ ms & args]
+                                  (swap! asked conj [(first args) ms])
+                                  (Thread/sleep 60)
+                                  "")]
+      (is (= {:error :timed-out} (#'bench/load-once {:name "s"} "http://h/a" 40)))
+      (is (every? #(<= (second %) 40) @asked) "the timing read waits only for what the load left"))))
+
+(deftest the-whole-census-fits-one-wall-clock
+  (let [clock (atom 0)
+        steps (atom [])
+        wall  @#'bench/census-wall-ms
+        spend (fn [step ms] (swap! steps conj step) (swap! clock + ms))]
+    ;; Every wait takes all it is allowed: the census still ends within its wall clock.
+    (with-redefs [bench/now-ms       (fn [] @clock)
+                  bench/browser      (fn [_ ms & args] (spend (first args) ms) "")
+                  bench/census*      (fn [{:keys [budget-ms]} _] (spend :loads budget-ms) [])
+                  server/page-routes (constantly {:pages [] :left-out []})]
+      (with-out-str (bench/census))
+      (is (= ["open" :loads "close"] @steps))
+      (is (<= @clock wall)
+          "starting the browser, the loads and closing it share the one wall clock"))))
