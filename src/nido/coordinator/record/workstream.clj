@@ -27,6 +27,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.core.provision :as provision]
    [nido.core.client :as client]
+   [nido.core.images :as images]
    [nido.platform.core :as core]
    [nido.platform.io :as io]))
 
@@ -2653,3 +2654,28 @@
   [project external-id entry content]
   (append-entry! project (:id (find-or-mint-by-ref! project external-id)) entry content))
 
+
+;; ── QA screenshots: a walk's evidence, kept outside the ledger by digest ─────────────────────
+
+(defn- qa-screenshot-root
+  "Where a QA walk's screenshots are kept, by digest: the nido home's `qa/screenshots/`, outside
+   the ledger, so a walk names its evidence and stays the size of its words. Named here alone —
+   every keeper and reader of a screenshot goes through `keep-screenshot!` and `screenshot`."
+  []
+  (str (core/nido-home) "/qa/screenshots"))
+
+(defn ^{:malli/schema [:=> [:cat [:map [:mime :string] [:digest :string] [:data :string]]]
+                       [:or :string [:map [:refused :keyword] [:digest :any]]]]}
+  keep-screenshot!
+  "Keep a QA screenshot — {:mime :digest :data}, `:data` its bytes in base64 — and answer the
+   digest a :qa-walk result names it by, or core-images' refusal when its bytes do not hash to
+   `:digest`. Keeping one twice keeps it once."
+  [shot]
+  (images/put! (qa-screenshot-root) shot))
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  screenshot
+  "The QA screenshot kept by `digest`, as {:mime :data :digest} with `:data` in base64, or nil
+   when none is kept by it."
+  [digest]
+  (when (string? digest) (images/fetch (qa-screenshot-root) digest)))

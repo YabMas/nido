@@ -754,11 +754,13 @@
    (stamped, or nil) and whether its project declares :qa — `declared?`, which the caller reads
    off the registry, because standing reads no registry.
 
-   {:state s :plan <seq> :surface :product|:none :walks [<seq> …]}. The plan it stands on is the
-   newest :qa-plan citing the governing design, in every state, and there is none when no plan
-   cites it — then :plan and :surface are absent. :walks are that plan's walks recorded after the
-   newest build (`newest-build`): a walk observes the build it follows, so one recorded before a
-   later build says nothing about the change as it stands. The state is:
+   {:state s :plan <seq> :surface :product|:none :walks [<seq> …] :earlier [<seq> …]}. The plan
+   it stands on is the newest :qa-plan citing the governing design, in every state, and there is
+   none when no plan cites it — then :plan and :surface are absent. :walks are that plan's walks
+   recorded after the newest build (`newest-build`): a walk observes the build it follows, so one
+   recorded before a later build says nothing about the change as it stands. :earlier names the
+   plan's walks recorded before that build — what a report says was found on the way — and never
+   enters the state. The state is:
 
      :off             the project declares no :qa
      :not-applicable  the plan is :none — whatever earlier plans or walks say
@@ -781,13 +783,15 @@
         plan  (when (and dseq (not= ::unreadable plans))
                 (->> plans (filter #(= dseq (get-in % [:design :seq]))) last))
         built (or (:seq (newest-build w)) 0)
-        walks (when (= :product (:surface plan))
+        all   (when (= :product (:surface plan))
                 (let [ws* (readable project ws-id w :qa-walk)]
                   (if (= ::unreadable ws*)
                     ws*
-                    (filter #(and (= (:seq plan) (get-in % [:plan :seq])) (> (:seq %) built)) ws*))))
-        lost? (and declared? (or (= ::unreadable plans) (= ::unreadable walks)))
-        walks (if (= ::unreadable walks) [] walks)
+                    (filter #(= (:seq plan) (get-in % [:plan :seq])) ws*))))
+        lost? (and declared? (or (= ::unreadable plans) (= ::unreadable all)))
+        all   (if (= ::unreadable all) [] all)
+        walks (filter #(> (:seq %) built) all)
+        early (remove #(> (:seq %) built) all)
         state (cond
                 (not declared?)               :off
                 lost?                         :owed
@@ -795,7 +799,7 @@
                 (some #(not (report/walk-passed? %)) walks) :failed
                 (seq walks)                   :passed
                 :else                         :owed)]
-    (cond-> {:state state :walks (mapv :seq walks)}
+    (cond-> {:state state :walks (mapv :seq walks) :earlier (mapv :seq early)}
       plan  (assoc :plan (:seq plan) :surface (:surface plan))
       lost? (assoc :indeterminate? true
                    :blocked {:reason :unreadable-ledger

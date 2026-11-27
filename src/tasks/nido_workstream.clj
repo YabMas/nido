@@ -21,8 +21,6 @@
    [nido.coordinator.work.core :as wcore]
    [nido.coordinator.lane.landing :as landing]
    [babashka.fs :as fs]
-   [nido.core.images :as images]
-   [nido.platform.core :as platform]
    [tasks.nido-attach :as attach])
   (:import (java.nio.file Files)
            (java.security MessageDigest)
@@ -69,18 +67,12 @@
     (owed-lines (keyword (:project opts)) (resolve-ws-id opts) (:seq (ex-data e)))
     []))
 
-(defn- qa-screenshot-root
-  "Where a QA walk's screenshots are kept, by digest: the nido home's `qa/screenshots/`, outside
-   the ledger, so a walk names its evidence and stays the size of its words."
-  []
-  (str (platform/nido-home) "/qa/screenshots"))
-
 (def ^:private screenshot-mimes
   {"png" "image/png" "jpg" "image/jpeg" "jpeg" "image/jpeg" "webp" "image/webp" "gif" "image/gif"})
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   screenshot-add*
-  "Keep the screenshot file :file under the QA screenshot root through core-images' put!, and
+  "Keep the screenshot file :file through record-workstream's `keep-screenshot!`, and
    answer the digest a :qa-walk result names it by. Throws when the file is missing, is not an
    image by its extension, or its bytes were not kept."
   [{:keys [file]}]
@@ -94,23 +86,22 @@
                                    {:file file})))
           bs   (Files/readAllBytes (.toPath ^java.io.File f))
           d    (apply str (map #(format "%02x" %) (.digest (MessageDigest/getInstance "SHA-256") bs)))
-          kept (images/put! (qa-screenshot-root)
-                            {:mime mime :digest d :data (.encodeToString (Base64/getEncoder) bs)})]
-      (if (and (string? kept) (images/fetch (qa-screenshot-root) kept))
+          kept (ws/keep-screenshot! {:mime mime :digest d :data (.encodeToString (Base64/getEncoder) bs)})]
+      (if (and (string? kept) (ws/screenshot kept))
         kept
         (throw (ex-info (str "The screenshot was not kept: " (pr-str kept)) {:file file :kept kept}))))))
 
 (defn- check-walk-screenshots!
-  "Refuse a :qa-walk naming a screenshot digest the QA screenshot root keeps no bytes for — before
+  "Refuse a :qa-walk naming a screenshot digest no bytes are kept for — before
    anything is appended. The ledger cannot ask: the bytes are kept outside it."
   [kind body]
   (when (= :qa-walk kind)
     (let [r       (try (edn/read-string body) (catch Exception _ nil))
           missing (->> (:results r) (mapcat :screenshots) distinct
-                       (remove #(and (string? %) (images/fetch (qa-screenshot-root) %))))]
+                       (remove ws/screenshot))]
       (when (seq missing)
-        (throw (ex-info (str "The QA walk names screenshots nothing is kept for under "
-                             (qa-screenshot-root) ": " (str/join ", " missing)
+        (throw (ex-info (str "The QA walk names screenshots nothing is kept for: "
+                             (str/join ", " missing)
                              " — keep each with `bb nido:workstream:screenshot:add :file <path>`"
                              " and name the digest it prints")
                         {:missing (vec missing)}))))))

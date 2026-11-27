@@ -167,10 +167,10 @@
         (build! add! d)
         (let [p (history/append-past-the-refusal! :brian id :qa-plan (pre-roles-plan d))]
           (testing "its QA reading is what it was: owed, standing on that plan"
-            (is (= {:state :owed :plan p :surface :product :walks []} (r))))
+            (is (= {:state :owed :plan p :surface :product :walks [] :earlier []} (r))))
           (testing "a walk of it casts nobody, and is taken"
             (let [w (add! :qa-walk (walk p [["open" :pass] ["check" :pass]] nil))]
-              (is (= {:state :passed :plan p :surface :product :walks [w]} (r)))))
+              (is (= {:state :passed :plan p :surface :product :walks [w] :earlier []} (r)))))
           (testing "a walk of it casting a role the plan never declared is refused"
             (is (thrown-with-msg? Exception #"not a role of the plan: teacher"
                                   (add! :qa-walk (walk p [["open" :pass] ["check" :pass]])))))
@@ -240,8 +240,8 @@
             _   (spit png "not really a png, but bytes")
             dg  (tw/screenshot-add* {:file png})]
         (is (re-matches #"[0-9a-f]{64}" dg))
-        (is (= (str (core/nido-home) "/qa/screenshots") (#'tw/qa-screenshot-root)))
-        (is (fs/exists? (fs/path (#'tw/qa-screenshot-root) dg)) "kept under the QA screenshot root")
+        (is (= (str (core/nido-home) "/qa/screenshots") (#'ws/qa-screenshot-root)))
+        (is (fs/exists? (fs/path (#'ws/qa-screenshot-root) dg)) "kept under the QA screenshot root")
         (is (= dg (tw/screenshot-add* {:file png})) "keeping it twice keeps it once")
         (testing "a missing file or one that is no image is refused"
           (is (thrown? Exception (tw/screenshot-add* {:file (str (fs/path tmp "nope.png"))})))
@@ -276,30 +276,30 @@
         (testing "a project that declares no :qa reads :off, plan or none"
           (is (= :off (:state (standing/qa :brian id false)))))
         (testing "no plan citing the governing design: owed, and no plan named"
-          (is (= {:state :owed :walks []} (r))))
+          (is (= {:state :owed :walks [] :earlier []} (r))))
         (build! add! d)
         (let [p1 (add! :qa-plan (product-plan d))]
-          (is (= {:state :owed :plan p1 :surface :product :walks []} (r)))
+          (is (= {:state :owed :plan p1 :surface :product :walks [] :earlier []} (r)))
           (is (= p1 (:plan (standing/qa :brian id false))) "even :off stands on the newest plan")
-          (let [w1 (add! :qa-walk (walk p1 [["open" :pass] ["check" :fail]]))]
-            (is (= {:state :failed :plan p1 :surface :product :walks [w1]} (r)))
+          (let [w1 (add! :qa-walk (walk p1 [["open" :pass] ["check" :fail]]))
+                w2 (do (is (= {:state :failed :plan p1 :surface :product :walks [w1] :earlier []} (r)))
+                       (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]])))]
             (testing "a later walk with no build between does not outweigh a failed one"
-              (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]]))
-              (is (= :failed (:state (r))))))
-          (testing "a build since makes every earlier walk count for nothing"
-            (build! add! d)
-            (is (= {:state :owed :plan p1 :surface :product :walks []} (r))))
-          (let [w (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]]))]
-            (is (= {:state :passed :plan p1 :surface :product :walks [w]} (r))))
+              (is (= :failed (:state (r)))))
+            (testing "a build since makes every earlier walk count for nothing — they are named :earlier"
+              (build! add! d)
+              (is (= {:state :owed :plan p1 :surface :product :walks [] :earlier [w1 w2]} (r))))
+            (let [w (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]]))]
+              (is (= {:state :passed :plan p1 :surface :product :walks [w] :earlier [w1 w2]} (r)))))
           (testing ":blocked is not passed"
             (add! :qa-walk (walk p1 [["open" :pass] ["check" :blocked]]))
             (is (= :failed (:state (r)))))
           (testing "the newest plan is :none: not applicable, whatever was walked before"
             (let [n (add! :qa-plan (none-plan d))]
-              (is (= {:state :not-applicable :plan n :surface :none :walks []} (r)))))
+              (is (= {:state :not-applicable :plan n :surface :none :walks [] :earlier []} (r)))))
           (testing "the newest plan is :product again: its own walks alone count"
             (let [p2 (add! :qa-plan (product-plan d ["one"]))]
-              (is (= {:state :owed :plan p2 :surface :product :walks []} (r))))))))))
+              (is (= {:state :owed :plan p2 :surface :product :walks [] :earlier []} (r))))))))))
 
 (deftest the-conditional-append-checks-a-walk-as-the-plain-append-does
   (with-tmp
