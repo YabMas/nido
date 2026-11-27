@@ -78,6 +78,15 @@
         (is (nil? (guard "/w" {:tool_input {:file_path "/wx/a"}}))))
       (finally (fs/delete-tree dir)))))
 
+(deftest a-read-only-turn-may-write-its-declarations-under-canvas
+  (let [guard #'claude/guard-decision]
+    (is (nil? (guard "/w" {:tool_input {:file_path "/w/canvas/core/x.clj"}})))
+    (is (nil? (guard "/w" {:cwd "/w" :tool_input {:file_path "canvas/core/x.clj"}})) "relative to the tool's cwd")
+    (is (some? (guard "/w" {:tool_input {:file_path "/w/src/nido/core/x.clj"}})))
+    (is (some? (guard "/w" {:tool_input {:file_path "/w/canvas/../src/x.clj"}})) "a .. escape out of canvas/")
+    (is (some? (guard "/w" {:tool_input {:file_path "/w/canvas"}})) "canvas itself is no declaration")
+    (is (some? (guard "/w" {:tool_input {:file_path "/w/canvasx/a.clj"}})))))
+
 ;; ── an ask the agent was woken past ──────────────────────────────────────────
 
 (defn- result-line [m] (json/write-str (merge {:type "result" :subtype "success"} m)))

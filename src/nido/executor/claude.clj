@@ -22,7 +22,8 @@
    Every run is passed the same permission policy, because `--resume` restores none: permissions
    skipped, nothing nobody could answer (AskUserQuestion, ScheduleWakeup), and only the user's and
    project's own settings beneath the run's. A read-only turn (`:read-only?` on its spec) has a
-   second PreToolUse hook, which refuses every file-editing tool pointed into its working copy.
+   second PreToolUse hook, which refuses every file-editing tool pointed into its working copy
+   outside its `canvas/`, where the turn writes its design's declarations.
 
    A turn's first run is prompted with the spec's `:instructions`, followed, when the spec names
    `:images` (digests), by one image block per image in order, read through the executor's `:image`
@@ -61,7 +62,7 @@
 
 (def ^:private file-editors
   "The tools that change files, which a read-only turn (`:read-only?` on its spec) may not point at
-   its working copy: a hook guards them rather than their being withheld, because a skill writes
+   its working copy outside `canvas/`: a hook guards them rather than their being withheld, because a skill writes
    its reports to files elsewhere."
   "Edit|MultiEdit|Write|NotebookEdit")
 
@@ -324,19 +325,22 @@
 
 (defn- guard-decision
   "The read-only hook's answer for `event`: a denial when the file-editing tool it names points
-   into working copy `cwd`, else nil."
+   into working copy `cwd` anywhere but under its `canvas/`, else nil. Both paths are canonical, so
+   `canvas/../src/x.clj` is refused: a design adding a module must declare it in `canvas/` before
+   its review can pass, and nothing else of the working copy is the turn's to change."
   [cwd {:keys [tool_input] :as event}]
   (when-let [p (or (:file_path tool_input) (:notebook_path tool_input))]
     (let [root (canonical nil cwd)
           path (canonical (:cwd event) p)]
-      (when (or (= path root) (str/starts-with? path (str root "/")))
+      (when (and (or (= path root) (str/starts-with? path (str root "/")))
+                 (not (str/starts-with? path (str root "/canvas/"))))
         {:hookSpecificOutput
          {:hookEventName "PreToolUse"
           :permissionDecision "deny"
           :permissionDecisionReason
           (str "nido's recipe holds this workstream's code until its design is cleared: this turn "
-               "may not change files in its working copy. Write what the recipe owes through nido's "
-               "verbs instead.")}}))))
+               "may change files in its working copy only under canvas/, to write its design's "
+               "declarations. Write what else the recipe owes through nido's verbs instead.")}}))))
 
 ;; ── the supervisor ───────────────────────────────────────────────────────────
 

@@ -830,7 +830,9 @@
 
 (def ^:private read-only-preamble
   (str "nido's recipe runs on this workstream and its design is not cleared, so this turn may not "
-       "change code: its file-editing tools are refused in its working copy, and it must not change files there any other way. Explore, "
+       "change code: it may write its design's declarations under canvas/ and nothing else in its "
+       "working copy — its file-editing tools are refused there outside canvas/, and it must not "
+       "change files there any other way. Explore, "
        "and write what the recipe owes — the baseline, the design (/design) — through nido's verbs; "
        "a product question is a design question, to ask now rather than after building."))
 
