@@ -382,6 +382,13 @@
     (socket-connectable? nrepl)
     (and (pos-int? nrepl) (proc/tcp-open? nrepl))))
 
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  jvm-answers?
+  "Whether the nREPL app service state `saved-state` names answers: for an app on an on-demand
+   JVM, whether that JVM runs."
+  [saved-state]
+  (boolean (nrepl-answers? (nrepl-of saved-state))))
+
 (defn- bound-port
   "The port the app itself binds: `:bind-port` when its JVM is on demand — the front holds the
    session's app port, `:app-port` — else the session's app port."

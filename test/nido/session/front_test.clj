@@ -288,3 +288,50 @@
             (let [[_ rec] (some #(when (and (vector? %) (= :record (first %))) %) @log)]
               (is (= :bypassed (:admission rec)) (str (:outcome rec) " records its admission bypassed")))))
         (finally (cleanup fx))))))
+
+(deftest an-nrepl-triggered-start-is-recorded-ready-when-the-jvm-answers
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {})
+        cfg  (assoc cfg :apps [{:service :app :port 1 :bind-port 2}])
+        _    (swap! front assoc :cfg cfg)
+        jvm-ready (atom nil)]
+    (try
+      (with-redefs-fn (assoc redefs
+                             #'state/read-session (fn [_] {:name "t"
+                                                           :service-defs [{:type :eval :name :app}]
+                                                           :service-states {:app {:bind-port 2}}})
+                             #'process/start-jvm! (let [f (get redefs #'process/start-jvm!)]
+                                                    (fn [c] (let [pid (f c)] (reset! jvm-ready (System/currentTimeMillis)) pid)))
+                             #'eval-svc/start-app! (fn [& _] (Thread/sleep 800) false))
+        (fn []
+          (is (= "x" (call (:nrepl-port cfg) "x" 3000)) "the nREPL call is answered once the JVM is")
+          (await-phase front :absent)
+          (Thread/sleep 100)
+          (let [recs (keep #(when (and (vector? %) (= :record (first %))) (second %)) @log)
+                rec  (first recs)]
+            (is (= 1 (count recs)) (str "one start, one record: " (pr-str recs)))
+            (is (= :ready (:outcome rec)) "the app failing after the JVM answered does not fail the nREPL's start")
+            (is (< (- (.toEpochMilli (java.time.Instant/parse (:ended-at rec))) @jvm-ready) 500)
+                "and it ended when the JVM answered, not when the app gave up"))
+          (is (some #(and (vector? %) (= :failure (first %))) @log) "the app's failure is kept all the same")))
+      (finally (cleanup fx)))))
+
+(deftest a-client-sending-during-a-start-is-held-only-up-to-the-limit
+  (let [{:keys [cfg redefs front] :as fx} (fixture {:start-ms 1500})]
+    (try
+      (with-redefs-fn redefs
+        (fn []
+          (with-open [c (Socket. "127.0.0.1" (int (:nrepl-port cfg)))]
+            (let [out  (.getOutputStream c)
+                  sent (atom 0)
+                  w    (future (try (let [b (byte-array 65536)]
+                                      (dotimes [_ 1024] (.write out b) (swap! sent + 65536)))
+                                    (catch Exception _ nil)))]
+              (Thread/sleep 1000)
+              (is (= :starting (:phase @front)))
+              (is (< @sent (* 16 1024 1024))
+                  "the front stops reading the client once it holds its limit, so the client's writes block")
+              (future-cancel w)))
+          ;; Its start runs on after the client goes; left running, it would land in the next
+          ;; test's redefinitions.
+          (await-phase front :running)))
+      (finally (cleanup fx)))))

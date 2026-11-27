@@ -11,7 +11,8 @@
      {:project :session :instance-id
       :port         :repl | :app      — which of the front's ports the first byte came to
       :requested-at <iso instant>     — when that first byte arrived
-      :ended-at     <iso instant>     — when the start ended, ready or not
+      :ended-at     <iso instant>     — when the triggering port was ready (the JVM's nREPL for
+                                        :repl, the app for :app), or when the start failed
       :outcome      :ready | :ready-after-give-up | :failed
       :cause        <string>          — a failed start's, only
       :admission    :bypassed}        — every start's: none is admitted against the fleet's

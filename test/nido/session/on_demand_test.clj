@@ -36,6 +36,14 @@
                               :service-states {:app {:on-demand? true :app-port 3300}}})
       (is (zero? @calls) "a join starts no JVM through the front"))))
 
+(deftest the-join-reconcile-recovers-an-on-demand-app-whose-jvm-runs
+  (let [calls (atom 0)]
+    (with-redefs [nido.session.services.eval/start-app!    (fn [& _] (swap! calls inc) true)
+                  nido.session.services.eval/jvm-answers? (fn [s] (= "/tmp/up.sock" (:socket s)))]
+      (engine/reconcile-app! {:service-defs   [{:type :eval :name :app}]
+                              :service-states {:app {:on-demand? true :app-port 3300 :socket "/tmp/up.sock"}}})
+      (is (= 1 @calls) "an app that stopped inside a running JVM is started again, as on any JVM"))))
+
 (deftest the-briefing-says-the-first-call-starts-the-jvm
   (let [rt (fn [on-demand?]
              {:project-dir "/wt-a" :members {"/wt-a" "a"}

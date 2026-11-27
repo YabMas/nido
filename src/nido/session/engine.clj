@@ -808,8 +808,12 @@
   (doseq [svc-def (:service-defs existing)
           :when   (= :eval (:type svc-def))
           :let    [saved-state (get (:service-states existing) (:name svc-def))]
-          ;; An app on an on-demand JVM is the front's to start, with the JVM.
-          :when   (and saved-state (not (:on-demand? saved-state)))]
+          ;; An app on an on-demand JVM that does not run is the front's to start, with the
+          ;; JVM; one whose JVM runs is recovered here like any other. The caller holds the
+          ;; runtime's lock, which the front's start and stop take too, so the JVM cannot come or
+          ;; go between this check and the start.
+          :when   (and saved-state
+                       (or (not (:on-demand? saved-state)) (eval-svc/jvm-answers? saved-state)))]
     (eval-svc/start-app! svc-def saved-state (:context existing))))
 
 (defn ^{:malli/schema [:=> [:cat :Path [:maybe :InstanceId]] [:sequential :string]]}

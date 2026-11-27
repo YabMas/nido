@@ -96,9 +96,12 @@
 (defn- now-ms [] (System/currentTimeMillis))
 
 (defn- record-start!
-  "Append the start that just ended to the project's cold-start log; a failure to write it is
-   logged, never thrown, so it cannot take the front down."
-  [front outcome cause]
+  "Append the start that ended at `ended-at` — the instant its triggering port was ready, or the
+   instant it failed — to the project's cold-start log, and mark it recorded, so a start is
+   recorded once. Called at that instant, so every field reads as it was then. A failure to write
+   it is logged, never thrown, so it cannot take the front down."
+  [front outcome cause ended-at]
+  (swap! front assoc-in [:start :recorded?] true)
   (let [{:keys [cfg start]} @front
         session (state/read-session (:instance-id cfg))]
     (try
@@ -108,7 +111,7 @@
                 :instance-id  (:instance-id cfg)
                 :port         (:port start)
                 :requested-at (:requested-at start)
-                :ended-at     (core/now-iso)
+                :ended-at     ended-at
                 :outcome      (if (and (= :ready outcome) (:gave-up? start)) :ready-after-give-up outcome)
                 ;; No start through the front is admitted against the fleet's memory budget.
                 :admission    :bypassed}
@@ -139,6 +142,16 @@
     (try (process/stop-jvm! cfg) (catch Exception e2 (core/log-step (str "warning: " (ex-message e2)))))
     (try (note-jvm! cfg nil) (catch Exception _ nil))))
 
+(defn- ready!
+  "Deliver port `kind`'s readiness, and when it is the port that triggered the start, record the
+   start ready at this instant."
+  [front kind]
+  (let [at (core/now-iso)
+        {:keys [ready start]} @front]
+    (deliver (get ready kind) {:ok true})
+    (when (= kind (:port start))
+      (record-start! front :ready nil at))))
+
 (defn- run-start!
   "Start the runtime's on-demand group — the JVM, then each app on it — delivering each port's
    readiness as it comes, and record the start however it ends. A start that fails is rolled back
@@ -156,15 +169,14 @@
               (swap! front assoc :jvm-pid pid)
               (note-jvm! cfg pid)
               (assert-port-file! cfg)
-              (deliver (:repl ready) {:ok true})
+              (ready! front :repl)
               (doseq [[d s] (app-services cfg session)]
                 (when-not (eval-svc/start-app! d s (:context session))
                   (throw (ex-info (str "The app " (name (:name d)) " did not open port " (:bind-port s)
                                        " after its start form")
                                   {:service (:name d) :bind-port (:bind-port s)}))))
-              (deliver (:app ready) {:ok true})
-              (swap! front assoc :phase :running :last-traffic (now-ms))
-              (record-start! front :ready nil))
+              (ready! front :app)
+              (swap! front assoc :phase :running :last-traffic (now-ms)))
             (catch Throwable e
               (roll-back-start! front)
               (throw e)))))
@@ -172,7 +184,10 @@
         (core/log-step (str "On-demand start failed: " (ex-message e)))
         (try (keep-failure! front e)
              (catch Exception e2 (core/log-step (str "warning: could not keep the failed start: " (ex-message e2)))))
-        (record-start! front :failed (or (ex-message e) (str (class e))))
+        ;; A start whose triggering port was ready is recorded ready, at that instant; what failed
+        ;; after it — an app, for an nREPL-triggered start — is kept above all the same.
+        (when-not (get-in @front [:start :recorded?])
+          (record-start! front :failed (or (ex-message e) (str (class e))) (core/now-iso)))
         ;; The front's own reading only, after the record, which reads this start's :start.
         (swap! front assoc :phase :absent :jvm-pid nil)
         (deliver (:repl ready) {:error e})
@@ -280,17 +295,26 @@
 (defn- traffic! [front kind]
   (when (= :repl kind) (swap! front assoc :last-traffic (now-ms))))
 
+(def ^:private held-limit
+  "The most a connection holds while its target is not ready. Past it the client is not read
+   until the target is connected, so a client sending faster than the start meets the
+   backpressure a direct connection gives it, not a front whose heap it can fill."
+  (* 1024 1024))
+
 (defn- pump-client!
   "Client to JVM: what the client sends is held until `inner` is connected, written through
-   after. The client's end of sending is passed on as the end of sending to `inner` — at once when
+   after — held up to `held-limit`, past which the client is not read until `released` (the
+   target connected, or the connection closed). The client's end of sending is passed on as the end of sending to `inner` — at once when
    it is connected, else once it is (`client-eof?`) — and is never the end of the connection, which
    a client may half-close and go on reading its reply from; `end!` says this direction is done.
    An end before `inner` is connected is read as the start's first client giving up, when it is
    the connection that started it: a half-close cannot be told from a close."
-  [front conn ^java.io.InputStream in held inner client-eof? end! close!]
+  [front conn ^java.io.InputStream in held inner released client-eof? end! close!]
   (try
     (let [b (byte-array 65536)]
       (loop []
+        (when (and (nil? @inner) (>= (locking held (.size ^java.io.ByteArrayOutputStream held)) held-limit))
+          (deref released))
         (let [n (.read in b)]
           (if (neg? n)
             (do (locking held
@@ -335,8 +359,10 @@
         held        (java.io.ByteArrayOutputStream.)
         inner       (atom nil)
         client-eof? (atom false)
+        released    (promise)
         closed?     (atom false)
         close!      (fn []
+                      (deliver released true)
                       (when (compare-and-set! closed? false true)
                         (try (.close client) (catch Exception _ nil))
                         (when-let [i @inner] (try ((:close i)) (catch Exception _ nil)))
@@ -353,7 +379,7 @@
             (traffic! front (:kind conn))
             (.write held buf 0 n)
             (let [ready (demand! front (:kind conn) conn)]
-              (future (pump-client! front conn in held inner client-eof? end! close!))
+              (future (pump-client! front conn in held inner released client-eof? end! close!))
               (let [r @ready]
                 (if (or (:error r) @closed?)
                   (close!)
@@ -362,6 +388,7 @@
                       (reset! inner i)
                       (let [bs (.toByteArray held)] ((:write i) bs (count bs)))
                       (when @client-eof? ((:shutdown-output i))))
+                    (deliver released true)
                     (when @closed? (try ((:close i)) (catch Exception _ nil)))
                     (pump-inner! front conn i client end! close!))))))))
       (catch Exception _ (close!)))))
