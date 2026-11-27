@@ -3729,6 +3729,15 @@
             (testing "and it is no longer stalled: the core is owed a move"
               (is (not (some #(= id (:ws-id %)) (:gates (work/read-gates))))))))))))
 
+(deftest a-held-stall-card-is-not-carded-once-the-stall-reading-drops-it
+  ;; Woken, a stall stops being one at once; the rows this process holds still carry its card
+  ;; until they refresh, and Needs you must not show it from them.
+  (let [stall   {:ws-id "w-stall" :core-ask nil :status {:stalled true :needs-you true :needs :system-error}}
+        landing {:ws-id "w-land" :core-ask nil :status {:needs-you true :needs :landing}}]
+    (with-redefs [work/model (atom {:projects {"brian" {:gates [stall landing]}}})]
+      (is (= [landing] (#'work/held-ledger-gates :brian #{}))
+          "the held stall card is left to stall-gates, which no longer cards it"))))
+
 (deftest nothing-the-core-is-not-the-mover-of-stalls
   (with-tmp
     (fn [_]

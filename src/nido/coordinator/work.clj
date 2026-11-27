@@ -4784,8 +4784,11 @@
   "The gates of `project`'s held rows that no core ask makes — a landing, a failed start, or a
    move the row's position owes the person (`row-gate`) — leaving out the workstreams in `asked`,
    which the core's asks already card. Over only the rows this process already holds, building none: empty before the first
-   build, or in a process that holds nothing."
+   build, or in a process that holds nothing. A held stall card is never among them: `stall-gates`
+   reads every stall fresh, so one it no longer cards — woken, say — has stopped being one."
   [project asked]
   (when-let [p (get-in @model [:projects (name project)])]
-    (into [] (filter #(and (nil? (:core-ask %)) (not (contains? asked (:ws-id %)))))
+    (into [] (filter #(and (nil? (:core-ask %))
+                           (not (get-in % [:status :stalled]))
+                           (not (contains? asked (:ws-id %)))))
           (:gates p))))
