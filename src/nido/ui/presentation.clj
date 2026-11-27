@@ -99,8 +99,8 @@
    :body    (str (h/html [:html
                           [:head [:meta {:charset "utf-8"}]
                            [:style (h/raw (registry/assembled-stylesheet))]]
-                          [:body {:style "display:grid;place-items:center;height:100vh;margin:0"}
-                           [:p.meta {:style "max-width:40em;white-space:pre-wrap"} text]]]))})
+                          [:body.notice-page
+                           [:p.meta.notice-text text]]]))})
 
 (defn ^{:malli/schema [:=> [:cat :string
                              [:map [:method [:enum :get :post]] [:path :string]

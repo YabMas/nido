@@ -2187,7 +2187,7 @@
   (let [html (views/shell chrome-ctx [:p "body"])]
     (is (= 1 (count (re-seq #"localStorage\.setItem\(&apos;nidoSideOpen&apos;" html)))
         "one writer of the key: the toggle")
-    (is (re-find #"<button[^>]*class=\"side-toggle\"[^>]*data-on:click=\"\$sideOpen = !\$sideOpen; localStorage\.setItem" html))))
+    (is (re-find #"<button[^>]*class=\"[^\"]*side-toggle\"[^>]*data-on:click=\"\$sideOpen = !\$sideOpen; localStorage\.setItem" html))))
 
 (deftest the-collapsed-rail-keeps-toggle-and-health
   (let [html  (str (h/html (#'views/sidebar {:active :workstreams :scope "brian" :daemon {:state :up}})))

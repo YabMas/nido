@@ -80,8 +80,8 @@
                           [:head [:meta {:charset "utf-8"}]
                            (when refresh? [:meta {:http-equiv "refresh" :content "1"}])
                            [:style (h/raw (registry/assembled-stylesheet))]]
-                          [:body {:style "display:grid;place-items:center;height:100vh;margin:0"}
-                           [:p.meta {:style "max-width:40em;white-space:pre-wrap"} text]]]))})
+                          [:body.notice-page
+                           [:p.meta.notice-text text]]]))})
 
 (defn ^{:malli/schema [:=> [:cat :string :string [:maybe :string]] :map]}
   forward

@@ -75,14 +75,9 @@
                      min-width:0; min-height:0; }
         .pickup { margin:var(--space-12) var(--space-16) var(--space-10); padding:var(--space-12) var(--space-14); border:1px solid var(--border);
                   border-radius:var(--radius-6); background:var(--surface); }
-        .pickup-label { color:var(--text-strong); font-size:var(--fs-xs); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:var(--space-6); }
-        .pickup-row { display:flex; gap:var(--space-6); }
-        .pickup input { flex:1; box-sizing:border-box; background:var(--surface-sunken); border:1px solid var(--border);
-                        border-radius:var(--radius-4); color:var(--text-strong); font:inherit; font-size:var(--fs-xs); padding:var(--space-6) var(--space-9); }
-        .pickup input::placeholder { color:var(--text-muted); }
-        .pickup input:focus { outline:none; border-color:var(--accent-border); }
-        .pickup .btn { color:var(--text-strong); }
-        .pickup-result { margin-top:var(--space-2); }
+        .pickup-row { display:flex; gap:var(--space-6); align-items:center; }
+        .pickup-row > .field { flex:1; min-width:0; }
+        .pickup-result { margin-top:var(--space-8); }
         .inbox { overflow:auto; flex:1; }
         .gate-card { display:block; padding:var(--space-10) var(--space-16); border-bottom:1px solid var(--border-subtle); color:inherit; }
         .gate-card:hover { background:var(--surface-hover); text-decoration:none; }
@@ -270,9 +265,7 @@
         .viewer-bar .lk { font-size:var(--fs-xs); text-transform:uppercase; color:var(--text-muted); }
         .viewer-bar .lt { flex:1; min-width:0; white-space:nowrap; overflow:hidden;
                           text-overflow:ellipsis; color:var(--text-strong); }
-        .viewer-close { background:none; border:none; color:var(--text-muted); cursor:pointer;
-                        font-size:var(--fs-sm); padding:0 var(--space-2); line-height:1; }
-        .viewer-close:hover { color:var(--text-strong); }
+        .viewer-close { flex:none; align-self:center; }
         .viewer > .md { border:none; border-radius:0; background:none; }
         .md { font-family:var(--font-prose);
               font-size:var(--fs-sm); line-height:1.7; color:var(--text); background:var(--surface-sunken);
@@ -341,19 +334,23 @@
      .sidebar { grid-area:side; background:var(--surface-raised); border-right:1px solid var(--border);
                 padding:var(--space-14); display:flex; flex-direction:column; gap:var(--space-3); }
      body:has(> .sidebar.open) { --side-w:var(--side-open-w); }
-     .side-toggle { align-self:flex-start; background:none; border:none; cursor:pointer; color:var(--text-muted);
-                    font-size:var(--fs-md); line-height:1; padding:var(--space-6) var(--space-8); border-radius:var(--radius-5); }
-     .side-toggle:hover { background:var(--surface-hover); color:var(--text-strong); }
+     .side-toggle { align-self:flex-start; }
      .sidebar:not(.open) { padding:var(--space-14) var(--space-6); align-items:center; }
      .sidebar:not(.open) .side-toggle { align-self:center; }
      .sidebar:not(.open) .side-link, .sidebar:not(.open) .side-divider { display:none; }
-     .sidebar:not(.open) .rail-health-btn { gap:0; color:transparent; width:var(--space-8); overflow:hidden; }
+     .sidebar:not(.open) .rail-health-btn { gap:0; }
+     .sidebar:not(.open) .rail-health-l { display:none; }
      .sidebar:not(.open) .rail-health-btn .dot { margin-right:0; flex:none; }
      .side-link { display:block; padding:var(--space-7) var(--space-10); border-radius:var(--radius-5); color:var(--text-muted);
                   border-left:3px solid transparent; }
      .side-link:hover { background:var(--surface-hover); text-decoration:none; }
      .side-divider { border:none; border-top:1px solid var(--border); margin:var(--space-8) 0; width:100%; }
      .side-link.active { background:var(--surface); color:var(--text-strong); border-left-color:var(--accent); }
+     /* A frame's stand-in page — the explorer or a catalog that cannot answer yet: one line of
+        words in the middle of the frame. */
+     body.notice-page { grid-template-columns:1fr; grid-template-rows:1fr; grid-template-areas:none;
+                        place-items:center; height:100vh; }
+     .notice-text { max-width:40em; white-space:pre-line; }
      .content { grid-area:main; padding:var(--space-20) var(--space-28); overflow:auto; }
      .content.bleed { padding:0; overflow:hidden; display:grid; }
      .structure-frame, .presentation-frame { width:100%; height:100%; border:0; display:block; }
@@ -386,21 +383,16 @@
                      background:var(--neutral-bg); padding:var(--space-6); margin:var(--space-4) 0; }
      .rail-badge.unread { background:var(--neutral-bg); color:var(--accent-strong); font-style:italic; }
      .rail-health { margin-top:auto; padding-top:var(--space-14); font-size:var(--fs-xs); color:var(--text-muted); }
-     .rail-health-btn { background:none; border:none; color:inherit; font:inherit;
-                        cursor:pointer; padding:0; display:flex; align-items:center; }
+     .rail-health-btn { display:flex; }
      .ops-wrap { position:fixed; left:14px; bottom:14px; width:340px; max-width:360px;
                  max-height:70vh; overflow-y:auto; z-index:50; }
      .ops-panel .card { background:var(--surface); }
      .ops-panel .fire-row { display:flex; align-items:center; gap:var(--space-6); flex-wrap:wrap;
                              margin:var(--space-6) 0; }
-     .ops-panel .fire-row input { background:var(--surface-sunken); border:1px solid var(--border);
-                                   border-radius:var(--radius-4); color:var(--text-strong); font:inherit;
-                                   font-size:var(--fs-xs); padding:var(--space-4) var(--space-8); width:100px; }
+     .ops-panel .fire-row .field { width:100px; }
      .ops-panel .fleet-head { display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-8); }
-     .ops-panel .fleet-bar { height:4px; border-radius:var(--radius-2); background:var(--border);
-                             margin:var(--space-7) 0 var(--space-6); overflow:hidden; }
-     .ops-panel .fleet-bar span { display:block; height:100%; background:var(--ok); }
-     .ops-panel .fleet-over .fleet-bar span { background:var(--warning); }
+     .ops-panel .fleet-meter { margin:var(--space-7) 0 var(--space-6); }
+     .fleet-note { margin-top:var(--space-7); }
      .ops-panel .fleet-over .fleet-pct { color:var(--warning); }
      .ops-panel .fleet-cand { display:flex; justify-content:space-between; gap:var(--space-8);
                               font-size:var(--fs-xs); margin-top:var(--space-3); }
@@ -453,6 +445,15 @@
         .prop-note { font-size:var(--fs-xs); color:var(--text-muted); margin:var(--space-8) 0 0; }
         .prop-note b { color:var(--text); font-weight:600; }
         .ops-empty { color:var(--text-faint); padding:var(--space-20) 0; }
+        .meta-failed { color:var(--failed); }
+        .prop-acts { margin-top:var(--space-10); }
+        .prop-band-note { margin:var(--space-18) 0 var(--space-8); }
+        .rec-feed-nav { margin-top:var(--space-8); }
+        .host-needs { color:var(--needs); }
+        .host-note { margin-top:var(--space-10); }
+        .rq-levers { margin-bottom:var(--space-14); }
+        .drain-card, .drain-start { margin:0 0 var(--space-28); }
+        .drain-line { margin:var(--space-6) 0; }
         .ops-head { display:flex; gap:var(--space-14); align-items:baseline; margin-bottom:var(--space-14); flex-wrap:wrap; }
         /* One reading column. Not .gate-wrap's queue+pane grid: nothing opens
            beside a proposal, so its 38% column would leave the evidence — the
@@ -641,6 +642,24 @@
         .kind-mark svg { width:1em; height:1em; }
         .gate-top .kind-mark svg { width:13px; height:13px; }
         .row-st .kind-mark svg { width:12px; height:12px; }
+        /* nido's catalog page (nido.ui.catalog/chat-page), filling the chrome's content area: two
+           columns, the frame and the chat's side panel — just wide enough for its toggle when
+           closed; open, it pushes the frame narrower, and below 1000px covers it instead. Pick is a
+           quiet icon button in the panel's bar, pressed while select mode is on; on, a hint
+           under the bar says what a click does and how to stop. */
+        .catc { position:relative; display:grid; grid-template-columns:1fr 58px; height:100%; min-height:0;
+                transition:grid-template-columns var(--dur-180) ease-out; }
+        .catc.open { grid-template-columns:1fr 420px; }
+        .catc-frame { border:0; width:100%; height:100%; background:var(--bg); }
+        .catc > .chat-side { height:100%; }
+        .catc-pick { flex:none; }
+        .catc-tool-i { font-size:var(--fs-md); line-height:1; }
+        .catc-hint { display:none; margin:0; font-size:var(--fs-xs); color:var(--accent-strong); background:var(--accent-bg);
+                     border:1px solid var(--accent-border); border-radius:var(--radius-4); padding:var(--space-5) var(--space-8); }
+        .catc-hint kbd { font-family:var(--font-mono); }
+        .catc.picking .catc-hint { display:block; }
+        @media (max-width: 999px) { .catc.open { grid-template-columns:1fr 58px; } }
+        @media (prefers-reduced-motion: reduce) { .catc { transition:none; } }
         /* The catalog scenes' own layout, for a scene that sets several calls of one function
            side by side or pairs an input with what it renders as. */
         .scene-rail { display:flex; flex-wrap:wrap; gap:var(--space-18); align-items:flex-start; }

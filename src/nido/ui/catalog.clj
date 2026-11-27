@@ -22,6 +22,7 @@
             [nido.libraries.ui.block :as block]
             [nido.libraries.ui.catalog-page :as library]
             [nido.ui.components.chat :as chat]
+            [nido.ui.components.control :as c]
             [nido.ui.registry :as registry]))
 
 ;; ---------------------------------------------------------------------------
@@ -37,34 +38,6 @@
 
 ;; ---------------------------------------------------------------------------
 ;; The catalog with its chat
-
-(def ^:private page-css
-  "The page around the scene frame: the frame and the chat's side panel, filling the content area
-   of the dashboard's page chrome. Every value is a token resources/nido/tokens.edn declares, or a
-   width the side panel's own rules share."
-  "        /* The page around the frame, filling the chrome's content area: two columns, the frame and
-           the chat's side panel — just wide enough for its toggle when closed; open, it pushes the
-           frame narrower, and below 1000px covers it instead. */
-        .catc { position:relative; display:grid; grid-template-columns:1fr 58px; height:100%; min-height:0;
-                transition:grid-template-columns 0.18s ease-out; }
-        .catc.open { grid-template-columns:1fr 420px; }
-        .catc-frame { border:0; width:100%; height:100%; background:var(--bg); }
-        .catc > .chat-side { height:100%; }
-        /* Select mode is a tool in the panel's bar, quiet like the toggle beside it, and pressed
-           while it is on; on, a hint under the bar says what a click does and how to stop. */
-        .catc-tool { display:inline-flex; gap:5px; align-items:center; background:none; cursor:pointer;
-                     border:1px solid transparent; border-radius:4px; padding:3px 7px;
-                     color:var(--text-muted); font:inherit; font-size:var(--fs-xs); }
-        .catc-tool:hover { color:var(--text-strong); background:var(--surface-hover); }
-        .catc-tool-i { font-size:var(--fs-md); line-height:1; }
-        .catc-pick.on { background:var(--accent-bg); border-color:var(--accent-border); color:var(--accent-strong); }
-        .catc-hint { display:none; margin:0; font-size:var(--fs-xs); color:var(--accent-strong); background:var(--accent-bg);
-                     border:1px solid var(--accent-border); border-radius:4px; padding:5px 8px; }
-        .catc-hint kbd { font-family:var(--font-mono); }
-        .catc.picking .catc-hint { display:block; }
-        @media (max-width: 999px) { .catc.open { grid-template-columns:1fr 58px; } }
-        @media (prefers-reduced-motion: reduce) { .catc { transition:none; } }
-")
 
 (def ^:private host-js
   "The page around the scene frame. It owns the chat's open state, select mode and the marks:
@@ -86,7 +59,7 @@
   var at = null, picking = false, marks = [];
   function post(m){ frame.contentWindow && frame.contentWindow.postMessage(m, '*'); }
   function isOpen(){ return root.classList.contains('open'); }
-  function setPicking(v){ picking = v; btn.classList.toggle('on', v); btn.setAttribute('aria-pressed', v);
+  function setPicking(v){ picking = v; btn.setAttribute('aria-pressed', v);
     root.classList.toggle('picking', v); post({type: 'nido-pick', on: v}); }
   function sendMarks(){ post({type: 'nido-marks', marks: isOpen() ? marks : []}); }
   function picks(){ try { var v = JSON.parse(input.value || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
@@ -148,7 +121,6 @@
         picks ((:signal kit) :picks)
         open  ((:signal kit) :open)]
     (list
-        [:style (h/raw (str "@layer app {\n" page-css "\n}"))]
         [:div.catc {:class (when open? "open")
                     "data-signals" "{catcFrame: ''}"
                     "data-class:open" (str "$" open)
@@ -160,16 +132,16 @@
                      :attach? (boolean (:attach? view))
                      :reset? true
                      :live?  true
-                     :bar    [[:button#catc-pick.catc-tool.catc-pick
-                               {:type "button" :aria-pressed "false" :aria-label "Pick elements"
+                     :bar    [(c/icon-button
+                               {:id "catc-pick" :class "catc-pick" :aria-pressed "false" :label "Pick elements"
                                 :title "Pick elements of a scene to talk about (Esc to stop)"}
-                               [:span.catc-tool-i {:aria-hidden "true"} "⌖"]]]
+                               [:span.catc-tool-i {:aria-hidden "true"} "⌖"])]
                      :top    [[:p.catc-hint "Click elements in the scene to attach them. Click again to remove one; "
                                [:kbd "Esc"] " to stop."]
                               change-bar]
-                     :extra  [[:input#catc-picks {:type "hidden" "data-bind" picks}]
-                              [:button#catc-picks-sync {:type "button" :hidden true
-                                                        "data-on:click" ((:action kit) :sync-picks)}]]}
+                     :extra  [(c/hidden-input {:id "catc-picks" "data-bind" picks})
+                              (c/button {:id "catc-picks-sync" :hidden true
+                                         "data-on:click" ((:action kit) :sync-picks)})]}
                     {} (:router view))
          [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.open($" open ")")}]
          [:span {:hidden true "data-effect" (str "window.nidoChat && window.nidoChat.marks($" picks ")")}]]

@@ -11,6 +11,7 @@
             [nido.ui.markdown :as md]
             [nido.libraries.ui.wire :as wire]
             [nido.ui.registry :as registry]
+            [nido.ui.components.control :as c]
             [nido.ui.components.state :as state]
             [nido.ui.components.row :as row]
             [nido.libraries.ui.block :as block]
@@ -85,9 +86,9 @@
 (defn- rail-health [{:keys [state]}]
   (let [s (name (or state :down))]
     [:div {:id "rail-health" :class "rail-health"}
-     [:button.rail-health-btn {"data-on:click" "$opsOpen = !$opsOpen"
-                               :title "ops panel"}
-      [:span {:class (str "dot dot-" s)}] s]]))
+     (c/quiet-button {:class "rail-health-btn" "data-on:click" "$opsOpen = !$opsOpen"
+                      :title "ops panel"}
+                     [:span {:class (str "dot dot-" s)}] [:span.rail-health-l s])]))
 
 (def ^:private slices
   "The sidebar: the focused project seen as a system, one slice per perspective.
@@ -168,12 +169,13 @@
    which renders the same either way."
   [{:keys [active scope daemon]}]
   [:nav.sidebar {"data-class:open" "$sideOpen"}
-   [:button.side-toggle {"data-on:click" (str "$sideOpen = !$sideOpen; localStorage.setItem('"
-                                              side-open-storage-key "', $sideOpen)")
-                         "data-attr:aria-expanded" "$sideOpen"
-                         :aria-expanded "false"
-                         :title "Show or hide the sidebar" :aria-label "Toggle the sidebar"}
-    "☰"]
+   (c/icon-button {:class "side-toggle"
+                   "data-on:click" (str "$sideOpen = !$sideOpen; localStorage.setItem('"
+                                        side-open-storage-key "', $sideOpen)")
+                   "data-attr:aria-expanded" "$sideOpen"
+                   :aria-expanded "false"
+                   :title "Show or hide the sidebar" :label "Toggle the sidebar"}
+                  "☰")
    (for [[id href label] slices]
      (list
       [:a {:class (str "side-link" (when (= id active) " active"))
@@ -247,12 +249,13 @@
         [:div.fleet-head
          [:span (process/human-bytes in-use) " / " (process/human-bytes machine)]
          [:span.fleet-pct.meta (when frac (str (Math/round (* 100.0 frac)) "%"))]]
-        [:div.fleet-bar [:span {:style (str "width:" (Math/round (* 100.0 (or frac 0))) "%")}]]
+        (c/meter {:value (or frac 0) :over? (boolean over?) :class "fleet-meter"
+                  :aria-label "Memory the fleet uses, of the machine's"})
         [:div.meta (str sessions " live session" (when (not= 1 sessions) "s"))]
         (cond
           (seq candidates)
           (list
-           [:div.meta {:style "margin-top:7px"} "Nothing driving these:"]
+           [:div.meta.fleet-note "Nothing driving these:"]
            (for [c (take 3 candidates)]
              (list
               [:div.fleet-cand
@@ -260,27 +263,27 @@
                [:span.sz (process/human-bytes (:bytes c)) " · " (fleet-idle-str c)]
                (if (:pending? c)
                  [:span.meta "stopping…"]
-                 [:button.btn
+                 (c/button
                   {"data-on:click"
                    (ops-post scope (str "/ops/fleet/" (:project c) "/"
                                         (java.net.URLEncoder/encode (str (:session c)) "UTF-8")
                                         "/down"))}
-                  "down"])]
+                  "down"))]
               ;; A stop that failed keeps its button — the action stays retryable —
               ;; and says why. The panel polls every 5s, so this is the only place
               ;; the click's outcome is ever reported.
               (when-let [err (:error-msg c)]
-                [:div.meta {:style "color:var(--failed)"} err])))
+                [:div.meta.meta-failed err])))
            (when (pos? more) [:div.meta (str "+" more " more")]))
 
           ;; A blind probe also produces no candidates, and "nothing is idle" is a
           ;; claim the snapshot cannot make from an absent signal. Same defect as
           ;; the predicate's, one layer up: silence must not be read as an answer.
           (false? signals-ok?)
-          [:div.meta {:style "margin-top:7px"} "Idle check unavailable."]
+          [:div.meta.fleet-note "Idle check unavailable."]
 
           :else
-          [:div.meta {:style "margin-top:7px"} "Nothing idle — every session was touched today."]))))]))
+          [:div.meta.fleet-note "Nothing idle — every session was touched today."]))))]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   ops-panel-fragment
@@ -301,9 +304,9 @@
       (if halt
         (list [:span "⏸ halted by " (name (:source halt))
                (when (:note halt) (str " — " (:note halt)))]
-              [:button.btn.btn-primary {"data-on:click" (ops-post scope "/ops/resume")} "Resume"])
+              (c/button {:emphasis :primary "data-on:click" (ops-post scope "/ops/resume")} "Resume"))
         (list [:span "running"]
-              [:button.btn.btn-danger {"data-on:click" (ops-post scope "/ops/halt")} "Halt"]))]
+              (c/button {:emphasis :danger "data-on:click" (ops-post scope "/ops/halt")} "Halt")))]
      (fleet-card fleet scope)
      [:div.card
       [:strong "Breakers"]
@@ -312,9 +315,9 @@
         ;; clearing a trip never lifts a pause, and only "resume" does.
         (for [{:keys [project trigger info]} breakers
               :let [lever (fn [verb label]
-                            [:button.btn {"data-on:click"
-                                          (ops-post scope (str "/ops/breakers/" (name project) "/" (name trigger) "/" verb))}
-                             label])]]
+                            (c/button {"data-on:click"
+                                       (ops-post scope (str "/ops/breakers/" (name project) "/" (name trigger) "/" verb))}
+                                      label))]]
           [:div.actions
            [:span.mono (str (name project) "/" (name trigger))]
            [:span.meta (str " — " (runs-view/breaker-reason info))]
@@ -329,12 +332,12 @@
           [:div.fire-row
            [:span.mono (str (clojure.core/name project) "/" (clojure.core/name name))]
            (for [k ks]
-             [:input {"data-bind" (fire-signal name k)
-                      :placeholder (clojure.core/name k)}])
-           [:button.btn {"data-on:click"
-                         (ops-post scope (str "/ops/fire/" (clojure.core/name project)
-                                              "/" (clojure.core/name name)))}
-            "fire"]]))]])))
+             (c/text-input {"data-bind" (fire-signal name k)
+                            :placeholder (clojure.core/name k)}))
+           (c/button {"data-on:click"
+                      (ops-post scope (str "/ops/fire/" (clojure.core/name project)
+                                           "/" (clojure.core/name name)))}
+                     "fire")]))]])))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   shell
@@ -457,9 +460,9 @@
     (if pause
       [:div.pause-line
        [:span (str "Paused" (when-let [n (:note pause)] (str " — " n)))]
-       [:button.btn.pause-ctl {"data-on:click" (post "resume")} "Resume"]]
+       (c/button {:class "pause-ctl" "data-on:click" (post "resume")} "Resume")]
       [:div.pause-line
-       [:button.btn.pause-ctl {"data-on:click" (post "pause") :title "stop pushing this forward for now"} "Pause"]])))
+       (c/button {:class "pause-ctl" "data-on:click" (post "pause") :title "stop pushing this forward for now"} "Pause")])))
 
 (defn- links-row
   "The workstream's followable external refs under a pane heading — one anchor per
@@ -1636,16 +1639,16 @@
     (case state
       :running
       [:div.actions
-       [:a.btn.btn-primary {:href url :target "_blank"} "Open app ↗"]
-       [:button.btn {"data-on:click" (act "stop")} "stop"]
-       [:button.btn {"data-on:click" (act "restart")} "restart"]]
+       (c/link-button {:emphasis :primary :href url :target "_blank"} "Open app ↗")
+       (c/button {"data-on:click" (act "stop")} "stop")
+       (c/button {"data-on:click" (act "restart")} "restart")]
       (:starting :stopping :restarting) [:span.meta "working…"]
       :failed
       [:div
-       [:button.btn.btn-primary {"data-on:click" (act "start")} "retry"]
+       (c/button {:emphasis :primary "data-on:click" (act "start")} "retry")
        (when error-msg [:div.error-msg error-msg])]
       ;; :down or nil
-      [:button.btn.btn-primary {"data-on:click" (act "start")} "start"])))
+      (c/button {:emphasis :primary "data-on:click" (act "start")} "start"))))
 
 (defn- day [at] (when at (let [s (str at)] (subs s 0 (min 10 (count s))))))
 
@@ -1748,8 +1751,9 @@
       [:span.lk (clojure.core/name (:kind entry))]
       [:span.meta (day (:at entry))]
       [:span.lt (:title entry)]
-      [:button.viewer-close {"data-on:click" (pane-fragment (at-entry pos nil))
-                             :title "close"} "✕"]])
+      (c/icon-button {:class "viewer-close" :label "close"
+                      "data-on:click" (pane-fragment (at-entry pos nil))}
+                     "✕")])
    (report-body report pos)])
 
 (defn- arc-entry-rows
@@ -1936,15 +1940,15 @@
    `findings`/`staging` signals auto-serialize into the JSON body (Datastar default)."
   [project ws-id]
   [:div.card
-   [:strong "File staging findings"]
-   [:p.meta "One per line:  severity | area | summary   (severity: blocker · tweak · nice-to-have)"]
-   [:textarea {"data-bind" "findings" :rows "5" :style "width:100%;box-sizing:border-box;"
-               :placeholder "blocker | Login | Save button 500s"}]
-   [:input {"data-bind" "staging" :style "width:100%;box-sizing:border-box;margin-top:6px;"
-            :placeholder "staging ref (optional)"}]
-   [:button {:style "margin-top:8px;"
-             "data-on:click" (str "@post('/workstreams/" project "/" ws-id "/findings')")}
-    "File findings & reopen"]])
+   (c/form-section
+    "File staging findings"
+    [:p.meta "One per line:  severity | area | summary   (severity: blocker · tweak · nice-to-have)"]
+    (c/textarea {"data-bind" "findings" :rows "5" :aria-label "Findings, one per line"
+                 :placeholder "blocker | Login | Save button 500s"})
+    (c/text-input {"data-bind" "staging" :aria-label "Staging ref"
+                   :placeholder "staging ref (optional)"})
+    [:div (c/button {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/findings')")}
+                    "File findings & reopen")])])
 
 (defn- bare-pane-body
   "The pane for a bare watched-view row: a page in a watched Notion view that no
@@ -2132,12 +2136,13 @@
   [project]
   (let [post (str "@post('/workstreams/pickup/" project "')")]
     [:div.pickup
-     [:div.pickup-label "Drive a ticket"]
-     [:div.pickup-row
-      [:input {"data-bind" "pickup"
-               "data-on:keydown" (str "evt.key === 'Enter' && (" post ")")
-               :placeholder "paste Notion URL / page id / BR-#…"}]
-      [:button.btn {"data-on:click" post} "Drive →"]]
+     (c/form-section
+      "Drive a ticket"
+      [:div.pickup-row
+       (c/text-input {"data-bind" "pickup" :aria-label "Ticket to drive"
+                      "data-on:keydown" (str "evt.key === 'Enter' && (" post ")")
+                      :placeholder "paste Notion URL / page id / BR-#…"})
+       (c/button {"data-on:click" post} "Drive →")])
      [:div {:id "pickup-result" :class "pickup-result"}]]))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :string]}
@@ -2147,7 +2152,7 @@
   [result {:keys [project]}]
   (str
    (h/html
-    [:div {:id "pickup-result" :class "pickup-result" :style "margin-top:8px;"}
+    [:div {:id "pickup-result" :class "pickup-result"}
      (if (= :unresolved (:decision result))
        [:p.meta
         (case (:error result)
@@ -2349,7 +2354,7 @@
              [:details.trail {:open (boolean (or (seq live) (:from feed)))}
               [:summary (str "Activity" (when (:from feed) " · older"))]
               [:div.rec-feed (for [e activity] (activity-line e))]
-              [:div.prop-meta {:style "margin-top:8px"}
+              [:div.prop-meta.rec-feed-nav
                (when (:from feed) [:a {:href (feed-href nil)} "newest"])
                (when (:next feed) [:a {:href (feed-href (:next feed))} "older →"])]]))))]))))
 
@@ -2498,11 +2503,11 @@
      ;; reached for an already-approved row would be no veto at all, and most of
      ;; the backlog is approved.
      (when-not landed
-       [:div.actions {:style "margin-top:10px"}
+       [:div.actions.prop-acts
         (when-not decision
-          [:button.btn.btn-primary {"data-on:click" (str "@post('" base "&verdict=approved')")} "Approve"])
+          (c/button {:emphasis :primary "data-on:click" (str "@post('" base "&verdict=approved')")} "Approve"))
         (when-not (= :declined (:verdict decision))
-          [:button.btn {"data-on:click" (str "@post('" base "&verdict=declined')")} "Decline"])])]))
+          (c/button {"data-on:click" (str "@post('" base "&verdict=declined')")} "Decline"))])]))
 
 (defn- proposal-band
   "Which of the three bands a row is in: what you still owe an answer, what you
@@ -2579,7 +2584,7 @@
                   (for [p queued] (proposal-card p))])
                (when (seq waiting)
                  (list
-                  [:p.meta {:style "margin:18px 0 8px"}
+                  [:p.meta.prop-band-note
                    "Approved — nothing in nido acts on an approval, so these are "
                    "waiting on someone to do them."]
                   (for [p waiting] (proposal-card p))))
@@ -2820,12 +2825,12 @@
        [:p.ops-empty "The host could not be read."]
        (list
         (when need
-          [:div.ops-head [:strong {:style "color:var(--needs)"} (str "Needs you: " (str/join " · " (:reasons need)))]])
+          [:div.ops-head [:strong.host-needs (str "Needs you: " (str/join " · " (:reasons need)))]])
         (for [l (host-figures host) :when l] [:div.meta l])
         (when coordinator
           [:div.meta (str "coordinator pid " (:pid coordinator)
                           (when-let [r (:rss-bytes coordinator)] (str " · " (process/human-bytes r))))])
-        [:p.meta {:style "margin-top:10px"}
+        [:p.meta.host-note
          "Grouped from every process your account runs, by command and parent: a process that is "
          "none of these counts as the kind of its nearest parent that is. Claude Code's own "
          "spare sessions count as Claude sessions; what no kind claims is listed under other."]
@@ -2915,9 +2920,9 @@
              [:div (if (str/blank? l) (h/raw "&nbsp;") l)])]]))
      (when (= :deciding stage)
        [:div.actions
-        [:button {:class (str "btn" (when (not= :approved decision) " btn-primary"))
-                  "data-on:click" (post "approved")} "Approve"]
-        [:button.btn {"data-on:click" (post "skipped")} "Skip"]])]))
+        (c/button {:emphasis (if (not= :approved decision) :primary :default)
+                   "data-on:click" (post "approved")} "Approve")
+        (c/button {"data-on:click" (post "skipped")} "Skip")])]))
 
 (defn- rq-ticket [project run-id stage {:keys [priority priority-was rank br title url lifecycle qa why items]}]
   [:div.prop
@@ -2991,20 +2996,20 @@
       [:strong (str "Review queue · " (name project))]
       [:span.meta (rq-stage-line q requested?)
        (when-let [l (get rq-decider-label decided-by)] (str " · " l))]]
-     [:div.actions {:style "margin-bottom:14px"}
+     [:div.actions.rq-levers
       (when idle?
-        [:button {:class (str "btn" (when (#{:none :applied :failed} stage) " btn-primary"))
-                  "data-on:click" (str "@post('" run-url "')")}
-         (if (= :none stage) "Run grooming" "Run a fresh grooming")])
+        (c/button {:emphasis (if (#{:none :applied :failed} stage) :primary :default)
+                   "data-on:click" (str "@post('" run-url "')")}
+                  (if (= :none stage) "Run grooming" "Run a fresh grooming")))
       (when (and (= :deciding stage) (pos? (:undecided counts)))
-        [:button.btn {"data-on:click" (str "@post('" (rq-base project run-id) "/approve-all')")}
-         (str "Approve the " (:undecided counts) " undecided")])
+        (c/button {"data-on:click" (str "@post('" (rq-base project run-id) "/approve-all')")}
+                  (str "Approve the " (:undecided counts) " undecided")))
       (when (and (= :deciding stage) (zero? (:undecided counts)) (pos? (:approved counts)))
-        [:button.btn.btn-primary {"data-on:click" (str "@post('" (rq-base project run-id) "/apply')")}
-         (str "Apply " (:approved counts) " approved")])
+        (c/button {:emphasis :primary "data-on:click" (str "@post('" (rq-base project run-id) "/apply')")}
+                  (str "Apply " (:approved counts) " approved")))
       (when (= :unfired stage)
-        [:button.btn.btn-primary {"data-on:click" (str "@post('" (rq-base project run-id) "/apply')")}
-         "Apply again"])]
+        (c/button {:emphasis :primary "data-on:click" (str "@post('" (rq-base project run-id) "/apply')")}
+                  "Apply again"))]
      (when (and nightly? (#{:planning :deciding} stage) (not requested?))
        [:p.meta "Nightly grooming — nido approves every undecided write and applies the plan once it is done."])
      (when (and (= :deciding stage) (not requested?) (not nightly?))
@@ -3104,7 +3109,7 @@
   (if (and scope (not= "all" scope)) (str "?scope=" scope) ""))
 
 (defn- drain-button [label url scope]
-  [:button.btn {"data-on:click" (str "@post('" url (drains-scope-query scope) "')")} label])
+  (c/button {"data-on:click" (str "@post('" url (drains-scope-query scope) "')")} label))
 
 (defn- trend-line [trend]
   (when (seq trend) (str/join " → " trend)))
@@ -3120,7 +3125,7 @@
 
 (defn- drain-card [scope {:keys [ws-id project charter phase version census trend proposals plans
                                  slices by-state misfits residue escalations] :as d}]
-  [:div.drain-card {:id (str "drain-" ws-id) :style "margin:0 0 28px"}
+  [:div.drain-card {:id (str "drain-" ws-id)}
    [:div.ops-head
     [:strong (:exit charter)]
     [:span.meta (str project " · " ws-id)]]
@@ -3135,11 +3140,11 @@
                                  " " [:a {:href (ws-page-href project (or (:slice e) ws-id))}
                                       "answer"]])]])
    (for [p proposals]
-     [:div.meta {:style "margin:6px 0"}
+     [:div.meta.drain-line
       (str "Recipe proposal #" (:seq p) ": " (:reason p) " ")
       (drain-button "Approve" (str (drain-base d) "/approve/" (:seq p)) scope)])
    (when (= :exhausted phase)
-     [:div {:style "margin:6px 0"} (drain-button "Close the drain" (str (drain-base d) "/close") scope)])
+     [:div.drain-line (drain-button "Close the drain" (str (drain-base d) "/close") scope)])
    [:p.meta (str (count slices) " slices"
                  (when (seq by-state)
                    (str " — " (str/join ", " (for [[st n] (sort-by key by-state)] (str n " " (name st))))))
@@ -3159,7 +3164,7 @@
   (str
    (h/html
     [:div {:id "drains"}
-     (when notice [:p.meta {:style "color:var(--failed)"} notice])
+     (when notice [:p.meta.meta-failed notice])
      (if (empty? drains)
        [:p.ops-empty "No drain is open. Start one below once a pattern is established."]
        (for [d drains] (drain-card scope d)))])))
@@ -3171,21 +3176,19 @@
   [{:keys [scope projects]}]
   (let [scoped? (and scope (not= "all" scope))
         input   (fn [sig placeholder]
-                  [:input {"data-bind" sig :placeholder placeholder
-                           :style "width:100%;box-sizing:border-box;margin-top:6px;"}])]
-    [:div.drain-start {:style "margin:0 0 28px"}
-     [:strong "Start a drain"]
-     (if scoped?
-       [:p.meta (str "in " scope)]
-       [:select {"data-bind" "drain_project" :style "margin-top:6px;"}
-        [:option {:value ""} "project…"]
-        (for [p projects] [:option {:value p} p])])
-     (input "drain_exit" "exit criterion — what is true when the drain is done")
-     (input "drain_established_ws" "established by workstream (ws-id)")
-     (input "drain_established_commit" "or by landed commit (rev)")
-     [:div {:style "margin-top:6px"}
-      [:button.btn {"data-on:click" (str "@post('/drains/start" (drains-scope-query scope) "')")}
-       "Start the drain"]]]))
+                  (c/text-input {"data-bind" sig :placeholder placeholder :aria-label placeholder}))]
+    [:div.drain-start
+     (c/form-section
+      "Start a drain"
+      (if scoped?
+        [:p.meta (str "in " scope)]
+        (c/select {"data-bind" "drain_project" :aria-label "Project"}
+                  (cons ["" "project…"] projects)))
+      (input "drain_exit" "exit criterion — what is true when the drain is done")
+      (input "drain_established_ws" "established by workstream (ws-id)")
+      (input "drain_established_commit" "or by landed commit (rev)")
+      [:div (c/button {"data-on:click" (str "@post('/drains/start" (drains-scope-query scope) "')")}
+                      "Start the drain")])]))
 
 (defn ^{:malli/schema [:=> [:cat :map [:vector :map]] :any]}
   drains-page
