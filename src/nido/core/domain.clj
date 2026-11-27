@@ -86,7 +86,9 @@
                         ; completed or asked; each defers the next wake (`:conductor-retry-at`)
    :conductor-retry-at nil ; epoch ms before which the conductor is not woken again, or nil
    :conductor-stopped? false ; a stop ask is open on the conductor; nothing wakes it until answered
-   :grants        {}    ; grant kind -> {:by str}: what the person granted and has not yet spent
+   :grants        {}    ; grant kind -> {:by str :occurrence n}: what the person granted and has not
+                        ; yet spent; :occurrence numbers the giving, so a spend can name the one it read
+   :grant-seq     0     ; how many grants have ever been given, which numbers the next one
    ;; :notices     #{}  ; every notice id posted to the workstream, kept for its life, so a notice
                         ; is posted once (`:post-notice`). Absent until the first notice, so a
                         ; state that never had one reads as it did before notices were a kind.
@@ -556,8 +558,12 @@
                                       :status :open :content content})))
 
 (defmethod evolve :grant-given [state {:keys [grant by]}]
-  ;; A landing granted is the conductor's to direct: nothing else tells a unit to land.
-  (cond-> (assoc-in state [:grants grant] {:by by})
+  ;; A landing granted is the conductor's to direct: nothing else tells a unit to land. Each giving
+  ;; is numbered, so a send-back can spend the one it read held and no grant given since.
+  (cond-> (let [n (inc (:grant-seq state 0))]
+            (-> state
+                (assoc :grant-seq n)
+                (assoc-in [:grants grant] {:by by :occurrence n})))
     (= :merge grant) (hear-later {:kind :landing-granted :by by})))
 
 (defmethod evolve :grant-spent [state {:keys [grant]}]
@@ -1233,6 +1239,36 @@
                        ;; whichever surface recorded it and whether or not a session is live.
                        (= :blocker-answered (:kind row))
                        (conj {:event :blocker-answer-heard :seq n})))))))
+
+;; The person's word sent the workstream back for rework: its :sent-back entry, the operator asks
+;; that word made moot and the :merge grant it read held are one commit, so no reader ever sees the
+;; record without its withdrawals, or the withdrawals without the record. Refused whole — nothing
+;; changes — when the ledger moved since the sender read it, or a named ask is not open or is a
+;; machine failure, which no word sends back. A :merge grant held under any other occurrence than
+;; the one named was given after the sender read the core, and stands.
+(defmethod decide :send-back [state {:keys [after row content asks reason merge-occurrence]}]
+  (let [latest (latest-seq state)
+        named  (map #(get-in state [:operator-asks %]) asks)
+        held   (get-in state [:grants :merge])]
+    (cond
+      (not (recorded? state))                    (refuse :no-such-workstream)
+      (not= after latest)                        (refuse :stale :latest latest)
+      (not= :sent-back (:kind row))              (refuse :send-back-needs-a-sent-back)
+      (entry-malformed row content)              (refuse (entry-malformed row content))
+      (str/blank? (str reason))                  (refuse :withdrawal-needs-a-reason)
+      (some #(not= :open (:status %)) named)
+      (refuse :ask-not-open :ask (some #(when (not= :open (get-in state [:operator-asks % :status])) %) asks))
+      (some machine-ask? named)
+      (refuse :ask-is-a-machine-failure :ask (:id (first (filter machine-ask? named))))
+      :else (apply accept
+                   (concat
+                    [{:event :entry-appended
+                      :row (assoc (dissoc row :file) :seq (inc latest))
+                      :content content}]
+                    (for [a (distinct asks)]
+                      {:event :operator-ask-withdrawn :ask a :reason reason})
+                    (when (and held merge-occurrence (= merge-occurrence (:occurrence held)))
+                      [{:event :grant-spent :grant :merge}]))))))
 
 ;; The person wakes a conductor that nothing else will: a stalled workstream's Wake. A stopped
 ;; conductor is woken through its stop ask, and one whose turn runs or resumes needs no waking.

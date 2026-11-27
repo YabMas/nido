@@ -570,6 +570,88 @@
                   {:command :give-grant :grant :intent :by "person"}])]
     (is (not-any? #(= :landing-granted (:kind %)) (vals (:inbox s))) "a grant of another kind wakes nothing")))
 
+(deftest each-grant-given-is-numbered
+  (let [[s] (run [{:command :create-workstream :identity {:project :p :created-at "t"}}
+                  {:command :give-grant :grant :intent :by "person"}
+                  {:command :give-grant :grant :merge :by "person"}])]
+    (is (= {:by "person" :occurrence 1} (get-in s [:grants :intent])))
+    (is (= {:by "person" :occurrence 2} (get-in s [:grants :merge])))
+    (let [[s2] (run [{:command :create-workstream :identity {:project :p :created-at "t"}}
+                     {:command :give-grant :grant :merge :by "person"}
+                     {:command :spend-grant :grant :merge}
+                     {:command :give-grant :grant :merge :by "person"}])]
+      (is (= 2 (get-in s2 [:grants :merge :occurrence]))
+          "a grant given again after it was spent is another occurrence"))))
+
+(defn- sent-back-state
+  "A recorded workstream whose conductor turn asked, with operator ask `a1` open on it about
+   landing, a machine-failure ask `stop` open beside it, and the person's :merge grant held."
+  []
+  (first (run [{:command :create-workstream :identity {:project :p :created-at "t"}}
+               {:command :start-turn :turn "k1" :unit nil :spec spec}
+               {:command :record-outcome :turn "k1" :outcome :asked :call {:id "c" :question "Land?"}}
+               {:command :raise-operator-ask :ask "a1" :binds ["k1"] :content ready}
+               {:command :start-turn :turn "k2" :unit nil :spec spec}
+               {:command :record-outcome :turn "k2" :outcome :asked :call {:id "c2" :question "Other?"}}
+               {:command :raise-operator-ask :ask "a2" :binds ["k2"] :content ready}
+               {:command :give-grant :grant :merge :by "person"}])))
+
+(defn- send-back [state & {:as more}]
+  (merge {:command :send-back :after (d/latest-seq state)
+          :row {:kind :sent-back :at "t" :ext "edn"}
+          :content (pr-str {:format :sent-back :words "rework it" :from :release-candidate})
+          :asks ["a1"] :reason "sent back for rework"
+          :merge-occurrence (get-in state [:grants :merge :occurrence])}
+         more))
+
+(deftest a-send-back-is-one-commit
+  (let [s (sent-back-state)
+        [s2 events r] (d/step s (send-back s))]
+    (is (nil? r))
+    (is (= [:entry-appended :operator-ask-withdrawn :grant-spent] (map :event events))
+        "the record, the asks it named and the grant it read held, in one commit")
+    (is (= [:sent-back] (map :kind (:ledger s2))))
+    (is (= :withdrawn (get-in s2 [:operator-asks "a1" :status])))
+    (is (= :open (get-in s2 [:operator-asks "a2" :status])) "an ask it was not handed stands")
+    (is (not (contains? (:grants s2) :merge)))
+    (is (= :resolved (get-in s2 [:turns "k1" :status])) "the withdrawn ask's call is refused, as any withdrawal's")))
+
+(deftest a-send-back-spends-only-the-grant-it-read
+  (let [s  (sent-back-state)
+        cmd (send-back s)
+        ;; The grant read is spent and the person grants Land again before the send-back commits.
+        s' (steps s [{:command :spend-grant :grant :merge} {:command :give-grant :grant :merge :by "person"}])
+        [s2 events r] (d/step s' cmd)]
+    (is (nil? r))
+    (is (not-any? #(= :grant-spent (:event %)) events))
+    (is (contains? (:grants s2) :merge) "a grant given after the sender read the core stands"))
+  (let [s (sent-back-state)
+        [s2 _ r] (d/step s (send-back s :merge-occurrence nil))]
+    (is (nil? r))
+    (is (contains? (:grants s2) :merge) "naming no occurrence spends none")))
+
+(deftest a-send-back-is-refused-whole
+  (let [s (sent-back-state)
+        nothing-changed? (fn [cmd reason]
+                           (let [[s2 events r] (d/step s cmd)]
+                             (is (= reason (:reason r)) (pr-str cmd))
+                             (is (nil? events))
+                             (is (= s s2))))]
+    (testing "the ledger moved since the sender read it"
+      (nothing-changed? (send-back s :after 7) :stale))
+    (testing "a named ask is not open"
+      (nothing-changed? (send-back s :asks ["a1" "nope"]) :ask-not-open)
+      (let [s3 (steps s [{:command :withdraw-operator-ask :ask "a1" :reason "moved"}])
+            [_ _ r] (d/step s3 (send-back s3))]
+        (is (= :ask-not-open (:reason r)))))
+    (testing "a named ask is a machine failure"
+      (let [s3 (steps s [{:command :raise-conductor-stop :ask "stop" :content ready}])
+            [_ ev r] (d/step s3 (send-back s3 :asks ["a1" "stop"]))]
+        (is (= :ask-is-a-machine-failure (:reason r)))
+        (is (nil? ev))))
+    (testing "it carries no :sent-back"
+      (nothing-changed? (send-back s :row {:kind :note :at "t" :ext "edn"}) :send-back-needs-a-sent-back))))
+
 (deftest a-completed-turn-leaves-its-workstream-open
   ;; Work that is over when its turn completes is a run (`:start-run`), never a unit: a unit's
   ;; turn completing finishes nothing, whatever the command opening it carried.
