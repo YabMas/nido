@@ -16,8 +16,10 @@
      control: one whose subject is a control element, a class the set writes, or a layout hook a
      caller hands a control, and which sets its background, border, padding, font, colour or
      cursor, or styles it on hover or focus;
-   - a class written on a control, in a scene or by a caller, that no rule in the assembled
-     stylesheet names, and a visible control with no class at all.
+   - a class written on a control, in a scene or by a caller — statically, or bound by Datastar
+     (data-class:NAME, a data-class object, a data-attr:class expression) — that no rule in the
+     assembled stylesheet names, and a visible control with no class at all. A bound class counts
+     as one the set writes for the restyling check too.
 
    Its reach is the hiccup in nido's Clojure sources. A control made by client script is still
    governed by the rule; this test does not see it. tui.clj is the terminal's, not dashboard
@@ -97,9 +99,29 @@
                        (second (drop-while #(not= :as %) spec))))
           (tree-seq coll? seq ns-form))))
 
+(defn- bound-classes
+  "The classes a Datastar binding in `attrs` can put on the element: the name of each
+   `data-class:NAME`, the keys of a `data-class` object, and the quoted literals of a
+   `data-attr:class` expression. Keys may be keywords or strings."
+  [attrs]
+  (set (for [[k v] attrs
+             :let [k (if (keyword? k) (subs (str k) 1) (str k))]
+             cl (cond
+                  (str/starts-with? k "data-class:") [(subs k (count "data-class:"))]
+                  (and (= k "data-class") (string? v))
+                  (map (fn [[_ a b c]] (or a b c))
+                       (re-seq #"(?:'([^']+)'|\"([^\"]+)\"|([\w-]+))\s*:" v))
+                  (and (= k "data-attr:class") (string? v))
+                  (mapcat #(str/split (str/trim (or (second %) (nth % 2))) #"\s+")
+                          (re-seq #"'([^']*)'|\"([^\"]*)\"" v))
+                  :else [])
+             :when (not (str/blank? cl))]
+         cl)))
+
 (defn- hook-classes
   "The layout hooks callers hand the control set: every literal `:class` in a map within the
-   first argument of a call to one of its functions."
+   first argument of a call to one of its functions, and every class a Datastar binding there
+   can write."
   [forms]
   (when-let [alias (control-alias forms)]
     (let [calls (volatile! [])]
@@ -110,9 +132,9 @@
                      forms)
       (set (for [arg @calls
                  m (filter map? (tree-seq coll? seq arg))
-                 :let [cl (:class m)]
-                 :when (string? cl)
-                 k (str/split (str/trim cl) #"\s+")]
+                 k (concat (let [cl (:class m)]
+                             (when (string? cl) (str/split (str/trim cl) #"\s+")))
+                           (bound-classes m))]
              k)))))
 
 (def ^:private read-sources
@@ -183,14 +205,25 @@
 ;; ---------------------------------------------------------------------------
 ;; Reading rendered markup
 
+(defn- unescape [s]
+  (-> s (str/replace "&quot;" "\"") (str/replace "&#39;" "'") (str/replace "&apos;" "'")
+      (str/replace "&lt;" "<") (str/replace "&gt;" ">") (str/replace "&amp;" "&")))
+
+(defn- tag-attrs
+  "The attributes of an opening tag, as a map of name to unescaped value."
+  [tag-html]
+  (into {} (for [[_ k v] (re-seq #"\s([^\s=/>]+)=\"([^\"]*)\"" tag-html)] [k (unescape v)])))
+
 (defn- rendered-controls
-  "Every control element in `html`: its tag, its classes, and whether it is shown."
+  "Every control element in `html`: its tag, its static classes, the classes a Datastar binding
+   on it can add, and whether it is shown."
   [html]
   (for [[tag-html tag] (re-seq #"<(button|input|textarea|select|meter)\b[^>]*>" html)
         :let [cls (second (re-find #"\sclass=\"([^\"]*)\"" tag-html))]]
     {:tag     tag
      :html    tag-html
      :classes (when cls (remove str/blank? (str/split cls #"\s+")))
+     :bound   (bound-classes (tag-attrs tag-html))
      :hidden? (boolean (or (re-find #"\shidden(=|\s|>|/)" tag-html)
                            (re-find #"\stype=\"hidden\"" tag-html)))}))
 
@@ -201,9 +234,12 @@
     [(str name " · " title) (str (h/html (render)))]))
 
 (defn- set-classes
-  "Every class a control the set renders in a scene carries."
+  "Every class a control the set renders in a scene can carry — written statically, or bound by
+   Datastar (`data-class:chosen` and its kin) to appear when the page's state says so."
   []
-  (set (for [[_ html] (scene-html) {:keys [classes]} (rendered-controls html) cl classes] cl)))
+  (set (for [[_ html] (scene-html) {:keys [classes bound]} (rendered-controls html)
+             cl (concat classes bound)]
+         cl)))
 
 (defn- unstyled-classes [classes css]
   (remove #(names-class? css %) classes))
@@ -290,6 +326,15 @@
     (is (= 2 (count (inline-styles forms))) "a literal margin, and a custom property merged in")
     (is (= 1 (count (foreign-style-elements forms))))
     (is (= #{"go-hook"} (hook-classes forms))))
+  (testing "a class a Datastar binding writes"
+    (is (= #{"busy" "go-hook" "on" "lit"}
+           (hook-classes (read-forms "(ns v (:require [nido.ui.components.control :as c]))
+                                      (c/button {:class \"go-hook\" \"data-class:busy\" \"$b\"
+                                                 :data-class \"{'on': $x}\"
+                                                 \"data-attr:class\" \"$y ? 'lit' : ''\"} \"Go\")"))))
+    (is (= #{"chosen"}
+           (:bound (first (rendered-controls (str (h/html (c/choice {:chosen "$x"} "Yes")))))))
+        "the choice's chosen state is bound, not written, and is still a class the set writes"))
   (testing "a rule elsewhere restyling a control"
     (is (= 4 (count (restyled-controls
                      ".pickup input { background:var(--surface-sunken); }
