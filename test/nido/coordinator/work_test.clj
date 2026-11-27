@@ -3741,6 +3741,25 @@
             (is (empty? (:gates (work/read-gates))))
             (is (some? w))))))))
 
+(deftest a-queued-arrival-waits-on-the-person-and-is-no-stall
+  ;; enqueue-inbox! creates it activated at :incoming, its :intake position owing an agent move
+  ;; and the core idle until the person promotes it: a deliberate wait, not a stall.
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects (constantly {"brian" {:directory "/tmp/brian"}})
+                    nido.notion.views/facet-properties (constantly nil)
+                    work/held-ledger-gates (fn [_ _] [])]
+        (let [w   (work/enqueue-inbox! {:project :brian
+                                        :trigger {:name :t :skill :triage-bug}
+                                        :payload {:adapter :slack-message :id "slack-C-9.0"
+                                                  :title "hi" :text "hi" :url "u"}})
+              row (first (filter #(= (:id w) (:ws-id %)) (work/list-workstreams :brian)))]
+          (is (= :incoming (:stage row)))
+          (is (not (get-in row [:status :stalled])) "it waits on the person's Promote")
+          (is (not (get-in row [:status :needs-you])) "and is no system error")
+          (is (not (some #(= (:id w) (:ws-id %)) (:gates (work/read-gates))))
+              "nor carded with Wake on Needs you"))))))
+
 (deftest an-answered-blocker-with-no-live-session-runs-again-or-needs-you
   ;; The incident: a review's blocker answered with no session live recorded the answer on the
   ;; ledger, and nothing heard it — the workstream sat with nothing running and on no list.

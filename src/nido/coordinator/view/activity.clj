@@ -42,6 +42,9 @@
      :core       its activity (`nido.core.domain/activity`: {:kind …}), or nil when the core does
                  nothing on it, is owed nothing, or does not hold it.
      :movable?   the core holds an open unit of it that no person holds.
+     :waits-on   the deliberate wait it rests on, a move something other than the idle core makes,
+                 or nil: :person-act (a row on an intake band, which the person's Promote or Apply
+                 moves) or :open-slice (a drain while a slice of it is open).
 
    What a running turn is doing:
      :claim      the activity claim held while the core's turn is :working, with its round's
@@ -57,6 +60,7 @@
    [:held?      {:optional true} :boolean]
    [:core       {:optional true} [:maybe :map]]
    [:movable?   {:optional true} :boolean]
+   [:waits-on   {:optional true} [:maybe [:enum :person-act :open-slice]]]
    [:claim      {:optional true} [:maybe :map]]])
 
 (def Running
@@ -243,8 +247,8 @@
       :stalled    the core is its mover and nothing will move it: the core holds it with the
                   recipe activated on it, or holds an open unit of it nobody holds; a move is owed
                   to an agent or the machine; the core does nothing and is owed nothing; nothing
-                  is underway (a merge waiting its turn included); no pause stands and nothing
-                  else needs the person. No turn's end, inbox item or ask will wake it, so only a
+                  is underway (a merge waiting its turn included); no pause stands, nothing
+                  else needs the person and it rests on no deliberate wait (:waits-on). No turn's end, inbox item or ask will wake it, so only a
                   person moves it again — a fault, never a resting state, so it needs the person
                   as a :system-error. A workstream the core is not the mover of is never stalled,
                   nor is one whose move is the person's or nobody's.
@@ -263,7 +267,7 @@
      a stall needs you, as a :system-error;
      stuck ⇒ nothing underway, and so nothing live;
      settled ⇒ nothing underway, needed or stalled."
-  [{:keys [closed? owed-by activated? landing? failure paused? held? core movable?] :as obs}]
+  [{:keys [closed? owed-by activated? landing? failure paused? held? core movable? waits-on] :as obs}]
   (let [doing     (when-not closed? (underway obs))
         paused    (boolean paused?)
         asking?   (and (not closed?) (= :asking (:kind core)))
@@ -276,7 +280,7 @@
         persons?  (and (not closed?) activated? (not paused) (= :person owed-by))
         stalled   (boolean (and (not closed?) (or (and held? activated?) movable?)
                                 (nil? core) (nil? doing) (not paused) (not failed?)
-                                (not= :conductor-stopped failure)
+                                (not= :conductor-stopped failure) (nil? waits-on)
                                 (#{:agent :machine} owed-by)))
         needs     (cond failed?                   :system-error
                         asking?                   :ask

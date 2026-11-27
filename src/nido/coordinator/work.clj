@@ -597,6 +597,26 @@
    all read."
   #{:release-candidate :published})
 
+(def ^:private intake-bands
+  "The bands whose rows wait on the person's Promote or Apply, which the board offers them."
+  #{:incoming :triage :ready})
+
+(defn- waits-on
+  "The deliberate wait workstream `ws-id`, open in band `band`, rests on, or nil: :person-act for
+   a row on an intake band, :open-slice for a drain while a slice of it is open — that slice's
+   own row says whether it is stalled."
+  [project ws-id band]
+  (cond
+    (contains? intake-bands band) :person-act
+    (= :drained band)
+    (let [w (cws/read-ws project ws-id)]
+      (when (and w (rdrain/drain? w)
+                 (some (fn [{sid :ws-id}]
+                         (let [c (some->> sid (cws/read-ws project) cws/closure)]
+                           (or (nil? c) (= :between-phases (:outcome c)))))
+                       (rdrain/slices w)))
+        :open-slice))))
+
 (defn- observation
   "Workstream `ws-id`'s `act/Observation`: the record facts `facts` (`pipeline/status`, or nil for
    a settled row nobody reads it for), whether it is settled, its band, and the core's state of it
@@ -619,6 +639,7 @@
      :core     core
      :movable? (boolean (some #(and (= :open (:status %)) (not (:held? %)))
                               (vals (get-in cw [:state :units]))))
+     :waits-on (when-not closed? (waits-on project ws-id band))
      :claim    (when (and (not closed?) (= :working (:kind core))) (act/observe project ws-id))}))
 
 (defn- coordination

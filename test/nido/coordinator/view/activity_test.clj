@@ -63,7 +63,15 @@
     (is (not (:stalled (act/of (assoc quiet :movable? true :owed-by :person :landing? true))))
         "while the move is the person's: a release candidate waits on their landing")
     (is (not (:stalled (act/of (assoc quiet :movable? true :failure :start-failed))))
-        "when a session failed to start: that is a system error only the person clears")))
+        "when a session failed to start: that is a system error only the person clears")
+    (is (not (:stalled (act/of (assoc quiet :held? true :activated? true :band :incoming
+                                      :waits-on :person-act))))
+        "a queued arrival on an intake band: it waits on the person's Promote, deliberately")
+    (is (not (:needs-you (act/of (assoc quiet :held? true :activated? true :band :incoming
+                                        :waits-on :person-act))))
+        "and is no system error")
+    (is (not (:stalled (act/of (assoc quiet :movable? true :band :drained :waits-on :open-slice))))
+        "a drain while a slice of it is open: the slice's own row is read for a stall")))
 
 (deftest a-landing-needs-you-as-a-landing-and-asks-nothing
   (testing "brian's release candidate as the person found it: review converged, Land offered, the
@@ -212,10 +220,11 @@
         band       [:in-progress :shipping]
         held?      [false true]
         movable?   (if held? [false true] [false])
-        claim      [nil claim]]
+        claim      [nil claim]
+        waits-on   [nil :person-act :open-slice]]
     {:closed? closed? :activated? activated? :landing? landing? :failure failure :paused? paused?
      :owed-by owed-by :core core :held? held?
-     :band band :movable? movable? :claim claim}))
+     :band band :movable? movable? :claim claim :waits-on waits-on}))
 
 (deftest the-facets-cannot-disagree
   (doseq [obs observations
@@ -242,11 +251,12 @@
         (str "waiting on the person with the core idle lights no working dot " (pr-str obs)))
     (is (or (not (:stalled a))
             (and (not (:live a)) (nil? (:doing a)) (not (:paused a)) (nil? (:core obs))
-                 (#{:agent :machine} (:owed-by obs))
+                 (#{:agent :machine} (:owed-by obs)) (nil? (:waits-on obs))
                  (or (:movable? obs) (and (:held? obs) (:activated? obs)))))
-        (str "a stall runs nothing, is unpaused, the core's to move and an agent's or the machine's move " (pr-str obs)))
+        (str "a stall runs nothing, is unpaused, rests on no deliberate wait, the core's to move and an agent's or the machine's move " (pr-str obs)))
     (is (or (:stalled a) (not (and (not (:closed? obs)) (nil? (:core obs)) (not (:paused? obs))
                                    (nil? (:failure obs)) (not= :shipping (:band obs))
+                                   (nil? (:waits-on obs))
                                    (#{:agent :machine} (:owed-by obs))
                                    (or (:movable? obs) (and (:held? obs) (:activated? obs))))))
         (str "the core's to move, owed to an agent or the machine, and nothing underway is a stall " (pr-str obs)))
