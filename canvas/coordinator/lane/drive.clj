@@ -60,8 +60,13 @@
      :delegates [standing/governing-design standing/proceeding?]})
   (Operation implementation-review-passed?
     "Whether the newest review over the implementation passed, with nothing built since — what
-     makes a workstream a release candidate."
-    {:signature [:=> [:catn [:w :any]] :boolean]})
+     makes a workstream a release candidate once its QA passes or does not apply. With `reviews`,
+     the review is the newest among those records — the fold's clamped trail — while the newest
+     build is still the whole workstream's, as record-standing reads it."
+    {:signature [:function
+                 [:=> [:catn [:w :any]] :boolean]
+                 [:=> [:catn [:w :any] [:reviews :any]] :boolean]]
+     :delegates [standing/newest-build]})
   (Operation qa
     "A workstream's QA reading, the one record-standing answers, told whether its project declares
      :qa as the registry says beside the landing declaration."
