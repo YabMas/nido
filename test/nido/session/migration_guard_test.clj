@@ -224,6 +224,20 @@
       (is (not (fs/exists? (fs/path (checkout/checkout-dir "p--ws") v3)))
           "the checkout does not hold the migration"))))
 
+(deftest a-shared-session-holding-a-changed-migration-is-refused-by-up-before-anything-starts
+  (with-engine :shared
+    (fn [{:keys [a started]}]
+      (put! a v2 "create table two (id int);\n")
+      (let [e (refusal #(up! a "a"))]
+        (is e "up is refused")
+        (is (= [v2] (:paths (ex-data e))))
+        (is (str/includes? (ex-message e) "bb nido:session:isolate :project p a")))
+      (is (= [] @started) "neither Postgres nor the JVM started")
+      (is (nil? (state/read-session "p--ws")))
+      (let [f (fs/path (checkout/checkout-dir "p--ws") v2)]
+        (is (not (and (fs/exists? f) (= "create table two (id int);\n" (slurp (str f)))))
+            "the checkout does not hold the changed migration")))))
+
 (deftest a-shared-session-is-refused-by-sync-and-its-checkout-keeps-what-it-had
   (with-engine :shared
     (fn [{:keys [a]}]
