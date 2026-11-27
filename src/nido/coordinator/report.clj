@@ -6360,10 +6360,11 @@
                 [""]))
       [(str "Source: " source-url)])))
 
-(defn- qa-role-labels
-  "Plan role id → how the brief names that role: the project's name for it, with the plan's id
-   beside it only where two roles share a name, so 'teacher (owner)' and 'teacher (colleague)'
-   stay two people."
+(defn ^{:malli/schema [:=> [:cat [:maybe [:sequential :map]]] [:map-of :string :string]]}
+  qa-role-labels
+  "Plan role id → how a rendering of the plan, or a brief from it, names that role among the
+   plan's `roles`: the project's name for it, with the plan's id beside it only where two roles
+   share a name, so 'teacher (owner)' and 'teacher (colleague)' stay two people."
   [roles]
   (let [shared (set (keep (fn [[k c]] (when (> c 1) k)) (frequencies (map :kind roles))))]
     (into {} (map (fn [{:keys [id kind]}] [id (if (shared kind) (str kind " (" id ")") kind)])) roles)))
@@ -6371,20 +6372,13 @@
 (defn- qa-plan-sections
   "A :product plan's sections, in `docs/reference/qa-brief.md`'s order and headings, as
    [heading lines] pairs — a section the plan does not carry is left out. Before you start lists
-   each role the plan declares with the state its account needs, then the plan's own prose, then —
-   given `walk`, the walk the QA reading counts — the account that played each role. Steps are
-   numbered, each the role it is performed as, one action, then what should happen. A plan from
-   before roles renders as it always did."
-  [{:keys [what-changed before-you-start roles steps also-check not-in-change]} walk]
+   each role the plan declares with the state its account needs, then the plan's own prose. Steps
+   are numbered, each the role it is performed as, one action, then what should happen. A plan
+   from before roles renders as it always did."
+  [{:keys [what-changed before-you-start roles steps also-check not-in-change]}]
   (let [label (qa-role-labels roles)
-        cast  (when (seq roles) (seq (:cast walk)))
         bys   (concat (for [{:keys [id needs]} roles] (str "- As " (label id) ": " needs))
-                      (when before-you-start [before-you-start])
-                      (when cast
-                        [(str "In nido's walk: "
-                              (str/join "; " (for [{:keys [role account]} cast]
-                                               (str (get label role role) " was " account)))
-                              ".")]))]
+                      (when before-you-start [before-you-start]))]
     (cond-> []
       what-changed     (conj ["What changed" [what-changed]])
       (seq bys)        (conj ["Before you start" bys])
@@ -6407,7 +6401,7 @@
       (if (= :none surface)
         [(str "Nothing a user sees changes: " reason)]
         (concat
-          (mapcat (fn [[h ls]] (concat [(str "## " h)] ls [""])) (qa-plan-sections plan nil))
+          (mapcat (fn [[h ls]] (concat [(str "## " h)] ls [""])) (qa-plan-sections plan))
           ["## Step ids"]
           (for [{:keys [id role action]} steps]
             (str "- `" id "`" (when role (str " as `" role "`")) " — " action)))))))
@@ -6428,24 +6422,6 @@
         (str "- `" step "` " (name outcome) " — " (str/join ", " (map #(subs % 0 12) screenshots))
              (when note (str " — " note))))
       (when note ["" note]))))
-
-(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
-  qa-brief
-  "The landing QA brief: a rendering of the plan the QA reading `reading` stands on, `plan` that
-   record — its sections in `docs/reference/qa-brief.md`'s shape while the reading is :passed, the
-   one-line 'nothing a user sees changes' brief from its :reason while it is :not-applicable — or
-   nil, when the reading is anything else and no brief may be written. `walk`, when given, is the
-   newest walk the passing reading counts, and the brief says which account played each of the
-   plan's roles in it. /land writes this, or no brief at all; it composes none of its own."
-  [{:keys [reading plan walk]}]
-  (case (:state reading)
-    :passed         (when (= :product (:surface plan))
-                      (str/join "\n"
-                        (concat ["QA instructions" ""]
-                                (mapcat (fn [[h ls]] (concat [h] ls [""])) (qa-plan-sections plan walk)))))
-    :not-applicable (when (= :none (:surface plan))
-                      (str "QA instructions\n\nNothing a user sees changes: " (:reason plan)))
-    nil))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :LedgerEvent]] :string]}
   report->markdown

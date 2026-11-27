@@ -579,38 +579,105 @@
 
 ;; ── the brief ──────────────────────────────────────────────────────────────
 
-(deftest the-brief-is-the-plan-rendered-or-nothing
+(deftest the-brief-is-the-plan-then-what-its-walks-recorded-or-nothing
   (let [pl (assoc (product-plan 4) :also-check ["The class list still loads."]
-                  :not-in-change ["Exports."])]
-    (testing ":passed renders the plan's sections and steps in qa-brief.md's shape"
-      (let [b (report/qa-brief {:reading {:state :passed} :plan pl})]
+                  :not-in-change ["Exports."])
+        rep {:steps [{:n 1 :id "open" :action "Do open." :outcome :pass :screenshots [digest]}
+                     {:n 2 :id "check" :action "Do check." :outcome :pass :note "the total read 12"
+                      :screenshots [digest digest]}]
+             :newest 9 :walks [{:seq 9 :passed? true :note "played as a teacher"}]
+             :earlier [] :also-check? true :tally {:passed 2 :of 2}}
+        brief #(#'tw/brief-text {:reading {:state %1} :plan %2 :report %3})]
+    (testing ":passed renders the plan's sections, then Tested before landing"
+      (let [b (brief :passed pl rep)]
         (is (str/starts-with? b "QA instructions"))
-        (doseq [h ["What changed" "Before you start" "Steps" "Also check" "Not in this change"]]
+        (doseq [h ["What changed" "Before you start" "Steps" "Also check" "Not in this change"
+                   "Tested before landing" "How it was walked" "Step results"]]
           (is (str/includes? b h)))
         (is (str/includes? b "1. As teacher: Do open. Expected: open happens."))
-        (is (str/includes? b "2. As teacher: Do check. Expected: check happens."))))
+        (is (str/includes? b "2. As teacher: Do check. Expected: check happens."))
+        (is (< (str/index-of b "Not in this change") (str/index-of b "Tested before landing")))
+        (is (str/includes? b "2 of 2 steps passed, on 1 walk of the build that lands."))
+        (is (str/includes? b "- played as a teacher"))
+        (is (str/includes? b "The Also check items were not walked."))
+        (is (str/includes? b "2. Passed — the total read 12 (2 screenshots)"))
+        (is (not (str/includes? b "Earlier walks")) "no earlier walk that did not pass, no section")))
     (testing "Before you start lists each role and the state its account needs, before the plan's prose"
-      (let [b (report/qa-brief {:reading {:state :passed} :plan pl})]
+      (let [b (brief :passed pl rep)]
         (is (str/includes? b "Before you start\n- As teacher: owns a course with one published quiz\nStaging."))
-        (is (not (str/includes? b "In nido's walk")) "no walk given, no cast named")))
-    (testing "given the counted walk, the brief names the account that played each role"
-      (let [b (report/qa-brief {:reading {:state :passed} :plan pl :walk (walk 5 [["open" :pass]])})]
+        (is (not (str/includes? b "In nido's walk")) "no cast in the report, no cast named")))
+    (testing "given the counted walk's cast, the brief names the account that played each role"
+      (let [b (brief :passed pl (assoc rep :cast a-cast))]
         (is (str/includes? b "In nido's walk: teacher was anna@school.test."))))
     (testing "two roles of one kind are told apart by the plan's id"
       (let [two (assoc pl :roles [teacher {:id "colleague" :kind "teacher" :needs "shares the course"}])
-            b   (report/qa-brief {:reading {:state :passed} :plan (assoc-in two [:steps 1 :role] "colleague")})]
+            b   (brief :passed (assoc-in two [:steps 1 :role] "colleague") rep)]
         (is (str/includes? b "- As teacher (colleague): shares the course"))
         (is (str/includes? b "2. As teacher (colleague): Do check."))))
     (testing "a plan from before roles renders as it always did"
-      (let [b (report/qa-brief {:reading {:state :passed} :plan (pre-roles-plan 4)})]
+      (let [b (brief :passed (pre-roles-plan 4) (assoc rep :cast []))]
         (is (str/includes? b "Before you start\nStaging.\n"))
         (is (str/includes? b "1. Do open. Expected: open happens."))))
-    (testing ":not-applicable is the one line from the plan's reason"
+    (testing ":not-applicable is the one line from the plan's reason, with no report"
       (is (= "QA instructions\n\nNothing a user sees changes: a background job only"
-             (report/qa-brief {:reading {:state :not-applicable} :plan (none-plan 4)}))))
+             (brief :not-applicable (none-plan 4) nil))))
     (testing "owed, failed, or off: no brief"
       (doseq [st [:owed :failed :off]]
-        (is (nil? (report/qa-brief {:reading {:state st} :plan pl})))))))
+        (is (nil? (brief st pl rep)))))))
+
+(deftest a-failed-walk-before-the-build-and-a-passing-one-after-it-read-as-qa-brief-md-says
+  (with-tmp
+    (fn [tmp]
+      (let [[id add!] (ledger)
+            d    (designed! add!)
+            png  (str (fs/path tmp "shot.png"))
+            _    (spit png "bytes")
+            dg   (tw/screenshot-add* {:file png})
+            walk (fn [pl outcomes] (update (walk pl outcomes) :results
+                                           (fn [rs] (mapv #(assoc % :screenshots [dg]) rs))))]
+        (with-redefs [project/qa (constantly :browser)]
+          (build! add! d)
+          (let [pl  (add! :qa-plan (assoc (product-plan d) :also-check ["The class list still loads."]))
+                _   (add! :qa-walk (-> (walk pl [["open" :pass] ["check" :fail]])
+                                       (noted "check" "the total read 0")
+                                       (assoc :note "played as a teacher")))
+                _   (build! add! d)
+                _   (add! :qa-walk (-> (walk pl [["open" :pass] ["check" :pass]])
+                                       (noted "check" "the total read 12")
+                                       (assoc :note "played as a teacher, after the fix")))
+                qa  (work/workstream-qa :brian id)
+                txt (#'tw/brief-text qa)
+                ups (atom [])
+                nb  (#'tw/brief-notion qa (fn [path nm] (swap! ups conj nm)
+                                            (if (= 1 (count @ups)) {:id "up-1"} {:error "too large"})))
+                kids    (get-in nb [:callout :children])
+                text-of (fn [b] (apply str (map #(get-in % [:text :content]) (get-in b [(keyword (:type b)) :rich_text]))))
+                toggle  (first (filter #(= "toggle" (:type %)) kids))
+                items   (get-in toggle [:toggle :children])]
+            (testing "the text: steps from the walk after the build, the earlier failure with its note"
+              (is (str/includes? txt "2 of 2 steps passed, on 1 walk of the build that lands."))
+              (is (str/includes? txt "How it was walked\n- played as a teacher, after the fix"))
+              (is (str/includes? txt "Earlier walks\n- Walk 1, before the last change: played as a teacher\n- Walk 1, step 2 — failed: the total read 0"))
+              (is (str/includes? txt "2. Passed — the total read 12")))
+            (testing "the Notion body says the same, inside the 🧪 QA instructions callout"
+              (is (= "QA instructions" (text-of nb)))
+              (is (= "🧪" (get-in nb [:callout :icon :emoji])))
+              (let [texts (map text-of kids)]
+                (is (some #{"Tested before landing"} texts))
+                (is (some #{"2 of 2 steps passed, on 1 walk of the build that lands."} texts))
+                (is (some #{"Walk 1, step 2 — failed: the total read 0"} texts))
+                (is (some #{"As teacher: owns a course with one published quiz"} texts))
+                (is (some #{"In nido's walk: teacher was anna@school.test."} texts))
+                (is (some #{"The Also check items were not walked."} texts))))
+            (testing "Step results is a collapsed toggle, one numbered item per step with its screenshots under it"
+              (is (= "Step results" (text-of toggle)))
+              (is (= ["numbered_list_item" "numbered_list_item"] (map :type items)))
+              (is (= ["Passed" "Passed — the total read 12"] (map text-of items))))
+            (testing "a screenshot that would not upload is a line in its place, and the brief stands"
+              (let [[first-shot] (get-in (first items) [:numbered_list_item :children])
+                    [second-shot] (get-in (second items) [:numbered_list_item :children])]
+                (is (= {:type "file_upload" :file_upload {:id "up-1"}} (:image first-shot)))
+                (is (str/includes? (text-of second-shot) "could not be uploaded"))))))))))
 
 (deftest show-prints-the-landing-brief-or-says-there-is-none
   (with-tmp

@@ -707,6 +707,11 @@
    :doc "Print a workstream's active ledger (own entries else ticket) + latest entry."
    :task (apply nido-workstream/show-cmd *command-line-args*)}
 
+  nido:workstream:qa:notion
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Print the Notion body of the workstream's landing QA brief — the 🧪 QA instructions callout, as JSON, the plan's sections followed by what its walks recorded, each step's screenshots uploaded with the notion CLI. What /land §6 sends. Exits 2, saying why, when no brief may be written. Resolves the workstream from cwd, or :project with :ws-id/:ref."
+   :task (apply nido-workstream/qa-notion *command-line-args*)}
+
   nido:review:loop
   {:requires ([tasks.nido-review :as nido-review])
    :doc "Run the review loop on the session's branch diff. Runs until it converges/stops progressing unless capped. The reviewer is codex unless :reviewer or the project's :reviewer in projects.edn names claude; a codex out of quota hands its reviews to claude opus. [:base main] [:max-iters <n>] [:cwd <dir>] [:dry-run? false] [:fixer-model sonnet|opus|<full name>] [:reviewer codex|claude] [:ignore-unavailable? true] — refused for five minutes after a run on the same reviewer ended reviewer-unavailable, unless :ignore-unavailable?"

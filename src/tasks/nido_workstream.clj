@@ -3,6 +3,8 @@
    stage, close a workstream. Resolves the target workstream by id or by Notion
    external ref (BR-####). Used by the triage skill's dual-write and by humans."
   (:require
+   [babashka.process :as process]
+   [cheshire.core :as json]
    [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.lane.pipeline :as pipeline]
@@ -180,6 +182,224 @@
   (let [{:keys [landed skipped]} (work/backfill-landings! (keyword project))]
     (println (format "landed %d · left alone %d" landed skipped))))
 
+(declare here)
+
+;; ── The landing QA brief: the plan's sections, then what the walks of it recorded ───────────
+;;
+;; Rendered here, twice from one value — as the text `show*` prints and as the Notion callout body
+;; `qa-notion*` prints for /land — so the two cannot say different steps, outcomes or notes. The
+;; value is the work plane's `workstream-qa`: the QA reading, its plan and the QA report derived
+;; from the walks the reading names.
+
+(defn- brief-plan-sections
+  "A :product plan's sections, in `docs/reference/qa-brief.md`'s order and headings, as
+   [heading items] pairs, each item [:p|:numbered|:bulleted text]. A section the plan does not
+   carry is left out. Before you start lists each role the plan declares with the state its account
+   needs, then the plan's own prose, then — given `cast`, the newest counted walk's — the account
+   that played each role; each step begins with the role it is performed as. A plan from before
+   roles carries none of the three."
+  [{:keys [what-changed before-you-start roles steps also-check not-in-change]} cast]
+  (let [label (report/qa-role-labels roles)
+        cast  (when (seq roles) (seq cast))
+        bys   (concat (for [{:keys [id needs]} roles] [:bulleted (str "As " (label id) ": " needs)])
+                      (when before-you-start [[:p before-you-start]])
+                      (when cast
+                        [[:p (str "In nido's walk: "
+                                  (str/join "; " (for [{:keys [role account]} cast]
+                                                   (str (get label role role) " was " account)))
+                                  ".")]]))]
+    (cond-> []
+      what-changed        (conj ["What changed" [[:p what-changed]]])
+      (seq bys)           (conj ["Before you start" (vec bys)])
+      (seq steps)         (conj ["Steps" (mapv (fn [{:keys [role action expected]}]
+                                                  [:numbered (str (when role (str "As " (get label role role) ": "))
+                                                                  action " Expected: " expected)])
+                                                steps)])
+      (seq also-check)    (conj ["Also check" (mapv #(vector :bulleted %) also-check)])
+      (seq not-in-change) (conj ["Not in this change" (mapv #(vector :bulleted %) not-in-change)]))))
+
+(def ^:private outcome-words {:pass "Passed" :fail "Failed" :blocked "Blocked"})
+
+(defn- walk-names
+  "Each walk the report names, by seq, as the reader is told it — `Walk n`, numbered in the order
+   they were recorded."
+  [{:keys [walks earlier]}]
+  (into {} (map-indexed (fn [i s] [s (str "Walk " (inc i))]))
+        (sort (concat (map :seq walks) (map :seq earlier)))))
+
+(defn- plural [n word] (str n " " word (when (not= 1 n) "s")))
+
+(defn- step-result-line
+  "A step's result as its numbered item reads — its outcome and the walk's note; its number is the
+   step's own above."
+  [{:keys [outcome note]}]
+  (str (outcome-words outcome (some-> outcome name)) (when note (str " — " note))))
+
+(defn- report-parts
+  "The report's section, `Tested before landing`, as the parts both forms render:
+   {:summary :walked [line …] :earlier [line …] :also-check <line|nil> :steps [step …]}."
+  [{:keys [walks earlier also-check? tally steps] :as report}]
+  (let [names (walk-names report)
+        many? (< 1 (count walks))]
+    {:summary    (str (:passed tally) " of " (plural (:of tally) "step") " passed, on "
+                      (plural (count walks) "walk") " of the build that lands.")
+     :walked     (vec (for [{:keys [seq note]} walks]
+                        (str (when many? (str (names seq) ": "))
+                             (or note "no note was recorded."))))
+     :earlier    (vec (mapcat (fn [{:keys [seq note results]}]
+                                (cons (str (names seq) ", before the last change: "
+                                           (or note "no note was recorded."))
+                                      (for [{:keys [n outcome] :as r} results]
+                                        (str (names seq) ", step " n " — "
+                                             (str/lower-case (outcome-words outcome (name outcome)))
+                                             (when (:note r) (str ": " (:note r)))))))
+                              earlier))
+     :also-check (when also-check? "The Also check items were not walked.")
+     :steps      steps}))
+
+(defn- brief-text
+  "The landing brief as text, from `qa` — {:reading :plan :report}: under :passed the plan's
+   sections followed by `Tested before landing`; under :not-applicable the one-line reason; under
+   any other state nil, and no brief may be written."
+  [{:keys [reading plan report]}]
+  (case (:state reading)
+    :passed
+    (when (and (= :product (:surface plan)) report)
+      (let [{:keys [summary walked earlier also-check steps]} (report-parts report)
+            item (fn [[t text] i] (case t :numbered (str (inc i) ". " text) :bulleted (str "- " text) text))]
+        (str/join "\n"
+          (concat ["QA instructions" ""]
+                  (mapcat (fn [[h items]] (concat [h] (map-indexed (fn [i it] (item it i)) items) [""]))
+                          (brief-plan-sections plan (:cast report)))
+                  ["Tested before landing" summary ""
+                   "How it was walked"] (map #(str "- " %) walked) [""]
+                  (when (seq earlier) (concat ["Earlier walks"] (map #(str "- " %) earlier) [""]))
+                  (when also-check [also-check ""])
+                  ["Step results"]
+                  (for [{:keys [n screenshots] :as st} steps]
+                    (str n ". " (step-result-line st)
+                         (when (seq screenshots) (str " (" (plural (count screenshots) "screenshot") ")"))))))))
+    :not-applicable
+    (when (= :none (:surface plan))
+      (str "QA instructions\n\nNothing a user sees changes: " (:reason plan)))
+    nil))
+
+;; ── …and as the Notion body /land sends ──────────────────────────────────────────────────────
+
+(defn- runs
+  "`text` as Notion rich-text runs, each under the 2000 characters one run may carry."
+  ([text] (runs text nil))
+  ([text annotations]
+   (vec (for [chunk (map #(apply str %) (partition-all 1900 (str text)))]
+          (cond-> {:type "text" :text {:content chunk}}
+            annotations (assoc :annotations annotations))))))
+
+(defn- block [t text & [children]]
+  (let [k (case t :p "paragraph" :numbered "numbered_list_item" :bulleted "bulleted_list_item"
+                  :heading "heading_3" :label "paragraph" :toggle "toggle")]
+    {:object "block" :type k
+     (keyword k) (cond-> {:rich_text (runs text (when (= :label t) {:bold true}))}
+                   (seq children) (assoc :children (vec children)))}))
+
+(defn ^{:malli/schema [:=> [:cat :string :string] [:or [:map [:id :string]] [:map [:error :string]]]]}
+  upload-screenshot!
+  "Upload the screenshot file at `path` to Notion as `name` with the `notion` CLI, and answer
+   {:id <file-upload-id>}, or {:error <why>} — never a throw: a screenshot that does not upload is
+   a line in the brief, not a failed brief."
+  [path name]
+  (try
+    (let [{:keys [exit out err]} (process/shell {:out :string :err :string :continue true}
+                                                "notion" "file" "upload" path "--name" name "-f" "json")]
+      (if-not (zero? exit)
+        {:error (let [e (str/trim (str err " " out))] (if (str/blank? e) (str "notion exited " exit) e))}
+        (if-let [id (or (try (get (json/parse-string out) "id") (catch Exception _ nil))
+                        (re-find #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" (str out)))]
+          {:id id}
+          {:error (str "no file upload id in: " (str/trim (str out)))})))
+    (catch Exception e {:error (ex-message e)})))
+
+(def ^:private mime-extensions
+  {"image/png" "png" "image/jpeg" "jpg" "image/webp" "webp" "image/gif" "gif"})
+
+(defn- screenshot-blocks
+  "A step's screenshots as image blocks, each uploaded through `upload!` — or, for one that could
+   not be, a line saying so in its place."
+  [upload! screenshots]
+  (vec (for [d screenshots
+             :let [short (subs d 0 12)
+                   shot  (ws/screenshot d)
+                   up    (if-not shot
+                           {:error "nothing is kept under its digest"}
+                           (let [ext (get mime-extensions (:mime shot) "png")
+                                 f   (fs/create-temp-file {:prefix (str "qa-" short "-") :suffix (str "." ext)})]
+                             (try
+                               (fs/write-bytes f (.decode (Base64/getDecoder) ^String (:data shot)))
+                               (upload! (str f) (str short "." ext))
+                               (finally (fs/delete-if-exists f)))))]]
+         (if-let [id (:id up)]
+           {:object "block" :type "image" :image {:type "file_upload" :file_upload {:id id}}}
+           (block :p (str "Screenshot " short " could not be uploaded: " (:error up)))))))
+
+(defn- brief-notion
+  "The landing brief as the Notion block /land writes — the 🧪 `QA instructions` callout — from the
+   same `qa` value `brief-text` renders, its screenshots uploaded through `upload!`; nil where no
+   brief may be written. Inside the callout, after Not in this change: the `Tested before landing`
+   heading, the summary line, How it was walked, Earlier walks, the Also check line, and a collapsed
+   `Step results` toggle holding one numbered item per step with its screenshots nested under it."
+  [{:keys [reading plan report]} upload!]
+  (let [callout (fn [children]
+                  {:object "block" :type "callout"
+                   :callout {:icon {:type "emoji" :emoji "🧪"}
+                             :rich_text (runs "QA instructions" {:bold true})
+                             :children (vec children)}})]
+    (case (:state reading)
+      :passed
+      (when (and (= :product (:surface plan)) report)
+        (let [{:keys [summary walked earlier also-check steps]} (report-parts report)]
+          (callout
+           (concat
+            (mapcat (fn [[h items]] (cons (block :heading h) (map (fn [[t text]] (block t text)) items)))
+                    (brief-plan-sections plan (:cast report)))
+            [(block :heading "Tested before landing")
+             (block :p summary)
+             (block :label "How it was walked")]
+            (map #(block :bulleted %) walked)
+            (when (seq earlier) (cons (block :label "Earlier walks") (map #(block :bulleted %) earlier)))
+            (when also-check [(block :p also-check)])
+            [(block :toggle "Step results"
+                    (for [{:keys [screenshots] :as st} steps]
+                      (block :numbered (step-result-line st) (screenshot-blocks upload! screenshots))))]))))
+      :not-applicable
+      (when (= :none (:surface plan))
+        (callout [(block :p (str "Nothing a user sees changes: " (:reason plan)))]))
+      nil)))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+  qa-notion*
+  "The Notion body of the workstream's landing QA brief, as JSON — the callout block /land writes,
+   its screenshots uploaded — or nil when no brief may be written. :upload! stands in for
+   `upload-screenshot!`."
+  [{:keys [upload!] :as opts}]
+  (let [[p ws-id] (here opts)]
+    (some-> (brief-notion (work/workstream-qa p ws-id) (or upload! upload-screenshot!))
+            (json/generate-string {:pretty true}))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  qa-notion
+  "bb nido:workstream:qa:notion [:project <p> (:ws-id <id> | :ref BR-####)] — else the cwd's
+   Print the Notion body of the landing QA brief, with its screenshots uploaded. Exits 2, saying
+   why on stderr, when no brief may be written."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (if-let [body (qa-notion* opts)]
+      (println body)
+      (let [{:keys [reading plan]} (apply work/workstream-qa (here opts))]
+        (binding [*out* *err*]
+          (println (str "none — QA reads " (name (:state reading))
+                        (when-not plan ", and no QA plan cites the governing design")
+                        "; /land writes no brief")))
+        (System/exit 2)))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   show* [{:keys [project] :as opts}]
   (let [p     (keyword project)
@@ -197,11 +417,9 @@
           (println "doing:" d))
         ;; Its QA, for any workstream and whatever entry is newest: the one reading, whether the
         ;; change is product-facing by the plan that reading stands on, and that plan.
-        (let [qa   (pipeline/qa p ws-id)
-              plan (some->> (:plan qa) (ws/entry-at-seq p ws-id))
-              ;; The newest walk the reading counts — the one whose cast the brief names.
-              walk (when (= :passed (:state qa))
-                     (some->> (:walks qa) last (ws/entry-at-seq p ws-id)))]
+        (let [wqa  (work/workstream-qa p ws-id)
+              qa   (:reading wqa)
+              plan (:plan wqa)]
           (println (str "qa: " (name (:state qa))
                         (when-let [d (:declaration qa)]
                           (str " (the registry's :qa " (pr-str (:value d)) " is not a QA it knows)"))
@@ -213,10 +431,11 @@
             (println)
             (println (str "── QA plan (entry " (:plan qa) ") ──"))
             (println (report/report->markdown plan)))
-          ;; The landing brief, rendered from that plan — what /land writes, or nothing.
+          ;; The landing brief, rendered from that plan and what its walks recorded — the text of
+          ;; what /land writes (`qa-notion`), or nothing.
           (println)
           (println "── landing QA brief ──")
-          (println (or (report/qa-brief {:reading qa :plan plan :walk walk})
+          (println (or (brief-text wqa)
                        (str "none — QA reads " (name (:state qa))
                             (when-not plan ", and no QA plan cites the governing design")
                             "; /land writes no brief"))))

@@ -209,6 +209,10 @@
   (Operation walk-passed?
     "Whether every result of a QA walk is :pass; :fail and :blocked are both not passed."
     {:signature [:=> [:catn [:walk [:maybe :map]]] :boolean]})
+  (Operation qa-role-labels
+    "Plan role id to how a rendering of the plan, or a brief from it, names the role: the project's
+     name for it, with the plan's id beside it only where two roles share a name."
+    {:signature [:=> [:catn [:roles [:maybe [:sequential :map]]]] [:map-of :string :string]]})
   (Operation qa-brief
     "The landing QA brief rendered from the plan the QA reading stands on: the plan's sections in
      qa-brief.md's shape for :passed, the one-line brief from its reason for :not-applicable, nil
