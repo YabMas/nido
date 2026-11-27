@@ -318,3 +318,19 @@
         (is (= {a "a" b "b"} (:members (state/read-session "p--ws"))) "the runtime came back up")
         (is (= "edited\n" (slurp (str (fs/path dir "f.txt")))) "it serves the admitted tree")
         (is (not (fs/exists? (fs/path dir v3))) "and not the migration added after it")))))
+
+(deftest a-move-onto-a-shared-runtime-is-refused-before-the-session-leaves-its-own
+  (with-engine :shared
+    (fn [{:keys [a b stopped]}]
+      (fs/create-dirs (state/instance-state-dir "p--solo"))
+      (spit (state/pg-mode-override-file "p--solo") (pr-str {:mode :isolated}))
+      (put! a v3 "create table three ();\n")
+      (engine/start-session! a {:runtime-key "solo" :session-name "a"})
+      (up! b "b")
+      (let [e (refusal #(engine/start-session! a {:runtime-key "ws" :session-name "a"}))]
+        (is e "the move is refused")
+        (is (= [v3] (:paths (ex-data e)))))
+      (is (= [] @stopped) "nothing a ran on was stopped")
+      (is (= {a "a"} (:members (state/read-session "p--solo"))) "a is still on its own runtime")
+      (is (= {b "b"} (:members (state/read-session "p--ws"))))
+      (is (not (fs/exists? (fs/path (checkout/checkout-dir "p--ws") v3)))))))

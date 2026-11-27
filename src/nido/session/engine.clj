@@ -886,6 +886,25 @@
                   (= (:instance-id existing) (:instance-id (registry-entry dir)))))
         (some-> existing state/members (dissoc (str project-dir)))))
 
+(defn- destination
+  "What runtime `instance-id` of `project-name` would serve were the session in `project-dir`
+   to come up on it now — joining `existing` when `join?`, else starting it cold for the members
+   still on it: :others the members staying on it, :code the members whose code it serves
+   (`code-members`), :defs its service definitions, :missing those a join must restart it for,
+   and :refuses? whether its checkout refresh refuses a migration main@origin lacks — by the
+   running runtime's recorded mode for a join that restarts nothing, else by `:defs`."
+  [project-dir project-name instance-id session-edn opts existing join?]
+  (let [others   (cond join?    (dissoc (state/members existing) (str project-dir))
+                       existing (still-on project-dir existing)
+                       :else    {})
+        all      (assoc others (str project-dir) (:session-name opts))
+        code     (code-members project-name all {(str project-dir) (:profile opts)})
+        defs     (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
+        missing  (when join? (remove #(contains? (:service-states existing) (:name %)) defs))
+        restart? (or (not join?) (seq missing) (not (:checkout existing)))]
+    {:others others :code code :defs defs :missing missing
+     :refuses? (if restart? (shared-defs? defs) (shared-runtime? existing))}))
+
 (defn- join!
   "Put the session `session-name` in `project-dir` on the live runtime `existing`. When the
    runtime already runs everything the joiner asks for, nothing is provisioned: it is recorded as a
@@ -897,12 +916,9 @@
    runtime is never grown, nor rolled back, service by service. A runtime that `owes-checkout?` is
    restarted the same way, onto a checkout of its own."
   [project-dir session-name existing session-edn opts]
-  (let [others  (dissoc (state/members existing) (str project-dir))
-        all     (assoc others (str project-dir) session-name)
-        code    (code-members (:project-name existing) all {(str project-dir) (:profile opts)})
-        defs    (runtime-service-defs (:project-name existing) session-edn
-                                      (:instance-id existing) (:profile opts) others)
-        missing (remove #(contains? (:service-states existing) (:name %)) defs)
+  (let [{:keys [others code defs missing]}
+        (destination project-dir (:project-name existing) (:instance-id existing) session-edn
+                     opts existing true)
         moving? (and (not (:checkout existing)) (checkout? (keys code)))]
     (if (or (seq missing) moving?)
       (do
@@ -973,6 +989,13 @@
     ;; Refuse before leaving anything.
     (refuse-start-in-backing-worktree! (:session-name opts) project-dir instance-id)
     (when (and on (not= on instance-id))
+      ;; A migration the destination would refuse refuses the move before the session leaves
+      ;; the runtime it runs on, whose services would otherwise be stopped for nothing.
+      (let [{:keys [code refuses?]} (destination project-dir project-name instance-id session-edn
+                                                 opts existing join?)]
+        (when (and refuses? (checkout? (keys code)))
+          (checkout/examine! instance-id code
+                             (admission project-name true code (:session-name opts)))))
       (core/log-step (str "Leaving runtime " on " for " instance-id))
       (stop-session! project-dir))
     ;; Setup prepares this session's own working copy, whether its runtime is started or joined.

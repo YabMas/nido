@@ -174,6 +174,41 @@
 
 (declare remove!)
 
+(defn- admitted-merge!
+  "The merge of `members`' working copies (`merge-of`, described `token` + \" merge\"), refused
+   when it conflicts or `admit!` throws on it — the merge abandoned and nothing else changed — and
+   otherwise returned as {:from a member's worktree, :merge its change id, :fixed its commit id}.
+   The change id moves whenever a member snapshots while the merge exists, so what is examined
+   and what is copied are one commit, `:fixed`."
+  [members token admit!]
+  (let [from  (first (keys members))
+        merge (merge-of from members (str token " merge"))
+        fixed (commit-id from false merge)]
+    (when (conflict? from fixed)
+      (let [paths (conflicted-paths from fixed)]
+        (jj! from false "abandon" merge)
+        (throw (ex-info (str "The working copies of " (str/join ", " (sort (remove nil? (vals members))))
+                             " conflict in " (str/join ", " paths)
+                             "; the runtime keeps serving the checkout it had")
+                        {:reason :checkout-conflict :members (vec (vals members)) :paths paths}))))
+    (try (admit! from fixed)
+         (catch Throwable e
+           (jj! from false "abandon" merge)
+           (throw e)))
+    {:from from :merge merge :fixed fixed}))
+
+(defn ^{:malli/schema [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :nil]}
+  examine!
+  "Refuse, as `refresh!` would, a refresh of runtime `instance-id`'s checkout with `members`
+   under `admit!` — a conflict or a throw from `admit!` goes to the caller — writing nothing: no
+   checkout is made or changed, and the merge examined is abandoned."
+  [instance-id members admit!]
+  (let [{:keys [from merge]} (admitted-merge! members (str "nido runtime " instance-id " "
+                                                           (System/nanoTime))
+                                              admit!)]
+    (jj! from false "abandon" merge)
+    nil))
+
 (defn ^{:malli/schema [:function
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]]] :Path]
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :Path]
@@ -202,23 +237,8 @@
   ([instance-id members setup!] (refresh! instance-id members setup! (fn [_ _])))
   ([instance-id members setup! admit!]
    (let [dir   (checkout-dir instance-id)
-         from  (first (keys members))
          token (str "nido runtime " instance-id " " (System/nanoTime))
-         merge (merge-of from members (str token " merge"))
-         ;; The change id moves whenever a member snapshots while the merge exists, so what is
-         ;; examined and what is copied are one commit, pinned here.
-         fixed (commit-id from false merge)]
-     (when (conflict? from fixed)
-       (let [paths (conflicted-paths from fixed)]
-         (jj! from false "abandon" merge)
-         (throw (ex-info (str "The working copies of " (str/join ", " (sort (remove nil? (vals members))))
-                              " conflict in " (str/join ", " paths)
-                              "; the runtime keeps serving the checkout it had")
-                         {:reason :checkout-conflict :members (vec (vals members)) :paths paths}))))
-     (try (admit! from fixed)
-          (catch Throwable e
-            (jj! from false "abandon" merge)
-            (throw e)))
+         {:keys [from merge fixed]} (admitted-merge! members token admit!)]
      (jj! from false "new" "--no-edit" "-m" token "root()")
      (let [copy (created from token)]
        (jj! from false "restore" "--from" fixed "--into" copy)

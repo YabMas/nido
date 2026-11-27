@@ -34,6 +34,10 @@
                  [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any]] Path]
                  [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any] [:admit! :any]] Path]]
      :delegates [checkout-dir git-dir sstate/read-session]})
+  (Operation examine!
+    "Refuse, as a refresh would, a refresh of a runtime's checkout with members under an
+     admission, writing nothing — so a caller about to stop services can be refused first."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:admit! :any]] :nil]})
   (Operation remove! "Forget a runtime's checkout workspace and delete its directory."
     {:signature [:=> [:catn [:instance-id InstanceId] [:from [:maybe Path]]] :nil]
      :delegates [checkout-dir git-dir]}))
@@ -119,7 +123,7 @@
     {:signature [:=> [:catn [:project-dir Path] [:opts :map]] :any]
      :delegates [load-session-edn resolve-project-name resolve-instance-id
                  write-profile-for-session! sstate/write-session! sstate/upsert-registry!
-                 refresh!]})
+                 refresh! examine!]})
   (Operation stop-session! "Bring a worktree's services down."
     {:signature [:=> [:catn [:project-dir Path]] :any]
      :delegates [resolve-instance-id sstate/read-session sstate/remove-from-registry!]})
