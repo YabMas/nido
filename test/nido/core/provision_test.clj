@@ -35,3 +35,10 @@
       "an adopted cwd keeps its own name")
   (is (= "barfoo" (provision/session-name {:unit "foo" :cwd "/wt/barfoo"}))
       "a cwd ending in the id's characters but not its segment is not the unit's"))
+
+(deftest an-up-carries-the-dirs-the-verb-named-writable
+  (let [a   {:ws "nido/ws-1" :unit "u" :attempt "a1" :want :up}
+        cmd #(:command (provision/outcome-command a {:exit 0 :out (pr-str %)}))]
+    (is (= ["/w/canvas"] (:writable (cmd {:cwd "/w" :writable ["/w/canvas"]})))
+        "as opaque paths, the way the verb gave them")
+    (is (not (contains? (cmd {:cwd "/w"}) :writable)) "a project with no declaration names none")))

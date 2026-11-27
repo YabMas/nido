@@ -4,8 +4,9 @@
    [babashka.fs :as fs]
    [clojure.data.json :as json]
    [clojure.edn :as edn]
+   [clojure.java.shell :as shell]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.executor.claude :as claude]))
 
 (defn- answer-read
@@ -78,14 +79,39 @@
         (is (nil? (guard "/w" {:tool_input {:file_path "/wx/a"}}))))
       (finally (fs/delete-tree dir)))))
 
-(deftest a-read-only-turn-may-write-its-declarations-under-canvas
-  (let [guard #'claude/guard-decision]
-    (is (nil? (guard "/w" {:tool_input {:file_path "/w/canvas/core/x.clj"}})))
-    (is (nil? (guard "/w" {:cwd "/w" :tool_input {:file_path "canvas/core/x.clj"}})) "relative to the tool's cwd")
-    (is (some? (guard "/w" {:tool_input {:file_path "/w/src/nido/core/x.clj"}})))
-    (is (some? (guard "/w" {:tool_input {:file_path "/w/canvas/../src/x.clj"}})) "a .. escape out of canvas/")
-    (is (some? (guard "/w" {:tool_input {:file_path "/w/canvas"}})) "canvas itself is no declaration")
-    (is (some? (guard "/w" {:tool_input {:file_path "/w/canvasx/a.clj"}})))))
+(deftest a-read-only-turn-may-edit-its-writable-dirs
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (let [guard   #'claude/guard-decision
+            command (fn [spec]
+                      (let [{:keys [files]} ((:launch (claude/executor {:src "/src"}))
+                                             {:turn-dir dir :run-dir dir :run 1 :spec (merge {:instructions "i"} spec)})]
+                        (->> (get files (str (fs/path dir "settings.json"))) json/read-str
+                             (#(get-in % ["hooks" "PreToolUse"]))
+                             (some #(when (= "Edit|MultiEdit|Write|NotebookEdit" (get % "matcher"))
+                                      (get-in % ["hooks" 0 "command"]))))))]
+        (is (str/ends-with? (command {:read-only? true :cwd "/w" :writable ["/w/canvas"]})
+                            "guard '/w' '/w/canvas'")
+            "the hook is handed the spec's writable dirs")
+        (is (str/ends-with? (command {:read-only? true :cwd "/w"}) "guard '/w'"))
+        (testing "each path reaches the guard as one argument, byte for byte"
+          (let [cmd (command {:read-only? true :cwd "/w x" :writable ["/w x/design specs" "/w x/it's"]})
+                {:keys [out]} (shell/sh "sh" "-c" (str "set -- " (subs cmd (+ (str/index-of cmd " guard ") 7))
+                                                         "; printf '%s\\n' \"$@\""))]
+            (is (= ["/w x" "/w x/design specs" "/w x/it's"] (str/split-lines out)))))
+        (is (nil? (guard "/w" ["/w/canvas"] {:tool_input {:file_path "/w/canvas/review/core.clj"}}))
+            "an edit under a writable dir is admitted")
+        (is (nil? (guard "/w" ["/w/canvas"] {:cwd "/w" :tool_input {:file_path "canvas/a.clj"}})))
+        (is (some? (guard "/w" ["/w/canvas"] {:tool_input {:file_path "/w/src/a.clj"}}))
+            "every other path in the working copy is denied as before")
+        (is (some? (guard "/w" ["/w/canvas"] {:tool_input {:file_path "/w/canvasx/a.clj"}})))
+        (is (some? (guard "/w" ["/w/canvas"] {:tool_input {:file_path "/w/canvas"}}))
+            "the dir itself is no path under it")
+        (is (some? (guard "/w" ["/w/canvas"] {:tool_input {:file_path "/w/canvas/../src/a.clj"}}))
+            "a path is read canonical, so no .. walks out of the dir")
+        (is (some? (guard "/w" nil {:tool_input {:file_path "/w/canvas/a.clj"}}))
+            "a turn with no writable dirs is held exactly as before"))
+      (finally (fs/delete-tree dir)))))
 
 ;; ── an ask the agent was woken past ──────────────────────────────────────────
 

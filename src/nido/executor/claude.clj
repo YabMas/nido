@@ -23,7 +23,7 @@
    skipped, nothing nobody could answer (AskUserQuestion, ScheduleWakeup), and only the user's and
    project's own settings beneath the run's. A read-only turn (`:read-only?` on its spec) has a
    second PreToolUse hook, which refuses every file-editing tool pointed into its working copy
-   outside its `canvas/`, where the turn writes its design's declarations.
+   outside the spec's `:writable` dirs.
 
    A turn's first run is prompted with the spec's `:instructions`, followed, when the spec names
    `:images` (digests), by one image block per image in order, read through the executor's `:image`
@@ -62,7 +62,7 @@
 
 (def ^:private file-editors
   "The tools that change files, which a read-only turn (`:read-only?` on its spec) may not point at
-   its working copy outside `canvas/`: a hook guards them rather than their being withheld, because a skill writes
+   its working copy outside its `:writable` dirs: a hook guards them rather than their being withheld, because a skill writes
    its reports to files elsewhere."
   "Edit|MultiEdit|Write|NotebookEdit")
 
@@ -138,6 +138,12 @@
        (resolution-text resolution)
        "\n\nCarry on from there."))
 
+(defn- sh-quote
+  "`s` as one shell word, byte for byte: a hook's command is run by a shell, and a path it is
+   handed is opaque — a space or quote in it must reach the hook as part of that one argument."
+  [s]
+  (str "'" (str/replace (str s) "'" "'\\''") "'"))
+
 (defn- launch
   "What to start for `run`. See `nido.core.turn` for `run`."
   [{:keys [claude-bin bb-bin src add-dirs image] :or {claude-bin "claude" bb-bin "bb"}}
@@ -183,13 +189,14 @@
                                         :PreToolUse
                                         (cond-> [{:matcher ask-tool-name
                                                   :hooks [{:type "command"
-                                                           :command (str bb-bin " --classpath " src
-                                                                         " -m nido.executor.claude hook " run-dir)}]}]
+                                                           :command (str (sh-quote bb-bin) " --classpath " (sh-quote src)
+                                                                         " -m nido.executor.claude hook " (sh-quote run-dir))}]}]
                                           (and (:read-only? spec) (:cwd spec))
                                           (conj {:matcher file-editors
                                                  :hooks [{:type "command"
-                                                          :command (str bb-bin " --classpath " src
-                                                                        " -m nido.executor.claude guard " (:cwd spec))}]}))}})
+                                                          :command (str (sh-quote bb-bin) " --classpath " (sh-quote src)
+                                                                        " -m nido.executor.claude guard " (sh-quote (:cwd spec))
+                                                                        (str/join (map #(str " " (sh-quote %)) (:writable spec))))}]}))}})
                      ;; nido's ask tool, unless the spec says the turn has nobody to ask (`:ask?`
                      ;; false: a run's), and any MCP servers the turn's spec brings (a conductor's
                      ;; tools): MCP is no provider's, so a spec may name servers and stay neutral.
@@ -325,22 +332,25 @@
 
 (defn- guard-decision
   "The read-only hook's answer for `event`: a denial when the file-editing tool it names points
-   into working copy `cwd` anywhere but under its `canvas/`, else nil. Both paths are canonical, so
-   `canvas/../src/x.clj` is refused: a design adding a module must declare it in `canvas/` before
-   its review can pass, and nothing else of the working copy is the turn's to change."
-  [cwd {:keys [tool_input] :as event}]
-  (when-let [p (or (:file_path tool_input) (:notebook_path tool_input))]
-    (let [root (canonical nil cwd)
-          path (canonical (:cwd event) p)]
-      (when (and (or (= path root) (str/starts-with? path (str root "/")))
-                 (not (str/starts-with? path (str root "/canvas/"))))
+   into working copy `cwd` and under none of `writable` — the spec's `:writable` dirs, opaque
+   absolute paths a held turn may still edit — else nil."
+  ([cwd event] (guard-decision cwd nil event))
+  ([cwd writable {:keys [tool_input] :as event}]
+   (when-let [p (or (:file_path tool_input) (:notebook_path tool_input))]
+     (let [root   (canonical nil cwd)
+           path   (canonical (:cwd event) p)
+           under? (fn [dir] (str/starts-with? path (str dir "/")))]
+       (when (and (or (= path root) (under? root))
+                  (not-any? #(under? (canonical nil %)) writable))
         {:hookSpecificOutput
          {:hookEventName "PreToolUse"
           :permissionDecision "deny"
           :permissionDecisionReason
           (str "nido's recipe holds this workstream's code until its design is cleared: this turn "
-               "may change files in its working copy only under canvas/, to write its design's "
-               "declarations. Write what else the recipe owes through nido's verbs instead.")}}))))
+               "may not change files in its working copy"
+               (when (seq writable)
+                 (str " outside its declaration (" (str/join ", " writable) ")"))
+               ". Write what the recipe owes through nido's verbs instead.")}})))))
 
 ;; ── the supervisor ───────────────────────────────────────────────────────────
 
@@ -418,14 +428,15 @@
       nil)))
 
 (defn ^:export -main
-  "`hook <run-dir>`: answer one PreToolUse event on stdin. `guard <cwd>`: refuse a file edit into
-   working copy `cwd`, for a read-only turn. `supervise <argv…>`: run Claude, ending it at its
-   first deferral. `stop <run-dir>`: answer one Stop event on stdin."
+  "`hook <run-dir>`: answer one PreToolUse event on stdin. `guard <cwd> [<writable-dir>…]`: refuse
+   a file edit into working copy `cwd` outside every writable dir, for a read-only turn.
+   `supervise <argv…>`: run Claude, ending it at its first deferral. `stop <run-dir>`: answer one
+   Stop event on stdin."
   [& [cmd arg & more]]
   (case cmd
     "hook"      (let [event (json/read-str (slurp *in*) :key-fn keyword)]
                   (println (json/write-str (hook-decision arg event))))
-    "guard"     (when-let [d (guard-decision arg (json/read-str (slurp *in*) :key-fn keyword))]
+    "guard"     (when-let [d (guard-decision arg more (json/read-str (slurp *in*) :key-fn keyword))]
                   (println (json/write-str d)))
     "stop"      (when-let [d (stop-decision arg (json/read-str (slurp *in*) :key-fn keyword))]
                   (println (json/write-str d)))

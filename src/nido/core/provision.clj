@@ -69,6 +69,8 @@
      :command (cond-> {:command :record-provision-outcome :unit unit :attempt attempt
                        :outcome (cond ok? :done refused? :refused :else :failed)}
                 (and ok? (= :up want)) (assoc :cwd (:cwd res))
+                ;; The dirs the verb says a held turn may still edit, carried as it gave them.
+                (and ok? (= :up want) (seq (:writable res))) (assoc :writable (vec (:writable res)))
                 (not ok?) (assoc :detail (str/trim (str (or (:error res)
                                                             (if exit (str "exit " exit) "timed out"))
                                                         (when-not (:error res)

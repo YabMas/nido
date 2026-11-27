@@ -4311,11 +4311,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                            (map #(str "Bash(" % ":*)") amender-jj-reads)
                            (when check-cmd [(str "Bash(" check-cmd ")")])))}))
 
-(defn- transcript-writes
-  "Every path a file-writing tool in an agent's stream-json transcript was pointed at, less the
-   calls whose result came back an error — a write the permission rules denied, an edit whose
-   old text was not there — since those wrote nothing. A call with no result yet (the agent was
-   killed mid-write) counts. An absent or unparseable transcript shows nothing."
+(defn- transcript-write-calls
+  "Every file-writing tool call in an agent's stream-json transcript, in the order it made them, as
+   {:name :input :path}, less the calls whose result came back an error — a write the permission
+   rules denied, an edit whose old text was not there — since those wrote nothing. A call with no
+   result yet (the agent was killed mid-write) counts. An absent or unparseable transcript shows
+   nothing."
   [transcript]
   (let [events (when (and transcript (fs/exists? transcript))
                  (keep #(try (json/parse-string % keyword) (catch Exception _ nil))
@@ -4326,8 +4327,42 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         failed (set (keep #(when (:is_error %) (:tool_use_id %)) (blocks "tool_result")))]
     (vec (keep (fn [{:keys [id name input]}]
                  (when (and (file-writing-tools name) (not (failed id)))
-                   (or (:file_path input) (:notebook_path input))))
+                   (when-let [path (or (:file_path input) (:notebook_path input))]
+                     {:name name :input input :path path})))
                (blocks "tool_use")))))
+
+(defn- transcript-writes
+  "Every path a file-writing tool in an agent's stream-json transcript was pointed at
+   (`transcript-write-calls`)."
+  [transcript]
+  (mapv :path (transcript-write-calls transcript)))
+
+(defn- replay-edit
+  "`content` with one Edit's `old` replaced by `new` as the tool replaces it — every occurrence
+   under `all?`, else the one occurrence it must find — or ::unknown when the replay cannot be
+   made exactly."
+  [content old new all?]
+  (let [old (str old)
+        i   (when (and (string? content) (seq old)) (str/index-of content old))]
+    (cond (nil? i)                         ::unknown
+          all?                             (str/replace content old (str new))
+          (str/index-of content old (inc i)) ::unknown
+          :else (str (subs content 0 i) new (subs content (+ i (count old)))))))
+
+(defn- replay-write
+  "What a file holding `content` holds after one file-writing tool call, by the call alone, or
+   ::unknown when it cannot be told exactly (a notebook edit, an edit the replay does not hold the
+   old text of)."
+  [content {:keys [name input]}]
+  (if (= ::unknown content)
+    ::unknown
+    (case name
+      "Write"     (str (:content input))
+      "Edit"      (replay-edit content (:old_string input) (:new_string input) (:replace_all input))
+      "MultiEdit" (reduce (fn [c {:keys [old_string new_string replace_all]}]
+                            (if (= ::unknown c) c (replay-edit c old_string new_string replace_all)))
+                          content (:edits input))
+      ::unknown)))
 
 (defn- under
   "`file` as a path relative to `root`, or nil when it lies outside it. Both are canonicalized, since
@@ -4337,6 +4372,24 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         f    (str (fs/canonicalize (if (fs/absolute? file) file (fs/path root file))))]
     (when (str/starts-with? f (str root "/"))
       (subs f (inc (count root))))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  amender-left
+  "What each path under `permitted` that an amender's own file-writing tools wrote holds by those
+   writes alone: its calls in `transcript`, replayed in order over `before` (path relative to
+   `cwd` → what it held as the amender launched, nil when absent). The value is what the amender
+   left, read from what it wrote rather than from the disk after it exits, so a person's edit made
+   while it ran is never taken for the amender's. A path whose replay cannot be made exactly maps
+   to ::unknown, which no file's content equals, so it is never taken for the amender's either."
+  [{:keys [transcript cwd permitted before]}]
+  (let [permitted? (fn [p] (some #(or (= p %) (str/starts-with? p (str % "/"))) permitted))]
+    (reduce (fn [left {:keys [path] :as call}]
+              (let [p (under cwd path)]
+                (if (and p (permitted? p))
+                  (assoc left p (replay-write (if (contains? left p) (get left p) (get before p)) call))
+                  left)))
+            {}
+            (transcript-write-calls transcript))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   amender-trespass

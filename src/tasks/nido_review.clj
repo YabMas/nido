@@ -2178,7 +2178,7 @@
    :usage-limited "the account's usage limit refused the amender — nothing was appended and nothing was decided; re-run after the reset named above"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
-   :canvas-unverified "the declaration's listing did not answer over the amender's canvas edit, retried once — the edit was put back and nothing was appended; its canvas as it left it is kept in the run dir, the case to list again against fukan"
+   :canvas-unverified "the declaration's listing timed out over the amender's canvas edit, or gave no answer twice — the edit was put back and nothing was appended; its canvas as it left it is kept in the run dir, the case to list again against fukan"
    :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"
    :dry-run    "nothing was amended"
    :no-workstream "run this from a nido session — its worktree or its session home"

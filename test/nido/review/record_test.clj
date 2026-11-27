@@ -3503,10 +3503,13 @@
   "Run a design amend stage over a temp worktree holding `canvas-module`, the amender being `amend`:
    called with the worktree, the 1-based launch and its prompt, it edits the canvas as it likes and
    answers with the record it returns. Every write it makes under the worktree is named in its
-   transcript, as claude's would be. `elements`, when given, stands in for the listing.
+   transcript, as claude's would be. `elements`, when given, stands in for the listing. `person`,
+   when given, is called with the worktree and the launch after the amender's writes and before
+   its launch returns: an edit someone else makes while the amender runs.
 
-   Answers {:out ctx :appended [payload] :prompts [..] :canvas <core.clj after> :wt :run-dir}."
-  [{:keys [amend elements append-throws? on-append]}]
+   Answers {:out ctx :appended [payload] :prompts [..] :canvas <core.clj after> :wt :run-dir},
+   with :thrown in place of :out when the stage throws."
+  [{:keys [amend elements append-throws? on-append person]}]
   (let [wt       (str (fs/create-temp-dir))
         root     (str (fs/create-temp-dir))
         core-clj (str (fs/path wt "canvas/review/core.clj"))
@@ -3538,23 +3541,31 @@
                       (swap! prompts conj first-message)
                       (let [before (slurp core-clj)
                             record (amend wt (count @prompts) first-message)
-                            wrote? (not= before (slurp core-clj))]
+                            after  (slurp core-clj)
+                            wrote? (not= before after)]
                         (spit out-file
                               (if wrote?
                                 (json/generate-string
                                  {:type "assistant"
-                                  :message {:content [{:type "tool_use" :name "Edit" :id "t1"
-                                                       :input {:file_path core-clj}}]}})
+                                  :message {:content [{:type "tool_use" :name "Write" :id "t1"
+                                                       :input {:file_path core-clj :content after}}]}})
                                 ""))
+                        (when person (person wt (count @prompts)))
                         (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                               (pr-str {:record record})))
                       {:num-turns 2 :exit-code 0})]
-        (let [out ((:run record/design-amend-stage)
-                   {:config {:cwd wt :run-id "r1"} :iter 1 :control :continue
-                    :findings [{:check :relation-honest :status :broken :note "n"}]
-                    :record decision})]
-          {:out out :appended @appended :prompts @prompts :canvas (slurp core-clj)
-           :wt wt :run-dir (str (cstate/run-dir "r1"))}))
+        (let [out (try ((:run record/design-amend-stage)
+                        {:config {:cwd wt :run-id "r1"} :iter 1 :control :continue
+                         :findings [{:check :relation-honest :status :broken :note "n"}]
+                         :record decision})
+                       (catch Exception e {::thrown e}))]
+          (cond-> {:appended @appended :prompts @prompts :canvas (slurp core-clj)
+                   :wt wt :run-dir (str (cstate/run-dir "r1"))
+                   :kept-core (let [f (fs/path (cstate/run-dir "r1") "design-amend-round-1-canvas"
+                                               "canvas/review/core.clj")]
+                                (when (fs/exists? f) (slurp (str f))))}
+            (::thrown out)       (assoc :thrown (::thrown out))
+            (not (::thrown out)) (assoc :out out))))
       (finally (fs/delete-tree wt) (fs/delete-tree root)))))
 
 (def ^:private amended (assoc design :effort :L))
@@ -3615,12 +3626,79 @@
     (is (= canvas-module canvas))
     (is (= :canvas-unverified (:status out)))
     (is (= 1 (count prompts)) "no re-ask: no repair by the amender makes fukan finish")
-    (is (= 3 @calls) "the listing before the amender, then the one after and its one retry")
-    (is (str/includes? (:amend-error out) "did not finish within 180s, twice"))
+    (is (= 2 @calls) "the listing before the amender, then the one after — a timeout is not asked again")
+    (is (str/includes? (:amend-error out) "did not finish within 180s"))
     (is (= :timeout (get-in out [:canvas-check :cause])))
     (is (= 180000 (get-in out [:canvas-check :limit-ms])))
     (is (str/starts-with? (get-in out [:canvas-check :kept]) run-dir)
         "the amender's canvas is kept in the run dir, the case to list again against fukan")))
+
+(deftest a-timed-out-listing-is-not-overruled-by-a-later-answer
+  ;; A listing that would have answered :listed had it been asked again still timed out: the edit
+  ;; is not verified, so it is put back and nothing is appended.
+  (let [calls  (atom 0)
+        listed (fn [_ _ & _]
+                 (if (= 2 (swap! calls inc))
+                   {:status :undecidable :cause :timeout :limit-ms 180000 :error "did not finish"}
+                   {:status :listed :elements []}))
+        {:keys [out appended canvas]}
+        (canvas-round {:elements listed
+                       :amend (fn [wt _ _]
+                                (spit (str (fs/path wt "canvas/review/core.clj")) (renamed canvas-module))
+                                amended)})]
+    (is (empty? appended))
+    (is (= canvas-module canvas))
+    (is (= :canvas-unverified (:status out)))
+    (is (= :timeout (get-in out [:canvas-check :cause])))))
+
+(deftest a-persons-edit-while-the-amender-runs-is-not-put-back
+  ;; What the amender left is what its own writes made the file, not what the disk holds when it
+  ;; exits: an edit a person makes meanwhile is theirs, and outlives the refused amendment.
+  (let [theirs (str (renamed canvas-module) ";; the person's\n")
+        {:keys [out appended canvas]}
+        (canvas-round {:append-throws? true
+                       :amend  (fn [wt n _]
+                                 (when (= 1 n)
+                                   (spit (str (fs/path wt "canvas/review/core.clj")) (renamed canvas-module)))
+                                 amended)
+                       :person (fn [wt n]
+                                 (when (= 1 n) (spit (str (fs/path wt "canvas/review/core.clj")) theirs)))})]
+    (is (empty? appended))
+    (is (= theirs canvas) "the person's edit is not overwritten by the pre-launch canvas")
+    (is (= ["canvas/review/core.clj"] (get-in out [:canvas-put-back :changed-since])))))
+
+(deftest a-persons-edit-between-launches-is-not-put-back
+  ;; The amender writes, a person edits the same file before the re-ask, and the re-asked amender
+  ;; writes it again: putting it back to the round's start would undo the person's edit.
+  (let [theirs (str (renamed canvas-module) ";; the person's\n")
+        {:keys [out appended canvas]}
+        (canvas-round {:append-throws? true
+                       :amend  (fn [wt n _]
+                                 (let [f (str (fs/path wt "canvas/review/core.clj"))]
+                                   (spit f (str (slurp f) ";; amender " n "\n")))
+                                 amended)
+                       :person (fn [wt n]
+                                 (when (= 1 n) (spit (str (fs/path wt "canvas/review/core.clj")) theirs)))})]
+    (is (empty? appended))
+    (is (str/starts-with? canvas theirs) "the person's edit survives the refused amendment")
+    (is (= ["canvas/review/core.clj"] (get-in out [:canvas-put-back :changed-since])))))
+
+(deftest a-throw-after-the-amender-still-puts-its-canvas-back
+  ;; A stage that throws past the amender's launch appends nothing, so its canvas edit goes back.
+  (let [calls  (atom 0)
+        listed (fn [_ _ & _]
+                 (if (= 1 (swap! calls inc))
+                   {:status :listed :elements []}
+                   (throw (ex-info "the load tracer would not start" {}))))
+        {:keys [thrown appended canvas kept-core]}
+        (canvas-round {:elements listed
+                       :amend (fn [wt _ _]
+                                (spit (str (fs/path wt "canvas/review/core.clj")) (duplicated canvas-module))
+                                amended)})]
+    (is (some? thrown) "the throw is not swallowed")
+    (is (empty? appended))
+    (is (= canvas-module canvas) "the canvas is put back to what it held before the amender")
+    (is (= (duplicated canvas-module) kept-core) "the run dir keeps what was put back")))
 
 (deftest a-loading-canvas-edit-is-put-back-when-its-amendment-is-refused
   (let [{:keys [out appended canvas]}

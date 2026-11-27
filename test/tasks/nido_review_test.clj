@@ -1429,7 +1429,7 @@
            :amend-unreadable   "would not parse as EDN"
            :amend-invalid      "the ledger refused"
            :amend-touched-code "still there"
-           :canvas-unverified  "retried once"
+           :canvas-unverified  "gave no answer twice"
            :no-workstream      "nido session"
            :no-record          "author the baseline first"
            :nothing-to-check   "refutable"
@@ -2982,9 +2982,9 @@
         (doseq [[reading says] {{:status :undecidable :cause :load-failure
                                  :error "canvas namespace canvas.review.core does not load: authors 2 instances"}
                                 "canvas.review.core does not load"
-                                {:status :undecidable :cause :timeout :limit-ms 180000 :retried? true
+                                {:status :undecidable :cause :timeout :limit-ms 180000
                                  :error "did not finish"}
-                                "did not finish within 180s, twice"}]
+                                "did not finish within 180s"}]
           (with-redefs [record/canvas-reading (fn [& _] reading)]
             (let [out (with-out-str
                         (is (= 1 (t/amend-check* {:project "nido" :ws-id "ws-1" :kind "design"

@@ -5904,10 +5904,14 @@
     :else
     (assoc ctx :control :stop :status :amend-noop)))
 
+(declare canvas-files)
+
 (defn- launch-amender!
   "Launch an amender on `first-message` over the round's code tree, and say what it did: `:trespass`
    is `stages/amender-trespass` over a reading of that tree either side, with `permitted` as the
-   dirs its writes are allowed in, and `:launch` is how the agent itself ended (`amender-launch`).
+   dirs its writes are allowed in, plus `:left` (`stages/amender-left`), what each path under
+   `permitted` it wrote holds by its own writes, and `:launched-over`, what every path under
+   `permitted` held as it launched, and `:launch` is how the agent itself ended (`amender-launch`).
 
    Confined by `stages/amender-tools`: it may write `out-path` and under `permitted`, and its
    shell runs only reads and `check-cmd` (the command string, or nil). That confinement is what
@@ -5925,7 +5929,10 @@
         code-cwd   (or (:code-cwd (:config ctx)) cwd)
         dir        (cstate/run-dir run-id)
         transcript (str (fs/path dir (str label ".log")))
-        before     (stages/working-copy-state code-cwd)]
+        before     (stages/working-copy-state code-cwd)
+        ;; What the declaration held as the amender launched: what its own writes are replayed
+        ;; over, to know what it left without reading a disk others write to as well.
+        files      (when (seq permitted) (canvas-files code-cwd permitted))]
     (fs/create-dirs dir)
     (fs/delete-if-exists transcript)
     (spit (str (fs/path dir (str label "-prompt.txt"))) first-message)
@@ -5937,9 +5944,12 @@
                            (stages/amender-tools {:cwd code-cwd :out-path out-path
                                                   :permitted permitted :check-cmd check-cmd})))]
       {:launch   (amender-launch launched transcript)
-       :trespass (stages/amender-trespass {:before before :after (stages/working-copy-state code-cwd)
-                                           :transcript transcript :cwd code-cwd
-                                           :permitted permitted})})))
+       :trespass (assoc (stages/amender-trespass {:before before :after (stages/working-copy-state code-cwd)
+                                                  :transcript transcript :cwd code-cwd
+                                                  :permitted permitted})
+                        :left (stages/amender-left {:transcript transcript :cwd code-cwd
+                                                    :permitted permitted :before files})
+                        :launched-over files)})))
 
 (defn- amendment-state
   "What the answer file at `out-path` held, for a round that will not append it: `:absent`,
@@ -9451,19 +9461,19 @@
 
 (def ^:private canvas-unverified-causes
   "The listing failures that say nothing about the canvas: the reading did not finish, or finished
-   without answering. Retried once, and never kept."
+   without answering. Never kept."
   #{:timeout :unanswered})
 
 (defn ^{:malli/schema [:=> [:cat :keyword :string [:maybe [:vector :string]]] :DeclaredElements]}
   canvas-reading
   "The declaration at `worktree` as the next round's pre-judge listing will read it — design-check's
    element listing, with `changed` (canvas paths relative to `worktree`) the files whose load is
-   traced first when one does not load. A reading that timed out or gave no answer is taken again
-   once, since a listing that did not finish says nothing about the canvas; the second answer is
-   the reading, `:retried?` set."
+   traced first when one does not load. A reading that gave no answer is taken again once, the
+   second answer the reading, `:retried?` set. A reading that timed out is the reading, never
+   asked again: a timed-out listing is never kept, so no later answer may stand in for it."
   [project worktree changed]
   (let [r (design-check/elements project worktree changed)]
-    (if (canvas-unverified-causes (:cause r))
+    (if (= :unanswered (:cause r))
       (assoc (design-check/elements project worktree changed) :retried? true)
       r)))
 
@@ -9487,7 +9497,7 @@
       :timeout
       (str "the declaration's element listing did not finish within "
            (if limit-ms (str (quot limit-ms 1000) "s") "its limit")
-           (when retried? ", twice") " over your edit, so whether the canvas loads is unknown")
+           " over your edit, so whether the canvas loads is unknown")
       (str "the declaration's element listing gave no answer over your edit"
            (when retried? ", twice") ": " error))))
 
@@ -9518,8 +9528,8 @@
 (defn- put-back-canvas!
   "Put back every declaration path the amender wrote this round to what it held before the amender
    launched (`before`, from `canvas-files`), and keep what it left under the run dir. A path that no
-   longer holds what the amender left (`left`, path → what it held after the amender's last launch)
-   was changed by someone after it, and is left alone. Answers what the report keeps of it, or nil
+   longer holds what the amender left (`left`, path → what its own writes made it, replayed from its
+   transcript, or ::stages/unknown) was changed by someone else, and is left alone. Answers what the report keeps of it, or nil
    when the amender wrote nothing there."
   [cwd before left kept-dir]
   (when (seq left)
@@ -9561,15 +9571,25 @@
         ;; that no longer loads is the amender's doing.
         canvas-before  (when declared (canvas-files code-cwd permitted))
         listed-before? (when declared (= :listed (:status (design-check/elements project code-cwd))))
-        ;; Every declaration path the amender wrote, as it left it after its last launch, and
-        ;; every one the tree readings saw move.
+        ;; Every declaration path the amender wrote, as its own writes left it (never as the disk
+        ;; reads after it exits, which may hold a person's edit), and every one the tree readings
+        ;; saw move. A path that held something else as a launch began than the round left it at —
+        ;; `canvas-before`, or the amender's own earlier writes — was written by someone between,
+        ;; and putting it back would undo them: it is never taken for the amender's.
         left      (atom {})
         moved     (atom #{})
         appended? (atom false)
         kept-dir  (str (fs/path dir (str stem "-canvas")))
         launched  (fn [trespass]
                     (swap! moved into (:permitted trespass))
-                    (swap! left merge (into {} (for [p (:wrote trespass)] [p (holds code-cwd p)]))))
+                    (swap! left
+                           (fn [l]
+                             (reduce (fn [l p]
+                                       (let [expected (if (contains? l p) (get l p) (get canvas-before p))]
+                                         (assoc l p (if (= expected (get (:launched-over trespass) p))
+                                                      (get (:left trespass) p)
+                                                      ::stages/unknown))))
+                                     l (:wrote trespass)))))
         ;; Whether the declaration the amender's writes leave stands beside the amendment: nil when
         ;; it does (or nothing under it moved), {:err refusal} for the amender to repair, or
         ;; {:halt stop} when no repair of its can lift what stopped it.
@@ -9593,9 +9613,14 @@
                       out
                       (if-let [pb (put-back-canvas! code-cwd canvas-before @left kept-dir)]
                         (assoc out :canvas-put-back pb)
-                        out)))]
+                        out)))
+        ;; Set once the round has an outcome to settle, so a throw before it — a launch, a
+        ;; listing, an append — still puts back what the round did not keep, and a throw from the
+        ;; put-back itself is not met by a second one.
+        settling? (atom false)]
     (fs/create-dirs dir)
     (fs/delete-if-exists out-path)
+    (try
     (let [{:keys [trespass launch]}
                    (launch-amender!
                     ctx {:label stem
@@ -9618,6 +9643,7 @@
                      (update :carry assoc :stale (:stale answer)
                              :stale-because (:stale-because answer)))]
       (settle
+       (let [out
        (cond
         (seq (:attributed trespass))
         (trespass-stop ctx trespass out-path answer)
@@ -9750,7 +9776,12 @@
                                        (for [{:keys [id why]} (vals @held)]
                                          {:claim (str "[" id "]")
                                           :because (str "the amendment changed " why
-                                                        "; refused, and left for the person")}))))))))))
+                                                        "; refused, and left for the person")}))))))]
+         (reset! settling? true)
+         out)))
+      (catch Throwable t
+        (when-not @settling? (settle nil))
+        (throw t)))))
 
 (defn- run-design-amend-stage
   [ctx]

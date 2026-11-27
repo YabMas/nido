@@ -444,6 +444,52 @@
       (is (nil? (d/code-held (ledger :activated :deactivated))))
       (is (nil? (:read-only? (started (ledger :activated :design :design-cleared))))))))
 
+(deftest a-held-turn-may-write-its-declaration-dirs
+  ;; A held unit turn owes the design's half of the work, and /design has it write the declaration;
+  ;; denied it, a canvas an amender broke waited on a person editing by hand. The dirs reach the
+  ;; core only as the session verb's :up gave them, opaque.
+  (let [append  (fn [s kind] (first (d/step s {:command :append-entry :after (d/latest-seq s)
+                                                 :row (row* kind) :content "{}"})))
+        up      (fn [outcome]
+                  (first (run [{:command :create-workstream :identity id*}
+                               {:command :open-unit :unit "u" :project "nido" :goal "g"}
+                               {:command :record-provision-attempt :unit "u" :attempt "p" :want :up}
+                               (merge {:command :record-provision-outcome :unit "u" :attempt "p"
+                                       :outcome :done :cwd "/w"}
+                                      outcome)])))
+        held    (fn [s] (reduce append s [:activated :design]))
+        started (fn [s cmd-spec]
+                  (get-in (first (d/step s {:command :start-turn :turn "t" :unit "u" :spec cmd-spec}))
+                          [:turns "t" :spec]))]
+    (testing "a held turn carries the dirs its session's :up recorded"
+      (let [sp (started (held (up {:writable ["/w/canvas"]})) spec)]
+        (is (:read-only? sp))
+        (is (= ["/w/canvas"] (:writable sp)))
+        (is (re-find #"may edit files under /w/canvas" (:instructions sp)))))
+    (testing "a session that recorded none is held exactly as before"
+      (let [sp (started (held (up {})) spec)]
+        (is (:read-only? sp))
+        (is (not (contains? sp :writable)))
+        (is (not (re-find #"may edit files under" (:instructions sp))))))
+    (testing "the command cannot widen it, and an unheld turn needs none"
+      (is (not (contains? (started (held (up {})) (assoc spec :writable ["/"])) :writable)))
+      (is (not (contains? (started (reduce append (up {:writable ["/w/canvas"]})
+                                           [:activated :design :design-cleared])
+                                   spec)
+                          :writable))))
+    (testing "code-held still reads only the ledger: the dirs change nothing about whether it holds"
+      (is (= :design-not-cleared (d/code-held (held (up {:writable ["/w/canvas"]}))))))
+    (testing "only an :up that came up records them, and only as absolute paths"
+      (let [attempted (first (run [{:command :create-workstream :identity id*}
+                                   {:command :open-unit :unit "u" :project "nido" :goal "g"}
+                                   {:command :record-provision-attempt :unit "u" :attempt "p" :want :up}]))]
+        (is (= :writable-needs-absolute-paths
+               (refusal attempted {:command :record-provision-outcome :unit "u" :attempt "p"
+                                   :outcome :done :cwd "/w" :writable ["canvas"]})))
+        (is (= :writable-only-from-an-up
+               (refusal attempted {:command :record-provision-outcome :unit "u" :attempt "p"
+                                   :outcome :failed :writable ["/w/canvas"]})))))))
+
 (deftest a-unit-the-core-brings-up-with-nothing-to-run-wakes-the-conductor
   (let [up (fn [u] [{:command :record-provision-attempt :unit u :attempt (str "p-" u) :want :up}
                     {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome :done :cwd "/w"}])

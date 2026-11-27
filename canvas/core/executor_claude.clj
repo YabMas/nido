@@ -16,6 +16,8 @@
    deferred call: Claude otherwise stays alive past a deferral while a background task of its runs,
    and the task's end wakes the agent past its ask. A run woken past its ask anyway is still :asked,
    and its resumption gives the resolution as a prompt, since no call is left to re-offer.
+   A spec's :read-only? is honoured by a hook that denies a file edit into the working copy, and
+   admits one under the spec's :writable dirs — opaque paths it never interprets.
 
    HIDES everything Claude-specific: flags, the permission policy passed on every run, the stream format, session
    ids, and the hook protocol: its hooks report to it and to no other

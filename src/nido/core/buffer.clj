@@ -314,7 +314,7 @@
       (d/code-held state)
       [(str "Recipe: running, and the design is NOT cleared"
             (if (seq recorded) (str " (recorded: " (str/join ", " (map name recorded)) ")") " (nothing recorded yet)")
-            ". Until it is, every unit turn runs read-only on the code: it may write its design's declarations under canvas/ and nothing else — do not direct a unit to build.")
+            ". Until it is, every unit turn runs read-only on the code, save the declaration dirs its session names — do not direct a unit to build.")
        "  Direct units through what the recipe owes, in order: the intent (the person's to state: ask them, or for an :intent grant so a unit may write it), the baseline (judged by `bb nido:review:baseline`), the design (/design, judged and cleared by `bb nido:review:design`)."
        "  A product question is a design question: put it to the person while designing, never after building."]
 
@@ -422,7 +422,7 @@
                             :properties {:unit {:type "string"} :project {:type "string"} :goal {:type "string"}}
                             :required ["unit" "project" "goal"]
                             :command (fn [{:keys [unit project goal]}] {:command :open-unit :unit unit :project project :goal goal})}
-   "start_unit_turn"       {:description "Start a unit's next turn: an agent working in the unit's session on `instructions`. While the recipe holds the workstream's design uncleared, the turn runs read-only on the code: it may write its design's declarations under canvas/ and nothing else."
+   "start_unit_turn"       {:description "Start a unit's next turn: an agent working in the unit's session on `instructions`. While the recipe holds the workstream's design uncleared, the turn runs read-only on the code, save the declaration dirs its session names."
                             :properties {:unit {:type "string"} :instructions {:type "string"}
                                          :executor {:type "string"}}
                             :required ["unit" "instructions"]

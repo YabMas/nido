@@ -11,7 +11,9 @@
 
    HIDES how a unit's session is brought up and stopped: a bounded call of a session verb that
    brings the working copy and its services up or down through session-lifecycle alone, carrying
-   the session into no conductor, seat or agent, and how its result is read back."
+   the session into no conductor, seat or agent, and how its result is read back. An :up that came
+   up carries the verb's :cwd and, when the verb gave them, its :writable dirs, as opaque absolute
+   paths."
   (Operation start
     "Start the provisioner. A start hands it every workstream not closed, which is how an attempt a
      kill left is made again."

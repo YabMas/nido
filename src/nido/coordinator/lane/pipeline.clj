@@ -1091,7 +1091,7 @@
    ;; the reason :fix-launch-failed is not: what killed it is not known to lift in a backoff.
    :amend-launch-failed  :escalate
    :amend-invalid        :escalate
-   ;; The listing over the amender's canvas edit did not finish or did not answer, retried once.
+   ;; The listing over the amender's canvas edit did not finish, or did not answer when asked twice.
    ;; Not :retry: what makes fukan slow is fukan's to fix, and the edit was already put back.
    :canvas-unverified    :escalate
    :amend-unreadable     :escalate

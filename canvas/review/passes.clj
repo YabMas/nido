@@ -749,6 +749,12 @@
      file-writing tools wrote. Only those count against it; a path moved by anyone else in a live
      worktree is reported, and a move inside a permitted dir never counts."
     {:signature [:=> [:catn [:opts :map]] :map]})
+  (Operation amender-left
+    "What each permitted path a record amender's own file-writing tools wrote holds by those
+     writes alone, replayed from its transcript over what the path held as it launched — never
+     read from a disk others write to while it runs. A write it cannot replay exactly is taken
+     for no one's, so an edit made beside the amender is never put back as the amender's."
+    {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation layer-label "A layer's label."
     {:signature [:=> [:catn [:layer :map]] :string]})
   (Operation reshape-plan

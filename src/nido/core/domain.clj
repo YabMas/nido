@@ -420,7 +420,7 @@
 (defmethod evolve :provision-attempted [state {:keys [unit attempt want]}]
   (assoc-in state [:units unit :session :attempt] {:id attempt :want want}))
 
-(defmethod evolve :provision-recorded [state {:keys [unit outcome cwd detail unit-ready?]}]
+(defmethod evolve :provision-recorded [state {:keys [unit outcome cwd writable detail unit-ready?]}]
   (let [want (get-in state [:units unit :session :attempt :want])
         status (case outcome :failed :failed :refused :refused (reached want))]
     (cond-> (update-in state [:units unit :session]
@@ -428,6 +428,12 @@
                           ;; Only an :up that came up sets it; a ledger whose other outcomes
                           ;; carried one folds without it.
                           (and cwd (= :done outcome) (= :up want)) (assoc :cwd cwd)
+                          ;; The dirs a held turn may still edit, as the :up gave them: opaque
+                          ;; paths, replaced whole by every :up so a session brought up again
+                          ;; holds what that :up said and nothing an earlier one did.
+                          (and (= :done outcome) (= :up want)) (as-> s (if (seq writable)
+                                                                         (assoc s :writable (vec writable))
+                                                                         (dissoc s :writable)))
                           detail (assoc :detail detail)))
       ;; A run has no conductor to hear a failure; one whose session never came up is over.
       (and (:run state) (= :failed outcome) (= :up want)) (assoc-in [:units unit :status] :finished)
@@ -784,7 +790,7 @@
     (refuse :session-not-owed :unit unit :want want)
     :else (accept {:event :provision-attempted :unit unit :attempt attempt :want want})))
 
-(defmethod decide :record-provision-outcome [state {:keys [unit attempt outcome cwd detail]}]
+(defmethod decide :record-provision-outcome [state {:keys [unit attempt outcome cwd writable detail]}]
   (let [a (get-in state [:units unit :session :attempt])]
     (cond
       (not= attempt (:id a))                    (refuse :no-such-attempt :unit unit :attempt attempt)
@@ -799,8 +805,16 @@
       ;; would adopt a path the core never provisioned, or overwrite the path a refusal kept.
       (and (some? cwd) (not (and (= :done outcome) (= :up (:want a)))))
       (refuse :cwd-only-from-an-up :unit unit :want (:want a) :outcome outcome)
+      ;; Writable dirs likewise, and only as absolute paths: the core never learns what they are,
+      ;; so it holds them to the one shape a guard can test a path against.
+      (and (some? writable) (not (and (= :done outcome) (= :up (:want a)))))
+      (refuse :writable-only-from-an-up :unit unit :want (:want a) :outcome outcome)
+      (and (some? writable) (not (and (sequential? writable)
+                                      (every? #(and (string? %) (str/starts-with? % "/")) writable))))
+      (refuse :writable-needs-absolute-paths :writable writable)
       :else (accept (cond-> {:event :provision-recorded :unit unit :attempt attempt :outcome outcome}
                       cwd    (assoc :cwd cwd)
+                      (seq writable) (assoc :writable (vec writable))
                       detail (assoc :detail detail)
                       ;; A unit that comes up with no first turn and none run yet has nothing to
                       ;; start it but the conductor, which wakes only on its inbox. Decided here and
@@ -830,11 +844,17 @@
 
 (def ^:private read-only-preamble
   (str "nido's recipe runs on this workstream and its design is not cleared, so this turn may not "
-       "change code: it may write its design's declarations under canvas/ and nothing else in its "
-       "working copy — its file-editing tools are refused there outside canvas/, and it must not "
-       "change files there any other way. Explore, "
+       "change code: its file-editing tools are refused in its working copy, and it must not change files there any other way. Explore, "
        "and write what the recipe owes — the baseline, the design (/design) — through nido's verbs; "
        "a product question is a design question, to ask now rather than after building."))
+
+(defn- writable-preamble
+  "What a held turn is told of the dirs it may still edit: the declaration is the design's own half,
+   so writing it is the recipe's work and not a change to code."
+  [writable]
+  (str "The one exception is the project's declared design: you may edit files under "
+       (str/join ", " writable)
+       " — the design's own half, which /design has you change — and must keep it loading."))
 
 (defmethod decide :start-turn [state {:keys [turn unit spec hears]}]
   (cond
@@ -854,11 +874,18 @@
       (refuse why :unit unit)
       ;; A unit turn works in its unit's session, whatever the command said — and changes no code
       ;; while the recipe holds it (`code-held`), whatever the command said either.
-      (accept {:event :turn-started :turn turn :unit unit
-               :spec (cond-> (assoc spec :cwd (get-in state [:units unit :session :cwd]))
-                       (code-held state)
-                       (assoc :read-only? true
-                              :instructions (str read-only-preamble "\n\n" (:instructions spec))))}))))
+      (let [writable (seq (get-in state [:units unit :session :writable]))]
+        (accept {:event :turn-started :turn turn :unit unit
+                 :spec (cond-> (-> (assoc spec :cwd (get-in state [:units unit :session :cwd]))
+                                   ;; never the command's to widen: the session's :up alone says it
+                                   (dissoc :writable))
+                         (code-held state)
+                         (assoc :read-only? true
+                                :instructions (str read-only-preamble
+                                                   (when writable (str " " (writable-preamble writable)))
+                                                   "\n\n" (:instructions spec)))
+                         (and (code-held state) writable)
+                         (assoc :writable (vec writable)))})))))
 
 (defmethod decide :record-outcome [state {:keys [turn run outcome call detail actions-unknown?]}]
   (let [t (get-in state [:turns turn])]
