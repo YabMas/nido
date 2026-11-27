@@ -201,6 +201,12 @@
           (broadcast! from (attachments-event from))
           (broadcast! to (attachments-event to)))))))
 
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  staged?
+  "Whether any image is staged on `host` for its next message."
+  [host]
+  (boolean (seq @(:staged host))))
+
 (defn- status-of [view t] (part view :status {:transcript t}))
 
 (defn- status-event [view t]
@@ -271,8 +277,8 @@
 (defn- send-message
   "Send the posted draft with its references and the conversation's staged images. Sent, the
    draft is cleared, the images it took leave the stage on every panel, and whatever `:on-sent`
-   adds (events) follows; refused — a turn is running, there are no words, or the panel's decoder
-   refused the body — nothing changes, so the draft and the staged images are kept. The
+   adds (events) follows; refused — a turn is running, there are neither words nor staged images,
+   or the panel's decoder refused the body — nothing changes, so the draft and the staged images are kept. The
    acceptance runs inside the caller's `:guard`."
   [{:keys [chat view refs on-sent guard staged] :as h} req]
   (let [fields (:ok (decode :send (:id view) req))
@@ -281,7 +287,7 @@
         ;; message takes, its acceptance and their leaving the stage.
         images (locking staged
                  (let [images @staged]
-                   (when (and (seq words)
+                   (when (and (or (seq words) (seq images))
                               (let [accept #((via chat :send! chat/send!) chat words (vec (refs (assoc req :fields fields))) images)]
                                 (if guard (guard accept) (accept))))
                      (reset! staged [])

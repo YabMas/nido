@@ -57,9 +57,10 @@
 (defn ^{:malli/schema [:=> [:cat :string [:sequential :map] [:sequential :map]] [:sequential :map]]}
   prompt-blocks
   "The prompt's ACP content blocks for the person's `text`, references and images: the one text
-   block `prompt-text` gives, then one image block per image, in order."
+   block `prompt-text` gives — none when it is empty, as for a message of images alone — then
+   one image block per image, in order."
   [text refs images]
-  (into [{:type "text" :text (prompt-text text refs)}]
+  (into (let [t (prompt-text text refs)] (if (seq t) [{:type "text" :text t}] []))
         (map (fn [{:keys [mime data]}] {:type "image" :mimeType mime :data data}))
         images))
 

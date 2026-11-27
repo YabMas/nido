@@ -87,6 +87,9 @@
 
 (deftest a-prompt-is-its-text-block-then-its-images
   (is (= [{:type "text" :text "plain"}] (t/prompt-blocks "plain" [] [])))
+  (is (= [{:type "image" :mimeType "image/png" :data "AA=="}]
+         (t/prompt-blocks "" [] [{:mime "image/png" :data "AA==" :digest "x"}]))
+      "a message of images alone carries no empty text block")
   (is (= [{:type "text" :text "look"} {:type "image" :mimeType "image/png" :data "AA=="}
           {:type "image" :mimeType "image/jpeg" :data "AQ=="}]
          (t/prompt-blocks "look" [] [{:mime "image/png" :data "AA==" :digest "x"}

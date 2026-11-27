@@ -518,11 +518,11 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
 
 (defn- start-from-draft!
   "A first message written where no chat was visible: a chat pinned to the place it was sent from,
-   started with it. Nothing starts when the draft has no words."
+   started with it. Nothing starts when the draft has neither words nor staged images."
   [req]
   (let [bs     (body-bytes req)
         words  (str/trim (str (get-in (host/decode :send draft-id (with-body req bs)) [:ok :text])))]
-    (if (str/blank? words)
+    (if (and (str/blank? words) (not (host/staged? (draft-host))))
       (host/sse)
       (let [id     (new-id)
             p      (place/place req)]

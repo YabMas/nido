@@ -65,6 +65,20 @@
       (is (= ["image/png"] (map :mime (nth @sent 2))))
       (is (empty? @(:staged h))))))
 
+(deftest images-alone-are-a-message
+  (let [h    (fresh-host)
+        sent (atom nil)
+        send #(host/handle! h {:request-method :post :uri (str "/" (str/join "/" (:prefix h)) "/send")
+                               :body (ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"  \"}}}"))})]
+    (with-redefs [chat/send! (fn [_ text _ images] (reset! sent [text images]) true)]
+      (send)
+      (is (nil? @sent) "no words and no images send nothing")
+      (post-image h png-bytes)
+      (send))
+    (is (= "" (first @sent)))
+    (is (= ["image/png"] (map :mime (second @sent))))
+    (is (empty? @(:staged h)))))
+
 (deftest a-refused-send-keeps-the-staged-images
   (let [h (fresh-host)]
     (post-image h png-bytes)

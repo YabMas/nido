@@ -59,6 +59,9 @@
     "An uploaded image as an Image — its media type read from its bytes' signature, one of the four
      the agent accepts, at most 5 MB decoded — or a refusal naming why."
     {:signature [:=> [:catn [:upload :map]] :map]})
+  (Operation staged?
+    "Whether any image is staged on a host for its next message."
+    {:signature [:=> [:catn [:host :map]] :boolean]})
   (Operation take-staged!
     "Move the images staged on one host onto another's stage, after what it holds — none staged
      twice, at most four — and re-render both: how a first message written where no conversation
