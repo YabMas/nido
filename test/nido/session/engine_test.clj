@@ -659,7 +659,9 @@
                                                                        :paths ["x"]})))
                                          "candidate")
                 checkout/remove!       (fn [id _] (swap! refreshes conj [:removed id]) nil)
-                checkout/git-dir       (constantly "/src/.git")]
+                checkout/git-dir       (constantly "/src/.git")
+                ;; No repository stands behind these worktrees, so main has no commit to read.
+                shared-pg/main-commit  (constantly "main")]
     (f)))
 
 (deftest a-runtime-of-jj-workspaces-runs-out-of-its-own-checkout

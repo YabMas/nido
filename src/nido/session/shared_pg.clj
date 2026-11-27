@@ -778,16 +778,29 @@
                       {:error (:err res) :repo (str repo) :args (vec args)})))
     (->> (str/split-lines (:out res)) (map str/trim) (remove str/blank?))))
 
-(defn ^{:malli/schema [:=> [:cat :Path :string] [:vector :string]]}
+(defn ^{:malli/schema [:=> [:cat :Path] :string]}
+  main-commit
+  "The commit id main@origin names now in the repository `repo` (any working copy of it): the
+   main a guard admits against, pinned (`offending-migrations`), so a fetch that moves main
+   between an admission and the write it admits cannot refuse the write. Throws on a jj error."
+  [repo]
+  (first (jj-lines repo "log" "log" "-r" main-rev "--no-graph" "-T" "commit_id")))
+
+(defn ^{:malli/schema [:function
+                       [:=> [:cat :Path :string] [:vector :string]]
+                       [:=> [:cat :Path :string [:maybe :string]] [:vector :string]]]}
   offending-migrations
   "The migration files revision `rev` of the repository `repo` (any working copy of it) would put
    in front of a shared cluster: every path under the migrations directory that `rev` holds and
-   main@origin either lacks or holds with other content — read from the same directory and main
-   revision `advance-shared-to-main!` applies. A migration identical to main's is not one, nor is
-   one `rev` deletes. Paths are relative to the repository root, sorted. Throws on a jj error,
-   which admits nothing."
-  [repo rev]
-  (let [dir     (str "root:" migrations-subdir)
+   main either lacks or holds with other content — read from the same directory
+   `advance-shared-to-main!` applies. Main is `main`, a commit `main-commit` pinned, else
+   main@origin as it is now. A migration identical to main's is not one, nor is one `rev`
+   deletes. Paths are relative to the repository root, sorted. Throws on a jj error, which
+   admits nothing."
+  ([repo rev] (offending-migrations repo rev nil))
+  ([repo rev main]
+  (let [main-rev (or main main-rev)
+        dir     (str "root:" migrations-subdir)
         held    (set (jj-lines repo "file list" "file" "list" "-r" rev dir))
         on-main (set (jj-lines repo "file list" "file" "list" "-r" main-rev dir))
         changed (jj-lines repo "diff" "diff" "--from" main-rev "--to" rev "--name-only" dir)
@@ -806,7 +819,7 @@
                              (or (not (on-main %))
                                  (not (java.util.Arrays/equals ^bytes (bytes main-rev %)
                                                                ^bytes (bytes rev %)))))
-                       changed)))))
+                       changed))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   migration-refusal

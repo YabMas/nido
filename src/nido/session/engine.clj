@@ -564,15 +564,27 @@
   "What a checkout refresh of a runtime of project `project-name` serving `members` (worktree to
    session name) admits: for one on the shared cluster (`shared?`), no merged tree holding a
    migration main lacks or holds otherwise, refused with `shared-pg/migration-refusal` naming
-   `session`, the session whose verb asked; for any other, everything."
-  [project-name shared? members session]
+   `session`, the session whose verb asked; for any other, everything. Main is `main`, the commit
+   pinned when the tree was first examined (`pinned-main`), else main@origin as it is now."
+  ([project-name shared? members session] (admission project-name shared? members session nil))
+  ([project-name shared? members session main]
   (if-not shared?
     (fn [_ _])
     (fn [repo rev]
-      (when-let [paths (seq (shared-pg/offending-migrations repo rev))]
+      (when-let [paths (seq (shared-pg/offending-migrations repo rev main))]
         (throw (shared-pg/migration-refusal
                 {:project project-name :session session
-                 :sessions (vec (remove nil? (vals members))) :paths (vec paths)}))))))
+                 :sessions (vec (remove nil? (vals members))) :paths (vec paths)})))))))
+
+(defn- pinned-main
+  "The main a candidate examined for `members` (`code-members`) is admitted against, from its
+   examination to the write: main@origin's commit now. Pinned, so a fetch moving main while
+   services stop cannot refuse, after the stop, a tree admitted before it — the checkout then
+   holds main's migrations as admitted, and the next start, join or sync compares it afresh.
+   Nil unless some admission of the candidate compares (`shared?`): a runtime off the shared
+   cluster never reads main."
+  [members shared?]
+  (when shared? (shared-pg/main-commit (first (keys members)))))
 
 (defn- migration-refusal? [e]
   (= :migration-on-shared-db (:refused (ex-data e))))
@@ -598,14 +610,14 @@
    was: a member coming up or going down is not refused for what another member's working copy
    holds. A merge holding a migration the shared cluster would not accept (`admission`) is
    refused to `session`, a member joining, and only reported when `session` is nil, a member
-   leaving. `candidate`, when given, is the tree `checkout/examine!` admitted for `members`,
-   written instead of a new merge."
-  ([runtime members session] (sync-checkout! runtime members session nil))
-  ([runtime members session candidate]
+   leaving. `candidate`, when given, is the tree `checkout/examine!` admitted for `members`
+   against main commit `main` (`pinned-main`), written instead of a new merge."
+  ([runtime members session] (sync-checkout! runtime members session nil nil))
+  ([runtime members session candidate main]
   (when (and (:checkout runtime) (checkout? (keys members)))
     (try (checkout/refresh! (:instance-id runtime) members (fn [_])
                             (admission (:project-name runtime) (shared-runtime? runtime)
-                                       members session)
+                                       members session main)
                             candidate)
          (catch clojure.lang.ExceptionInfo e
            (cond
@@ -625,7 +637,8 @@
    members and admitted for these services before stopping what ran: it is run out of as it is,
    so no merge is made — nor refused — once the old services are gone. Otherwise a
    `(:candidate opts)` — the tree `checkout/examine!` admitted for these members before anything
-   stopped — is what the checkout is written from, rather than a new merge."
+   stopped, against main commit `(:main opts)` — is what the checkout is written from, rather
+   than a new merge."
   ([project-dir project-name instance-id session-edn opts others fallback-dir]
    (start-services! project-dir project-name instance-id session-edn opts others fallback-dir nil))
   ([project-dir project-name instance-id session-edn opts others fallback-dir prepared]
@@ -638,7 +651,8 @@
         ;; the JVM.
         run-dir  (or prepared
                      (runtime-dir instance-id code session-edn fallback-dir
-                                  (admission project-name (shared-defs? services) code session-name)
+                                  (admission project-name (shared-defs? services) code session-name
+                                             (:main opts))
                                   (:candidate opts)))
         pre-allocated (pre-allocate-ports services run-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
@@ -940,19 +954,25 @@
         ;; are written from one candidate, admitted for the restart before anything stops, so
         ;; nothing a member snapshots meanwhile is merged — or refused — after the stop.
         (let [target-shared? (shared-defs? defs)
+              main      (when (checkout? (keys code))
+                          (if (:candidate opts)
+                            (:main opts)
+                            (pinned-main code (or target-shared?
+                                                  (and (:checkout existing)
+                                                       (shared-runtime? existing))))))
               candidate (when (checkout? (keys code))
                           (or (:candidate opts)
                               (checkout/examine! (:instance-id existing) code
                                                  (admission (:project-name existing) target-shared?
-                                                            code session-name))))
-              opts      (assoc opts :candidate candidate)
+                                                            code session-name main))))
+              opts      (assoc opts :candidate candidate :main main)
               prepared
               (when candidate
                 (try (runtime-dir (:instance-id existing) code session-edn nil
                                   (admission (:project-name existing)
                                              (or target-shared?
                                                  (and (:checkout existing) (shared-runtime? existing)))
-                                             code session-name)
+                                             code session-name main)
                                   candidate)
                      (catch clojure.lang.ExceptionInfo e
                        (when (or target-shared? (not (migration-refusal? e))) (throw e))
@@ -969,7 +989,7 @@
         (println "Joining running session" (:instance-id runtime))
         ;; Brought up to date before the joiner is recorded: a merge refused for a migration
         ;; leaves the runtime without it.
-        (sync-checkout! runtime code session-name (:candidate opts))
+        (sync-checkout! runtime code session-name (:candidate opts) (:main opts))
         (state/write-session! (:instance-id runtime) runtime)
         (rebrief! project-dir session-name (:runtime-key opts) runtime session-edn
                   (select-keys opts [:run-dir :profile]))
@@ -990,7 +1010,8 @@
    opts: {:runtime-key string, :session-name string, :profile <resolved-profile-map>,
           :jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str], :run-dir path}
    A move's destination is admitted before the session leaves its runtime, and every refresh
-   that follows writes that admitted tree, carried as `:candidate` in opts."
+   that follows writes that admitted tree, carried as `:candidate` in opts with the main commit
+   it was admitted against as `:main` (`pinned-main`)."
   [project-dir {:keys [profile] :as opts}]
   (let [opts         (assoc opts
                             :profile (or profile {:services :all
@@ -1016,9 +1037,12 @@
                                                             session-edn opts existing join?)]
                    (cond-> opts
                      (checkout? (keys code))
-                     (assoc :candidate (checkout/examine! instance-id code
-                                                          (admission project-name refuses? code
-                                                                     (:session-name opts))))))
+                     (as-> o (let [main (pinned-main code refuses?)]
+                               (assoc o :main main
+                                      :candidate (checkout/examine! instance-id code
+                                                                    (admission project-name refuses? code
+                                                                               (:session-name opts)
+                                                                               main)))))))
                  opts)]
     (when (and on (not= on instance-id))
       (core/log-step (str "Leaving runtime " on " for " instance-id))
@@ -1060,15 +1084,17 @@
                                    (seq (still-on project-dir existing))))
         {:keys [code refuses?]} (destination project-dir project-name instance-id session-edn
                                              opts existing join?)
-        candidate    (when (checkout? (keys code))
-                       (try (checkout/examine! instance-id code
-                                               (admission project-name refuses? code
-                                                          (:session-name opts)))
-                            (catch Throwable e
-                              (when refused! (refused!))
-                              (throw e))))]
+        [main candidate]
+        (when (checkout? (keys code))
+          (try (let [main (pinned-main code refuses?)]
+                 [main (checkout/examine! instance-id code
+                                          (admission project-name refuses? code
+                                                     (:session-name opts) main))])
+               (catch Throwable e
+                 (when refused! (refused!))
+                 (throw e))))]
     (stop!)
-    (start-session! project-dir (cond-> opts candidate (assoc :candidate candidate)))))
+    (start-session! project-dir (cond-> opts candidate (assoc :candidate candidate :main main)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Legacy session detection

@@ -113,6 +113,24 @@
           "jj reads the bit as a change")
       (is (= [] (shared-pg/offending-migrations a "@"))))))
 
+(deftest a-pinned-main-admits-what-it-admitted-after-main-moves
+  ;; A guard admits before a stop and writes after it; a fetch moving main between the two must
+  ;; not turn the admitted tree into a refusal once services are down.
+  (with-repo
+    (fn [src a _]
+      (sh a "jj" "status")
+      (let [pin (shared-pg/main-commit a)]
+        (is (= [] (shared-pg/offending-migrations a "@" pin)))
+        (put! src (str mig "/V2__two.sql") "create table two (id int);\n")
+        (sh src "jj" "commit" "-m" "main changes V2")
+        (sh src "jj" "bookmark" "set" "main" "-r" "@-")
+        (sh src "jj" "git" "push" "-b" "main")
+        (is (not= pin (shared-pg/main-commit a)) "main@origin moved")
+        (is (= [(str mig "/V2__two.sql")] (shared-pg/offending-migrations a "@"))
+            "against main as it is now, the old V2 is a change")
+        (is (= [] (shared-pg/offending-migrations a "@" pin))
+            "against the pinned main, it is what was admitted")))))
+
 ;; ---------------------------------------------------------------------------
 ;; The checkout refresh asks before it writes
 ;; ---------------------------------------------------------------------------
