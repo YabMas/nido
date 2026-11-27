@@ -9,6 +9,7 @@
    [nido.platform.core :as core]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.entry :as entry]
+   [nido.coordinator.record.history :as history]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.pipeline :as p]
@@ -72,22 +73,39 @@
       (add! :design-cleared {:format :design-cleared :design {:seq d}})
       d)))
 
+(def teacher {:id "teacher" :kind "teacher" :needs "owns a course with one published quiz"})
+
 (defn product-plan [d & [ids]]
   {:format :qa-plan :design {:seq d} :surface :product
    :what-changed "A teacher sees the total."
-   :before-you-start "Staging, as a teacher."
+   :before-you-start "Staging."
+   :roles [teacher]
    :steps (vec (for [i (or ids ["open" "check"])]
-                 {:id i :action (str "Do " i ".") :expected (str i " happens.")}))})
+                 {:id i :role "teacher" :action (str "Do " i ".") :expected (str i " happens.")}))})
+
+(defn pre-roles-plan
+  "A :product plan as one was written before plans declared their roles."
+  [d & [ids]]
+  (-> (product-plan d ids) (dissoc :roles) (update :steps #(mapv (fn [s] (dissoc s :role)) %))))
 
 (defn none-plan [d] {:format :qa-plan :design {:seq d} :surface :none :reason "a background job only"})
 
 (def digest (apply str (repeat 64 "a")))
 
-(defn walk [plan-seq outcomes]
-  {:format :qa-walk :plan {:seq plan-seq}
-   :results (vec (for [[s o] outcomes] {:step s :outcome o :screenshots [digest]}))})
+(def a-cast [{:role "teacher" :account "anna@school.test"}])
+
+(defn walk
+  "A walk of plan `plan-seq` with one result per [step outcome], casting `cast` — the teacher by
+   default, nobody given nil."
+  ([plan-seq outcomes] (walk plan-seq outcomes a-cast))
+  ([plan-seq outcomes cast]
+   (cond-> {:format :qa-walk :plan {:seq plan-seq}
+            :results (vec (for [[s o] outcomes] {:step s :outcome o :screenshots [digest]}))}
+     (seq cast) (assoc :cast (vec cast)))))
 
 ;; ── the records' own shapes ────────────────────────────────────────────────
+
+(defn- build! [add! d] (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 1}))
 
 (deftest a-plan-is-parsed-at-the-append
   (testing "a :product plan carries at least one step"
@@ -109,7 +127,85 @@
     (is (false? (report/walk-passed? (walk 3 [["a" :pass] ["b" :blocked]]))))
     (is (true? (report/walk-passed? (walk 3 [["a" :pass]]))))))
 
+(deftest a-plan-declares-the-roles-its-steps-are-performed-as
+  (let [refusal (fn [plan] (try (report/validate-event :qa-plan plan) nil
+                                (catch Exception e (ex-message e))))]
+    (testing "a plan with roles, every step naming one, is taken"
+      (is (nil? (refusal (product-plan 1))))
+      (is (m/validate report/QaPlan (product-plan 1))))
+    (testing "a :product plan declaring no roles is refused"
+      (is (re-find #"declares at least one role" (refusal (dissoc (product-plan 1) :roles))))
+      (is (not (m/validate report/QaPlan (dissoc (product-plan 1) :roles)))))
+    (testing "a step naming no role is refused, naming the step"
+      (is (re-find #"step `check` names no :role"
+                   (refusal (update-in (product-plan 1) [:steps 1] dissoc :role)))))
+    (testing "a step naming an undeclared role is refused, naming the step and the role"
+      (is (re-find #"step `open` names role `admin`, which the plan does not declare"
+                   (refusal (assoc-in (product-plan 1) [:steps 0 :role] "admin")))))
+    (testing "a role declared twice is refused, naming the role"
+      (is (re-find #"role `teacher` is declared 2 times"
+                   (refusal (update (product-plan 1) :roles conj (assoc teacher :needs "any"))))))
+    (testing "a role is the project's name and the state its account needs"
+      (is (not (m/validate report/QaPlan (update-in (product-plan 1) [:roles 0] dissoc :needs)))))
+    (testing "a :none plan declares no roles"
+      (is (nil? (refusal (none-plan 1))))
+      (is (re-find #"a :none plan declares no :roles" (refusal (assoc (none-plan 1) :roles [teacher])))))))
+
+(deftest a-plan-and-a-walk-from-before-roles-still-read
+  (do
+    (testing "an earlier plan is refused as a write, and read as it was written"
+      (is (thrown? Exception (report/validate-event :qa-plan (pre-roles-plan 1))))
+      (is (= (:steps (pre-roles-plan 1)) (:steps (report/parse-event :qa-plan (pre-roles-plan 1))))))
+    (testing "an earlier walk, which casts nobody, reads and validates"
+      (is (m/validate report/QaWalk (walk 5 [["open" :pass]] nil)))
+      (is (some? (report/parse-event :qa-walk (walk 5 [["open" :pass]] nil))))))
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d  (designed! add!)
+            r  #(standing/qa :brian id true)]
+        (build! add! d)
+        (let [p (history/append-past-the-refusal! :brian id :qa-plan (pre-roles-plan d))]
+          (testing "its QA reading is what it was: owed, standing on that plan"
+            (is (= {:state :owed :plan p :surface :product :walks []} (r))))
+          (testing "a walk of it casts nobody, and is taken"
+            (let [w (add! :qa-walk (walk p [["open" :pass] ["check" :pass]] nil))]
+              (is (= {:state :passed :plan p :surface :product :walks [w]} (r)))))
+          (testing "a walk of it casting a role the plan never declared is refused"
+            (is (thrown-with-msg? Exception #"not a role of the plan: teacher"
+                                  (add! :qa-walk (walk p [["open" :pass] ["check" :pass]])))))
+          (testing "show prints its brief as it always did, with no role and no cast"
+            (with-redefs [project/qa (constantly :browser)]
+              (let [o (with-out-str (tw/show* {:project "brian" :ws-id id}))]
+                (is (str/includes? o "1. Do open. Expected: open happens."))
+                (is (not (str/includes? o "In nido's walk")))))))))))
+
 ;; ── what the append refuses ────────────────────────────────────────────────
+
+(deftest the-append-holds-a-walk-to-cast-every-role-its-plan-uses
+  (with-tmp
+    (fn [_]
+      (let [[_ add!] (ledger)
+            d   (designed! add!)
+            two (-> (product-plan d)
+                    (assoc :roles [teacher {:id "pupil" :kind "student" :needs "enrolled in the course"}])
+                    (assoc-in [:steps 1 :role] "pupil"))
+            p   (add! :qa-plan two)
+            all [["open" :pass] ["check" :pass]]
+            both [{:role "teacher" :account "anna@school.test"} {:role "pupil" :account "ben@school.test"}]]
+        (testing "a walk missing a role a step uses is refused, naming the role"
+          (is (thrown-with-msg? Exception #"not cast: pupil" (add! :qa-walk (walk p all)))))
+        (testing "a walk casting nobody is refused, naming every role"
+          (is (thrown-with-msg? Exception #"not cast: teacher, pupil" (add! :qa-walk (walk p all nil)))))
+        (testing "a walk naming a role the plan does not declare is refused, naming it"
+          (is (thrown-with-msg? Exception #"not a role of the plan: admin"
+                                (add! :qa-walk (walk p all (conj both {:role "admin" :account "root"}))))))
+        (testing "a walk casting a role twice is refused, naming it"
+          (is (thrown-with-msg? Exception #"cast twice: teacher"
+                                (add! :qa-walk (walk p all (conj both {:role "teacher" :account "carl@school.test"}))))))
+        (testing "a walk casting every role once is taken"
+          (is (pos? (add! :qa-walk (walk p all both)))))))))
+
 
 (deftest the-append-checks-what-a-plan-and-a-walk-cite
   (with-tmp
@@ -170,8 +266,6 @@
       (is (false? (#'p/qa-declared? :nido))))))
 
 ;; ── the one reading ────────────────────────────────────────────────────────
-
-(defn- build! [add! d] (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 1}))
 
 (deftest the-qa-reading-has-one-state-from-the-plans-walks-and-builds
   (with-tmp
@@ -444,8 +538,24 @@
         (is (str/starts-with? b "QA instructions"))
         (doseq [h ["What changed" "Before you start" "Steps" "Also check" "Not in this change"]]
           (is (str/includes? b h)))
-        (is (str/includes? b "1. Do open. Expected: open happens."))
-        (is (str/includes? b "2. Do check. Expected: check happens."))))
+        (is (str/includes? b "1. As teacher: Do open. Expected: open happens."))
+        (is (str/includes? b "2. As teacher: Do check. Expected: check happens."))))
+    (testing "Before you start lists each role and the state its account needs, before the plan's prose"
+      (let [b (report/qa-brief {:reading {:state :passed} :plan pl})]
+        (is (str/includes? b "Before you start\n- As teacher: owns a course with one published quiz\nStaging."))
+        (is (not (str/includes? b "In nido's walk")) "no walk given, no cast named")))
+    (testing "given the counted walk, the brief names the account that played each role"
+      (let [b (report/qa-brief {:reading {:state :passed} :plan pl :walk (walk 5 [["open" :pass]])})]
+        (is (str/includes? b "In nido's walk: teacher was anna@school.test."))))
+    (testing "two roles of one kind are told apart by the plan's id"
+      (let [two (assoc pl :roles [teacher {:id "colleague" :kind "teacher" :needs "shares the course"}])
+            b   (report/qa-brief {:reading {:state :passed} :plan (assoc-in two [:steps 1 :role] "colleague")})]
+        (is (str/includes? b "- As teacher (colleague): shares the course"))
+        (is (str/includes? b "2. As teacher (colleague): Do check."))))
+    (testing "a plan from before roles renders as it always did"
+      (let [b (report/qa-brief {:reading {:state :passed} :plan (pre-roles-plan 4)})]
+        (is (str/includes? b "Before you start\nStaging.\n"))
+        (is (str/includes? b "1. Do open. Expected: open happens."))))
     (testing ":not-applicable is the one line from the plan's reason"
       (is (= "QA instructions\n\nNothing a user sees changes: a background job only"
              (report/qa-brief {:reading {:state :not-applicable} :plan (none-plan 4)}))))
@@ -463,3 +573,24 @@
           (is (str/includes? (out) "none — QA reads owed, and no QA plan cites the governing design"))
           (add! :qa-plan (none-plan d))
           (is (str/includes? (out) "── landing QA brief ──\nQA instructions\n\nNothing a user sees changes")))))))
+
+(deftest show-hands-the-brief-the-walk-the-passing-reading-counts
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d   (designed! add!)
+            out #(with-out-str (tw/show* {:project "brian" :ws-id id}))]
+        (with-redefs [project/qa (constantly :browser)]
+          (build! add! d)
+          (let [p (add! :qa-plan (product-plan d))]
+            (add! :qa-walk (walk p [["open" :pass] ["check" :fail]] [{:role "teacher" :account "first@school.test"}]))
+            (is (str/includes? (out) "none — QA reads failed") "no brief while the walk failed")
+            (build! add! d)
+            (add! :qa-walk (walk p [["open" :pass] ["check" :pass]] [{:role "teacher" :account "second@school.test"}]))
+            (let [o (out)]
+              (is (str/includes? o "── landing QA brief ──\nQA instructions"))
+              (is (str/includes? o "- As teacher: owns a course with one published quiz"))
+              (is (str/includes? o "1. As teacher: Do open."))
+              (is (str/includes? o "In nido's walk: teacher was second@school.test."))
+              (is (not (str/includes? (subs o (str/index-of o "── landing QA brief ──")) "first@school.test"))
+                  "the brief names the counted walk's cast, not an earlier one's"))))))))

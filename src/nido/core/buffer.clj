@@ -254,8 +254,12 @@
             "is recorded for the governing design. Direct the unit holding the change to record one with `" nido-verb
             " nido:workstream:entry:add :project " (some-> project name) " :ws-id " ws-id " :kind :qa-plan :file <edn>`: "
             "a :qa-plan citing the design ({:design {:seq N}}), in ~/Code/nido/docs/reference/qa-brief.md's sections — "
-            ":surface :product with :steps ({:id :action :expected}), or :surface :none with the :reason nothing a user "
-            "sees changes. Every step, and everything its Before you start asks for, must be something the walk can do "
+            ":surface :product with :roles ({:id :kind :needs} — the plan's id for each role, the project's name for it, "
+            "and the state its account must be in) and :steps ({:id :role :action :expected}, :role naming the "
+            "declared role the step is performed as), or :surface :none with the :reason nothing a user sees "
+            "changes. Declare every role the plan's steps are performed as, with the state each needs, and give "
+            "every step its role; name roles as the project's docs/reference/qa-roles.md (in its worktree) does, "
+            "where the project has one. Every step, and everything its Before you start asks for, must be something the walk can do "
             "in the session's own running web app. No Student App runs against a session's local backend, so no step "
             "or precondition may need the Student App: a check that would is left out of the plan. Naming a visual "
             "the web app draws after the Student App is not needing it. It is no release candidate yet.")
@@ -263,9 +267,15 @@
        (= :walk-qa stage)
        (str "  Owed now: the QA walk — at " at ". Direct the unit holding the change to walk the QA plan `" nido-verb
             " nido:workstream:show` prints, step by step, through agent-browser against its session's running app "
-            "(the app port its briefing names); to keep a screenshot of every step with `" nido-verb
-            " nido:workstream:screenshot:add :file <path>`; and to record one :qa-walk citing the plan "
-            "({:plan {:seq N}}) with, for every step id, a :pass, :fail or :blocked result and its screenshot digests. "
+            "(the app port its briefing names). Before walking, it casts every role the plan declares: for each, an "
+            "account in the session's own app and database that is in the role's declared state — using the "
+            "accounts and setup helpers the project's docs/reference/qa-roles.md (in its worktree) names, where it "
+            "has one. When a role cannot be cast with an account in its declared state, it records no walk and "
+            "asks the person, naming the role and the state it needs; it never plays a role with another account, "
+            "and never walks a step as an account other than the one cast for its role. Then it keeps a screenshot of every step "
+            "with `" nido-verb " nido:workstream:screenshot:add :file <path>`, and records one :qa-walk citing the plan "
+            "({:plan {:seq N}}) with its :cast — one {:role :account} for every role, naming the account that played "
+            "it — and, for every step id, a :pass, :fail or :blocked result and its screenshot digests. "
             "A step that needs the Student App is not walked and recorded :blocked: the unit first records a newer "
             ":qa-plan citing the same design without that step, and walks that plan. "
             "It is no release candidate until a walk passes; direct no landing.")

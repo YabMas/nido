@@ -207,7 +207,10 @@
         ;; Its QA, for any workstream and whatever entry is newest: the one reading, whether the
         ;; change is product-facing by the plan that reading stands on, and that plan.
         (let [qa   (pipeline/qa p ws-id)
-              plan (some->> (:plan qa) (ws/entry-at-seq p ws-id))]
+              plan (some->> (:plan qa) (ws/entry-at-seq p ws-id))
+              ;; The newest walk the reading counts — the one whose cast the brief names.
+              walk (when (= :passed (:state qa))
+                     (some->> (:walks qa) last (ws/entry-at-seq p ws-id)))]
           (println (str "qa: " (name (:state qa))
                         (when-let [d (:declaration qa)]
                           (str " (the registry's :qa " (pr-str (:value d)) " is not a QA it knows)"))
@@ -222,7 +225,7 @@
           ;; The landing brief, rendered from that plan — what /land writes, or nothing.
           (println)
           (println "── landing QA brief ──")
-          (println (or (report/qa-brief {:reading qa :plan plan})
+          (println (or (report/qa-brief {:reading qa :plan plan :walk walk})
                        (str "none — QA reads " (name (:state qa))
                             (when-not plan ", and no QA plan cites the governing design")
                             "; /land writes no brief"))))

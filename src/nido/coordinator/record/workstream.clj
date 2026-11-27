@@ -1716,11 +1716,35 @@
     (when-let [why (slice-unlandable project w)]
       (throw (ex-info (:message why) (-> why (dissoc :message) (assoc :ws-id (:id w))))))))
 
+(defn- check-qa-cast!
+  "A walk of plan `n`, `plan`, casts every role a step of it is performed as, once each, and no
+   role it does not declare: a step walked as nobody, or a role played by an account the plan never
+   asked for, is not the walk the plan describes. A plan from before roles declares none and is
+   walked by no cast."
+  [n plan walk]
+  (let [declared (set (keep :id (:roles plan)))
+        used     (distinct (keep :role (:steps plan)))
+        cast     (mapv :role (:cast walk))
+        twice    (keep (fn [[r c]] (when (> c 1) r)) (frequencies cast))
+        uncast   (remove (set cast) used)
+        extra    (distinct (remove declared cast))]
+    (when (or (seq uncast) (seq twice) (seq extra))
+      (throw (ex-info (str "A QA walk casts every role a step of plan " n " is performed as, once each, "
+                           "in :cast [{:role :account}]"
+                           (when (seq uncast) (str "; not cast: " (str/join ", " uncast)))
+                           (when (seq twice) (str "; cast twice: " (str/join ", " twice)))
+                           (when (seq extra) (str "; not a role of the plan: " (str/join ", " extra)))
+                           (when (seq uncast)
+                             (str " — a role no account in its declared state can play is asked of the "
+                                  "person, and the walk is not recorded")))
+                      {:seq n :uncast (vec uncast) :twice (vec twice) :extra (vec extra)})))))
+
 (defn- check-qa-citations!
   "A QA plan cites the :design it plans, and a QA walk the :qa-plan it walks — a :product plan,
    with exactly one result for every step id of it. A plan with no product surface has no steps to
    walk, and a walk missing a step, or naming one twice or one the plan lacks, did not walk the
-   plan it cites. Whether a walk's screenshots are kept is the writing verb's to check: their bytes
+   plan it cites; nor did one that does not cast the plan's roles (`check-qa-cast!`). Whether a
+   walk's screenshots are kept is the writing verb's to check: their bytes
    are no ledger's."
   [w kind payload]
   (when (#{:qa-plan :qa-walk} kind)
@@ -1748,7 +1772,8 @@
                                             (when (seq miss) (str "; missing: " (str/join ", " miss)))
                                             (when (seq twice) (str "; given twice: " (str/join ", " twice)))
                                             (when (seq extra) (str "; not in the plan: " (str/join ", " extra))))
-                                       {:seq n :missing (vec miss) :twice (vec twice) :extra (vec extra)})))))))))
+                                       {:seq n :missing (vec miss) :twice (vec twice) :extra (vec extra)})))
+                     (check-qa-cast! n plan r)))))))
 
 (defn- check-append!
   "Every refusal an append makes of `payload` joining `w`, in the order `append-entry!` asks them.

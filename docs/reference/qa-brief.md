@@ -23,12 +23,15 @@ the brief says in its own words.
     QA instructions                                   ← callout, 🧪
     What changed      1–3 sentences: the problem as a user met it, and what
                       they experience now.
-    Before you start  where (staging or production), which role/account, what
-                      data must exist ("a course with at least one published
-                      quiz"), any setting to switch on — named as the UI names
-                      it, German label beside the English one where the UI has
-                      both.
-    Steps             numbered; each is one action, then "Expected: …".
+    Before you start  each role the steps are performed as, with the state
+                      its account must be in ("As teacher: owns a course with
+                      at least one published quiz"); then where (staging or
+                      production), what other data must exist, any setting to
+                      switch on — named as the UI names it, German label
+                      beside the English one where the UI has both; and, once
+                      a walk passed, which account played each role in it.
+    Steps             numbered; each names its role, is one action, then
+                      "Expected: …" ("As teacher: open the quiz. Expected: …").
     Also check        1–3 nearby behaviours a user relies on that the change
                       could plausibly disturb.
     Not in this change  what a reviewer might expect but will not find — so it
@@ -46,6 +49,44 @@ session's local backend, so no step or precondition may need the Student App —
 not "keep the Student App open", not "compare with the Student App". A check
 that would is left out of the plan. Naming a visual the web app draws after the
 Student App ("the Student App ring") is not needing it.
+
+## Roles and the cast
+
+Who performs a step is part of the plan's data, not its prose. A `:product`
+plan declares its **roles** — `:roles [{:id :kind :needs}]`: the plan's own id
+for each, the project's name for the role (`teacher`, `student`, `school
+admin`), and the state its account must be in ("a teacher on a trial that ends
+in three days, who owns a course with one published quiz"). Every step names the
+role it is performed as by `:role`. A plan without roles, a step without one, a
+step naming a role the plan does not declare, or a role declared twice is
+refused when it is recorded, naming the step or the role. A `:none` plan
+declares none. Plans recorded before roles stay readable, and render as they
+always did.
+
+A walk records its **cast** — `:cast [{:role :account}]`: which account in the
+walked environment played each role. A walk missing a role some step uses,
+naming a role the plan does not declare, or casting a role twice is refused,
+naming the role. The walker casts every role **before** it walks: an account in
+the role's declared state, in the session's own app and database. When it
+cannot cast one, it records no walk and asks the person, naming the role and the
+state it needs. No other account stands in for a role — a teacher's step walked
+as a superadmin is not the step the plan describes.
+
+The brief lists each role and its state under Before you start, names the role
+on every step, and says which account played each role in the walk that passed.
+
+### Who owns what
+
+- **nido owns** the plan and walk schema, the planner's and the walker's
+  directions (the conductor's `:plan-qa` and `:walk-qa`), and this page.
+- **Each project owns** `docs/reference/qa-roles.md` in its own tree: its
+  roles and what each can do, the seed accounts for them per environment (the
+  session's dev database, staging), and the helpers that make an account and its
+  fixtures meet a stated state — a trial that ends tomorrow, a course with a
+  published quiz. The planner names roles as it does; the walker casts from the
+  accounts and helpers it names. nido reads none of it itself: the agents read it
+  from the project's worktree, and a project without one is walked by accounts
+  set up by hand, or the person is asked.
 
 When grooming, `/review-queue`
 draws from the change's own record: the PR's layer briefs (Claims, Verify,

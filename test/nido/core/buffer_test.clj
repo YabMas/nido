@@ -268,6 +268,18 @@
         (is (re-find #"no step or precondition may need the Student App: a check that would is left out of the plan" plan))
         (is (re-find #"Naming a visual the web app draws after the Student App is not needing it" plan))
         (is (re-find #"A step that needs the Student App is not walked and recorded :blocked: the unit first records a newer :qa-plan citing the same design without that step, and walks that plan" walk))
+        (testing "the planner declares the roles and their state, every step names one"
+          (is (re-find #":roles \(\{:id :kind :needs\}" plan))
+          (is (re-find #":steps \(\{:id :role :action :expected\}" plan))
+          (is (re-find #"Declare every role the plan's steps are performed as, with the state each needs, and give every step its role" plan))
+          (is (re-find #"name roles as the project's docs/reference/qa-roles\.md \(in its worktree\) does, where the project has one" plan)))
+        (testing "the walker casts every role before walking, and asks rather than stand an account in"
+          (is (re-find #"Before walking, it casts every role the plan declares" walk))
+          (is (re-find #"in the session's own app and database that is in the role's declared state" walk))
+          (is (re-find #"accounts and setup helpers the project's docs/reference/qa-roles\.md \(in its worktree\) names" walk))
+          (is (re-find #"When a role cannot be cast with an account in its declared state, it records no walk and asks the person, naming the role and the state it needs" walk))
+          (is (re-find #"it never plays a role with another account, and never walks a step as an account other than the one cast for its role" walk))
+          (is (re-find #"with its :cast — one \{:role :account\} for every role" walk)))
         (is (re-find #"Owed now: what the QA walk found — at qa-failed" fix))
         (doseq [t [walk plan fix]
                 :let [line (re-find #"Owed now: [^\n]*" t)]]

@@ -4146,23 +4146,55 @@
 
 ;; ── QA: the plan a reviewer is handed, and the walk that exercised it ─────────────────────
 
+(def QaRole
+  "One role a QA plan's steps are performed as. :id is the plan's own name for it, which a step's
+   :role and a walk's cast cite; :kind is the project's name for the role (as the project's
+   `docs/reference/qa-roles.md` names it, where it has one); :needs is the state the account
+   playing it must be in — 'a teacher who owns a course with one published quiz'."
+  [:map {:closed true}
+   [:id    [:string {:min 1}]]
+   [:kind  [:string {:min 1}]]
+   [:needs [:string {:min 1}]]])
+
 (def QaStep
   "One step of a QA plan: one action a reviewer takes, and what they should see. :id is the
-   plan's own name for the step, which a walk's result cites."
+   plan's own name for the step, which a walk's result cites; :role the id of the plan's role the
+   step is performed as."
   [:map {:closed true}
    [:id       [:string {:min 1}]]
+   [:role     {:optional true} [:string {:min 1}]]
    [:action   [:string {:min 1}]]
    [:expected [:string {:min 1}]]])
 
-(def QaPlan
-  "What a reviewer of the change is to do and see, in `docs/reference/qa-brief.md`'s sections, as
-   the change's author records it — before or after the build, owed once its implementation review
-   passes. :design cites the design it plans; the QA reading reads only the plans citing the
-   governing design, newest first.
+(defn- qa-plan-role-problems
+  "What is wrong with the roles of QA plan `plan`, one sentence each naming the step or role — []
+   when nothing is. A :product plan declares at least one role, each id once, and every step names
+   one of them by :role; a :none plan declares none. Total over any value, so the write contract
+   can ask it before the schema has said the plan is a map at all."
+  [plan]
+  (if-not (map? plan)
+    []
+    (let [roles (when (sequential? (:roles plan)) (:roles plan))
+          steps (when (sequential? (:steps plan)) (:steps plan))
+          ids   (keep #(when (map? %) (:id %)) roles)
+          known (set ids)]
+      (if (= :none (:surface plan))
+        (cond-> []
+          (contains? plan :roles) (conj "a :none plan declares no :roles — nothing is walked"))
+        (vec (concat
+               (when (and (= :product (:surface plan)) (empty? roles))
+                 ["a :product plan declares at least one role in :roles, each {:id :kind :needs}"])
+               (for [[r c] (frequencies ids) :when (> c 1)]
+                 (str "role `" r "` is declared " c " times"))
+               (for [{:keys [id role]} (filter map? steps)
+                     :when (not (contains? known role))]
+                 (if (nil? role)
+                   (str "step `" id "` names no :role")
+                   (str "step `" id "` names role `" role "`, which the plan does not declare")))))))))
 
-   :surface :product is a change a user sees, and carries its steps; :none is a change nothing a
-   user sees moves, and carries the :reason that becomes the brief's one line. Step ids are unique
-   within a plan, because a walk's result names its step by id."
+(def ^:private QaPlanPreRoles
+  "The :qa-plan shape written before a plan declared its roles: no :roles, and steps that name no
+   role. Read era only — every :qa-plan recorded before roles is in this shape."
   [:and
    [:map {:closed true}
     [:format           [:= :qa-plan]]
@@ -4171,6 +4203,36 @@
     [:reason           {:optional true} [:string {:min 1}]]
     [:what-changed     {:optional true} [:string {:min 1}]]
     [:before-you-start {:optional true} [:string {:min 1}]]
+    [:steps            {:optional true} [:vector [:map {:closed true}
+                                                  [:id       [:string {:min 1}]]
+                                                  [:action   [:string {:min 1}]]
+                                                  [:expected [:string {:min 1}]]]]]
+    [:also-check       {:optional true} [:vector [:string {:min 1}]]]
+    [:not-in-change    {:optional true} [:vector [:string {:min 1}]]]]
+   [:fn (fn [{:keys [surface steps]}] (or (not= :product surface) (seq steps)))]
+   [:fn (fn [{:keys [surface reason]}] (or (not= :none surface) (some? reason)))]
+   [:fn (fn [{:keys [steps]}] (= (count steps) (count (distinct (map :id steps)))))]])
+
+(def QaPlan
+  "What a reviewer of the change is to do and see, in `docs/reference/qa-brief.md`'s sections, as
+   the change's author records it — before or after the build, owed once its implementation review
+   passes. :design cites the design it plans; the QA reading reads only the plans citing the
+   governing design, newest first.
+
+   :surface :product is a change a user sees, and carries its steps and the :roles they are
+   performed as — each step naming one by :role, so who performs a step is data a walk is held to
+   (`qa-plan-role-problems`); :none is a change nothing a user sees moves, and carries the :reason
+   that becomes the brief's one line, and no roles. Step ids are unique within a plan, because a
+   walk's result names its step by id. A plan written before roles reads under its own era."
+  [:and
+   [:map {:closed true}
+    [:format           [:= :qa-plan]]
+    [:design           [:map {:closed true} [:seq int?]]]
+    [:surface          [:enum :product :none]]
+    [:reason           {:optional true} [:string {:min 1}]]
+    [:what-changed     {:optional true} [:string {:min 1}]]
+    [:before-you-start {:optional true} [:string {:min 1}]]
+    [:roles            {:optional true} [:vector QaRole]]
     [:steps            {:optional true} [:vector QaStep]]
     [:also-check       {:optional true} [:vector [:string {:min 1}]]]
     [:not-in-change    {:optional true} [:vector [:string {:min 1}]]]]
@@ -4179,7 +4241,13 @@
    [:fn {:error/message "a :none plan carries the :reason nothing a user sees changes"}
     (fn [{:keys [surface reason]}] (or (not= :none surface) (some? reason)))]
    [:fn {:error/message "step ids are unique within a plan"}
-    (fn [{:keys [steps]}] (= (count steps) (count (distinct (map :id steps)))))]])
+    (fn [{:keys [steps]}] (= (count steps) (count (distinct (map :id steps)))))]
+   [:fn {:error/message "a :product plan declares its roles, and every step names one of them"}
+    (fn [plan] (empty? (qa-plan-role-problems plan)))]])
+
+(def QaPlanAny
+  "Every :qa-plan that was writable when it was written: today's, or one from before roles."
+  [:or QaPlan QaPlanPreRoles])
 
 (def qa-outcomes
   "What a walk records of a step: :pass, or a failing outcome — :fail, or :blocked for a step the
@@ -4196,15 +4264,25 @@
    [:screenshots [:vector {:min 1} [:re #"^[0-9a-f]{64}$"]]]
    [:note        {:optional true} [:string {:min 1}]]])
 
+(def QaCast
+  "Who played one role of the plan in a walk: the plan's role id, and the account in the walked
+   environment that played it — as the walker can name it to a person, a login or an email."
+  [:map {:closed true}
+   [:role    [:string {:min 1}]]
+   [:account [:string {:min 1}]]])
+
 (def QaWalk
   "A walk of a :product plan through agent-browser against the session's running app: exactly
-   one result for every step of the plan it cites, each with at least one screenshot. Whether the
-   plan it cites is a :product plan and the results cover it is checked at the append, against the
-   plan; whether every screenshot's bytes are kept is the writing verb's to check."
+   one result for every step of the plan it cites, each with at least one screenshot, and — for a
+   plan that declares roles — its :cast, one entry for every role a step of the plan is performed
+   as. Whether the plan it cites is a :product plan, the results cover it and the cast casts it is
+   checked at the append, against the plan; whether every screenshot's bytes are kept is the
+   writing verb's to check. A walk of a plan from before roles carries no cast."
   [:map {:closed true}
    [:format  [:= :qa-walk]]
    [:plan    [:map {:closed true} [:seq int?]]]
    [:app     {:optional true} [:string {:min 1}]]
+   [:cast    {:optional true} [:vector {:min 1} QaCast]]
    [:results [:vector {:min 1} QaResult]]
    [:note    {:optional true} [:string {:min 1}]]])
 
@@ -4675,7 +4753,10 @@
    :proposed-tickets ProposedTicketsRead
    ;; Nothing writes a grant any more; the ledgers written while a person granted designs still
    ;; hold them, and read under the shape they were written in.
-   :design-approved DesignApproved})
+   :design-approved DesignApproved
+   ;; A :product plan came to declare the :roles its steps are performed as, each step naming one.
+   ;; Every plan recorded before that names none, and its QA reading must not change.
+   :qa-plan QaPlanAny})
 
 (def ^:private compiled-schemas
   "[contract kind] → a delay of the compiled schema that pair validates under,
@@ -4892,6 +4973,12 @@
                          "and :questions [] when you route without directions. See "
                          "the triage-bug skill's report template.")
                     {:kind :triage :report report})))
+  (when (= :qa-plan kind)
+    (when-let [problems (seq (qa-plan-role-problems report))]
+      (throw (ex-info (str "This QA plan does not cast its steps: " (str/join "; " problems)
+                           ". Declare :roles [{:id :kind :needs}] — the project's name for each role and the "
+                           "state its account must be in — and give every step the :role it is performed as.")
+                      {:kind :qa-plan :report report :problems (vec problems)}))))
   (cond-> (validate-against (schema-for :write kind) kind report)
     (= :blocker kind)          (-> enforce-blocker-options enforce-blocker-parts)
     (= :conduct-decision kind) enforce-escalation-parts))
@@ -6246,19 +6333,41 @@
                 [""]))
       [(str "Source: " source-url)])))
 
+(defn- qa-role-labels
+  "Plan role id → how the brief names that role: the project's name for it, with the plan's id
+   beside it only where two roles share a name, so 'teacher (owner)' and 'teacher (colleague)'
+   stay two people."
+  [roles]
+  (let [shared (set (keep (fn [[k c]] (when (> c 1) k)) (frequencies (map :kind roles))))]
+    (into {} (map (fn [{:keys [id kind]}] [id (if (shared kind) (str kind " (" id ")") kind)])) roles)))
+
 (defn- qa-plan-sections
   "A :product plan's sections, in `docs/reference/qa-brief.md`'s order and headings, as
-   [heading lines] pairs — a section the plan does not carry is left out. Steps are numbered, each
-   one action then what should happen."
-  [{:keys [what-changed before-you-start steps also-check not-in-change]}]
-  (cond-> []
-    what-changed     (conj ["What changed" [what-changed]])
-    before-you-start (conj ["Before you start" [before-you-start]])
-    (seq steps)      (conj ["Steps" (map-indexed (fn [i {:keys [action expected]}]
-                                                   (str (inc i) ". " action " Expected: " expected))
-                                                 steps)])
-    (seq also-check) (conj ["Also check" (map #(str "- " %) also-check)])
-    (seq not-in-change) (conj ["Not in this change" (map #(str "- " %) not-in-change)])))
+   [heading lines] pairs — a section the plan does not carry is left out. Before you start lists
+   each role the plan declares with the state its account needs, then the plan's own prose, then —
+   given `walk`, the walk the QA reading counts — the account that played each role. Steps are
+   numbered, each the role it is performed as, one action, then what should happen. A plan from
+   before roles renders as it always did."
+  [{:keys [what-changed before-you-start roles steps also-check not-in-change]} walk]
+  (let [label (qa-role-labels roles)
+        cast  (when (seq roles) (seq (:cast walk)))
+        bys   (concat (for [{:keys [id needs]} roles] (str "- As " (label id) ": " needs))
+                      (when before-you-start [before-you-start])
+                      (when cast
+                        [(str "In nido's walk: "
+                              (str/join "; " (for [{:keys [role account]} cast]
+                                               (str (get label role role) " was " account)))
+                              ".")]))]
+    (cond-> []
+      what-changed     (conj ["What changed" [what-changed]])
+      (seq bys)        (conj ["Before you start" bys])
+      (seq steps)      (conj ["Steps" (map-indexed (fn [i {:keys [role action expected]}]
+                                                     (str (inc i) ". "
+                                                          (when role (str "As " (get label role role) ": "))
+                                                          action " Expected: " expected))
+                                                   steps)])
+      (seq also-check) (conj ["Also check" (map #(str "- " %) also-check)])
+      (seq not-in-change) (conj ["Not in this change" (map #(str "- " %) not-in-change)]))))
 
 (defn- qa-plan->markdown
   [{:keys [surface reason steps design] :as plan}]
@@ -6271,12 +6380,13 @@
       (if (= :none surface)
         [(str "Nothing a user sees changes: " reason)]
         (concat
-          (mapcat (fn [[h ls]] (concat [(str "## " h)] ls [""])) (qa-plan-sections plan))
+          (mapcat (fn [[h ls]] (concat [(str "## " h)] ls [""])) (qa-plan-sections plan nil))
           ["## Step ids"]
-          (map #(str "- `" (:id %) "` — " (:action %)) steps))))))
+          (for [{:keys [id role action]} steps]
+            (str "- `" id "`" (when role (str " as `" role "`")) " — " action)))))))
 
 (defn- qa-walk->markdown
-  [{:keys [plan app results note]}]
+  [{:keys [plan app cast results note]}]
   (str/join "\n"
     (concat
       [(str "# QA walk of plan " (:seq plan) " — "
@@ -6285,6 +6395,8 @@
                      " steps not passed")))
        ""]
       (when app [(str "Walked against " app) ""])
+      (when (seq cast)
+        (concat ["Cast:"] (for [{:keys [role account]} cast] (str "- `" role "` — " account)) [""]))
       (for [{:keys [step outcome screenshots note]} results]
         (str "- `" step "` " (name outcome) " — " (str/join ", " (map #(subs % 0 12) screenshots))
              (when note (str " — " note))))
@@ -6295,14 +6407,15 @@
   "The landing QA brief: a rendering of the plan the QA reading `reading` stands on, `plan` that
    record — its sections in `docs/reference/qa-brief.md`'s shape while the reading is :passed, the
    one-line 'nothing a user sees changes' brief from its :reason while it is :not-applicable — or
-   nil, when the reading is anything else and no brief may be written. /land writes this, or no
-   brief at all; it composes none of its own."
-  [{:keys [reading plan]}]
+   nil, when the reading is anything else and no brief may be written. `walk`, when given, is the
+   newest walk the passing reading counts, and the brief says which account played each of the
+   plan's roles in it. /land writes this, or no brief at all; it composes none of its own."
+  [{:keys [reading plan walk]}]
   (case (:state reading)
     :passed         (when (= :product (:surface plan))
                       (str/join "\n"
                         (concat ["QA instructions" ""]
-                                (mapcat (fn [[h ls]] (concat [h] ls [""])) (qa-plan-sections plan)))))
+                                (mapcat (fn [[h ls]] (concat [h] ls [""])) (qa-plan-sections plan walk)))))
     :not-applicable (when (= :none (:surface plan))
                       (str "QA instructions\n\nNothing a user sees changes: " (:reason plan)))
     nil))
