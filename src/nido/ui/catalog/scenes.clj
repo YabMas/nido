@@ -17,6 +17,7 @@
   (:require [nido.libraries.ui.block :as block]
             [nido.ui.components.ask :as ask]
             [nido.ui.components.chat :as chat]
+            [nido.ui.components.control :as c]
             [nido.ui.components.dialog :as dialog]
             [nido.ui.components.row :as row]
             [nido.ui.components.state :as state]))
@@ -284,6 +285,88 @@
                              (fn [k] (state/arc-mark :current :awaiting k)))}]}])
 
 ;; ---------------------------------------------------------------------------
+;; Controls
+
+(defn- control-scenes []
+  [{:name "button"
+    :note "The house button, in its three emphases. A decision has at most one primary; danger is
+           an action that destroys or stops something."
+    :scenes [{:title "default, primary, danger"
+              :render #(rail name [:default :primary :danger]
+                             (fn [e] (c/button {:emphasis e "data-on:click" no-click} (name e))))}
+             {:title "disabled"
+              :note "A step that cannot be taken yet, such as Previous on the first question."
+              :render #(c/button {:disabled true} "◂ Previous")}]}
+   {:name "link-button"
+    :note "Navigation drawn as a button, for a link that sits among actions."
+    :scenes [{:title "default and primary"
+              :render #(rail name [:default :primary]
+                             (fn [e] (c/link-button {:emphasis e :href "#"} "Open app ↗")))}]}
+   {:name "quiet-button"
+    :note "A borderless button for chrome: a toggle, a tool, a row that opens. Accent-tinted while
+           it is on."
+    :scenes [{:title "off, and on"
+              :render #(rail first [["off" "false"] ["on" "true"]]
+                             (fn [[_ p]] (c/quiet-button {:aria-pressed p} [:span "⌖"] "Pick")))}]}
+   {:name "icon-button"
+    :note "A quiet button that shows only a glyph. It cannot be drawn without the label that names
+           it to a reader who cannot see the glyph."
+    :scenes [{:title "close, remove, a stepper mark"
+              :render #(list (c/icon-button {:label "Close"} "✕") " "
+                             (c/icon-button {:label "Attach a file"} "+") " "
+                             (c/icon-button {:label "Question 1" :aria-current "step"} "●") " "
+                             (c/icon-button {:label "Question 2"} "○"))}]}
+   {:name "choice"
+    :note "A selectable option card: its words, in the card that answers with it."
+    :scenes [{:title "plain, recommended, chosen, static"
+              :note "Chosen follows a page expression; static is an option that cannot be acted
+                     on while its agent runs."
+              :render #(into [:div.scene-rail]
+                             [(c/choice {} [:strong "Keep it"])
+                              (c/choice {:primary? true} [:strong "Ship it"])
+                              (c/choice {:chosen "true"} [:strong "Chosen"])
+                              (c/choice {:static? true} [:strong "Working…"])])}]}
+   {:name "text-input"
+    :note "A one-line field. One look, one size; how wide it is is the layout's."
+    :scenes [{:title "empty, with a placeholder"
+              :render #(c/text-input {:placeholder "Paste a ticket URL…"})}]}
+   {:name "textarea"
+    :note "A multi-line field, in the same look and size as the one-line field."
+    :scenes [{:title "with a placeholder"
+              :render #(c/textarea {:rows "3" :placeholder "Tell the agent what to do next…"})}]}
+   {:name "select"
+    :note "A choice among fixed values, in the same look as a text field."
+    :scenes [{:title "projects"
+              :render #(c/select {} [["nido" "nido"] ["brian" "brian"]])}]}
+   {:name "labelled"
+    :note "A field with its label above it."
+    :scenes [{:title "a labelled field"
+              :render #(c/labelled "Staging URL" (c/text-input {:placeholder "https://…"}))}]}
+   {:name "form-section"
+    :note "A small form: its heading, then its fields and actions."
+    :scenes [{:title "pick up a ticket"
+              :render #(c/form-section "Pick up a ticket"
+                                       (c/text-input {:placeholder "Paste a Notion URL…"})
+                                       [:div (c/button {} "Drive →")])}]}
+   {:name "meter"
+    :note "A fraction as a bar, its value the element's own. Past what it is measured against, it
+           turns the warning colour."
+    :scenes [{:title "under, and over"
+              :render #(rail first [["62%" 0.62 false] ["104%" 1.04 true]]
+                             (fn [[l v o]] [:div {:class "scene-meter"}
+                                            (c/meter {:value v :over? o :aria-label l})]))}]}
+   {:name "hidden-input"
+    :note "A value the page's script writes and a signal reads. It renders nothing visible."
+    :scenes [{:title "hidden"
+              :render #(list (c/hidden-input {"data-bind" "catalogNowhereValue"})
+                             [:span.scene-empty "renders nothing visible"])}]}
+   {:name "file-input"
+    :note "The picker a visible control opens. Hidden, out of the tab order."
+    :scenes [{:title "with the control that opens it"
+              :render #(list (c/file-input {:accept "image/png"})
+                             (c/icon-button {:label "Attach a file"} "+"))}]}])
+
+;; ---------------------------------------------------------------------------
 ;; The registry
 
 (defn ^{:malli/schema [:=> [:cat] :any]}
@@ -301,6 +384,10 @@
     :note "A conversation with an agent. The panel is a block over a transcript, so every state
            here is a literal transcript; the buttons post to a dead end."
     :blocks [(registered "panel" chat/panel) (registered "change-bar" chat/change-bar)]}
+   {:id "control" :title "Controls"
+    :note "The house controls every page and block is built from: one function per kind, each
+           styled by one rule. A control drawn anywhere else is drawn wrong."
+    :blocks (control-scenes)}
    {:id "state" :title "State marks"
     :note "A workstream's state as a reader sees it. Every one of these is judged against its
            siblings rather than alone — a mark only means something relative to the other marks

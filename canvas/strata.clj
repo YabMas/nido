@@ -34,7 +34,8 @@
             [canvas.core.ask-tool :refer [core-ask-tool]]
             [canvas.core.reconcile :refer [core-reconcile]]
             [canvas.ui.surface :refer [ui-stylesheet ui-components-state ui-components-row
-                                       ui-components-ask ui-components-chat ui-components-dialog]]))
+                                       ui-components-ask ui-components-chat ui-components-dialog
+                                       ui-components-control]]))
 
 ;; ── the record machinery, floor first ────────────────────────────────────────
 
@@ -132,11 +133,15 @@
 
 (Stratum ui-visual-language
   "The dashboard's visual language: nido's token values — colour, type, spacing, radius, shadow
-   and motion — which the UI library emits as the one :root block, and every class rule no block
-   registration carries: the state marks', the pages', and those blocks and pages share. ui-registry
-   assembles it with every registration's rules once, and every chrome that renders dashboard
-   markup emits what it holds."
-  {:provided-by [ui-stylesheet]})
+   and motion — which the UI library emits as the one :root block; every class rule no block
+   registration carries: the state marks', the pages', and those blocks and pages share; and the
+   house controls, the functions that write the control classes beside the one rule that styles
+   each. Its interface is the tokens, the class rules markup names, and the control functions
+   that write those classes. The blocks and pages above are written in its vocabulary: every
+   control they show is one of its functions, and every spacing they set is one of its classes or
+   tokens, with no inline literal reaching past it. ui-registry assembles it with every
+   registration's rules once, and every chrome that renders dashboard markup emits what it holds."
+  {:provided-by [ui-stylesheet ui-components-control]})
 
 (Stratum ui-state-marks
   "A workstream's state as a reader sees it — the words each facet is said in, and the mark that
@@ -151,7 +156,9 @@
    a scannable list row, one Ask offered for answer, a chat panel over a transcript and a dialog —
    each rendered over props, the explicit context and the caller's router, reading nothing. The level the
    dashboard's pages and its component catalog are both written in, which is what lets the
-   catalog be a preview of the app rather than a second implementation of it."
+   catalog be a preview of the app rather than a second implementation of it. A registration's
+   rules are the layout of the region it composes; the controls inside it are the visual
+   language's, one level down."
   {:provided-by [ui-components-row ui-components-ask ui-components-chat ui-components-dialog]
    :rests-on    [ui-state-marks ui-visual-language]})
 

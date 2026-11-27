@@ -29,7 +29,12 @@
 
 (def ^:private component-namespaces
   ['nido.ui.components.state 'nido.ui.components.row 'nido.ui.components.ask
-   'nido.ui.components.chat 'nido.ui.components.dialog])
+   'nido.ui.components.chat 'nido.ui.components.dialog 'nido.ui.components.control])
+
+(def ^:private not-a-block
+  "Public vars of a component namespace that are not something to render: the control set's
+   rules, which every control scene is drawn in."
+  #{'nido.ui.components.control/css})
 
 (defn- blocks []
   (mapcat :blocks (scenes/groups)))
@@ -97,7 +102,8 @@
   (let [covered (into #{} (map :name) (blocks))]
     (doseq [ns-sym component-namespaces]
       (require ns-sym)
-      (doseq [[sym _] (ns-publics ns-sym)]
+      (doseq [[sym _] (ns-publics ns-sym)
+              :when (not (not-a-block (symbol (str ns-sym) (str sym))))]
         (testing (str ns-sym "/" sym)
           (is (contains? covered (clojure.core/name sym))
               (str "no scene renders " ns-sym "/" sym

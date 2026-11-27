@@ -11,7 +11,8 @@
    The token values are data, in resources/nido/tokens.edn, and no namespace under nido.ui states
    one. Every declaration here reads a token through var(--…), which the library's lint checks."
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [nido.ui.components.control :as control]))
 
 ;; ---------------------------------------------------------------------------
 ;; The rules
@@ -48,14 +49,6 @@
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
         .pulse { animation: pulse var(--dur-2000) ease-in-out infinite; }
         .actions { display: flex; gap: var(--space-6); flex-wrap: wrap; }
-        .btn { background: var(--control-bg); color: var(--text); border: 1px solid var(--control-bg-hover);
-               padding: var(--space-4) var(--space-10); border-radius: var(--radius-3); font-size:var(--fs-xs);
-               cursor: pointer; font-family: inherit; }
-        .btn:hover { background: var(--control-bg-hover); }
-        .btn-primary { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-strong); }
-        .btn-primary:hover { background: var(--accent-border); }
-        .btn-danger { background: var(--failed-bg); border-color: var(--failed-border); color: var(--failed-strong); }
-        .btn-danger:hover { background: var(--failed-border); }
         .app-state { padding: var(--space-2) var(--space-8); border-radius: var(--radius-3); font-size:var(--fs-xs);
                      text-transform: uppercase; letter-spacing: 0.04em; }
         .app-state-running { background: var(--ok-bg); color: var(--ok); }
@@ -667,6 +660,7 @@
         .scene-label { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--text-faint); }
         .scene-pair .scene-label { min-width:190px; }
         .scene-empty { color:var(--text-faint); font-style:italic; }
+        .scene-meter { width:160px; }
         .chat-spin { width:8px; height:8px; border-radius:50%; background:var(--working);
                      animation:pulse var(--dur-1200) ease-in-out infinite; flex:none; }
         .chat-spin-asking { background:var(--needs); animation:none; }
@@ -713,4 +707,4 @@
   "nido's inputs to the library's stylesheet call: `:tokens`, the token map from
    resources/nido/tokens.edn, and `:rules`, the text of every rule no block registration carries."
   []
-  {:tokens @tokens :rules app-css})
+  {:tokens @tokens :rules (str app-css "\n" control/css)})

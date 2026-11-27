@@ -44,14 +44,62 @@
 (Module ui-stylesheet
   "nido's visual language, as the UI library takes it.
 
-   HIDES which hue, which size and which rule: the token values, read from resources/nido/tokens.edn
-   — colour, type, space, radius, shadow, motion — and every class rule no block registration
-   carries. It assembles nothing; `ui-registry` hands these to the library beside the
-   registrations, so no chrome can emit a stylesheet of its own."
+   HIDES the token values and nido's shared and per-page layout rules, among them nido's catalog
+   page's: the token values, read from resources/nido/tokens.edn — colour, type, space, radius,
+   shadow, motion — and every class rule no block registration carries. None of its own rules
+   names a control element or a control by its container. The control set's rules are not its
+   secret: it passes them on beside its own. It assembles nothing; `ui-registry` hands these to
+   the library beside the registrations, so no chrome can emit a stylesheet of its own.
+
+   Its interface is the class names markup may write, and `stylesheet` — the tokens, its own
+   rules and the control set's, handed to the library."
   (Operation stylesheet
     "nido's inputs to the library's stylesheet call: `:tokens`, the token map, and `:rules`, the
-     text of every rule no block registration carries."
+     text of every rule no block registration carries — its own and the control set's."
     {:signature [:=> [:catn] :map]}))
+
+(Module ui-components-control
+  "The dashboard's house controls: one public function per kind of control, and the one rule
+   that styles each.
+
+   HIDES how each kind of control is drawn: its element, its class, its variants and the one rule
+   that styles it. The kinds are the button (default, primary, danger), the quiet and icon-only
+   button, the link drawn as a button, the selectable choice card, the sunken text input,
+   textarea and select at one size, the labelled field, the form section with its heading, the
+   meter that shows a fraction (the fleet bar's fill), and the hidden and file inputs.
+
+   Its interface is one public function per kind, returning that control's hiccup over the
+   caller's own attributes (data-bind, data-on:*, placeholder, label, title) and a closed set of
+   emphases; and the rules for those classes, which reach the assembled stylesheet through
+   ui-stylesheet. It is the only writer of a button, input, textarea or select element in the
+   dashboard's markup."
+  (Operation button "A button in one of three emphases: default, primary, danger."
+    {:signature [:=> [:catn [:attrs :map] [:content [:* :any]]] :any]})
+  (Operation link-button "A link drawn as a button, in the button's emphases."
+    {:signature [:=> [:catn [:attrs :map] [:content [:* :any]]] :any]})
+  (Operation quiet-button "A borderless button for chrome, accent-tinted while it is on."
+    {:signature [:=> [:catn [:attrs :map] [:content [:* :any]]] :any]})
+  (Operation icon-button
+    "A quiet button showing only a glyph; refused without the label that is its accessible name."
+    {:signature [:=> [:catn [:attrs :map] [:content [:* :any]]] :any]})
+  (Operation choice "A selectable option card, with its chosen, primary and static states."
+    {:signature [:=> [:catn [:attrs :map] [:content [:* :any]]] :any]})
+  (Operation text-input "A one-line field in the one sunken look, at the one size."
+    {:signature [:=> [:catn [:attrs :map]] :any]})
+  (Operation textarea "A multi-line field in the same look and size."
+    {:signature [:=> [:catn [:attrs :map] [:content [:* :any]]] :any]})
+  (Operation select "A choice among fixed values, in the same look and size."
+    {:signature [:=> [:catn [:attrs :map] [:options [:sequential :any]]] :any]})
+  (Operation labelled "A field with its label above it."
+    {:signature [:=> [:catn [:label :any] [:control :any]] :any]})
+  (Operation form-section "A small form: its heading, then its fields and actions."
+    {:signature [:=> [:catn [:heading :any] [:content [:* :any]]] :any]})
+  (Operation meter "A fraction as a bar, carried by the element's own value."
+    {:signature [:=> [:catn [:attrs :map]] :any]})
+  (Operation hidden-input "A value the page's script writes and a signal reads."
+    {:signature [:=> [:catn [:attrs :map]] :any]})
+  (Operation file-input "The hidden file picker a visible control opens."
+    {:signature [:=> [:catn [:attrs :map]] :any]}))
 
 (Module ui-catalog-scenes
   "The state functions' named renderings over literal sample data. A block's scenes are carried by
@@ -192,11 +240,14 @@
    controls. They are values, not functions: each renders through the library over props, the
    context and the page's router alone, on the workstream's id as its instance.
 
-   HIDES how a decision is offered — one question at a time or all at once, which control is
-   primary, where a consequence sits relative to the button that carries it — and what a gate's
-   click sends. Each block declares its actions as data, and the server reads a gate's posted
-   body only through the decoder the same declaration derives, so no posted name is repeated on
-   two sides.")
+   HIDES how one Ask is offered — question order, which choice is primary, where consequence sits
+   relative to the button that carries it — and the layout rules of its own regions; its
+   options, stepper, reply and evidence fields and buttons are the control set's. Its interface
+   is the card and bar block registrations.
+
+   Each block declares its actions as data, and the server reads a gate's posted body only
+   through the decoder the same declaration derives, so no posted name is repeated on two
+   sides.")
 
 (Module ui-components-chat
   "A conversation with an agent, registered with the UI library as two blocks: `panel`, the side
@@ -206,7 +257,10 @@
    row — and `change-bar`, the conversation's unlanded change with Publish and Cancel, each
    confirmed in place.
 
-   HIDES how a transcript reads: item order, folding, the status row, the composer and its picks.
+   HIDES how a chat panel and its composer are laid out: item order, folding, the status row, the
+   composer and its picks. Its icon buttons, composer textarea and attach input are the control
+   set's. Its interface is the panel and change-bar block registrations.
+
    Each renders over a transcript value as props, the explicit context and a caller's router;
    every control is an action the panel declares — send, stop, reset, the stream, a permission
    answer, a pick removed, an image unstaged, the picks synced — and its draft, picks, busy flag,
@@ -218,12 +272,15 @@
   "A dialog, registered with the UI library as one block: a native <dialog> opened by its own
    trigger, with a title that labels it, a body, and optionally a footer of closing controls.
 
-   HIDES how a dialog is opened, labelled and closed: the trigger names it in commandfor and asks
-   for show-modal, so the platform owns the top layer, focus moving in and back out, and Escape,
-   and whether it is open lives in the DOM alone — no script and no signal holds it. Its parts
-   carry data-scope and data-part, and their ids and ARIA derive from one instance id, so its
-   title labels it. The slots — trigger, body, footer — are render functions each handed the
-   attrs its part must spread; which control closed it is its one signal, `returned`.")
+   HIDES the native-dialog mechanics: the trigger names it in commandfor and asks for show-modal,
+   so the platform owns the top layer, focus moving in and back out, and Escape, and whether it
+   is open lives in the DOM alone — no script and no signal holds it. Its close button and
+   footer buttons are the control set's. Its interface is the dialog block registration, whose
+   props are a :title and :trigger, :body and optional :footer render functions.
+
+   Its parts carry data-scope and data-part, and their ids and ARIA derive from one instance id,
+   so its title labels it. The slots — trigger, body, footer — are render functions each handed
+   the attrs its part must spread; which control closed it is its one signal, `returned`.")
 
 (Module ui-views
   "The dashboard's pages and fragments, and the twenty per-kind cards a ledger record reads as.
