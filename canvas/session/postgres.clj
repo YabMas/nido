@@ -33,7 +33,11 @@
    includes, immediately before the postmaster starts; a running cluster is never restarted to
    apply a changed one. A shared-mode session start is admitted only when every runtime's claim,
    its own share and the reserve fit the limit the cluster STARTED with — admissions taken one at
-   a time under the cluster's lock, each claim held until nido stops its runtime."
+   a time under the cluster's lock. A claim is taken at admission and released by an ATTEMPT to
+   remove it from the claims file, made at every stop of its runtime and at a throw from the start
+   that took it. An attempt has two outcomes: its write persists and the claim is gone, or its
+   write throws, and it is reported naming the claims file and the runtime, does not throw on, and
+   leaves the claim counted, with nothing kept to retry it."
   (Operation resolve-shared-port
     "A project's shared-cluster port, derived from its name so it is stable across restarts."
     {:signature [:=> [:catn [:project-name ProjectName]] :int]})
