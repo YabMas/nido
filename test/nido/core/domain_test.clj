@@ -863,3 +863,59 @@
     (let [[s] (run (into landing-unit [{:command :give-grant :grant :merge :by "person"}
                                        {:command :record-merge :unit "u"}]))]
       (is (nil? (get-in s [:turns "t1" :ended-under-merge?]))))))
+
+;; ── a person's blocker answer and Wake reach the conductor ───────────────────
+
+(deftest a-blocker-answer-puts-one-person-item-in-the-inbox
+  (let [[s events] (run [{:command :create-workstream :identity id*}
+                         {:command :append-entry :after 0 :row (row* :blocker) :content "{:format :blocker}"}
+                         {:command :append-entry :after 1 :row (row* :blocker-answered)
+                          :content "{:format :blocker-answered :blocker-seq 1 :summary \"go\"}"}])
+        items (vals (:inbox s))]
+    (is (= [{:kind :blocker-answered :seq 2}] (map #(dissoc % :id) items))
+        "exactly one item, naming the answer's seq")
+    (is (every? #(d/person-input-kinds (:kind %)) items) "and it is the person's input")
+    (is (= [:entry-appended :blocker-answer-heard] (map :event (take-last 2 events))))
+    (is (= 2 (:seq (:row (first (filter #(= :entry-appended (:event %)) (take-last 2 events))))))
+        "the entry's own event comes first, carrying its seq")
+    (is (= s (d/fold events)))
+    (testing "any other entry fills no inbox"
+      (let [[s2] (d/step s {:command :append-entry :after 2 :row (row* :note) :content "n"})]
+        (is (= (:inbox s) (:inbox s2)))))))
+
+(deftest events-recorded-before-a-blocker-answer-woke-fold-as-before
+  (testing "an :entry-appended of a :blocker-answered row, as recorded before this change, changes
+            only the ledger: a rebuilt store wakes no past answer and renumbers no inbox id"
+    (let [old [{:event :workstream-created :identity id*}
+               {:event :entry-appended :row (assoc (row* :blocker) :seq 1) :content "b"}
+               {:event :entry-appended :row (assoc (row* :blocker-answered) :seq 2) :content "a"}
+               {:event :chat-posted :message "m" :text "hi"}]
+          s (d/fold old)]
+      (is (= ["#1 chat"] (keys (:inbox s))))
+      (is (= 1 (:inbox-seq s)))
+      (is (= [1 2] (map :seq (:ledger s))))))
+  (testing "every kind of entry folds to the ledger alone"
+    (doseq [k [:blocker-answered :note :design :intent]]
+      (let [s (d/fold [{:event :workstream-created :identity id*}
+                       {:event :entry-appended :row (assoc (row* k) :seq 1) :content "x"}])]
+        (is (empty? (:inbox s)) (str k))
+        (is (zero? (:inbox-seq s 0)) (str k))))))
+
+(deftest the-person-wakes-a-stalled-conductor
+  (let [[s] (run [{:command :create-workstream :identity id*}])
+        [s2 events] (d/step s {:command :wake-conductor :by :person})]
+    (is (= [:conductor-woken] (map :event events)))
+    (is (= [{:kind :woken :by :person}] (map #(dissoc % :id) (vals (:inbox s2)))))
+    (is (d/person-input-kinds :woken) "the waking is the person's input"))
+  (testing "refused where waking is not the person's to give this way"
+    (is (= :no-such-workstream (refusal d/empty-state {:command :wake-conductor :by :person})))
+    (let [[s] (run [{:command :create-workstream :identity id*} {:command :close-workstream}])]
+      (is (= :workstream-closed (refusal s {:command :wake-conductor :by :person}))))
+    (let [[s] (run [{:command :create-workstream :identity id*}
+                    {:command :raise-conductor-stop :ask "stop" :content ready}])]
+      (is (= :conductor-stopped (refusal s {:command :wake-conductor :by :person}))
+          "a stopped conductor is woken through its stop ask"))
+    (let [[s] (run [{:command :create-workstream :identity id*}
+                    {:command :start-turn :turn "k" :unit nil :spec spec :hears []}])]
+      (is (= :conductor-turn-active (refusal s {:command :wake-conductor :by :person}))
+          "a conductor turn already runs"))))

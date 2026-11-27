@@ -405,3 +405,23 @@
                          {"d" {:state (drain-state) :pos 1} "b" {:state noticed :pos 2}} ["d" "b"])]
     (is (= ["d"] (map :ws (filter :withheld? ws))) "the drain is withheld")
     (is (= ["b"] (map :ws (remove :withheld? ws))) "and its place passes to the next workstream owed")))
+
+(deftest a-blocker-answer-and-a-wake-wake-the-conductor-and-say-what-they-are
+  (let [id {:project :nido :external-refs [] :created-at "2026-11-27T00:00:00Z"}
+        row (fn [k] {:kind k :at "t" :ext "edn"})
+        s (state-after [{:command :create-workstream :identity id}
+                        {:command :append-entry :after 0 :row (row :blocker) :content "b"}
+                        {:command :append-entry :after 1 :row (row :blocker-answered) :content "a"}])
+        woken (state-after [{:command :create-workstream :identity id}
+                            {:command :wake-conductor :by :person}])]
+    (doseq [st [s woken]]
+      (is (= [:start-turn] (map (comp :command :command) (b/decisions opts "ws" st 3)))
+          "the conductor is woken")
+      (is (b/person-input? st) "as by a person's input, which no cap holds back"))
+    (testing "the brief says each in plain words, never as its raw kind"
+      (let [t (b/brief "ws" s (vals (:inbox s)))]
+        (is (re-find #"the person answered a blocker: their answer is the workstream's ledger entry at seq 2" t))
+        (is (not (re-find #"- :blocker-answered" t))))
+      (let [t (b/brief "ws" woken (vals (:inbox woken)))]
+        (is (re-find #"the person woke this workstream" t))
+        (is (not (re-find #"- :woken" t)))))))

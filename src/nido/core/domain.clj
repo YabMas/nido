@@ -107,7 +107,7 @@
 
 (def person-input-kinds
   "The inbox items that carry a person's input. A wake for an inbox holding one is never capped."
-  #{:chat :ask-answered})
+  #{:chat :ask-answered :blocker-answered :woken})
 
 (def max-message-images
   "How many images one chat message may carry."
@@ -639,6 +639,14 @@
 
 (defmethod evolve :entry-appended [state {:keys [row]}]
   (update state :ledger (fnil conj []) row))
+
+;; A blocker answer's wake is its own event, so an :entry-appended recorded before it existed
+;; folds as it always did: only new decisions yield one.
+(defmethod evolve :blocker-answer-heard [state {:keys [seq]}]
+  (hear-later state {:kind :blocker-answered :seq seq}))
+
+(defmethod evolve :conductor-woken [state {:keys [by]}]
+  (hear-later state {:kind :woken :by by}))
 
 (defmethod evolve :workstream-closed [state _]
   (assoc state :closed? true))
@@ -1216,9 +1224,26 @@
       (not (recorded? state))            (refuse :no-such-workstream)
       (not= after latest)                (refuse :stale :latest latest)
       (entry-malformed row content)      (refuse (entry-malformed row content))
-      :else (accept {:event :entry-appended
-                     :row (assoc (dissoc row :file) :seq (inc latest))
-                     :content content}))))
+      :else (let [n (inc latest)]
+              (apply accept
+                     (cond-> [{:event :entry-appended
+                               :row (assoc (dissoc row :file) :seq n)
+                               :content content}]
+                       ;; The person answered a blocker: their answer is the conductor's to hear,
+                       ;; whichever surface recorded it and whether or not a session is live.
+                       (= :blocker-answered (:kind row))
+                       (conj {:event :blocker-answer-heard :seq n})))))))
+
+;; The person wakes a conductor that nothing else will: a stalled workstream's Wake. A stopped
+;; conductor is woken through its stop ask, and one whose turn runs or resumes needs no waking.
+(defmethod decide :wake-conductor [state {:keys [by]}]
+  (cond
+    (not (recorded? state))     (refuse :no-such-workstream)
+    (:closed? state)            (refuse :workstream-closed)
+    (:conductor-stopped? state) (refuse :conductor-stopped)
+    (some #(and (conductor-turn? %) (#{:running :resolved} (:status %))) (vals (:turns state)))
+    (refuse :conductor-turn-active)
+    :else (accept {:event :conductor-woken :by (or by :person)})))
 
 (def run-commands
   "The commands a run admits: its one unit's mechanics, and the records of what it did. Every
