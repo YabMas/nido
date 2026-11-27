@@ -9534,22 +9534,29 @@
 
 (defn- amender-canvas
   "What the run dir keeps of the amender's canvas: every path in `left` whose content its own
-   writes are known to have made, whether or not it is put back — a path someone changed since is
-   left alone in the worktree, and what the amender wrote there is still the case to list again.
-   The one source both the copy and every report of where it is derive from."
+   writes are known to have made, whether or not it is the amender's to put back — a path someone
+   changed is left alone in the worktree, and what the amender wrote there is still the case to
+   list again. `left` is path → {:content :mine?}: what the amender's own writes made the path
+   (::stages/unknown only when they cannot be replayed), and whether nobody else wrote it this
+   round. The one source both the copy and every report of where it is derive from; which paths
+   are put back is `put-back-canvas!`'s, from the same record."
   [left]
-  (into {} (remove (comp #{::stages/unknown} val)) left))
+  (into {} (keep (fn [[path {:keys [content]}]]
+                   (when-not (= ::stages/unknown content) [path content])))
+        left))
 
 (defn- put-back-canvas!
   "Put back every declaration path the amender wrote this round to what it held before the amender
-   launched (`before`, from `canvas-files`), and keep what it left under the run dir. A path that no
-   longer holds what the amender left (`left`, path → what its own writes made it, replayed from its
-   transcript, or ::stages/unknown) was changed by someone else, and is left alone. What is kept
-   is `amender-canvas`, put back or not. Answers what the report keeps of it, or nil when the
+   launched (`before`, from `canvas-files`), and keep what it left under the run dir. A path in
+   `left` (see `amender-canvas`) is put back only when it is `:mine?` and still holds the
+   `:content` the amender left; any other was changed by someone else, and is left alone. What is
+   kept is `amender-canvas`, put back or not. Answers what the report keeps of it, or nil when the
    amender wrote nothing there."
   [cwd before left kept-dir]
   (when (seq left)
-    (let [{mine true theirs false} (group-by (fn [[path content]] (= content (holds cwd path))) left)
+    (let [{mine true theirs false} (group-by (fn [[path {:keys [content mine?]}]]
+                                               (and mine? (= content (holds cwd path))))
+                                             left)
           kept (keep-canvas! kept-dir (amender-canvas left))]
       (doseq [[path _] mine
               :let [f (fs/path cwd path) was (get before path)]]
@@ -9591,7 +9598,8 @@
         ;; reads after it exits, which may hold a person's edit), and every one the tree readings
         ;; saw move. A path that held something else as a launch began than the round left it at —
         ;; `canvas-before`, or the amender's own earlier writes — was written by someone between,
-        ;; and putting it back would undo them: it is never taken for the amender's.
+        ;; and putting it back would undo them: it is never `:mine?` again, though what the
+        ;; amender's writes made it stays known, for the run dir to keep.
         left      (atom {})
         moved     (atom #{})
         appended? (atom false)
@@ -9601,10 +9609,11 @@
                     (swap! left
                            (fn [l]
                              (reduce (fn [l p]
-                                       (let [expected (if (contains? l p) (get l p) (get canvas-before p))]
-                                         (assoc l p (if (= expected (get (:launched-over trespass) p))
-                                                      (get (:left trespass) p)
-                                                      ::stages/unknown))))
+                                       (let [prior    (get l p)
+                                             expected (if prior (:content prior) (get canvas-before p))]
+                                         (assoc l p {:content (get (:left trespass) p)
+                                                     :mine?   (and (:mine? prior true)
+                                                                   (= expected (get (:launched-over trespass) p)))})))
                                      l (:wrote trespass)))))
         ;; Whether the declaration the amender's writes leave stands beside the amendment: nil when
         ;; it does (or nothing under it moved), {:err refusal} for the amender to repair, or

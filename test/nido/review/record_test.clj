@@ -3704,6 +3704,28 @@
     (is (some? (get-in out [:canvas-check :kept])))
     (is (= (renamed canvas-module) kept-core) "the run dir keeps the canvas as the amender left it")))
 
+(deftest a-timed-out-listing-keeps-a-re-asks-write-over-a-persons-edit
+  ;; A person edits between launches, so the path is not the amender's to put back — but the
+  ;; re-ask's full Write is known, and a timed-out round's run dir keeps it.
+  (let [theirs (str (renamed canvas-module) ";; the person's\n")
+        second (str (renamed canvas-module) ";; the re-ask's\n")
+        calls  (atom 0)
+        listed (fn [_ _ & _]
+                 (if (< (swap! calls inc) 3)
+                   {:status :listed :elements []}
+                   {:status :undecidable :cause :timeout :limit-ms 180000 :error "did not finish"}))
+        {:keys [out kept-core]}
+        (canvas-round {:elements listed :append-throws? true
+                       :amend  (fn [wt n _]
+                                 (spit (str (fs/path wt "canvas/review/core.clj"))
+                                       (if (= 1 n) (renamed canvas-module) second))
+                                 amended)
+                       :person (fn [wt n]
+                                 (when (= 1 n) (spit (str (fs/path wt "canvas/review/core.clj")) theirs)))})]
+    (is (= :canvas-unverified (:status out)))
+    (is (= ["canvas/review/core.clj"] (get-in out [:canvas-put-back :changed-since])))
+    (is (= second kept-core) "the run dir keeps the canvas as the amender left it")))
+
 (deftest the-amend-dry-run-command-hands-each-path-over-whole
   (with-redefs [nido.platform.core/nido-source-dir (constantly "/src dir/it's")]
     (let [cmd (#'record/amend-check-cmd :nido "ws 1" :design "/run dir/it's/a.edn")
