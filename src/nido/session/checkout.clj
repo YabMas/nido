@@ -176,7 +176,8 @@
 
 (defn ^{:malli/schema [:function
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]]] :Path]
-                       [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :Path]]}
+                       [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :Path]
+                       [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any :any] :Path]]}
   refresh!
   "Bring runtime `instance-id`'s checkout up to date with `members` (worktree to session name) —
    every one a jj workspace — creating it on first use, or when its directory is gone though jj
@@ -191,9 +192,14 @@
    the ex-info names the members and the conflicted paths (`:reason :checkout-conflict`). So is a
    refresh whose members' working copies cannot all be snapshotted (`:reason
    :checkout-unsnapshottable`): the checkout keeps the files it had, never one missing a member's
-   edits."
+   edits.
+
+   `admit!` is asked about the merged tree before anything is written: it is called with a working
+   copy of the project and the merge's revision, and a throw refuses the refresh the same way —
+   nothing is changed, and its error goes on to the caller."
   ([instance-id members] (refresh! instance-id members (fn [_])))
-  ([instance-id members setup!]
+  ([instance-id members setup!] (refresh! instance-id members setup! (fn [_ _])))
+  ([instance-id members setup! admit!]
    (let [dir   (checkout-dir instance-id)
          from  (first (keys members))
          token (str "nido runtime " instance-id " " (System/nanoTime))
@@ -205,6 +211,10 @@
                               " conflict in " (str/join ", " paths)
                               "; the runtime keeps serving the checkout it had")
                          {:reason :checkout-conflict :members (vec (vals members)) :paths paths}))))
+     (try (admit! from merge)
+          (catch Throwable e
+            (jj! from false "abandon" merge)
+            (throw e)))
      (jj! from false "new" "--no-edit" "-m" token "root()")
      (let [copy (created from token)]
        (jj! from false "restore" "--from" merge "--into" copy)

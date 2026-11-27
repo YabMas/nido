@@ -8,6 +8,36 @@
             [canvas.session.state :as sstate :refer [InstanceId]]
             [fukan.common.typing.malli]))
 
+(Module session-checkout
+  "A runtime's own checkout: a jj workspace of the project, outside every member's worktree, whose
+   working copy is a copy of the merge of every member's working copy. It is the boundary between
+   members' files and the runtime's JVM — a file reaches what the runtime reads, and so what its
+   app's Flyway migrates, only through a refresh of it.
+
+   A refresh REFUSES BEFORE IT WRITES: a merge that conflicts, members that cannot be snapshotted,
+   or a merged tree the caller's admission rejects all leave the checkout's files exactly as they
+   were. The checkout holds a COPY of the merge parented on the root, never the merge itself,
+   since jj rebases a merge whenever a member snapshots and a workspace on a rebased commit goes
+   stale."
+  (Operation jj-workspace? "Whether a directory is a jj workspace of a colocated source."
+    {:signature [:=> [:catn [:dir Path]] :boolean]})
+  (Operation checkout-dir "Where a runtime's checkout lives, inside its state directory."
+    {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [sstate/instance-state-dir]})
+  (Operation git-dir "The git directory of the colocated source a checkout is a workspace of."
+    {:signature [:=> [:catn [:dir Path]] Path]})
+  (Operation refresh!
+    "Bring a runtime's checkout up to date with its members' working copies, creating it on first
+     use; refused, changing nothing, on a conflict, an unsnapshottable member, or an admission
+     that rejects the merged tree."
+    {:signature [:function
+                 [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]]] Path]
+                 [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any]] Path]
+                 [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any] [:admit! :any]] Path]]
+     :delegates [checkout-dir git-dir sstate/read-session]})
+  (Operation remove! "Forget a runtime's checkout workspace and delete its directory."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:from [:maybe Path]]] :nil]
+     :delegates [checkout-dir git-dir]}))
+
 (Module session-engine
   "Bring a project's declared services up and down for one worktree.
 
@@ -88,7 +118,8 @@
   (Operation start-session! "Bring a worktree's declared services up."
     {:signature [:=> [:catn [:project-dir Path] [:opts :map]] :any]
      :delegates [load-session-edn resolve-project-name resolve-instance-id
-                 write-profile-for-session! sstate/write-session! sstate/upsert-registry!]})
+                 write-profile-for-session! sstate/write-session! sstate/upsert-registry!
+                 refresh!]})
   (Operation stop-session! "Bring a worktree's services down."
     {:signature [:=> [:catn [:project-dir Path]] :any]
      :delegates [resolve-instance-id sstate/read-session sstate/remove-from-registry!]})
@@ -102,7 +133,7 @@
     {:signature [:function
                  [:=> [:catn [:project-dir Path]] [:maybe Path]]
                  [:=> [:catn [:project-dir Path] [:instance-id [:maybe InstanceId]]] [:maybe Path]]]
-     :delegates [resolve-instance-id sstate/read-session]})
+     :delegates [resolve-instance-id sstate/read-session refresh!]})
   (Operation session-status "What a worktree's session is doing."
     {:signature [:=> [:catn [:project-dir Path]] :any]
      :delegates [resolve-instance-id sstate/read-session]})

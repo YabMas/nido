@@ -101,3 +101,28 @@
                                    :paths ["x"]}))
                         [:refused :reason]))
         "two sessions' refusals are one failure cause")))
+
+;; ---------------------------------------------------------------------------
+;; The checkout refresh asks before it writes
+;; ---------------------------------------------------------------------------
+
+(deftest a-refused-admission-leaves-the-checkout-as-it-was
+  (with-repo
+    (fn [_ a _]
+      (let [dir (checkout/refresh! "p--ws" {a "a"})]
+        (put! a "f.txt" "edited\n")
+        (let [asked (atom nil)
+              e     (try (checkout/refresh! "p--ws" {a "a"} (fn [_])
+                                            (fn [repo rev]
+                                              (reset! asked (sh repo "jj" "--ignore-working-copy"
+                                                                "file" "show" "-r" rev "f.txt"))
+                                              (throw (ex-info "no" {:refused :x}))))
+                         nil
+                         (catch clojure.lang.ExceptionInfo e e))]
+          (is (= "edited\n" (:out @asked)) "admission is asked about the merged tree")
+          (is (= {:refused :x} (ex-data e)) "its error goes on to the caller")
+          (is (= "base\n" (slurp (str (fs/path dir "f.txt")))) "nothing was written")
+          (is (str/blank? (:out (sh a "jj" "log" "--no-graph" "-r"
+                                    "description(substring:\"nido runtime\") ~ ::nido-runtime-p--ws@"
+                                    "-T" "change_id")))
+              "the merge it was asked about is abandoned"))))))
