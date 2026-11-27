@@ -665,6 +665,34 @@ Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.m
 
 Stage 4 added launchd auto-start at login; Stage 5 added the Notion source; cron / GitHub remain future work.
 
+## Dashboard UI — house components only
+
+**All web-dashboard UI is built from house-style, purpose-made components and
+never from ad-hoc markup or inline styling.** This holds for every kind of
+component, not only form fields.
+
+- **Where the set lives:** `src/nido/ui/components/control.clj`
+  (`nido.ui.components.control`) — buttons, link buttons, quiet and icon
+  buttons, choice cards, text inputs, textareas, selects, labelled fields, form
+  sections, the meter, hidden and file inputs. It is the only namespace that
+  writes a `button`, `input`, `textarea`, `select` or `meter` element. Pages and
+  blocks call its functions and own only layout; a `:class` handed to a control
+  is a layout hook, never a restyle.
+- **No inline style** in the markup nido's server writes (the hiccup under
+  `src/nido/ui`), custom properties included. A value the page's own script
+  measures from the live layout at runtime (the chat log's `--chat-tail`) is
+  outside the ban.
+- **Adding a component:** one public function in the namespace that owns its
+  kind, its one rule beside the others there, and a scene in
+  `nido.ui.catalog.scenes` so `/_catalog` shows it.
+- **The check:** `nido.ui.controls-test`, run by `bb nido:test`, fails on a
+  control literal outside the set, any inline style, a `<style>` other than the
+  assembled stylesheet, a rule elsewhere restyling a control, and an unstyled or
+  classless control.
+
+The full rule, with what it is drawn from, is §9 of
+`docs/reference/ui-principles.md`.
+
 ## Delegation
 
 Specialist agents live in `.claude/agents/`. Most domain agents are borrowed from brian via symlink — `datastar-dev` points at brian's, and `dev-rules.md` is symlinked too so its `@.claude/dev-rules.md` import resolves correctly. Native nido agents (currently just `architect`) live alongside the symlinks.

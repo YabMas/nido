@@ -186,3 +186,51 @@ Paused is only ever the person's choice (the pane's Pause, a `:paused` ledger en
 Everything else is a fault. A workstream where an agent owes the move but nothing runs, nothing asks you, and nobody paused it is **stalled**: it shows ⚠ in the failed colour, never ‖. A stall is something nido has to recover from, by restarting the owed work or turning it into a stated question. It is not a state to display and leave.
 
 Who runs and on what, which round, who owes the move: these are detail. They go in the mark's title and in the pane, never on the overview row. The person's words: "All I care about is if its in progress … or if it needs my input on something. The rest i see as irrelvant details at this level and can be opaque."
+
+## 9. Construction — built from house components, never ad hoc
+
+**Rule.** All dashboard UI is built from house-style, purpose-made components
+and never from ad-hoc markup or inline styling. This is a rule for every kind
+of component, not only for form fields: a control, a mark, a block and a page
+region are each drawn by the function that owns that kind, in the rule that
+styles it.
+
+- **The controls live in `nido.ui.components.control`** (`src/nido/ui/components/control.clj`):
+  the button (default, primary, danger), the link drawn as a button, the
+  quiet button and its icon-only form (which cannot render without a label),
+  the choice card, the text input, textarea and select at one look and one
+  size, the labelled field, the form section, the meter, and the hidden and
+  file inputs. It is the only namespace that writes a `button`, `input`,
+  `textarea`, `select` or `meter` element. Pages and blocks call it, and own
+  only the layout of what they compose: a caller may hand a control a
+  `:class` as a layout hook and place it by that class (margin, flex, width,
+  position), never restyle it.
+- **No inline style.** Markup nido's server writes — the hiccup under
+  `src/nido/ui` — carries no `:style` attribute, custom properties included.
+  Spacing and type are classes over the tokens; a value computed from data is
+  carried by a control whose element takes it natively (the fleet bar is a
+  `meter`, its fill the element's value). A value the page's own script
+  measures from the live layout at runtime — the chat log's `--chat-tail`
+  scroll room — is outside the ban: it is not markup the server writes.
+- **One stylesheet.** Every chrome under `src/nido/ui` emits only the
+  assembled stylesheet (`nido.ui.registry/assembled-stylesheet`); a page's
+  rules go in `nido.ui.stylesheet`, a block's in its registration.
+
+**Adding a component.** Write it as one public function in the namespace that
+owns its kind (a new kind of control goes in `nido.ui.components.control`),
+add its one rule beside the others there, and give it a scene in
+`nido.ui.catalog.scenes` so `/_catalog` shows it. The catalog test fails until
+the scene exists.
+
+**Check.** `nido.ui.controls-test`, run by `bb nido:test`, reads the sources
+under `src/nido/ui` and the assembled stylesheet. It fails on a control
+literal outside the control set, any inline style in hiccup, a `<style>` that
+is not the assembled stylesheet, a rule outside the set that restyles a
+control, a class written on a control that no rule names, and a visible
+control with no class. Its reach is the hiccup: a control client script
+creates is still governed by this rule, but the test does not see it.
+
+**From.** Parnas, *On the criteria to be used in decomposing systems into
+modules*: a control's look is one decision, hidden by one module. Design
+systems' component libraries (GOV.UK Design System, Primer): a page composes
+components and never restyles them.
