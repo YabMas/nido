@@ -1197,14 +1197,17 @@
                         rows)]
     (mapv #(assoc % :superseded-by (get by-target (:seq %))) rows)))
 
+(declare hydrate-qa)
+
 (defn- report-at
   "The entry whose :seq is `seq`, rendered via entry->report and hydrated with
-   whatever detail it points at. Callers select `seq` from the entries themselves,
+   whatever detail it points at — a :qa-walk with its plan's steps (`hydrate-qa`). Callers select `seq` from the entries themselves,
    so a miss means the ledger changed under the read — nil, not the latest entry
    silently swapped in."
   [ledger entries seq]
   (let [by-seq (into {} (map (juxt :seq identity)) entries)]
-    (some->> (get by-seq seq) (entry->report ledger) hydrate)))
+    (some->> (get by-seq seq) (entry->report ledger) hydrate
+             (hydrate-qa (:project ledger) (:id ledger)))))
 
 (defn- intake-fallback
   "Synthetic markdown report from a workstream's stored intake text (un-triaged
@@ -1462,6 +1465,106 @@
                           :when (landing-kinds (:format r))]
                       (select-keys r [:format :step :pr :via :words :reason :event-at :commit])))}))
 
+(defn ^{:malli/schema [:=> [:cat :map [:maybe :map] [:map-of :int :map]] [:maybe :map]]}
+  qa-report*
+  "The QA report of a workstream, from its QA reading `reading`, the plan that reading stands on
+   `plan` and the walks it names (`walks`, by seq) — or nil when there is none to make: the plan is
+   no :product plan, or no walk of it counts. Derived on every read and stored nowhere.
+
+   {:steps [{:n :id :action :expected :outcome :note :screenshots} …]  every plan step in plan
+                                       order, with what the NEWEST counted walk recorded of it
+    :newest <seq>                      that walk
+    :cast [{:role :account} …]         who played each of the plan's roles in that walk; [] for a
+                                       walk of a plan from before roles
+    :walks [{:seq :app :note :passed?} …]  every counted walk, oldest first
+    :earlier [{:seq :app :note :results [step result …]} …]  every walk recorded before the
+                                       newest build that did not pass, with its steps not :pass
+    :also-check? <bool>                the plan carries Also check items, which no walk carries out
+    :tally {:passed n :of m}}          the newest counted walk's passed steps, of the plan's"
+  [reading plan walks]
+  (let [counted (keep walks (:walks reading))
+        newest  (last counted)]
+    (when (and (= :product (:surface plan)) newest)
+      (let [by-step (fn [w] (into {} (map (juxt :step identity)) (:results w)))
+            numbered (map-indexed (fn [i st] [(inc i) st]) (:steps plan))
+            n-of     (into {} (map (fn [[n st]] [(:id st) [n st]])) numbered)
+            results  (by-step newest)
+            steps    (vec (for [[n {:keys [id action expected]}] numbered
+                                :let [r (get results id)]]
+                            (cond-> {:n n :id id :action action :expected expected
+                                     :outcome (:outcome r) :screenshots (vec (:screenshots r))}
+                              (:note r) (assoc :note (:note r)))))]
+        {:steps       steps
+         :newest      (:seq newest)
+         :cast        (vec (:cast newest))
+         :walks       (vec (for [w counted]
+                             (cond-> {:seq (:seq w) :passed? (report/walk-passed? w)}
+                               (:app w)  (assoc :app (:app w))
+                               (:note w) (assoc :note (:note w)))))
+         :earlier     (vec (for [s (:earlier reading)
+                                 :let [w (get walks s)]
+                                 :when (and w (not (report/walk-passed? w)))]
+                             (cond-> {:seq s
+                                      :results (vec (for [r (sort-by #(first (n-of (:step %))) (:results w))
+                                                          :when (not= :pass (:outcome r))
+                                                          :let [[n st] (n-of (:step r))]]
+                                                      (cond-> {:n n :id (:step r) :action (:action st)
+                                                               :outcome (:outcome r)
+                                                               :screenshots (vec (:screenshots r))}
+                                                        (:note r) (assoc :note (:note r)))))}
+                               (:app w)  (assoc :app (:app w))
+                               (:note w) (assoc :note (:note w)))))
+         :also-check? (boolean (seq (:also-check plan)))
+         :tally       {:passed (count (filter #(= :pass (:outcome %)) steps))
+                       :of     (count steps)}}))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:maybe :map]]] :map]}
+  workstream-qa
+  "Workstream `ws-id`'s QA as the surfaces read it: {:reading :plan :report} — its QA reading
+   (`reading` when the caller already holds one, else `pipeline/qa`'s), the plan record that reading
+   stands on (nil when none), and the QA report (`qa-report*`) composed from the plan and the walks
+   the reading names by seq, and from no other record."
+  ([project ws-id] (workstream-qa project ws-id nil))
+  ([project ws-id reading]
+   (let [reading (or reading (pipeline/qa project ws-id))
+         at      #(cws/entry-at-seq project ws-id %)
+         plan    (some-> (:plan reading) at)
+         walks   (into {} (keep (fn [s] (when-let [w (at s)] [s w])))
+                       (concat (:walks reading) (:earlier reading)))]
+     {:reading reading
+      :plan    plan
+      :report  (qa-report* reading plan walks)})))
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  qa-screenshot
+  "The QA screenshot kept by `digest` — {:mime :data :digest}, `:data` in base64 — or nil, for the
+   dashboard to serve."
+  [digest]
+  (cws/screenshot digest))
+
+(defn- land-qa
+  "What the Land rung says of QA: the reading's state and, when a report exists, the seqs of every
+   walk it is built from — its counted walks, then its earlier walks that did not pass — with its
+   tally."
+  [{:keys [reading report]}]
+  (cond-> {:state (:state reading)}
+    report (assoc :walks (into (mapv :seq (:walks report)) (map :seq (:earlier report)))
+                  :earlier (mapv :seq (:earlier report))
+                  :tally (:tally report))))
+
+(defn- hydrate-qa
+  "An opened :qa-walk report, with its cited plan's steps (`:plan-steps`) and whether the QA
+   reading counts it (`:counted?`) — what its rows are numbered and worded by. Every other report
+   passes through."
+  [project ws-id report]
+  (if (= :qa-walk (:format report))
+    (let [reading (pipeline/qa project ws-id)
+          plan    (cws/entry-at-seq project ws-id (get-in report [:plan :seq]))]
+      (assoc report
+             :plan-steps (vec (:steps plan))
+             :counted?   (boolean (some #{(:seq report)} (:walks reading)))))
+    report))
+
 (defn- land-rung
   "The Land rung past `arc`'s stages — a projection of the row's activity, its position and the
    core's grant, never a stage the arc is read at. It holds the newest landing's records (the
@@ -1473,8 +1576,11 @@
    While :current it carries what `arc` says past its stages and only that: the person awaited
    (`:past :needs`), a merge underway (`:past :doing`, its words on the rung's line), and running
    while the activity is `live?` and no stage of the arc carries a mark. Where the position names
-   a spine stage, that stage keeps its marks and the rung carries none."
-  [ledger entries arc position live? granted?]
+   a spine stage, that stage keeps its marks and the rung carries none.
+
+   Whatever its state it carries `:qa` (`land-qa`): the QA reading's state and, when a QA report
+   exists, the walks it is built from and its tally — what the brief a landing writes will report."
+  [ledger entries arc position live? granted? qa]
   (let [recs    (filter #(landing-kinds (:kind %)) (current-phase-entries entries))
         seqs    (mapv :seq recs)
         state   (cond (or (some #(= :merged (:kind %)) recs) (= :awaiting-gate (:at position))) :done
@@ -1486,7 +1592,8 @@
              :state   state
              :entries (count seqs)
              :visits  (if (seq seqs) 1 0)
-             :trail   (land-trail ledger entries seqs granted?)}
+             :trail   (land-trail ledger entries seqs granted?)
+             :qa      (land-qa qa)}
       (seq seqs)                                        (assoc :seqs seqs :last-seq (peek seqs)
                                                                :last-at (:at (last recs)))
       needs                                             (assoc :now :awaiting :needs needs)
@@ -1588,7 +1695,8 @@
         ;; What is running rides beside it, on the stage it is running in.
         ;; Past the stages, the Land rung: a projection of the same reading, never a stage.
         :arc          (assoc arc :land (land-rung ledger entries arc position
-                                                  (get-in row [:status :live]) granted?))
+                                                  (get-in row [:status :live]) granted?
+                                                  (workstream-qa project ws-id (:qa position))))
         ;; This workstream's card on the needs-you list, when it holds one: its question, the
         ;; actions that answer it and the session a reply reaches, which the pane renders through
         ;; the question card. Read from the core as the list's is, so the two cannot ask different

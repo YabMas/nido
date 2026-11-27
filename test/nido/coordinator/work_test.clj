@@ -3343,7 +3343,7 @@
 
 (deftest the-land-rung-carries-only-what-the-arc-says-past-its-stages
   (let [rung (fn [arc & {:keys [live? granted?] :or {granted? true}}]
-               (#'work/land-rung {} [] arc {:at :land-granted} live? granted?))
+               (#'work/land-rung {} [] arc {:at :land-granted} live? granted? {:reading {:state :off}}))
         bare {:stages [{:stage :implementation :state :done}]}]
     (is (= [:awaiting :ask] ((juxt :now :needs) (rung (assoc bare :past {:needs :ask}))))
         "the person awaited past the stages is awaited on the rung")

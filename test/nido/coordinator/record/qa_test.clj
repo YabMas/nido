@@ -13,6 +13,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.pipeline :as p]
+   [nido.coordinator.work :as work]
    [nido.platform.project :as project]
    [nido.ui.components.state]
    [tasks.nido-workstream :as tw]))
@@ -505,6 +506,54 @@
             (is (= :qa-failed (:at (p/of :brian id))))
             (add! :qa-plan (none-plan d))
             (is (= :release-candidate (:at (p/of :brian id))) "go by the newest plan")))))))
+
+;; ── the report ─────────────────────────────────────────────────────────────
+
+(defn- noted [w step note] (update w :results (fn [rs] (mapv #(cond-> % (= step (:step %)) (assoc :note note)) rs))))
+
+(deftest the-report-is-derived-from-the-walks-the-reading-names
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d (designed! add!)]
+        (with-redefs [project/qa (constantly :browser)]
+          (build! add! d)
+          (let [pl (add! :qa-plan (assoc (product-plan d) :also-check ["The class list still loads."]))
+                w1 (add! :qa-walk (-> (walk pl [["open" :pass] ["check" :fail]])
+                                      (noted "check" "the total read 0")
+                                      (assoc :note "played as a teacher" :app "http://localhost:3100")))
+                _  (build! add! d)
+                w2 (add! :qa-walk (-> (walk pl [["open" :pass] ["check" :pass]])
+                                      (noted "check" "the total read 12")
+                                      (assoc :note "played as a teacher, after the fix")))
+                {:keys [reading plan report]} (work/workstream-qa :brian id)]
+            (is (= :passed (:state reading)))
+            (is (= pl (:seq plan)))
+            (testing "every step in plan order, with the newest counted walk's result"
+              (is (= [[1 "open" :pass nil] [2 "check" :pass "the total read 12"]]
+                     (map (juxt :n :id :outcome :note) (:steps report))))
+              (is (= w2 (:newest report))))
+            (testing "every counted walk, with its note verbatim"
+              (is (= [{:seq w2 :passed? true :note "played as a teacher, after the fix"}] (:walks report))))
+            (testing "an earlier walk that did not pass, with its note and its steps not passed"
+              (is (= [{:seq w1 :app "http://localhost:3100" :note "played as a teacher"
+                       :results [{:n 2 :id "check" :action "Do check." :outcome :fail
+                                  :screenshots [digest] :note "the total read 0"}]}]
+                     (:earlier report))))
+            (is (true? (:also-check? report)))
+            (is (= {:passed 2 :of 2} (:tally report)))
+            (testing "the Land rung names every walk the report is built from"
+              (is (= {:state :passed :walks [w2 w1] :earlier [w1] :tally {:passed 2 :of 2}}
+                     (#'work/land-qa (work/workstream-qa :brian id)))))
+            (testing "an opened walk carries its plan's steps and whether the reading counts it"
+              (let [h #(#'work/hydrate-qa :brian id (assoc (ws/entry-at-seq :brian id %) :format :qa-walk))]
+                (is (true? (:counted? (h w2))))
+                (is (false? (:counted? (h w1))))
+                (is (= ["open" "check"] (map :id (:plan-steps (h w1)))))))))))))
+
+(deftest no-report-without-a-counted-walk-of-a-product-plan
+  (is (nil? (work/qa-report* {:state :owed :walks [] :earlier []} (product-plan 1) {})))
+  (is (nil? (work/qa-report* {:state :not-applicable :walks [] :earlier []} (none-plan 1) {}))))
 
 ;; ── the spine ──────────────────────────────────────────────────────────────
 
