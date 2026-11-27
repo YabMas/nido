@@ -462,6 +462,11 @@
     {:signature [:=> [:catn [:s :string]] :any]})
   (Operation resolve-failure-msg "Why a gate action did not do what was asked."
     {:signature [:=> [:catn [:result :map]] :string]})
+  (Operation page-routes
+    "Every page handle-get renders to a browser — a parameterised one with how a concrete
+     instance of it is found — and every route it answers that is not one, with why. Kept by
+     hand beside handle-get; what a census measures."
+    {:signature [:=> [:catn] :map] :delegates [work/newest-workstream]})
   (Operation handle-request "One request, routed."
     {:signature [:=> [:catn [:req :map]] :map]
      :delegates [derive-screen parse-findings-lines resolve-failure-msg

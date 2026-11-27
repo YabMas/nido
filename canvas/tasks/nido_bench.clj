@@ -16,4 +16,16 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation levers
     "List known bench levers."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]}))
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation census
+    "bb nido:census [:port n] [:loads n] — every page the dashboard on that port lists, each its
+     median browser load (navigation timing, through agent-browser) over at least three loads,
+     printed as one overview with its samples. Every load has a deadline and the census a budget
+     under ten minutes; a page whose loads missed them is reported with what it has."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation census*
+    "The census over a load function: one row per listed page — samples, median, status — never
+     dropping one."
+    {:signature [:=> [:catn [:opts :map] [:load! :any]] [:vector :map]]})
+  (Operation median "The median of some numbers, or nil when there are none."
+    {:signature [:=> [:catn [:xs [:sequential number?]]] [:maybe number?]]}))

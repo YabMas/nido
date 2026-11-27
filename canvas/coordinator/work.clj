@@ -83,6 +83,9 @@
     "Run a thunk with one read of each project's rows shared across it. The board asks two
      questions of the same rows, and this is what makes them one read rather than two."
     {:signature [:=> [:catn [:f :any]] :any]})
+  (Operation newest-workstream
+    "The id of a project's newest minted workstream the core holds, or nil."
+    {:signature [:=> [:catn [:project ProjectName]] [:maybe :string]]})
   (Operation list-workstreams "Every workstream of a project, as enriched rows on the spine."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [view/workstream-rows]})

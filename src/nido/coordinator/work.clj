@@ -2751,6 +2751,16 @@
         (let [u (owed-revivals)] (swap! model #(when % (assoc % :casualties u))) u))
     (owed-revivals)))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :string]]}
+  newest-workstream
+  "The id of `project`'s newest minted workstream the core holds — the greatest `ws-<day>-…` id —
+   or nil when it holds none. Throws when the core is unreachable."
+  [project]
+  (->> (core-client/value! (core-client/workstreams) :workstreams)
+       (keep #(when-let [[p id] (core-client/split-key %)]
+                (when (and (= p (name project)) (str/starts-with? id "ws-")) id)))
+       sort last))
+
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   refused-sessions
   "Every unit session whose destroy session-lifecycle refused, because its working copy is not the

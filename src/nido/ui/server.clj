@@ -927,6 +927,50 @@
   [project ws-id]
   {:status 302 :headers {"Location" (str "/workstreams/" project "/" ws-id)}})
 
+;; ---------------------------------------------------------------------------
+;; The page list
+
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  page-routes
+  "Every page `handle-get` renders to a browser, and every route it answers that is not one, with
+   why. `:pages` are `{:path :title}`; a parameterised one also carries `:instance`, called with
+   `{:project p}` to answer one concrete path of it (nil when there is none), and `:found-by`,
+   saying how. `:left-out` are `{:route :why}`. What a census measures.
+
+   Kept by hand beside `handle-get`, which dispatches on the path by `case`: a page route added
+   there and not here is not measured. nido.ui.server-pages-test renders every page listed here
+   through `handle-get`."
+  []
+  {:pages
+   [{:path "/" :title "Needs you"}
+    {:path "/workstreams" :title "Workstreams board"}
+    {:path "/workstreams/:project/:ws-id" :title "A workstream's page"
+     :instance (fn [{:keys [project]}]
+                 (some->> (work/newest-workstream project) (str "/workstreams/" (name project) "/")))
+     :found-by "the project's newest workstream the core holds (work/newest-workstream)"}
+    {:path "/operations" :title "Operations"}
+    {:path "/operations/improvements" :title "Improvements"}
+    {:path "/operations/recovery" :title "Session recovery"}
+    {:path "/operations/host" :title "Host"}
+    {:path "/operations/review-queue" :title "Review queue"}
+    {:path "/structure" :title "Structure"}
+    {:path "/structure/drains" :title "Drains"}
+    {:path "/presentation" :title "Presentation"}
+    {:path "/domain" :title "Domain"}
+    {:path "/functionality" :title "Functionality"}
+    {:path "/development" :title "Development"}
+    {:path "/_catalog" :title "Component catalog"}]
+   :left-out
+   [{:route "/favicon.png, /favicon.ico, /nido-logo.png" :why "images a page loads, not pages"}
+    {:route "/system, /drains, /gate/:project/:ws-id" :why "redirects to a listed page"}
+    {:route "/_fragment/…" :why "SSE fragments a page's own polls request after it has loaded"}
+    {:route "/structure/explorer/:project/…"
+     :why "fukan's explorer, forwarded; loaded inside /structure's frame"}
+    {:route "/presentation/app/:project/…"
+     :why "the project's own catalog app, forwarded; loaded inside /presentation's frame"}
+    {:route "/_chat/…, /_catalog/chat/…"
+     :why "the side chats' streams and posts, opened by a page once it has loaded"}]})
+
 (defn- handle-get [{:keys [uri] :as req}]
   (let [segments (parse-path uri)]
     (case segments

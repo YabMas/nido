@@ -263,6 +263,11 @@
    :doc "List known bench levers"
    :task (apply nido-bench/levers *command-line-args*)}
 
+  nido:census
+  {:requires ([tasks.nido-bench :as nido-bench])
+   :doc "Load every dashboard page in a browser and print each one's median load: [:port 8800] [:loads 3] [:project nido] [:deadline-s 90] [:out <path>]"
+   :task (apply nido-bench/census *command-line-args*)}
+
   nido:bench:surfaces
   {:requires ([tasks.nido-bench-surfaces :as nido-bench-surfaces])
    :doc "Time the dashboard pages and TUI screens on a clone of the store, live and enlarged: [:project <name>] [:ws <id>] [:synthetic <n>] [:runs <n>] [:out <path>]"
