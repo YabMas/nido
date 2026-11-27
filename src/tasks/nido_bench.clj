@@ -62,8 +62,9 @@
 ;; The census: every page the dashboard lists, as a browser loads it
 
 (def ^:private census-wall-ms
-  "The whole census's wall clock, from its start to the browser closed: starting the browser, every
-   load and closing it each wait only for what is left of it. A load is not started once the loads'
+  "The whole census's wall clock, from its start to the browser closed: starting the browser,
+   finding each parameterised page's instance, every load and closing it each wait only for what is
+   left of it. A load is not started once the loads'
    share is spent; what was not taken is reported as not measured, never dropped. Under the ten
    minutes a census must end within."
   (* 9 60 1000))
@@ -73,6 +74,20 @@
   30000)
 
 (defn- now-ms [] (System/currentTimeMillis))
+
+(defn- within
+  "`(f)`, or ::timed-out when it has not answered within `ms`. It runs on a daemon thread, so a call
+   that never answers — a core that accepted the connection and stopped replying — neither holds the
+   census past its wall clock nor keeps the process alive after it."
+  [ms f]
+  (let [r (promise)
+        t (doto (Thread. ^Runnable (fn [] (deliver r (try {:ok (f)} (catch Throwable e {:thrown e})))))
+            (.setDaemon true)
+            (.start))]
+    (let [v (deref r ms ::timed-out)]
+      (if (= ::timed-out v)
+        (do (.interrupt t) ::timed-out)
+        (if-let [e (:thrown v)] (throw e) (:ok v))))))
 
 (def ^:private nav-timing-js
   "The browser's navigation timing of the document it is showing, as JSON."
@@ -142,17 +157,24 @@
   "Load every page of `(server/page-routes)` `:loads` times through `load!` — `(load! url ms)` →
    `{:ms n}` or `{:error e}` — and answer one row per page: `:path`, `:url` (nil when a
    parameterised page has no instance), `:samples` (ms), `:median`, `:errors`, and `:status`
-   :ok, :timed-out (a load missed its deadline), :failed, :no-instance or :not-measured (the
-   census's budget was spent before it). A page is never dropped. Pages are loaded round-robin, so
-   whatever the budget cuts is spread across pages rather than taken from the last ones."
+   :ok, :timed-out (a load, or finding a parameterised page's instance, missed its deadline),
+   :failed, :no-instance or :not-measured (the census's budget was spent before it, or before its
+   instance was sought). Every wait is bounded by what is left of `:budget-ms`. A page is never
+   dropped. Pages are loaded round-robin, so whatever the budget cuts is spread across pages rather
+   than taken from the last ones."
   [{:keys [base loads project deadline-ms budget-ms] :as _opts} load!]
-  (let [t0    (System/currentTimeMillis)
-        left  #(- budget-ms (- (System/currentTimeMillis) t0))
+  (let [t0    (now-ms)
+        left  #(- budget-ms (- (now-ms) t0))
         pages (mapv (fn [{:keys [path instance] :as pg}]
-                      (let [inst (if instance
-                                   (try (instance {:project project}) (catch Exception _ nil))
-                                   path)]
-                        (assoc pg :url (some->> inst (str base)) :samples [] :errors [])))
+                      (let [spent (and instance (<= (left) 0))
+                            inst  (cond (not instance) path
+                                        spent          nil
+                                        :else          (try (within (left) #(instance {:project project}))
+                                                            (catch Exception _ nil)))
+                            lost  (= ::timed-out inst)]
+                        (cond-> (assoc pg :url (when-not lost (some->> inst (str base))) :samples []
+                                       :errors (if lost [:timed-out] []))
+                          spent (assoc :unsought true))))
                     (:pages (server/page-routes)))
         rows  (reduce
                (fn [rows _round]
@@ -166,12 +188,13 @@
                                      (update r :errors conj (:error o))))))
                        rows))
                pages (range loads))]
-    (mapv (fn [{:keys [url samples errors skipped] :as r}]
+    (mapv (fn [{:keys [url samples errors skipped unsought] :as r}]
             (-> (select-keys r [:path :title :url :samples :errors :found-by])
                 (assoc :median (median samples)
                        :status (cond
-                                 (nil? url) :no-instance
                                  (some #{:timed-out} errors) :timed-out
+                                 unsought :not-measured
+                                 (nil? url) :no-instance
                                  (seq errors) :failed
                                  (and skipped (< (count samples) loads)) :not-measured
                                  :else :ok))))

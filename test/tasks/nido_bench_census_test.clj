@@ -48,7 +48,7 @@
                                :deadline-ms 1000 :budget-ms 0}
                               (fn [_ _] (throw (ex-info "no load may start" {}))))]
       (is (= 4 (count rows)))
-      (is (= #{:not-measured :no-instance} (set (map :status rows)))))))
+      (is (= #{:not-measured} (set (map :status rows))) "a parameterised page not sought is not measured"))))
 
 (deftest a-load-never-waits-past-its-deadline
   (let [asked (atom [])]
@@ -73,3 +73,17 @@
       (is (= ["open" :loads "close"] @steps))
       (is (<= @clock wall)
           "starting the browser, the loads and closing it share the one wall clock"))))
+
+(deftest finding-an-instance-is-bounded-by-the-budget
+  ;; A lookup that never answers (a core that stopped replying) is reported, not waited on.
+  (with-redefs [server/page-routes (constantly {:pages [{:path "/a"}
+                                                        {:path "/p/:id" :instance (fn [_] @(promise))}]
+                                                :left-out []})]
+    (let [rows (deref (future (bench/census* {:base "http://h" :loads 3 :project "nido"
+                                              :deadline-ms 100 :budget-ms 300}
+                                             (fn [_ _] {:ms 1})))
+                      5000 ::hung)]
+      (is (not= ::hung rows) "the census ends within its budget")
+      (when (vector? rows)
+        (is (= :timed-out (:status (first (filter #(= "/p/:id" (:path %)) rows)))))
+        (is (= 2 (count rows)) "no page is dropped")))))
