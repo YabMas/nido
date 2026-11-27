@@ -141,6 +141,15 @@ record one verdict:
 "Before you start" names production for a Prod ticket, staging otherwise, in a
 restyled brief as in a written one.
 
+**A brief carrying `Tested before landing`** — the report `/land` sent, rendered
+by nido from the walks of the plan — is judged on its instructions by the same
+four tests and gets the same verdicts. Its report is not judged and is kept
+whole: a **keep** leaves it, a **correct** edits only the instructions above it.
+A brief this skill **writes** or **restyles** carries no report — there is no walk
+here to render one from, and a report is never composed. Never draft a
+`Tested before landing` section, nor say anywhere in a brief that something was
+tested.
+
 ### Follow-up actions
 
 Collect what a person still owes the product's people — a notification

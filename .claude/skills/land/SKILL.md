@@ -445,39 +445,54 @@ notion page markdown "$PAGE"
 notion comment list "$PAGE" --all
 ```
 
-**The brief is the recorded QA plan, rendered — never one you compose.** Print it:
+**The brief is the recorded QA plan and what its walks recorded, rendered by
+nido — never one you compose.** Read it first:
 
 ```bash
 bb --config ~/Code/nido/bb.edn nido:workstream:show   # from the worktree; or :project brian :ws-id <id>
 ```
 
 Its `qa:` line is the workstream's QA reading, and the section under
-`── landing QA brief ──` is the brief: the plan's sections in
-`docs/reference/qa-brief.md`'s shape when the walk of it passed, or the one-line
-"nothing a user sees changes" brief from its reason when the plan says nothing a
-user sees moves. **When that section reads `none — …`** — QA owed, failed, or
-off with no plan recorded — **write no brief**: report it in §7 as
-`skipped — no walked QA plan`, naming the verbs that record one (`nido:workstream:entry:add
-:kind :qa-plan`, then a `:qa-walk`). Do not fill the gap from the layer briefs,
-the ticket or the design: an unrecorded, unwalked brief is exactly what this
-step no longer writes.
+`── landing QA brief ──` is the brief's text: the plan's sections in
+`docs/reference/qa-brief.md`'s shape followed by `Tested before landing` when
+the walk of it passed, or the one-line "nothing a user sees changes" brief from
+its reason when the plan says nothing a user sees moves. **When that section
+reads `none — …`** — QA owed, failed, or off with no plan recorded — **write no
+brief**: report it in §7 as `skipped — no walked QA plan`, naming the verbs that
+record one (`nido:workstream:entry:add :kind :qa-plan`, then a `:qa-walk`). Do
+not fill the gap from the layer briefs, the ticket or the design: an
+unrecorded, unwalked brief is exactly what this step no longer writes.
 
-Turn the rendering into Notion blocks without changing its words — each section
-heading a heading, each numbered step a `numbered_list_item`, each `- ` line a
-`bulleted_list_item`, each other line a paragraph — inside the callout.
-`docs/reference/qa-brief.md` defines how it goes into Notion, shared with
-`/review-queue`. Build the callout JSON and send it:
+**Send the Notion body nido prints, as printed.** It is the whole 🧪 `QA
+instructions` callout as one JSON block — the plan's sections, then `Tested
+before landing` with its `Step results` toggle, each step's screenshots
+already uploaded:
 
 ```bash
-notion api PATCH /v1/blocks/"$PAGE"/children --body - <<'JSON'
-{"position": {"type": "start"},
- "children": [{"type": "callout",
-               "callout": {"icon": {"type": "emoji", "emoji": "🧪"},
-                           "rich_text": [{"type": "text", "text": {"content": "QA instructions"},
-                                          "annotations": {"bold": true}}],
-                           "children": [ …headings, paragraphs, numbered_list_items… ]}}]}
-JSON
+bb --config ~/Code/nido/bb.edn nido:workstream:qa:notion > /tmp/qa-brief.json   # exits 2 when there is no brief
 ```
+
+Change none of it: no words, no blocks, no order. A screenshot that would not
+upload is already a line in its place; it is not a reason to stop. Uploads
+expire unattached after an hour, so print it just before the write.
+
+The callout nests four levels (callout → toggle → item → image) and a request
+nests two, so it is written in two passes, as `docs/reference/qa-brief.md` §
+"How it is written to Notion" says: the callout with its children, the toggle
+still empty; then the toggle's items, each with its images, onto the toggle's id
+Notion returns.
+
+```bash
+jq '{position: {type: "start"},
+     children: [.callout.children |= map(if .type == "toggle" then del(.toggle.children) else . end)]}' \
+   /tmp/qa-brief.json | notion api PATCH /v1/blocks/"$PAGE"/children --body -
+# $TOGGLE: the id of the callout's `Step results` child, read back from the new callout's children
+jq '{children: (.callout.children[] | select(.type == "toggle") | .toggle.children)}' \
+   /tmp/qa-brief.json | notion api PATCH /v1/blocks/"$TOGGLE"/children --body -
+```
+
+A second pass that fails leaves the brief on top with its `Step results` empty:
+report it in §7 as such; it does not undo the brief.
 
 **Write it on top, or not at all** — `docs/reference/qa-brief.md` § "How it is
 written to Notion" is the order: note the earlier briefs by id, prepend, read the

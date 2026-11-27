@@ -36,11 +36,16 @@ the brief says in its own words.
                       could plausibly disturb.
     Not in this change  what a reviewer might expect but will not find — so it
                       is not filed as a bug.
+    Tested before landing  at landing only: what the walks of the plan
+                      recorded — see "What was tested" below.
 
-At landing, `/land` writes no brief of its own: it renders the workstream's
-recorded QA plan — the `:qa-plan` the QA walk exercised — which `bb
-nido:workstream:show` prints under `── landing QA brief ──`, or writes none.
-The plan's author writes the plan to this page.
+At landing, `/land` writes no brief of its own: it sends the workstream's
+recorded QA plan — the `:qa-plan` the QA walk exercised — followed by what its
+walks recorded, rendered by nido, or writes none. `bb nido:workstream:show`
+prints the brief's text under `── landing QA brief ──`; `bb
+nido:workstream:qa:notion` prints the same brief as the Notion block `/land`
+sends. The plan's author writes the plan to this page; nobody writes the
+report.
 
 A recorded plan is walked by an agent before it lands, so every step of it,
 and everything its Before you start asks for, must be something the walk can
@@ -96,8 +101,50 @@ migration, a log line, a query count) is dropped, not translated into jargon. If
 nothing the change does is visible, the brief says so in one line and names what
 to check still works.
 
-Never write a step the change does not back, and never claim something was
-tested.
+Never write a step the change does not back. Only a recorded walk says what was
+tested, and the report that says it is rendered from the walk, never written:
+a brief nido did not render from a walk carries no `Tested before landing`.
+
+## What was tested
+
+A brief written at landing ends with one more section, `Tested before
+landing`, rendered from the walks of the plan — the agent's run of every step
+against the session's app, each result recorded with its outcome, a note and at
+least one screenshot. A brief is written only once the newest walk of the build
+that lands passed every step, so the section reports a passing walk; what did
+not pass shows only as an earlier walk's. In order:
+
+    Tested before landing   heading
+    summary          one line: how many of the plan's steps passed, on how
+                     many walks of the build that lands — "11 of 11 steps
+                     passed, on 1 walk of the build that lands."
+    How it was walked  each counted walk's note, verbatim — the walker's own
+                     account of who it played and what it could not do. With
+                     more than one walk, each line names its walk ("Walk 2: …").
+    Earlier walks    only when a walk before the last change did not pass:
+                     its note, then each step it did not pass, with its
+                     outcome (failed, or blocked — a step the walk could not
+                     carry out) and its note — "Walk 1, step 2 — failed: the
+                     total read 0". A walk before the last change that passed
+                     is not shown: it says nothing the newest walk does not.
+    Also check line  "The Also check items were not walked." whenever the plan
+                     has any — no walk carries them out.
+    Step results     one numbered item per step, numbered as the step above:
+                     its outcome and the newest walk's note — "2. Passed — the
+                     total read 12" — with that step's screenshots.
+
+Walks are numbered in the order they were recorded, over the walks the section
+shows. Every result shown comes from the newest walk of the build that lands;
+a walk recorded before a later build never counts towards the summary.
+
+In Notion the section sits inside the callout, after Not in this change: the
+heading, the summary paragraph, `How it was walked` and `Earlier walks` as bold
+lines over their bulleted items, the Also check line, and `Step results` as a
+**collapsed toggle** holding the numbered items, each step's screenshots
+nested under its item as uploaded images. A screenshot that could not be
+uploaded is replaced by a line saying so — "Screenshot <digest> could not be
+uploaded: …" — and never stops the brief. The reviewer reads the instructions
+first; the results are one click away.
 
 ## Is an existing brief adequate?
 
@@ -111,6 +158,10 @@ A ticket may already carry QA instructions — a person's, or another bot's
 4. **Current** — it describes what shipped, not a plan, and says nothing that
    the release has made false ("not released yet", "until this ships").
 
+A brief carrying a `Tested before landing` section — one nido rendered at
+landing — is judged on its instructions by the same four tests; its report is
+not judged, and is kept whole whatever is done to the instructions above it.
+
 Every ticket's brief has the one shape above, so a reviewer moving down the
 queue reads the same thing in the same place. What to do with an existing one
 follows from its substance and its shape:
@@ -121,6 +172,9 @@ follows from its substance and its shape:
   rewritten into the sections above, with anything 4 fails dropped. Its
   substance is not re-derived; a person already worked it out.
 - **Fails 1, 2 or 3** — write a new one.
+
+A brief written or restyled when grooming carries no `Tested before landing`:
+grooming has no walk to render one from, and a report is never composed.
 
 ## Follow-up actions
 
@@ -218,7 +272,10 @@ this order:
      leaving it would also leave the ticket with two.
 
 Keep each rich-text run under 2000 characters: one oversized run rejects the
-whole request.
+whole request. A request nests two levels, and a landing brief nests four
+(callout → `Step results` toggle → item → image): write the callout with its
+children, the toggle empty, then the toggle's items with their images onto the
+toggle's id Notion returns.
 
 ## Cleanup
 
