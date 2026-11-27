@@ -134,13 +134,26 @@
                       :origin            {:kind :on-demand :port (:port start)}}
                      e)))
 
-(defn- roll-back-start!
-  "Undo what a failed start made on the runtime — the JVM, if it came up, and its pid. Called
-   holding the runtime's lock, so no verb sees the half-made start."
-  [front]
+(defn- fail-start!
+  "Everything a failed start owes, as one outcome: undo what it made on the runtime — the JVM, if
+   it came up, and its pid — keep the failure under ~/.nido/failures/, record the start failed
+   unless its triggering port was already ready (recorded then), and read the group absent. Run
+   holding the runtime's lock, so no verb sees a half-made start or ends the front before the
+   evidence is written; `rollback?` false only when that lock was never taken, so no JVM was
+   started. Never throws."
+  [front e rollback?]
   (let [{:keys [cfg]} @front]
-    (try (process/stop-jvm! cfg) (catch Exception e2 (core/log-step (str "warning: " (ex-message e2)))))
-    (try (note-jvm! cfg nil) (catch Exception _ nil))))
+    (core/log-step (str "On-demand start failed: " (ex-message e)))
+    (when rollback?
+      (try (process/stop-jvm! cfg) (catch Exception e2 (core/log-step (str "warning: " (ex-message e2)))))
+      (try (note-jvm! cfg nil) (catch Exception _ nil)))
+    (try (keep-failure! front e)
+         (catch Exception e2 (core/log-step (str "warning: could not keep the failed start: " (ex-message e2)))))
+    ;; What failed after the triggering port was ready — an app, for an nREPL-triggered start —
+    ;; is kept above all the same.
+    (when-not (get-in @front [:start :recorded?])
+      (record-start! front :failed (or (ex-message e) (str (class e))) (core/now-iso)))
+    (swap! front assoc :phase :absent :jvm-pid nil)))
 
 (defn- ready!
   "Deliver port `kind`'s readiness, and when it is the port that triggered the start, record the
@@ -154,11 +167,13 @@
 
 (defn- run-start!
   "Start the runtime's on-demand group — the JVM, then each app on it — delivering each port's
-   readiness as it comes, and record the start however it ends. A start that fails is rolled back
-   under the same hold of the runtime's lock it was made under."
+   readiness as it comes, and record the start however it ends. A start that fails is settled
+   (`fail-start!`) under the same hold of the runtime's lock it was made under; only telling the
+   waiting connections is left until after it."
   [front]
   (let [{:keys [cfg ready]} @front
-        {:keys [instance-id]} cfg]
+        {:keys [instance-id]} cfg
+        handled? (atom false)]
     (try
       (lifecycle/with-runtime-lock instance-id :on-demand-start
         (fn []
@@ -178,18 +193,11 @@
               (ready! front :app)
               (swap! front assoc :phase :running :last-traffic (now-ms)))
             (catch Throwable e
-              (roll-back-start! front)
+              (reset! handled? true)
+              (fail-start! front e true)
               (throw e)))))
       (catch Throwable e
-        (core/log-step (str "On-demand start failed: " (ex-message e)))
-        (try (keep-failure! front e)
-             (catch Exception e2 (core/log-step (str "warning: could not keep the failed start: " (ex-message e2)))))
-        ;; A start whose triggering port was ready is recorded ready, at that instant; what failed
-        ;; after it — an app, for an nREPL-triggered start — is kept above all the same.
-        (when-not (get-in @front [:start :recorded?])
-          (record-start! front :failed (or (ex-message e) (str (class e))) (core/now-iso)))
-        ;; The front's own reading only, after the record, which reads this start's :start.
-        (swap! front assoc :phase :absent :jvm-pid nil)
+        (when-not @handled? (fail-start! front e false))
         (deliver (:repl ready) {:error e})
         (deliver (:app ready) {:error e})))))
 
@@ -386,11 +394,14 @@
                   (let [i (connect-inner (:cfg @front) l)]
                     (locking held
                       (reset! inner i)
+                      ;; Replies are read from before the held bytes are written, as a direct
+                      ;; connection would: a target that answers before it has read everything
+                      ;; sent it would otherwise block on its reply while the flush blocks on it.
+                      (future (pump-inner! front conn i client end! close!))
                       (let [bs (.toByteArray held)] ((:write i) bs (count bs)))
                       (when @client-eof? ((:shutdown-output i))))
                     (deliver released true)
-                    (when @closed? (try ((:close i)) (catch Exception _ nil)))
-                    (pump-inner! front conn i client end! close!))))))))
+                    (when @closed? (try ((:close i)) (catch Exception _ nil))))))))))
       (catch Exception _ (close!)))))
 
 (defn- listen!

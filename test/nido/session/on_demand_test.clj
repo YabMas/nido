@@ -23,6 +23,15 @@
     (is (= [{:service :app :port port :bind-port bind-port}] (get-in ctx [:repl :front-apps]))
         "the front is told which app port it holds and where the app listens")))
 
+(deftest no-port-is-handed-out-twice-in-one-allocation
+  (with-redefs [nido.platform.process/deterministic-port (fn [_ low _] low)
+                nido.platform.process/port-free?         (constantly true)]
+    (let [svcs [{:type :process :name :repl :command "clojure" :on-demand {:idle-ms 1 :port-range [4000 4001]}}
+                {:type :eval :name :app :repl-service :repl :port-range [4000 4001]}]
+          ctx  (#'engine/pre-allocate-ports svcs "/tmp/wt-collide")
+          ports [(get-in ctx [:repl :port]) (get-in ctx [:app :port]) (get-in ctx [:app :bind-port])]]
+      (is (= 3 (count (distinct ports))) (str "the front's ports and the app's bound port differ: " ports)))))
+
 (deftest an-eager-runtime-allocates-as-before
   (let [ctx (#'engine/pre-allocate-ports (update services 1 dissoc :on-demand) "/tmp/wt-eager")]
     (is (nil? (:repl ctx)) "the JVM's nREPL picks its own port, as it always did")

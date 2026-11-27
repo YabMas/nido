@@ -335,3 +335,63 @@
           ;; test's redefinitions.
           (await-phase front :running)))
       (finally (cleanup fx)))))
+
+(defn- answers-first-server!
+  "A server on filesystem socket `path` standing in for a JVM that answers before it has read what
+   it was sent: it reads one byte, writes `reply-bytes`, then reads to the end. Returns a fn that
+   stops it."
+  [path reply-bytes]
+  (fs/delete-if-exists path)
+  (let [ss (ServerSocketChannel/open StandardProtocolFamily/UNIX)]
+    (.bind ss (UnixDomainSocketAddress/of (str path)))
+    (future
+      (try
+        (let [c (.accept ss)]
+          (.read c (ByteBuffer/allocate 1))
+          (let [b (ByteBuffer/wrap (byte-array reply-bytes))]
+            (while (.hasRemaining b) (.write c b)))
+          (let [b (ByteBuffer/allocate 65536)]
+            (loop [] (.clear b) (when (pos? (.read c b)) (recur))))
+          (.close c))
+        (catch Exception _ nil)))
+    (fn [] (.close ss) (fs/delete-if-exists path))))
+
+(deftest a-reply-is-read-while-the-held-bytes-are-still-being-written
+  (let [{:keys [cfg redefs server] :as fx} (fixture {})
+        reply (* 8 1024 1024)]
+    (try
+      (with-redefs-fn (assoc redefs #'process/start-jvm!
+                             (fn [c] (Thread/sleep 300)
+                               (reset! server (answers-first-server! (:socket c) reply))
+                               4242))
+        (fn []
+          (with-open [c (Socket. "127.0.0.1" (int (:nrepl-port cfg)))]
+            (.setSoTimeout c 5000)
+            (let [got (future (let [in (.getInputStream c) b (byte-array 65536)]
+                                (loop [n 0]
+                                  (let [r (try (.read in b) (catch Exception _ -1))]
+                                    (if (or (neg? r) (>= (+ n r) reply)) (+ n (max r 0)) (recur (+ n r)))))))]
+              ;; Sent while the JVM starts, so it is held and flushed once it answers.
+              (try (.write (.getOutputStream c) (byte-array (* 1024 1024)))
+                   (catch Exception _ nil))
+              (is (= reply (deref got 6000 :stuck))
+                  "the whole reply arrives although the target answers before reading its input")))))
+      (finally (cleanup fx)))))
+
+(deftest a-failed-start-is-kept-and-recorded-under-the-runtime-lock
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {:start-fails? true})
+        held? (atom false)]
+    (try
+      (with-redefs-fn (assoc redefs
+                             #'lifecycle/with-runtime-lock (fn [_ _ f]
+                                                             (reset! held? true)
+                                                             (try (f) (finally (reset! held? false))))
+                             #'failure/record! (fn [_ _] (swap! log conj [:failure-held? @held?]) {:id "f"})
+                             #'cold-starts/record! (fn [e] (swap! log conj [:record-held? @held? (:outcome e)]) e))
+        (fn []
+          (call (:nrepl-port cfg) "x" 3000)
+          (await-phase front :absent)
+          (Thread/sleep 100)
+          (is (some #{[:failure-held? true]} @log) "the failure is kept before the lock is let go")
+          (is (some #{[:record-held? true :failed]} @log) "and the start recorded failed under it")))
+      (finally (cleanup fx)))))

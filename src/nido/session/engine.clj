@@ -303,8 +303,17 @@
   [services]
   (into #{} (comp (filter #(and (= :process (:type %)) (:on-demand %))) (map :name)) services))
 
-(defn- allocate-port [seed [low high]]
-  (proc/find-available-port (proc/deterministic-port seed low high) (- high low)))
+(defn- free-port-outside
+  "The first port at or above `preferred` that `proc/find-available-port` finds free and that is not
+   in `taken` — the ports this allocation pass has already chosen, which no listener holds yet —
+   within `attempts` ports of it."
+  [preferred attempts taken]
+  (loop [p preferred]
+    (let [q (proc/find-available-port p (max 0 (- attempts (- p preferred))))]
+      (if (contains? taken q) (recur (inc q)) q))))
+
+(defn- allocate-port [seed [low high] taken]
+  (free-port-outside (proc/deterministic-port seed low high) (- high low) taken))
 
 (defn- pre-allocate-ports
   "Pre-allocate ports for services that need their port known by other
@@ -320,15 +329,19 @@
    is also named under its :process service's `:front-apps`, which is how the front learns
    which app port it holds."
   [services project-dir]
-  (let [on-demand (on-demand-repls services)]
+  (let [on-demand (on-demand-repls services)
+        ;; Every port this pass hands out, so none is handed out twice: nothing binds them
+        ;; until the services start, so a live-socket probe alone would pass one twice.
+        taken     (atom #{})
+        take!     (fn [port] (swap! taken conj port) port)]
     (reduce (fn [acc svc-def]
               (cond
                 (and (= :eval (:type svc-def)) (:name svc-def))
                 (let [rng  (or (:port-range svc-def) [3100 5100])
-                      port (allocate-port project-dir rng)
+                      port (take! (allocate-port project-dir rng @taken))
                       repl (some-> (:repl-service svc-def) keyword)]
                   (if (contains? on-demand repl)
-                    (let [bind (proc/find-available-port (inc port) (- (second rng) (first rng)))]
+                    (let [bind (take! (free-port-outside (inc port) (- (second rng) (first rng)) @taken))]
                       (-> acc
                           (assoc (keyword (:name svc-def)) {:port port :bind-port bind})
                           (update-in [repl :front-apps] (fnil conj [])
@@ -337,8 +350,9 @@
 
                 (contains? on-demand (:name svc-def))
                 (assoc-in acc [(keyword (:name svc-def)) :port]
-                          (allocate-port (str project-dir "#" (name (:name svc-def)))
-                                         (or (get-in svc-def [:on-demand :port-range]) [5100 5500])))
+                          (take! (allocate-port (str project-dir "#" (name (:name svc-def)))
+                                                (or (get-in svc-def [:on-demand :port-range]) [5100 5500])
+                                                @taken)))
 
                 :else acc))
             {} services)))

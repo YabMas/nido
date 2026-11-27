@@ -21,7 +21,12 @@
   (Operation start-app! "Evaluate the service's start form and wait for it."
     {:signature [:=> [:catn [:service-def :map] [:saved-state :any] [:session-ctx :map]] :any]})
   (Operation stop-app! "Evaluate the service's stop form."
-    {:signature [:=> [:catn [:service-def :map] [:saved-state :any]] :any]}))
+    {:signature [:=> [:catn [:service-def :map] [:saved-state :any]] :any]})
+  (Operation jvm-answers?
+    "Whether the nREPL an app's saved state names answers — for an app on an on-demand JVM,
+     whether that JVM runs, which is when a join recovers its app rather than leaving it to the
+     front."
+    {:signature [:=> [:catn [:saved-state :map]] :boolean]}))
 
 ;; The eval service is one implementation of the session-service protocol, by dispatch on :eval.
 ;; Declared beside the supplier because the protocol must not name its implementations.
