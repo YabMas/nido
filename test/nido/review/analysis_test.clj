@@ -12,12 +12,10 @@
    :targets-reviewed 3 :targets-skipped 5
    :reviewed-project :brian :reviewed-session "fix/thing" :reviewed-ws-id "ws-1"})
 
-(deftest the-external-ref-names-its-own-adapter
-  ;; spawn/external-ref defaults the adapter to :notion. Left to the default,
-  ;; every analysis would mint a workstream claiming a Notion identity it has
-  ;; not got.
+(deftest the-payload-names-the-run-and-no-adapter
+  ;; An analysis fire is a run, which mints no workstream and so claims no ref.
   (let [p (analysis/payload a-run)]
-    (is (= :review-run (:adapter p)))
+    (is (not (contains? p :adapter)))
     (is (= "review-abc" (:id p)))))
 
 (deftest the-payload-carries-the-counts-not-just-a-path-to-them
@@ -530,7 +528,7 @@
 
 (deftest a-record-runs-envelope-says-what-the-run-did
   (let [p (analysis/payload a-design-run)]
-    (is (= :review-run (:adapter p)))
+    (is (not (contains? p :adapter)))
     (is (= "design-loop-1" (:id p)))
     (is (= "design" (:loop p)))
     (is (= "design-loop cleared · record-round-analysis · 2 rounds · stratified still broken" (:title p)))

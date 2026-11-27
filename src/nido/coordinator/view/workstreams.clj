@@ -82,10 +82,7 @@
   "Source bucket of a workstream, classified from its record: :scratch when its
    ledger holds the birth entry of a one-off (scratch/birth!); :github when it
    carries a :github-issue ref (Phase 3); :slack when it carries a :slack-message
-   ref; :review-run when it carries a :review-run ref — a workstream minted to
-   HOLD a review-loop analysis rather than to do work, which is why it is a
-   source of its own: every other bucket names somewhere work arrived FROM, and
-   this one names a reading nido made of itself; :drain and :slice when its ledger holds a drain's
+   ref; :drain and :slice when its ledger holds a drain's
    or a slice's birth entry — work nido coordinates, shown on its own page. Else :notion — the
    default/coordinator bucket, so a ref-less coordinator workstream is never
    dropped from every view."
@@ -96,7 +93,6 @@
     (standing/born-scratch? ws)                                   :scratch
     (some #(= :github-issue (:adapter %)) (:external-refs ws))   :github
     (some #(= :slack-message (:adapter %)) (:external-refs ws))  :slack
-    (some #(= :review-run (:adapter %)) (:external-refs ws))     :review-run
     :else                                                         :notion))
 
 (defn- machine-name? [s]

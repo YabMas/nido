@@ -52,9 +52,5 @@
   {:about [ui-server ui-tui] :evidence "round"})
 
 (Claim at-rest-defined
-  "A held workstream is at rest when its row is settled, or when the position its row carries from status is :analysed — a review-loop analysis — whatever its band and whether or not it draws a gate. Being at rest is decided each time its row is recomputed, from that row alone, and decides nothing but which refreshes reach the row: a row's gate, its denials and its band are derived exactly as when nothing is at rest, and an at-rest row's gate is held as its row was last recomputed until a refresh reaches it."
+  "A held workstream is at rest when its row is settled. Being at rest is decided each time its row is recomputed, from that row alone, and decides nothing but which refreshes reach the row: a row's gate, its denials and its band are derived exactly as when nothing is at rest, and an at-rest row's gate is held as its row was last recomputed until a refresh reaches it."
   {:about [coordinator-work] :evidence "test"})
-
-(Claim analyses-off-the-list-refresh
-  "The surface bench can enlarge its clone with synthetic finished review-loop analysis workstreams — open, with a ledger whose position status reads as :analysed and no live session — as it already can with synthetic settled ones, and times the gate inbox, the Workstreams overview and the TUI board on that clone as on its others. Outside its tests, the code this change adds or changes appends no ledger entry to any analysis workstream and closes none; its tests file a synthetic analysis in a temporary store and append notes to it."
-  {:about [ui-server ui-tui] :evidence "round"})

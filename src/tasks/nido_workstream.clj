@@ -405,7 +405,7 @@
   discharge-cmd [& args] (run* discharge* args #{:rev :addresses :worktree :bookmark}))
 (def ^:private settled-bands
   "The bands of work that is over or is not work, which the list leaves out unless asked."
-  #{:done :dismissed :analysed})
+  #{:done :dismissed})
 
 (defn- list-line
   "One row as a line: id, band, who owes the next move — the person with the category they are

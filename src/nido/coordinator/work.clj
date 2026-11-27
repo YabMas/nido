@@ -474,12 +474,9 @@
 (def ^:private unrendered-bands
   "Bands the board does not draw a row for, and so does not need a position for.
    :done is dropped by grouped-by-stage outright; :dismissed renders its own
-   muted row with one action and nothing about where the work stood; :analysed
-   is not work at all — a workstream holding a review-loop analysis has no arc
-   to advance and belongs to the operations surface, whose unit is the proposal
-   inside it rather than the workstream around it; :drained is every drain and slice, whose own
-   page is /drains."
-  #{:done :dismissed :analysed :drained})
+   muted row with one action and nothing about where the work stood; :drained is every drain
+   and slice, whose own page is /drains."
+  #{:done :dismissed :drained})
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   release-candidate?
@@ -534,7 +531,7 @@
 (defn- band-of
   "The board band of an OPEN workstream, read off its ledger: :drained for a drain or a slice,
    whatever it holds — /drains shows them, never the overview; in progress while status places it
-   at an unanswered blocker; an analysis's own band; for a ledger the pipeline cannot read, the
+   at an unanswered blocker; for a ledger the pipeline cannot read, the
    stage chosen for it else in progress; settled when status's position says a person
    settled it in Notion; a person's or nido's recorded stage choice, while no record of the work
    is newer than it — the intake pen among them, which queueing a report records; a one-off's own band;
@@ -551,7 +548,6 @@
       ;; of :done.)
       (contains? #{:drain :slice} origin)            :drained
       (= :blocked (:at position))                    :in-progress
-      (= :review-run origin)                         :analysed
       ;; A ledger of records the pipeline cannot read is a person's reading, not a derivation:
       ;; it keeps the stage a person chose for it, and is otherwise in progress — never moved
       ;; on to a later band by a default.
@@ -2188,10 +2184,8 @@
                      :settled?  settled?
                      ;; At rest: only the sweep reaches it — settled history, as the core's
                      ;; engagement or the ledger's own close says (the core keeps most closed
-                     ;; ledgers open), or a review-loop analysis, read off the position status
-                     ;; gives it, whatever its band or gate. Decides nothing else; the gate above
-                     ;; reads `settled?`.
-                     :at-rest?  (or settled? finished? (= :analysed (get-in row [:position :at])))
+                     ;; ledgers open). Decides nothing else; the gate above reads `settled?`.
+                     :at-rest?  (or settled? finished?)
                      :gate      (when gate? (row-gate project row))
                      ;; The winding-down band's row, less its live sessions, which are the
                      ;; registry's and change without this row being recomputed.

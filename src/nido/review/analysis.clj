@@ -47,12 +47,9 @@
    fields; a diff envelope still carries each field below, so a template that names them renders a
    diff run as it always did.
 
-   `:adapter`/`:id` form the external ref the coordinator dedups workstreams on.
-   The adapter is named explicitly because `spawn/external-ref` defaults it to
-   `:notion`, and a review run is not a Notion page — left to the default, every
-   analysis would mint a workstream claiming a Notion identity it does not have.
-   Keyed on the run id, a re-fire of the same run lands back in the workstream
-   that already holds its analysis instead of starting a second one.
+   `:id` is the analysed run's id, which keys the analysis run's start, so a re-fire of the
+   same run is answered rather than run twice. It names no `:adapter`: the fire is a run, which
+   mints no workstream and so claims no ref.
 
    The counts are duplicated out of the report on purpose. They are the whole
    story of the run if the run dir has been reclaimed by the time the analysis
@@ -246,8 +243,7 @@
         ;; memory skipping a run and is said in its own words.
         unrecorded (when (and ledger (not (#{"appended" "no-workstream" "superseded"} ledger)))
                      review-entry)]
-    (cond-> {:adapter            :review-run
-             :id                 (str run-id)
+    (cond-> {:id                 (str run-id)
              :title              (str "review-loop " (name (or status :unknown))
                                       (when reviewed-session (str " · " reviewed-session))
                                       " · " (or rounds 0)
@@ -430,8 +426,7 @@
         broken (seq (map name still-broken))
         ;; Broken in a judgement the run then amended against: not judged again, so not known broken.
         at-end (if repaired? " · amended, not re-judged: " " · broken at the end: ")]
-    (cond-> {:adapter     :review-run
-             :id          (str run-id)
+    (cond-> {:id          (str run-id)
              :loop        kind
              :title       (str kind "-loop " (name (or status :unknown))
                                (when reviewed-session (str " · " reviewed-session))

@@ -115,7 +115,6 @@
    :slice-implemented
    :slice-reviewed
    :slice-cleared
-   :analysed
    :intake
    :unplaceable])
 
@@ -771,19 +770,6 @@
     (contains? ks :intent)         :intent-stated
     triage-unaccepted?             :triage-awaiting
 
-    ;; A workstream that exists to HOLD a reading, not to do work. The review
-    ;; loop mints one per analysed run and files one analysis into it; decisions
-    ;; about the proposals in that analysis accumulate beside it. There is no
-    ;; intent to establish and no arc to advance, so every clause above is
-    ;; silent and the :else below would answer :intake — which is what put ten
-    ;; of these on the board asking to be triaged. Placed after the record arc
-    ;; rather than before it so that a workstream which somehow grew a real arc
-    ;; is read by that arc, not by how it started.
-    (and (contains? ks :review-analysis)
-         (empty? (disj (set (filter legible-kinds ks))
-                       :review-analysis :improvement-decision :improvement-landed)))
-    :analysed
-
     ;; An empty ledger IS :intake — that is a pickup, and its own row in the
     ;; routing table. A ledger with entries none of which this vocabulary reads
     ;; is a different fact and must not collapse into the same answer.
@@ -904,10 +890,6 @@
    :slice-reviewed    {:stage :clear-slice           :mode :authoring}
    :slice-cleared     {:stage :land                  :mode :human}
    :shipped           nil
-   ;; Terminal, and not for want of a stage: the analysis is complete when it is
-   ;; filed. What happens to its proposals is a decision, which is a human's and
-   ;; has no stage to run.
-   :analysed          nil
    :unplaceable       nil})
 
 (defn ^{:malli/schema [:=> [:cat :any :keyword] [:maybe :map]]}

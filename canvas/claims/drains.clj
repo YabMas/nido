@@ -61,7 +61,7 @@
   {:about [lane-drain ui-server] :evidence "round"})
 
 (Claim overview-bands-derived-from-origin-and-position
-  "An open workstream's band on the overview is band-of's, read from its origin, its position and the recorded stage choice. A workstream closed between phases is placed on :awaiting-gate, and a closed one on :done or :dismissed from its closure. :done and :analysed are not drawn on the overview, nor is any workstream whose origin is in the one set of origins owned by another page: :drain and :slice always, and :review-run unless status places it at a blocker."
+  "An open workstream's band on the overview is band-of's, read from its origin, its position and the recorded stage choice, with two overrides from the core: a workstream the core holds closed is :done, and one the core has placed at work while its ledger reads intake is :in-progress where band-of answers :triage or :ready. A workstream closed between phases and open in the core is placed on :awaiting-gate, and a closed one on :done or :dismissed from its closure. :done is not drawn on the overview, nor is any workstream whose origin is :drain or :slice, which another page owns."
   {:about [coordinator-work view-workstreams] :evidence "round"})
 
 (Claim drains-page-and-one-inbox-row

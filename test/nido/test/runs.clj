@@ -35,7 +35,7 @@
    into the analysis. Answers the run's id."
   ([project run-id observations] (analysis! project run-id observations {}))
   ([project run-id observations extra]
-   (let [id (run! project :review-analysis {:adapter "review-run" :id run-id :title "t"} :running)]
+   (let [id (run! project :review-analysis {:id run-id :title "t"} :running)]
      (records/append-to-run! (client/run-key project id)
                              (merge {:kind :review-analysis :verdict :degraded :run-id run-id
                                      :status "clean" :rounds 1 :summary "s"

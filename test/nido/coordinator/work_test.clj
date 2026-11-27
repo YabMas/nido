@@ -108,11 +108,6 @@
   ;; The guarantee this whole design exists for: nothing nido drives can be
   ;; hidden by default again. Every row the model emits outside the intake
   ;; stages is on exactly one band.
-  ;;
-  ;; :analysed is the other deliberate exception and it is checked below rather
-  ;; than left implicit — a workstream holding a review-loop analysis is not work
-  ;; and has no arc, so the board draws no row for it and the operations surface
-  ;; is where it is reachable.
   (let [grouped {:incoming [{:ws-id "i"}]
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
@@ -127,41 +122,6 @@
         "the board = every row grouped-rows emits, less intake")
     (is (= (count board) (count (set board)))
         "and no row appears on two bands")))
-
-(deftest analysed-rows-are-off-the-board-on-both-sides-or-neither
-  ;; The coverage oracle above only holds because board-bands and grouped-rows
-  ;; agree about :analysed. If a later edit teaches one of them about the band
-  ;; and not the other, that test starts failing for a reason nobody will connect
-  ;; to this; so the agreement is asserted here, where the reason is written down.
-  (let [grouped {:in-progress [{:ws-id "p"}] :analysed [{:ws-id "a"}]}]
-    (is (= #{"p"} (set (map :ws-id (work/grouped-rows grouped))))
-        "grouped-rows does not emit an analysed row")
-    (is (= #{"p"} (set (map :ws-id (mapcat second (work/board-bands grouped)))))
-        "and the board draws none")
-    (is (contains? @#'work/unrendered-bands :analysed)
-        "so it must be an unrendered band — otherwise with-position pays to place
-         a row nothing will draw")))
-
-(deftest a-workstream-holding-an-analysis-is-not-work
-  ;; What put ten analyses in nido's Intake asking to establish intent: they
-  ;; arrived through no source ws-source knew, fell to the :notion default, and
-  ;; were projected as ordinary un-triaged tickets.
-  (with-tmp
-    (fn [_]
-      (let [mk    #(:id (workstream/create! :brian {:external-refs [{:adapter :review-run :id %}]}))
-            open  (mk "r1")
-            gone  (mk "r2")
-            done  (mk "r3")
-            stage #(:stage (first (filter (comp #{%} :ws-id) (work/list-workstreams :brian))))]
-        (work/dismiss! :brian gone)
-        (workstream/close! :brian done :done)
-        (is (= :analysed (stage open))
-            "a review-run row folds off the board")
-        (is (= :dismissed (stage gone))
-            "a dismissed one still reads dismissed — that is a human's decision and it outranks
-             what kind of record this is")
-        (is (= :done (stage done))
-            "and a closed one still reads done")))))
 
 (deftest winding-down-lists-closed-ws-with-live-sessions
   (with-tmp
@@ -2830,8 +2790,8 @@
       "a stage nido runs itself owes a person nothing")
   (is (nil? (work/awaiting-human {:next nil})) "a terminal position owes nothing")
   (is (nil? (work/awaiting-human nil))
-      "and a row that carries no position at all must not throw — :done,
-       :dismissed and :analysed are never stamped with one"))
+      "and a row that carries no position at all must not throw — :done and
+       :dismissed are never stamped with one"))
 
 (deftest a-published-pr-is-landed-from-its-own-button
   (is (= [{:id :land :label "Land" :kind :mutation :style :primary :seq 37}]
@@ -3188,7 +3148,7 @@
           (let [held (test-runs/run! :nido :improvement-claim
                                      {:adapter :improvement :id "ws-p/1#0" :title "improve: it"} :running)]
             (test-runs/run! :nido :improvement-claim {:adapter :improvement :id "ws-p/1#1"} :done)
-            (test-runs/run! :nido :review-analysis {:adapter :review-run :id "r"} :running)
+            (test-runs/run! :nido :review-analysis {:id "r"} :running)
             (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: it"
                      :state :working}]
                    (map #(dissoc % :started-at) (work/improvement-holds)))
@@ -3471,17 +3431,6 @@
         (is (= :done (:stage (row))))
         (work/set-stage! :brian (:id w) :ready)
         (is (= :ready (:stage (row))) "re-choosing the stored stage reverses the settlement")))))
-
-(deftest an-unanswered-blocker-outranks-the-analysis-band
-  (with-tmp
-    (fn [_]
-      (let [w   (workstream/create! :brian {:external-refs [{:adapter :review-run :id "run-1" :title "t"}]})
-            row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
-        (is (= :analysed (:stage (row))))
-        (workstream/append-entry! :brian (:id w) {:kind :blocker}
-          (pr-str {:format :blocker :summary "s" :needs "n?" :options sample-options :after "The work resumes once you answer."}))
-        (is (= :blocked (get-in (row) [:position :at])))
-        (is (= :in-progress (:stage (row))) "status places it, not where it came from")))))
 
 (deftest a-shipment-carries-its-shipping-choice-out
   (with-tmp
