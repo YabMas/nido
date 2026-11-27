@@ -5605,6 +5605,28 @@
                                 :message {:content [(assoc c :type "tool_use")]}}))))
   path)
 
+(deftest a-full-write-is-known-whatever-preceded-it
+  ;; An edit whose old text the launch snapshot did not hold (a person changed the file) leaves
+  ;; the path unknown — until a full Write states it whole again.
+  (let [dir (str (fs/create-temp-dir))
+        f   (str (fs/path dir "canvas/a.clj"))
+        log (str (fs/path dir "t.log"))]
+    (try
+      (transcript! log
+                   {:id "1" :name "Edit" :input {:file_path f :old_string "not there" :new_string "x"}}
+                   {:id "2" :name "Write" :input {:file_path f :content "whole\n"}})
+      (is (= {"canvas/a.clj" "whole\n"}
+             (stages/amender-left {:transcript log :cwd dir :permitted ["canvas"]
+                                   :before {"canvas/a.clj" "a\n"}})))
+      (transcript! log
+                   {:id "1" :name "Write" :input {:file_path f :content "whole\n"}}
+                   {:id "2" :name "Edit" :input {:file_path f :old_string "not there" :new_string "x"}})
+      (is (= {"canvas/a.clj" :nido.review.stages/unknown}
+             (stages/amender-left {:transcript log :cwd dir :permitted ["canvas"]
+                                   :before {"canvas/a.clj" "a\n"}}))
+          "an edit the replay cannot make after it is still unknown")
+      (finally (fs/delete-tree dir)))))
+
 (deftest the-tree-reading-ignores-a-commit-that-leaves-the-tree-as-it-was
   ;; Two runs lost an amendment with @'s tree byte-identical either side of the
   ;; amend window: a caller's `jj commit` moved @'s parent, so `jj diff --git` —

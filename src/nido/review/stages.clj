@@ -4352,17 +4352,17 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
 (defn- replay-write
   "What a file holding `content` holds after one file-writing tool call, by the call alone, or
    ::unknown when it cannot be told exactly (a notebook edit, an edit the replay does not hold the
-   old text of)."
+   old text of). Only an edit reads `content`, through `replay-edit`, which is the one place an
+   unknown base stays unknown: a full Write states the file whole, so it is known whatever
+   preceded it."
   [content {:keys [name input]}]
-  (if (= ::unknown content)
-    ::unknown
-    (case name
-      "Write"     (str (:content input))
-      "Edit"      (replay-edit content (:old_string input) (:new_string input) (:replace_all input))
-      "MultiEdit" (reduce (fn [c {:keys [old_string new_string replace_all]}]
-                            (if (= ::unknown c) c (replay-edit c old_string new_string replace_all)))
-                          content (:edits input))
-      ::unknown)))
+  (case name
+    "Write"     (str (:content input))
+    "Edit"      (replay-edit content (:old_string input) (:new_string input) (:replace_all input))
+    "MultiEdit" (reduce (fn [c {:keys [old_string new_string replace_all]}]
+                          (replay-edit c old_string new_string replace_all))
+                        content (:edits input))
+    ::unknown))
 
 (defn- under
   "`file` as a path relative to `root`, or nil when it lies outside it. Both are canonicalized, since
