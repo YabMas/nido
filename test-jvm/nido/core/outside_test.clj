@@ -186,7 +186,7 @@
 (deftest a-run-starts-in-a-scope-of-its-own-under-its-cap
   (when-let [scope (test-scope 50)]
     (with-core [{:keys [s cmd! root]} {:scope scope}]
-      (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
       (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec (str own-cgroup "; echo '{:outcome :completed}'"))})
       (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))
       (let [[cg cap] (str/split-lines (slurp (io/file (turn/run-dir (turn/turn-dir root "ws" "t") 1) "out")))]
@@ -196,7 +196,7 @@
 (deftest a-scoped-run-is-cancelled-through-the-port
   (when-let [scope (test-scope 50)]
     (with-core [{:keys [s cmd! root]} {:scope scope}]
-      (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
       (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "sleep 30")})
       (let [pid-f (io/file (turn/run-dir (turn/turn-dir root "ws" "t") 1) "pid")]
         (is (await-until #(.exists pid-f) 10000))
@@ -219,7 +219,9 @@
           cmd! (fn [c] (deref (writer/submit! w {:key (str "k" (swap! n inc)) :ws "ws" :command c}) 10000 nil))
           dead (turn/start {:root root :executors {:fake fake} :submit (fn [_] nil) :scope scope})]
       (try
-        (doseq [u ["a" "b" "c"]] (cmd! {:command :open-unit :unit u :project "p" :goal "g" :session-cwd "/tmp"}))
+        (doseq [u ["a" "b" "c"]
+                c (sessions/ready {:command :open-unit :unit u :project "p" :goal "g"} "/tmp")]
+          (cmd! c))
         (cmd! {:command :start-turn :turn "still-running" :unit "a"
                :spec (spec (str "{ " own-cgroup "; } >&2; sleep 2; echo '{:outcome :completed}'"))})
         (cmd! {:command :start-turn :turn "refused-meanwhile" :unit "b"
@@ -259,7 +261,7 @@
     (let [cg (java.nio.file.Paths/get "/proc/self/cgroup" (make-array String 0))
           parent (when (java.nio.file.Files/exists cg (make-array java.nio.file.LinkOption 0))
                    (-> (java.nio.file.Files/readAllLines cg) first (str/split #":" 3) (get 2)))]
-      (cmd! "ws" {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+      (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "g"} "/tmp")] (cmd! "ws" c))
       (cmd! "ws" {:command :start-turn :turn "t" :unit "u" :spec (spec "cut -d: -f3 /proc/self/cgroup 2>/dev/null; echo '{:outcome :completed}'")})
       (is (await-until #(= :completed (:status (turn-of s "ws" "t"))) 10000))
       (let [rdir (turn/run-dir (turn/turn-dir root "ws" "t") 1)
