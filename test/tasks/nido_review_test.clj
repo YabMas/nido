@@ -1429,6 +1429,7 @@
            :amend-unreadable   "would not parse as EDN"
            :amend-invalid      "the ledger refused"
            :amend-touched-code "still there"
+           :canvas-unverified  "retried once"
            :no-workstream      "nido session"
            :no-record          "author the baseline first"
            :nothing-to-check   "refutable"
@@ -2970,3 +2971,28 @@
     (with-redefs [ws/read-ws    (fn [_ _] {:entries rows})
                   ws/entries-of (fn [_ _ kind] (case kind :blocker [{:seq 2} {:seq 5}] []))]
       (is (= [5] (mapv :seq (#'t/unanswered-blockers :brian "ws-1")))))))
+
+(deftest the-amend-dry-run-answers-whether-the-canvas-loads
+  ;; The incident's amender ran the dry-run over a canvas that did not load and was told `ok`.
+  (let [f (str (fs/create-temp-file {:suffix ".edn"}))]
+    (spit f (pr-str {:record {:format :design}}))
+    (try
+      (with-redefs [record/amendment-refusal (constantly nil)
+                    nido.design.check/design-of (fn [_ _] {:spec-dirs ["canvas"]})]
+        (doseq [[reading says] {{:status :undecidable :cause :load-failure
+                                 :error "canvas namespace canvas.review.core does not load: authors 2 instances"}
+                                "canvas.review.core does not load"
+                                {:status :undecidable :cause :timeout :limit-ms 180000 :retried? true
+                                 :error "did not finish"}
+                                "did not finish within 180s, twice"}]
+          (with-redefs [record/canvas-reading (fn [& _] reading)]
+            (let [out (with-out-str
+                        (is (= 1 (t/amend-check* {:project "nido" :ws-id "ws-1" :kind "design"
+                                                  :file f :worktree "/w"}))))]
+              (is (str/includes? out says)))))
+        (with-redefs [record/canvas-reading (fn [& _] {:status :listed :elements []})]
+          (is (= 0 (t/amend-check* {:project "nido" :ws-id "ws-1" :kind "design" :file f :worktree "/w"}))))
+        (testing "a baseline amender writes no canvas, and its dry-run reads none"
+          (with-redefs [record/canvas-reading (fn [& _] (throw (ex-info "read" {})))]
+            (is (= 0 (t/amend-check* {:project "nido" :ws-id "ws-1" :kind "baseline" :file f :worktree "/w"}))))))
+      (finally (fs/delete-if-exists f)))))

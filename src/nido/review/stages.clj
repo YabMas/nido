@@ -4346,10 +4346,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    is the amender's own stream-json log; `permitted` holds dirs relative to `cwd` the amender may
    write in, whose moves are reported and never held against it. Returns
 
-     {:before id :after id :moved [path] :permitted [path] :attributed [path]}
+     {:before id :after id :moved [path] :permitted [path] :attributed [path] :wrote [path]}
 
    plus `:unreadable` when either reading failed. The amender trespassed iff `:attributed` is
-   non-empty.
+   non-empty. `:wrote` is every path under `permitted` a file-writing tool of its own wrote, moved
+   or not — what is the amender's to put back when its amendment is not kept, where `:permitted`
+   is what moved there whoever moved it.
 
    ATTRIBUTED, not detected. An amender runs in a live session worktree that a person, their
    agent, an editor's cache and the REPL all write to, so a moved path is the amender's only when
@@ -4366,7 +4368,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
              :after      (:identity after)
              :moved      (vec moved)
              :permitted  (vec (filter permitted? moved))
-             :attributed (vec (sort (remove permitted? suspects)))}
+             :attributed (vec (sort (remove permitted? suspects)))
+             :wrote      (vec (sort (filter permitted? written)))}
       unreadable (assoc :unreadable unreadable))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}

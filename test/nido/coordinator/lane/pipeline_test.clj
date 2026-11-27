@@ -599,6 +599,7 @@
   (doseq [s [:sufficient :asked :cleared :clearance-contended :nothing-to-clear
              :disputed :underivable :nothing-to-amend :unrecorded :retreated
              :amend-noop :amend-launch-failed :usage-limited :amend-invalid :amend-touched-code :amend-unreadable
+             :canvas-unverified
              :codex-failed :reviewer-unavailable :no-output :round-crashed :unusable-answer
              :nothing-to-check :no-record :no-workstream
              :premise-unverified :premise-retracted :design-retracted

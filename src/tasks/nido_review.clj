@@ -25,6 +25,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as creport]
    [nido.coordinator.report.model :as claim-model]
+   [nido.design.check :as design-check]
    [nido.review.analysis :as analysis]
    [nido.review.codex :as codex]
    [nido.review.frontend :as frontend]
@@ -2177,6 +2178,7 @@
    :usage-limited "the account's usage limit refused the amender — nothing was appended and nothing was decided; re-run after the reset named above"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
+   :canvas-unverified "the declaration's listing did not answer over the amender's canvas edit, retried once — the edit was put back and nothing was appended; its canvas as it left it is kept in the run dir, the case to list again against fukan"
    :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"
    :dry-run    "nothing was amended"
    :no-workstream "run this from a nido session — its worktree or its session home"
@@ -3041,12 +3043,21 @@
   amend-check*
   "Dry-run an amender's answer file against the ledger it will be appended to: 0 and `ok` when the
    append would take its :record, 1 and the refusal when it would not, 2 when there is no record to
-   check. Writes nothing."
-  [{:keys [project ws-id kind file]}]
-  (let [answer (try (edn/read-string (slurp (str file))) (catch Exception _ nil))]
+   check. Writes nothing.
+
+   A :design answer in a modelled project is also refused when the declaration in `worktree` (the
+   cwd, which is where an amender runs it) does not list — a namespace that does not load, or a
+   listing that did not finish — with the refusal the round's own gate would give, so the amender
+   learns of a canvas it broke before it answers rather than after."
+  [{:keys [project ws-id kind file worktree]}]
+  (let [answer   (try (edn/read-string (slurp (str file))) (catch Exception _ nil))
+        project  (keyword (name project))
+        kind     (keyword (name kind))
+        worktree (str (or worktree (System/getProperty "user.dir")))]
     (if-let [r (:record answer)]
-      (if-let [refusal (record/amendment-refusal (keyword (name project)) (str ws-id)
-                                                 (keyword (name kind)) r)]
+      (if-let [refusal (or (record/amendment-refusal project (str ws-id) kind r)
+                           (when (and (= :design kind) (design-check/design-of project worktree))
+                             (record/canvas-refusal (record/canvas-reading project worktree nil))))]
         (do (println (str "refused — " refusal)) 1)
         (do (println "ok — the ledger would take this record") 0))
       (do (println (str "nothing to check — " file " holds no readable {:record ...}")) 2))))

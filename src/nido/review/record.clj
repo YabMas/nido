@@ -5816,7 +5816,7 @@
    Narrower than the amend prompts on purpose. The judge's findings are not repeated, because the
    record already answers them and this is not another round: the only thing wrong with it is
    what the ledger named."
-  [{:keys [kind record refusal out-path check-cmd]}]
+  [{:keys [kind record refusal out-path check-cmd permitted]}]
   (str "The ledger refused the " (name kind) " record you wrote for this round, so nothing\n"
        "was appended and the amendment has not taken effect.\n\n"
        "WHY IT WAS REFUSED:\n\n  " refusal "\n\n"
@@ -5832,7 +5832,11 @@
        amender-reading
        (check-block check-cmd)
        "nido reads this file, validates it and appends it. Do not append it yourself, do\n"
-       "not commit anything, and do NOT edit any source file."))
+       "not commit anything, and do NOT edit any source file"
+       (if (seq permitted)
+         (str " outside the declaration under " (str/join ", " (map #(str % "/") permitted))
+              ": that, where the refusal names it, is yours to repair.")
+         ".")))
 
 (defn- amender-launch
   "What the report keeps of how an amender's agent ended — `agent/launch!`'s `:exit-code`,
@@ -5998,14 +6002,22 @@
    path that moved ends it `:amend-touched-code`, with that stop's `:amend-error` and
    `:amend-tree`. `permitted` is the dirs a repair may write in, as for the amendment it repairs.
    `path` is the answer file `record` was read from; `check-cmd`, given an answer file, is the
-   command that dry-runs it, or nil to offer none."
-  [ctx {:keys [kind stem record path append permitted check-cmd]}]
+   command that dry-runs it, or nil to offer none.
+
+   `append` may instead return `{:halt stop}`: the round ends there on `stop` (a map carrying its
+   `:status`), with no re-ask — for a refusal no repair by the amender can lift. `launched`, when
+   given, is called with each re-ask's trespass reading, so the round knows every path its
+   amender wrote."
+  [ctx {:keys [kind stem record path append permitted check-cmd launched]}]
   (let [dir     (cstate/run-dir (:run-id (:config ctx)))
         invalid (fn [err refusals path]
                   {:status :amend-invalid :amend-error err :refusals refusals :unappended path})]
     (loop [record record, path path, refusals []]
-      (let [{:keys [err] :as written} (append record)]
+      (let [{:keys [err halt] :as written} (append record)]
         (cond
+          halt
+          (assoc halt :refusals refusals)
+
           (nil? err)
           (assoc written :refusals refusals)
 
@@ -6024,7 +6036,9 @@
                                :out-path out-path :check-cmd check
                                :first-message (refusal-prompt {:kind kind :record (:record written)
                                                                :refusal err :out-path out-path
-                                                               :check-cmd check})})
+                                                               :check-cmd check
+                                                               :permitted permitted})})
+                _        (when launched (launched trespass))
                 raw      (when (fs/exists? out-path)
                            (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
                 answer   (parse-amend-answer raw [] nil)
@@ -6053,7 +6067,8 @@
                  :amend-refusals (:refusals written))
     (:amend-error written) (assoc :amend-error (:amend-error written))
     (:unappended written)  (assoc :amend-unappended (:unappended written))
-    (:amend-tree written)  (assoc :amend-tree (:amend-tree written))))
+    (:amend-tree written)  (assoc :amend-tree (:amend-tree written))
+    (:canvas-check written) (assoc :canvas-check (:canvas-check written))))
 
 (def ^:private stale-rule
   "What an amender does with every subject a finding it accepted bears on beyond the one it names.
@@ -9406,6 +9421,119 @@
       :restated (when (and project ws-id) (restated-areas project ws-id prev (:record ctx)))
       :declared? declared?})))
 
+;; ── The declaration an amendment carries ────────────────────────────────────
+;;
+;; A design amender in a modelled project may write the declaration under its spec-dirs, and that
+;; edit is half of its answer. The round keeps it only beside the amendment it belongs to, and only
+;; when the declaration still lists with it: a canvas that does not load stops every later round
+;; before its judge, and nothing but an amender is let write it before the design clears.
+
+(defn- canvas-files
+  "What every file under `dirs` (relative to `cwd`) holds, by path relative to `cwd` — the
+   declaration as one value a later reading compares against and puts back from."
+  [cwd dirs]
+  (into {}
+        (for [d dirs
+              :let [root (fs/path cwd d)]
+              :when (fs/directory? root)
+              f (fs/glob root "**")
+              :when (fs/regular-file? f)]
+          [(str (fs/relativize cwd f)) (slurp (str f))])))
+
+(defn- holds
+  "What `path` (relative to `cwd`) holds now, or nil when it is absent."
+  [cwd path]
+  (let [f (fs/path cwd path)] (when (fs/regular-file? f) (slurp (str f)))))
+
+(defn- spec-path?
+  [dirs path]
+  (some #(or (= path %) (str/starts-with? path (str % "/"))) dirs))
+
+(def ^:private canvas-unverified-causes
+  "The listing failures that say nothing about the canvas: the reading did not finish, or finished
+   without answering. Retried once, and never kept."
+  #{:timeout :unanswered})
+
+(defn ^{:malli/schema [:=> [:cat :keyword :string [:maybe [:vector :string]]] :DeclaredElements]}
+  canvas-reading
+  "The declaration at `worktree` as the next round's pre-judge listing will read it — design-check's
+   element listing, with `changed` (canvas paths relative to `worktree`) the files whose load is
+   traced first when one does not load. A reading that timed out or gave no answer is taken again
+   once, since a listing that did not finish says nothing about the canvas; the second answer is
+   the reading, `:retried?` set."
+  [project worktree changed]
+  (let [r (design-check/elements project worktree changed)]
+    (if (canvas-unverified-causes (:cause r))
+      (assoc (design-check/elements project worktree changed) :retried? true)
+      r)))
+
+(defn ^{:malli/schema [:=> [:cat :DeclaredElements] [:maybe :string]]}
+  canvas-refusal
+  "Why the declaration a `canvas-reading` read cannot stand beside an amendment, said to the
+   amender who wrote it — or nil when it lists. The same text the round re-asks with and the
+   dry-run refuses with, so the amender is told one thing either way."
+  [{:keys [status cause error limit-ms retried?]}]
+  (case status
+    :listed nil
+    :unmodelled
+    (str "your edit left no declaration under the design's spec-dirs: every .clj file there is"
+         " gone, so the canvas the design stands on no longer exists. Put the declaration back,"
+         " changed only where the amendment moves or adds an element")
+    (case cause
+      :load-failure
+      (str "the declaration under canvas/ no longer loads with your edit, so no later round could"
+           " read it: " error ". Repair the canvas so that it loads — change only what broke it —"
+           " and answer the record again")
+      :timeout
+      (str "the declaration's element listing did not finish within "
+           (if limit-ms (str (quot limit-ms 1000) "s") "its limit")
+           (when retried? ", twice") " over your edit, so whether the canvas loads is unknown")
+      (str "the declaration's element listing gave no answer over your edit"
+           (when retried? ", twice") ": " error))))
+
+(defn- canvas-unverified-stop
+  "The round's end on a post-amend listing that did not answer: nothing appended and no re-ask,
+   since no repair by the amender makes fukan finish — the reading itself is what failed. `kept`
+   is where the run dir holds the amender's canvas as it left it, the case to list again against
+   fukan."
+  [reading kept]
+  {:status       :canvas-unverified
+   :canvas-check (cond-> (select-keys reading [:status :cause :error :limit-ms :retried?])
+                   kept (assoc :kept kept))
+   :amend-error  (str (canvas-refusal reading)
+                      " — the edit is not verified, so it was put back and nothing was appended"
+                      (when kept (str "; the canvas as the amender left it is kept at " kept)))})
+
+(defn- keep-canvas!
+  "Copy `files` (path → what it held) under `dir`, by path, and answer `dir` — or nil when there is
+   nothing to keep."
+  [dir files]
+  (when (seq files)
+    (doseq [[path content] files
+            :let [f (fs/path dir path)]]
+      (fs/create-dirs (fs/parent f))
+      (if (some? content) (spit (str f) content) (spit (str f ".absent") "")))
+    (str dir)))
+
+(defn- put-back-canvas!
+  "Put back every declaration path the amender wrote this round to what it held before the amender
+   launched (`before`, from `canvas-files`), and keep what it left under the run dir. A path that no
+   longer holds what the amender left (`left`, path → what it held after the amender's last launch)
+   was changed by someone after it, and is left alone. Answers what the report keeps of it, or nil
+   when the amender wrote nothing there."
+  [cwd before left kept-dir]
+  (when (seq left)
+    (let [{mine true theirs false} (group-by (fn [[path content]] (= content (holds cwd path))) left)
+          kept (keep-canvas! kept-dir (into {} mine))]
+      (doseq [[path _] mine
+              :let [f (fs/path cwd path) was (get before path)]]
+        (if (some? was)
+          (do (fs/create-dirs (fs/parent f)) (spit (str f) was))
+          (fs/delete-if-exists f)))
+      (cond-> {:put-back (vec (sort (map first mine)))}
+        kept         (assoc :kept kept)
+        (seq theirs) (assoc :changed-since (vec (sort (map first theirs))))))))
+
 (defn- amend-design!
   "Launch the amender against the design record and take in what it hands back.
 
@@ -9426,17 +9554,57 @@
         ;; element-id rule requires is part of the answer, and the next round
         ;; judges it with the rest.
         permitted (:spec-dirs declared)
-        check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :design %))]
+        check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :design %))
+        stem      (str "design-amend-round-" (:iter ctx))
+        ;; The declaration as it stood before the amender, and whether it listed then: the first
+        ;; is what an edit the round does not keep is put back to, the second whether a canvas
+        ;; that no longer loads is the amender's doing.
+        canvas-before  (when declared (canvas-files code-cwd permitted))
+        listed-before? (when declared (= :listed (:status (design-check/elements project code-cwd))))
+        ;; Every declaration path the amender wrote, as it left it after its last launch, and
+        ;; every one the tree readings saw move.
+        left      (atom {})
+        moved     (atom #{})
+        appended? (atom false)
+        kept-dir  (str (fs/path dir (str stem "-canvas")))
+        launched  (fn [trespass]
+                    (swap! moved into (:permitted trespass))
+                    (swap! left merge (into {} (for [p (:wrote trespass)] [p (holds code-cwd p)]))))
+        ;; Whether the declaration the amender's writes leave stands beside the amendment: nil when
+        ;; it does (or nothing under it moved), {:err refusal} for the amender to repair, or
+        ;; {:halt stop} when no repair of its can lift what stopped it.
+        canvas-gate (fn []
+                      (when declared
+                        (let [now     (canvas-files code-cwd permitted)
+                              changed (vec (sort (into @moved
+                                                       (filter #(not= (get canvas-before %) (get now %)))
+                                                       (into (set (keys canvas-before)) (keys now)))))]
+                          (when (seq changed)
+                            (let [reading (canvas-reading project code-cwd
+                                                          (filterv #(spec-path? permitted %) changed))]
+                              (cond
+                                (= :listed (:status reading)) nil
+                                (canvas-unverified-causes (:cause reading))
+                                {:halt (canvas-unverified-stop reading (when (seq @left) kept-dir))}
+                                listed-before? {:err (canvas-refusal reading)}
+                                :else nil))))))
+        settle    (fn [out]
+                    (if @appended?
+                      out
+                      (if-let [pb (put-back-canvas! code-cwd canvas-before @left kept-dir)]
+                        (assoc out :canvas-put-back pb)
+                        out)))]
     (fs/create-dirs dir)
     (fs/delete-if-exists out-path)
     (let [{:keys [trespass launch]}
                    (launch-amender!
-                    ctx {:label (str "design-amend-round-" (:iter ctx))
+                    ctx {:label stem
                          :permitted permitted
                          :out-path out-path
                          :check-cmd (when check-cmd (check-cmd out-path))
                          :first-message (design-amend-message ctx prev recommend baseline out-path
                                                               (some? declared))})
+          _        (launched trespass)
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
           answer   (parse-amend-answer raw (:findings ctx) design-finding-base-key)
@@ -9449,7 +9617,8 @@
                      (seq (:stale answer))
                      (update :carry assoc :stale (:stale answer)
                              :stale-because (:stale-because answer)))]
-      (cond
+      (settle
+       (cond
         (seq (:attributed trespass))
         (trespass-stop ctx trespass out-path answer)
 
@@ -9508,6 +9677,7 @@
                                     :record record
                                     :path out-path
                                     :check-cmd check-cmd
+                                    :launched launched
                                     ;; Refused like a ledger refusal, so the amender is asked to
                                     ;; put the asked claims back rather than the run stopping.
                                     :append (fn [record]
@@ -9522,12 +9692,15 @@
                                                                (some->> (accepted-moves prev record (:findings ctx))
                                                                         person-refusal))]
                                                 {:record record :err err}
-                                                (let [record (cite record)]
-                                                  (try {:record record
-                                                        :seq    (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
-                                                                                  (pr-str (ws/unstamp record)))}
-                                                       (catch Exception e
-                                                         {:record record :err (ledger-refusal e)})))))})
+                                                (if-let [gate (canvas-gate)]
+                                                  (assoc gate :record record)
+                                                  (let [record (cite record)]
+                                                    (try (let [n (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
+                                                                                   (pr-str (ws/unstamp record)))]
+                                                           (reset! appended? true)
+                                                           {:record record :seq n})
+                                                         (catch Exception e
+                                                           {:record record :err (ledger-refusal e)}))))))})
                       record  (:record written)]
                   (if (:status written)
                     (refused-stop ctx written disputes)
@@ -9577,7 +9750,7 @@
                                        (for [{:keys [id why]} (vals @held)]
                                          {:claim (str "[" id "]")
                                           :because (str "the amendment changed " why
-                                                        "; refused, and left for the person")})))))))))
+                                                        "; refused, and left for the person")}))))))))))
 
 (defn- run-design-amend-stage
   [ctx]

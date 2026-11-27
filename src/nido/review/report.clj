@@ -890,6 +890,11 @@
                 (seq (:standing-ask ctx)) (assoc :standing-ask (vec (:standing-ask ctx)))
                 (seq (:widened-spent ctx)) (assoc :widened-spent (vec (:widened-spent ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
+                ;; The listing over the amender's canvas edit that did not answer (its cause, limit
+                ;; and where the canvas it was taken over is kept), and what of the amender's
+                ;; declaration edits was put back because its amendment was not kept.
+                (:canvas-check ctx) (assoc :canvas-check (:canvas-check ctx))
+                (:canvas-put-back ctx) (assoc :canvas-put-back (:canvas-put-back ctx))
                 (:amend-launch ctx) (assoc :launch (:amend-launch ctx))
                 (#{:amend-launch-failed :usage-limited} (:status ctx)) (assoc :status "failed")
                 (:amend-unappended ctx) (assoc :status "refused"

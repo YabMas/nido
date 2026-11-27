@@ -817,6 +817,8 @@
                   ws/latest-entry (fn [_ _ _] prev)
                   stages/cited-baseline (fn [_ _] nil)
                   design-check/design-of (fn [_ _] declared)
+                  ;; a declaration that lists, before the amender and after it
+                  design-check/elements (fn [& _] {:status :listed :elements []})
                   stages/working-copy-state (fn [_] @state)
                   ws/append-entry! (fn [_ _ _ payload]
                                      (when (or append-throws? (< @refused refusals))

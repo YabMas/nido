@@ -343,4 +343,17 @@
   (Operation amendment-refusal
     "What the ledger would refuse of an amendment appended now, citing what the loop would have it
      cite; nil when it would be taken. Writes nothing."
-    {:signature [:=> [:catn [:project :keyword] [:ws-id :string] [:kind :keyword] [:record :map]] [:maybe :string]]}))
+    {:signature [:=> [:catn [:project :keyword] [:ws-id :string] [:kind :keyword] [:record :map]] [:maybe :string]]})
+  (Operation canvas-reading
+    "The declaration at a worktree as the next round's pre-judge listing would read it, with the
+     canvas files known to be edited traced first when one does not load. A listing that timed
+     out or gave no answer is taken again once: one that did not finish says nothing about the
+     canvas."
+    {:signature [:=> [:catn [:project :keyword] [:worktree :string] [:changed [:maybe [:vector :string]]]]
+                 DeclaredElements]
+     :delegates [design/elements]})
+  (Operation canvas-refusal
+    "Why the declaration a canvas reading read cannot stand beside an amendment, said to the
+     amender who wrote it, or nil when it lists — one text for the round's re-ask and the amend
+     dry-run, so an amender is told the same thing by either."
+    {:signature [:=> [:catn [:reading DeclaredElements]] [:maybe :string]]}))
