@@ -219,7 +219,10 @@
                        :design {:seq d}})
         (is (true? (p/implementation-review-passed? (w))))
         (build! add! d)
-        (is (false? (p/implementation-review-passed? (w))))))))
+        (is (false? (p/implementation-review-passed? (w))))
+        (testing "a review taken from a trail that keeps no layer builds is still judged after them"
+          (let [trail (remove #(= :layer-completed (:kind %)) (:entries (w)))]
+            (is (false? (p/implementation-review-passed? (w) trail)))))))))
 
 ;; ── show ───────────────────────────────────────────────────────────────────
 

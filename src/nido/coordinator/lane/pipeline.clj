@@ -607,19 +607,24 @@
 
 ;; ── The fold ────────────────────────────────────────────────────────────────
 
-(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+(defn ^{:malli/schema [:function [:=> [:cat :any] :boolean] [:=> [:cat :any :any] :boolean]]}
   implementation-review-passed?
   "Whether `w`'s newest :review over the implementation passed — its status :clean or :converged —
-   and no implementation was recorded after it, so it judged the change as it stands. A newer
-   review that ended otherwise withdraws an older pass. Read off the whole workstream, so a
-   workstream of several units is ready only once the review over all of their work passed."
-  [w]
-  (let [es     (:entries w)
-        review (last (filter #(= :review (:kind %)) es))
+   and no build was recorded after it, so it judged the change as it stands. A newer review that
+   ended otherwise withdraws an older pass. Read off the whole workstream, so a workstream of
+   several units is ready only once the review over all of their work passed.
+
+   With `reviews`, the review is the newest among those records — the fold passes its clamped
+   trail, so only a review that stands counts — while the newest build is still `w`'s, read
+   through `standing/newest-build` as the QA reading reads it. A build the trail does not keep,
+   such as a layer built to fix a failed walk, still withdraws the pass."
+  ([w] (implementation-review-passed? w (:entries w)))
+  ([w reviews]
+  (let [review (last (filter #(= :review (:kind %)) reviews))
         built  (standing/newest-build w)]
     (boolean (and review
                   (or (nil? built) (> (:seq review) (:seq built)))
-                  (#{:clean :converged} (:status (entry/parsed w (:seq review))))))))
+                  (#{:clean :converged} (:status (entry/parsed w (:seq review)))))))))
 
 (defn- qa-declared?
   "Whether `project` takes on the QA stage — its registry entry declares :qa. A declaration
@@ -1380,10 +1385,11 @@
                          :merge-granted? (boolean (and (or (contains? ks :pr-opened) (contains? ks :review))
                                                        (some #(= :merge (:kind %))
                                                              (ws/unspent-grants project ws-id))))
-                         ;; Asked of the clamped trail, not the span: the review that passed is the
-                         ;; newest STANDING one, so a review under a design since superseded — however
-                         ;; late it was appended — passes nothing the fold places.
-                         :review-passed? (implementation-review-passed? (assoc w :entries trail))
+                         ;; The review from the clamped trail, the build from the span: the review that
+                         ;; passed is the newest STANDING one, so a review under a design since
+                         ;; superseded passes nothing the fold places — and it is judged after the
+                         ;; same newest build `qa` reads, layer builds the trail drops included.
+                         :review-passed? (implementation-review-passed? w trail)
                          ;; A declaration `landing` refuses reads as PR-landing: nothing then becomes
                          ;; a candidate before a PR is open, and its Land refuses it by name.
                          :lands-pr?      (not (false? (landing/names-pr? project)))
