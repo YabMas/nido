@@ -614,8 +614,13 @@
    and `others` ask for. `others` are the sessions staying on the runtime — those still on it when
    it died, or every member when a join restarts it — worktree to session name; they stay its
    members and are re-registered and re-briefed with the ports it comes up on. `fallback-dir` is
-   the worktree the runtime runs out of when it has no checkout of its own (`runtime-dir`)."
-  [project-dir project-name instance-id session-edn opts others fallback-dir]
+   the worktree the runtime runs out of when it has no checkout of its own (`runtime-dir`).
+   `prepared`, when given, is the checkout a caller already brought up to date with these very
+   members and admitted for these services before stopping what ran: it is run out of as it is,
+   so no merge is made — nor refused — once the old services are gone."
+  ([project-dir project-name instance-id session-edn opts others fallback-dir]
+   (start-services! project-dir project-name instance-id session-edn opts others fallback-dir nil))
+  ([project-dir project-name instance-id session-edn opts others fallback-dir prepared]
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
   (let [session-name (:session-name opts)
         all      (assoc others (str project-dir) session-name)
@@ -623,8 +628,9 @@
         services (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
         ;; Refreshed before any service starts, so a refused merge starts neither Postgres nor
         ;; the JVM.
-        run-dir  (runtime-dir instance-id code session-edn fallback-dir
-                              (admission project-name (shared-defs? services) code session-name))
+        run-dir  (or prepared
+                     (runtime-dir instance-id code session-edn fallback-dir
+                                  (admission project-name (shared-defs? services) code session-name)))
         pre-allocated (pre-allocate-ports services run-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
         init-ctx (merge pre-allocated
@@ -674,7 +680,7 @@
     (doseq [[dir member] others]
       (rebrief! dir member (:runtime-key opts) session-data session-edn))
     (print-session-summary session-data final-ctx)
-    session-data))
+    session-data)))
 
 (defn- session-alive?
   "Is any of this session's PROCESSES still running? Deliberately narrow: it
@@ -903,24 +909,28 @@
         ;; A conflict between the working copies, or a migration the shared cluster would not
         ;; take, refuses the join before anything is stopped. The checkout written here is still
         ;; served by the running runtime, so its mode admits too: a migration only it refuses is
-        ;; not written now, and comes in with the restart once the shared runtime has stopped.
-        (when (checkout? (keys code))
-          (let [target-shared? (shared-defs? defs)]
-            (try (runtime-dir (:instance-id existing) code session-edn nil
-                              (admission (:project-name existing)
-                                         (or target-shared?
-                                             (and (:checkout existing) (shared-runtime? existing)))
-                                         code session-name))
-                 (catch clojure.lang.ExceptionInfo e
-                   (when (or target-shared? (not (migration-refusal? e))) (throw e))))))
+        ;; not written now, and comes in with the restart once the shared runtime has stopped —
+        ;; where the restart, admitting everything, can refuse no migration. A checkout written
+        ;; here is the one the restart runs out of, so what was admitted is what is served.
+        (let [prepared
+              (when (checkout? (keys code))
+                (let [target-shared? (shared-defs? defs)]
+                  (try (runtime-dir (:instance-id existing) code session-edn nil
+                                    (admission (:project-name existing)
+                                               (or target-shared?
+                                                   (and (:checkout existing) (shared-runtime? existing)))
+                                               code session-name))
+                       (catch clojure.lang.ExceptionInfo e
+                         (when (or target-shared? (not (migration-refusal? e))) (throw e))
+                         nil))))]
         (core/log-step (str "Restarting " (:instance-id existing) " for " session-name
                             (if (seq missing)
                               (str ", which asks for " (str/join ", " (map (comp name :name) missing)))
                               ", onto a checkout of its own")))
         (stop-services! existing (:instance-id existing))
         (start-services! project-dir (:project-name existing) (:instance-id existing) session-edn
-                         opts others (:project-dir existing))
-        nil)
+                         opts others (:project-dir existing) prepared)
+        nil))
       (let [runtime (assoc existing :members (assoc (state/members existing) (str project-dir) session-name))]
         (println "Joining running session" (:instance-id runtime))
         ;; Brought up to date before the joiner is recorded: a merge refused for a migration

@@ -300,3 +300,21 @@
         (is (seq @while-held) "the shared runtime was stopped")
         (is (not-any? true? @while-held) "its checkout never held the migration while it ran")
         (is (fs/exists? (fs/path dir v3)) "the isolated runtime it restarted as serves it")))))
+
+(deftest a-restarting-shared-join-serves-what-it-admitted-before-the-stop
+  (with-engine :shared
+    (fn [{:keys [a b]}]
+      (up! a "a")
+      (put! b "f.txt" "edited\n")
+      (let [dir (checkout/checkout-dir "p--ws")]
+        (with-redefs [engine/load-session-edn
+                      (constantly {:services [{:type :postgresql :name :pg :mode :shared}
+                                              {:type :process :name :repl}
+                                              {:type :process :name :extra}]})
+                      ;; A member adds a migration while the old services are stopping.
+                      service/stop-service!
+                      (fn [_ _] (put! b v3 "create table three ();\n") nil)]
+          (is (nil? (refusal #(up! b "b"))) "nothing is refused once a service has stopped"))
+        (is (= {a "a" b "b"} (:members (state/read-session "p--ws"))) "the runtime came back up")
+        (is (= "edited\n" (slurp (str (fs/path dir "f.txt")))) "it serves the admitted tree")
+        (is (not (fs/exists? (fs/path dir v3))) "and not the migration added after it")))))
