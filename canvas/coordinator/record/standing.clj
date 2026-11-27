@@ -121,8 +121,8 @@
   (Operation qa*
     "The QA reading over a workstream's current span and governing design, told by its caller
      whether the project declares :qa: its state — :off, :not-applicable, :owed, :failed or :passed
-     — the newest plan citing the governing design it stands on, with that plan's surface, and the
-     plan's walks recorded after the newest build."
+     — the newest plan citing the governing design it stands on, with that plan's surface, the
+     plan's walks recorded after the newest build, and, as :earlier, those recorded before it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any] [:design [:maybe :map]]
                         [:declared? :any]] :map]
      :delegates [workstream/entries-of newest-build]})

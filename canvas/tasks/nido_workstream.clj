@@ -27,12 +27,28 @@
     "Stamp an external ref. For :adapter github this also files the :pr-opened"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation show*
-    "The `show*` entry point."
-    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+    "Print a workstream's ledger, its QA reading and plan, and the landing brief's text."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]
+     :delegates [work/workstream-qa]})
+  (Operation qa-notion*
+    "The Notion body of the landing QA brief, as JSON: the 🧪 QA instructions callout, the plan's
+     sections then what its walks recorded, each step's screenshots uploaded — or nil where no brief
+     may be written. Rendered from the same value as the text show* prints."
+    {:signature [:=> [:catn [:opts :map]] [:maybe :string]]
+     :delegates [work/workstream-qa upload-screenshot! workstream/screenshot]})
+  (Operation qa-notion
+    "bb nido:workstream:qa:notion — print the landing brief's Notion body, or exit 2 saying why
+     there is none."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation upload-screenshot!
+    "Upload a screenshot file to Notion with the notion CLI and answer its file upload id, or why it
+     could not be — never a throw."
+    {:signature [:=> [:catn [:path :string] [:name :string]] [:or [:map [:id :string]] [:map [:error :string]]]]})
   (Operation screenshot-add*
-    "Keep a QA walk's screenshot file under the nido home's QA screenshot root, by digest, and print
-     the digest a :qa-walk result names it by."
-    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+    "Keep a QA walk's screenshot file through record-workstream, by digest, and print the digest a
+     :qa-walk result names it by."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]
+     :delegates [workstream/keep-screenshot! workstream/screenshot]})
   (Operation screenshot-add
     "bb nido:workstream:screenshot:add :file <path>"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

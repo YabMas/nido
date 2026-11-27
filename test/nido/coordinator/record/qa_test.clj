@@ -549,7 +549,13 @@
               (let [h #(#'work/hydrate-qa :brian id (assoc (ws/entry-at-seq :brian id %) :format :qa-walk))]
                 (is (true? (:counted? (h w2))))
                 (is (false? (:counted? (h w1))))
-                (is (= ["open" "check"] (map :id (:plan-steps (h w1)))))))))))))
+                (is (true? (:earlier? (h w1))))
+                (is (false? (:earlier? (h w2))))
+                (is (= ["open" "check"] (map :id (:plan-steps (h w1)))))
+                (testing "a walk of a plan since replaced, with no build between, is neither counted nor earlier"
+                  (add! :qa-plan (product-plan d ["one"]))
+                  (is (false? (:counted? (h w2))))
+                  (is (false? (:earlier? (h w2)))))))))))))
 
 (deftest no-report-without-a-counted-walk-of-a-product-plan
   (is (nil? (work/qa-report* {:state :owed :walks [] :earlier []} (product-plan 1) {})))

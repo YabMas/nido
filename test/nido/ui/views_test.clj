@@ -2267,7 +2267,7 @@
                             :note "played as a teacher\nafter the fix"
                             :plan-steps [{:id "open" :action "Open the order." :expected "x"}
                                          {:id "check" :action "Read the total." :expected "y"}]
-                            :counted? false
+                            :counted? false :earlier? true
                             :results [{:step "check" :outcome :fail :note "the total read 0" :screenshots [a-digest]}
                                       {:step "open" :outcome :pass :screenshots [a-digest]}]})))]
     (is (str/includes? html "before the newest build"))
@@ -2278,6 +2278,15 @@
     (is (re-find #"qa-step fail.*✗.*2\..*Read the total\..*the total read 0" html))
     (is (str/includes? html (str "<a href=\"/qa/screenshot/" a-digest "\" target=\"_blank\"")) "a thumbnail opens the full image")
     (is (str/includes? html (str "<img alt=\"Screenshot of step 2\" class=\"qa-thumb\" loading=\"lazy\" src=\"/qa/screenshot/" a-digest "\"")))))
+
+(deftest a-qa-walk-the-reading-neither-counts-nor-names-earlier-is-not-said-to-precede-the-build
+  (let [html (str (h/html (#'views/report-body
+                           {:format :qa-walk :plan {:seq 5} :counted? false :earlier? false
+                            :plan-steps [{:id "open" :action "Open the order." :expected "x"}]
+                            :results [{:step "open" :outcome :pass}]})))]
+    (is (str/includes? html "not counted by the QA reading"))
+    (is (not (str/includes? html "before the newest build"))
+        "a walk of a replaced plan was not excluded by a build")))
 
 (deftest the-land-row-says-what-the-brief-will-report-and-opens-each-walk
   (let [render #(pr-str (#'views/arc-block {:ws-id "w" :project "nido"} % [] nil false nil))

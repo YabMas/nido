@@ -2,7 +2,8 @@
   "The claims the qa-stage design (workstream ws-20261126-89b0fe, design at ledger entry 39) commits
    nido to, declared where they live on: a workstream's QA plan and QA walks as checked records, one
    QA reading over them, that reading gating the release candidate in a project that declares :qa,
-   a QA stage on the spine, and the landing brief rendered from the plan. Each Claim's name is the
+   and a QA stage on the spine. The landing brief it rendered from the plan alone is now rendered
+   with what the plan's walks recorded — canvas.claims.qa-walk-report. Each Claim's name is the
    claim's id, its docstring the statement, and its :about the elements it is about."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.lane.drive :refer [arc lane-pipeline of]]
@@ -41,10 +42,6 @@
 (Claim qa-stage-drawn-or-greyed
   "The spine is intent, baseline, design, implementation, qa. Which stage a record is grouped in is its kind's, apart from the spine stage of the next action that writes it: :qa-walk entries belong to :qa and :qa-plan entries to :design, whichever action wrote the plan. A workstream whose QA reads :off or :not-applicable draws :qa in a sixth state, :off, whose greyed mark and words arc-mark and ui-state-marks give — never :skipped or :ahead, and never a colour arc-row chooses itself; every other workstream draws :qa by the arc's existing rule from its position's stage, as every spine stage is drawn."
   {:about [arc ui-components-state arc-mark] :evidence "round"})
-
-(Claim brief-is-the-plan-rendered
-  "The landing QA brief is a rendering of the plan the QA reading stands on — its sections in qa-brief.md's shape for :passed, the one-line 'nothing a user sees changes' brief from its reason for :not-applicable — and /land writes that rendering or no brief; it composes none of its own."
-  {:about [coordinator-report] :evidence "round"})
 
 (Claim conductor-told-qa
   "The conductor learns what is owed from the pipeline's next-action stage, worded per stage, including :walk-qa and :address-qa; both its standing rule and its :review-implementation direction say a workstream is a release candidate once the implementation review converges and its QA passes or does not apply, and neither calls a converged review a release candidate by itself."

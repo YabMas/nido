@@ -11,6 +11,7 @@
             [canvas.coordinator.record.entry :as entry]
             [canvas.coordinator.report :as report]
             [canvas.core.client :as client]
+            [canvas.core.images :as images]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -446,4 +447,15 @@
      a citation was owed at all. A boolean on purpose, so no writer can read it as `which
      design`. PUBLIC because the :pr-opened writer, the merge poller and the review loop each
      ask it, and three implementations of `does this ledger hold a design` would drift."
-    {:signature [:=> [:catn [:w Workstream]] :boolean]}))
+    {:signature [:=> [:catn [:w Workstream]] :boolean]})
+  (Operation keep-screenshot!
+    "Keep a QA walk's screenshot under the QA screenshot root, which this module alone names, and
+     answer the digest a walk result names it by — or core-images' refusal when its bytes do not
+     hash to it."
+    {:signature [:=> [:catn [:shot [:map [:mime :string] [:digest :string] [:data :string]]]]
+                 [:or :string [:map [:refused :keyword] [:digest :any]]]]
+     :delegates [images/put!]})
+  (Operation screenshot
+    "The QA screenshot kept by a digest, with its media type, or nil."
+    {:signature [:=> [:catn [:digest :any]] [:maybe :map]]
+     :delegates [images/fetch]}))

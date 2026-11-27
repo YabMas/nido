@@ -146,7 +146,23 @@
      :delegates [workstream/latest-entry standing/governing-design]})
   (Operation workstream "Full detail for one workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:selected-seq [:? :any]]] :map]
-     :delegates [classify-origin holds latest-report environment workstream/read-ws]})
+     :delegates [classify-origin holds latest-report environment workstream/read-ws workstream-qa]})
+  (Operation qa-report*
+    "A workstream's QA report, derived on read and stored nowhere, from its QA reading, the plan it
+     stands on and the walks it names: every plan step with what the newest counted walk recorded
+     of it, who played each of the plan's roles in that walk, every counted walk's note, the earlier
+     walks that did not pass with their failing steps, whether the plan has Also check items, and
+     the passed-steps tally — nil without a counted walk of a :product plan."
+    {:signature [:=> [:catn [:reading :map] [:plan [:maybe :map]] [:walks [:map-of :int :map]]] [:maybe :map]]})
+  (Operation workstream-qa
+    "A workstream's QA as the surfaces read it: its QA reading, the plan it stands on, and the QA
+     report composed from the entries that reading names, fetched by seq."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:reading [:? [:maybe :map]]]] :map]
+     :delegates [qa-report* workstream/entry-at-seq]})
+  (Operation qa-screenshot
+    "A QA walk's screenshot by digest, for the dashboard to serve."
+    {:signature [:=> [:catn [:digest :any]] [:maybe :map]]
+     :delegates [workstream/screenshot]})
   (Operation gates "The workstreams of a project that want a person now."
     {:signature [:=> [:catn [:project ProjectName]] [:vector Gate]]
      :delegates [list-workstreams gate-actions]})

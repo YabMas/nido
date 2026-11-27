@@ -1508,17 +1508,20 @@
 (defn- qa-screenshot-href [digest] (str "/qa/screenshot/" digest))
 
 (defn- qa-walk-card
-  "A :qa-walk entry, hydrated with its plan's steps (`:plan-steps`) and whether the QA reading
-   counts it (`:counted?`): its caveats — the walker's note, verbatim, and the app it was walked
-   against — and one row per step in plan order: outcome mark, step number and action, the note,
+  "A :qa-walk entry, hydrated with its plan's steps (`:plan-steps`), whether the QA reading
+   counts it (`:counted?`) and whether it names it as walked before the newest build (`:earlier?`;
+   neither is said of a walk outside the plan and span it reads): its caveats — the walker's
+   note, verbatim, and the app it was walked against — and one row per step in plan order: outcome mark, step number and action, the note,
    and its screenshots as thumbnails, each opening the full image."
-  [{:keys [plan app results note plan-steps counted?]}]
+  [{:keys [plan app results note plan-steps counted? earlier?]}]
   (let [by-step (into {} (map (juxt :step identity)) results)
         passed  (count (filter #(= :pass (:outcome %)) results))]
     [:div.md
      [:h2 "QA walk of plan " (:seq plan)]
      [:div.report-meta
-      [:span.chip (if counted? "walks the build that lands" "before the newest build")]
+      [:span.chip (cond counted? "walks the build that lands"
+                        earlier? "before the newest build"
+                        :else    "not counted by the QA reading")]
       [:span.meta passed " of " (count results) " steps passed"]]
      (when app [:p.meta "Walked against " app])
      (when note [:div [:h3 "How it was walked"] (qa-note note)])

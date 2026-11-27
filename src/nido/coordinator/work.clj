@@ -1553,16 +1553,19 @@
                   :tally (:tally report))))
 
 (defn- hydrate-qa
-  "An opened :qa-walk report, with its cited plan's steps (`:plan-steps`) and whether the QA
-   reading counts it (`:counted?`) — what its rows are numbered and worded by. Every other report
-   passes through."
+  "An opened :qa-walk report, with its cited plan's steps (`:plan-steps`), whether the QA
+   reading counts it (`:counted?`) and whether the reading names it as a walk of its plan before
+   the newest build (`:earlier?`) — what its rows are numbered and worded by, and why it is not
+   counted. A walk it neither counts nor names is outside the plan and span it reads. Every other
+   report passes through."
   [project ws-id report]
   (if (= :qa-walk (:format report))
     (let [reading (pipeline/qa project ws-id)
           plan    (cws/entry-at-seq project ws-id (get-in report [:plan :seq]))]
       (assoc report
              :plan-steps (vec (:steps plan))
-             :counted?   (boolean (some #{(:seq report)} (:walks reading)))))
+             :counted?   (boolean (some #{(:seq report)} (:walks reading)))
+             :earlier?   (boolean (some #{(:seq report)} (:earlier reading)))))
     report))
 
 (defn- land-rung
