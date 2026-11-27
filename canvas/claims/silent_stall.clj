@@ -21,11 +21,11 @@
   {:about [core-domain] :evidence "test"})
 
 (Claim stall-needs-you-as-error
-  "of reads a workstream as :stalled when the core is its mover and nothing will move it: the core holds it with the recipe activated on it or with an open unit nobody holds, a move is owed to an agent or the machine, the core does nothing and is owed nothing, nothing is underway (a merge waiting its turn included) and no pause stands. A stalled answer has :needs-you, :needs :system-error and :owed-by :person. needs-categories stays :ask, :landing and :system-error."
-  {:about [of] :evidence "test"})
+  "of reads a workstream as :stalled when nido owes its next move and nothing will make it: the core holds it, with the recipe activated on it or an open unit of it nobody holds; the move is an agent's or the machine's; the core does nothing and is owed nothing, nothing is underway (a merge waiting its turn included), no pause stands and no failure only the person clears stands; and its observation's :waits-on names no deliberate wait. coordinator-work sets :waits-on for two waits only, each a move something other than the idle core makes: :person-act for a row on an intake band (:incoming, :triage or :ready), where the board offers the person the Promote or Apply that moves it, and :open-slice for a drain while a slice of it is open, that slice read by this same rule. A stalled answer has :needs-you, :needs :system-error and :owed-by :person. needs-categories stays :ask, :landing and :system-error."
+  {:about [of coordinator-work] :evidence "test"})
 
 (Claim stalls-carded-without-rows
-  "read-gates cards, for each project, every workstream the core holds whose observation of answers :stalled, reading the core's held state and that workstream's records itself rather than this process's held rows, so the Needs-you list and the tally read from read-gates include it in a process that holds no rows or has built none. The CLI list's 'waiting on a person' count stays the list-workstreams rows whose of-answer has :needs-you, which a stall now has."
+  "read-gates cards, for each project, every workstream the core holds whose observation of answers :stalled, reading the core's held state and the work records its observation is built from rather than this process's held rows, so the Needs-you list and the tally read from read-gates include it in a process that holds no rows or has built none. The CLI list's 'waiting on a person' count stays the list-workstreams rows whose of-answer has :needs-you, which a stall now has."
   {:about [coordinator-work of] :evidence "test"})
 
 (Claim stall-card-wakes

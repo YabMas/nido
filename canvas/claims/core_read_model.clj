@@ -16,5 +16,5 @@
   {:about [observe of coordinator-work] :evidence "test"})
 
 (Claim stall-is-the-cores
-  "An open workstream's row reads :stalled exactly when the core is its mover — it holds the workstream with the recipe activated on it, or holds an open unit of it that no person holds — the core has no activity on it, nothing is underway, no pause stands, no failure only the person clears stands and the move is an agent's or the machine's — a move the person owes, a release candidate's landing included, and a session that failed to start both need the person otherwise, and a move nobody owes waits on nothing; none of them is stalled. A stalled row needs the person as a :system-error. A workstream the core is not the mover of is never stalled."
+  "An open workstream's row reads :stalled exactly when the observation coordinator-work builds of it meets the stall condition [stall-needs-you-as-error] states, and then needs the person as a :system-error. A move the person owes, a release candidate's landing included, and a session that failed to start need the person otherwise, a move nobody owes waits on nothing, and a row whose :waits-on names a deliberate wait waits on it; none of them is stalled."
   {:about [of coordinator-work] :evidence "test"})
