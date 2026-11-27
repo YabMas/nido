@@ -614,18 +614,18 @@
    against main commit `main` (`pinned-main`), written instead of a new merge."
   ([runtime members session] (sync-checkout! runtime members session nil nil))
   ([runtime members session candidate main]
-  (when (and (:checkout runtime) (checkout? (keys members)))
-    (try (checkout/refresh! (:instance-id runtime) members (fn [_])
-                            (admission (:project-name runtime) (shared-runtime? runtime)
-                                       members session main)
-                            candidate)
-         (catch clojure.lang.ExceptionInfo e
-           (cond
-             (and (migration-refusal? e) session) (throw e)
-             (or (migration-refusal? e)
-                 (#{:checkout-conflict :checkout-unsnapshottable} (:reason (ex-data e))))
-             (core/log-step (str "warning: " (ex-message e)))
-             :else (throw e)))))))
+   (when (and (:checkout runtime) (checkout? (keys members)))
+     (try (checkout/refresh! (:instance-id runtime) members (fn [_])
+                             (admission (:project-name runtime) (shared-runtime? runtime)
+                                        members session main)
+                             candidate)
+          (catch clojure.lang.ExceptionInfo e
+            (cond
+              (and (migration-refusal? e) session) (throw e)
+              (or (migration-refusal? e)
+                  (#{:checkout-conflict :checkout-unsnapshottable} (:reason (ex-data e))))
+              (core/log-step (str "warning: " (ex-message e)))
+              :else (throw e)))))))
 
 (defn- start-services!
   "Start runtime `instance-id` cold for the session in `project-dir`, under the union of what it
@@ -642,68 +642,68 @@
   ([project-dir project-name instance-id session-edn opts others fallback-dir]
    (start-services! project-dir project-name instance-id session-edn opts others fallback-dir nil))
   ([project-dir project-name instance-id session-edn opts others fallback-dir prepared]
-  (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
-  (let [session-name (:session-name opts)
-        all      (assoc others (str project-dir) session-name)
-        code     (code-members project-name all {(str project-dir) (:profile opts)})
-        services (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
-        ;; Refreshed before any service starts, so a refused merge starts neither Postgres nor
-        ;; the JVM.
-        run-dir  (or prepared
-                     (runtime-dir instance-id code session-edn fallback-dir
-                                  (admission project-name (shared-defs? services) code session-name
-                                             (:main opts))
-                                  (:candidate opts)))
-        pre-allocated (pre-allocate-ports services run-dir)
-        jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
-        init-ctx (merge pre-allocated
-                        {:session (cond-> {:project-dir run-dir
-                                           :project-name project-name
-                                           :instance-id instance-id
-                                           :runtime-key (:runtime-key opts)
-                                           :jvm jvm-cfg}
-                                    session-name (assoc :name session-name)
-                                    (checkout? (keys code)) (assoc :git-dir (checkout/git-dir run-dir)))})
-        ;; A worktree with no entry yet is given the boot placeholder a background start
-        ;; writes, naming this process, before any service starts: a start killed part-way
-        ;; leaves no session state, and its stop finds the runtime — and what a service took
-        ;; on its behalf, a shared-cluster claim among them — only through this entry.
-        placeholder? (not (get (state/read-registry) (str project-dir)))
-        _ (when placeholder?
-            (state/upsert-registry! (str project-dir)
-                                    {:project-dir  (str project-dir)
-                                     :project-name project-name
-                                     :instance-id  instance-id
-                                     :runtime-key  (:runtime-key opts)
-                                     :session-name session-name
-                                     :boot-pid     (.pid (java.lang.ProcessHandle/current))
-                                     :created-at   (core/now-iso)}))
-        ;; No session state is persisted unless every service starts. One that throws has
-        ;; rolled back what it started, so the placeholder written for it goes too.
-        result (try (start-each! init-ctx services opts)
-                    (catch Exception e
-                      (when placeholder? (state/remove-from-registry! (str project-dir)))
-                      (throw e)))
-        final-ctx (:ctx result)
-        session-data (cond-> {:project-dir run-dir
-                              :project-name project-name
-                              :instance-id instance-id
-                              :runtime-key (:runtime-key opts)
-                              :members all
-                              :service-defs (:service-defs result)
-                              :service-states (:service-states result)
-                              :context final-ctx
-                              :created-at (core/now-iso)}
-                       session-name              (assoc :name session-name)
-                       (checkout? (keys code))   (assoc :checkout run-dir))]
-    (state/write-session! instance-id session-data)
-    ;; The profile is recorded before the briefing, which reads it to choose the full or lite one.
-    (rebrief! project-dir session-name (:runtime-key opts) session-data session-edn
-              (select-keys opts [:run-dir :profile]))
-    (doseq [[dir member] others]
-      (rebrief! dir member (:runtime-key opts) session-data session-edn))
-    (print-session-summary session-data final-ctx)
-    session-data)))
+   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
+   (let [session-name (:session-name opts)
+         all      (assoc others (str project-dir) session-name)
+         code     (code-members project-name all {(str project-dir) (:profile opts)})
+         services (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
+         ;; Refreshed before any service starts, so a refused merge starts neither Postgres nor
+         ;; the JVM.
+         run-dir  (or prepared
+                      (runtime-dir instance-id code session-edn fallback-dir
+                                   (admission project-name (shared-defs? services) code session-name
+                                              (:main opts))
+                                   (:candidate opts)))
+         pre-allocated (pre-allocate-ports services run-dir)
+         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
+         init-ctx (merge pre-allocated
+                         {:session (cond-> {:project-dir run-dir
+                                            :project-name project-name
+                                            :instance-id instance-id
+                                            :runtime-key (:runtime-key opts)
+                                            :jvm jvm-cfg}
+                                     session-name (assoc :name session-name)
+                                     (checkout? (keys code)) (assoc :git-dir (checkout/git-dir run-dir)))})
+         ;; A worktree with no entry yet is given the boot placeholder a background start
+         ;; writes, naming this process, before any service starts: a start killed part-way
+         ;; leaves no session state, and its stop finds the runtime — and what a service took
+         ;; on its behalf, a shared-cluster claim among them — only through this entry.
+         placeholder? (not (get (state/read-registry) (str project-dir)))
+         _ (when placeholder?
+             (state/upsert-registry! (str project-dir)
+                                     {:project-dir  (str project-dir)
+                                      :project-name project-name
+                                      :instance-id  instance-id
+                                      :runtime-key  (:runtime-key opts)
+                                      :session-name session-name
+                                      :boot-pid     (.pid (java.lang.ProcessHandle/current))
+                                      :created-at   (core/now-iso)}))
+         ;; No session state is persisted unless every service starts. One that throws has
+         ;; rolled back what it started, so the placeholder written for it goes too.
+         result (try (start-each! init-ctx services opts)
+                     (catch Exception e
+                       (when placeholder? (state/remove-from-registry! (str project-dir)))
+                       (throw e)))
+         final-ctx (:ctx result)
+         session-data (cond-> {:project-dir run-dir
+                               :project-name project-name
+                               :instance-id instance-id
+                               :runtime-key (:runtime-key opts)
+                               :members all
+                               :service-defs (:service-defs result)
+                               :service-states (:service-states result)
+                               :context final-ctx
+                               :created-at (core/now-iso)}
+                        session-name              (assoc :name session-name)
+                        (checkout? (keys code))   (assoc :checkout run-dir))]
+     (state/write-session! instance-id session-data)
+     ;; The profile is recorded before the briefing, which reads it to choose the full or lite one.
+     (rebrief! project-dir session-name (:runtime-key opts) session-data session-edn
+               (select-keys opts [:run-dir :profile]))
+     (doseq [[dir member] others]
+       (rebrief! dir member (:runtime-key opts) session-data session-edn))
+     (print-session-summary session-data final-ctx)
+     session-data)))
 
 (defn- session-alive?
   "Is any of this session's PROCESSES still running? Deliberately narrow: it
@@ -1044,23 +1044,23 @@
                                                                                (:session-name opts)
                                                                                main)))))))
                  opts)]
-    (when (and on (not= on instance-id))
-      (core/log-step (str "Leaving runtime " on " for " instance-id))
-      (stop-session! project-dir))
-    ;; Setup prepares this session's own working copy, whether its runtime is started or joined.
-    (doseq [step (:setup session-edn)]
-      (run-setup-step! step project-dir))
-    ;; The session briefing is now injected at launch (--append-system-prompt),
-    ;; so the worktree stays pure project code: remove any prior nido-managed
-    ;; CLAUDE.md instead of writing one. (Session-home dissolution, step 2.)
-    (try (agent-guidance/remove! project-dir)
-         (catch Exception e
-           (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
-                               (ex-message e)))))
-    (if join?
-      (join! project-dir (:session-name opts) existing session-edn opts)
-      (start-services! project-dir project-name instance-id session-edn opts
-                       (if existing (still-on project-dir existing) {}) project-dir)))))
+      (when (and on (not= on instance-id))
+        (core/log-step (str "Leaving runtime " on " for " instance-id))
+        (stop-session! project-dir))
+      ;; Setup prepares this session's own working copy, whether its runtime is started or joined.
+      (doseq [step (:setup session-edn)]
+        (run-setup-step! step project-dir))
+      ;; The session briefing is now injected at launch (--append-system-prompt),
+      ;; so the worktree stays pure project code: remove any prior nido-managed
+      ;; CLAUDE.md instead of writing one. (Session-home dissolution, step 2.)
+      (try (agent-guidance/remove! project-dir)
+           (catch Exception e
+             (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
+                                 (ex-message e)))))
+      (if join?
+        (join! project-dir (:session-name opts) existing session-edn opts)
+        (start-services! project-dir project-name instance-id session-edn opts
+                         (if existing (still-on project-dir existing) {}) project-dir)))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map :any [:maybe :any]] :any]}
   restart-session!
