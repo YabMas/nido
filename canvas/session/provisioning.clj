@@ -32,12 +32,14 @@
     {:signature [:function
                  [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]]] Path]
                  [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any]] Path]
-                 [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any] [:admit! :any]] Path]]
+                 [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any] [:admit! :any]] Path]
+                 [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:setup! :any] [:admit! :any] [:candidate [:maybe :string]]] Path]]
      :delegates [checkout-dir git-dir sstate/read-session]})
   (Operation examine!
     "Refuse, as a refresh would, a refresh of a runtime's checkout with members under an
-     admission, writing nothing — so a caller about to stop services can be refused first."
-    {:signature [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:admit! :any]] :nil]})
+     admission, writing nothing — so a caller about to stop services can be refused first; returns
+     the commit it admitted, the candidate a later refresh writes from."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:members [:map-of :string [:maybe :string]]] [:admit! :any]] :string]})
   (Operation remove! "Forget a runtime's checkout workspace and delete its directory."
     {:signature [:=> [:catn [:instance-id InstanceId] [:from [:maybe Path]]] :nil]
      :delegates [checkout-dir git-dir]}))

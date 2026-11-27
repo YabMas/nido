@@ -197,22 +197,25 @@
            (throw e)))
     {:from from :merge merge :fixed fixed}))
 
-(defn ^{:malli/schema [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :nil]}
+(defn ^{:malli/schema [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :string]}
   examine!
   "Refuse, as `refresh!` would, a refresh of runtime `instance-id`'s checkout with `members`
    under `admit!` — a conflict or a throw from `admit!` goes to the caller — writing nothing: no
-   checkout is made or changed, and the merge examined is abandoned."
+   checkout is made or changed, and the merge examined is abandoned. Returns the commit id of the
+   tree it admitted, the candidate a later `refresh!` writes from instead of merging again, so
+   what a member snapshots meanwhile cannot change what was admitted."
   [instance-id members admit!]
-  (let [{:keys [from merge]} (admitted-merge! members (str "nido runtime " instance-id " "
-                                                           (System/nanoTime))
-                                              admit!)]
+  (let [{:keys [from merge fixed]} (admitted-merge! members (str "nido runtime " instance-id " "
+                                                                 (System/nanoTime))
+                                                    admit!)]
     (jj! from false "abandon" merge)
-    nil))
+    fixed))
 
 (defn ^{:malli/schema [:function
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]]] :Path]
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :Path]
-                       [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any :any] :Path]]}
+                       [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any :any] :Path]
+                       [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any :any [:maybe :string]] :Path]]}
   refresh!
   "Bring runtime `instance-id`'s checkout up to date with `members` (worktree to session name) —
    every one a jj workspace — creating it on first use, or when its directory is gone though jj
@@ -232,17 +235,25 @@
    `admit!` is asked about the merged tree before anything is written: it is called with a working
    copy of the project and the merge's commit id — the very commit the checkout is then written
    from, whatever a member snapshots meanwhile — and a throw refuses the refresh the same way —
-   nothing is changed, and its error goes on to the caller."
+   nothing is changed, and its error goes on to the caller.
+
+   `candidate`, when given, is a commit `examine!` returned for these members: the checkout is
+   written from it — asked of `admit!` as a merge would be — and no merge is made."
   ([instance-id members] (refresh! instance-id members (fn [_])))
   ([instance-id members setup!] (refresh! instance-id members setup! (fn [_ _])))
-  ([instance-id members setup! admit!]
+  ([instance-id members setup! admit!] (refresh! instance-id members setup! admit! nil))
+  ([instance-id members setup! admit! candidate]
    (let [dir   (checkout-dir instance-id)
          token (str "nido runtime " instance-id " " (System/nanoTime))
-         {:keys [from merge fixed]} (admitted-merge! members token admit!)]
+         {:keys [from merge fixed]} (if candidate
+                                      (let [from (first (keys members))]
+                                        (admit! from candidate)
+                                        {:from from :fixed candidate})
+                                      (admitted-merge! members token admit!))]
      (jj! from false "new" "--no-edit" "-m" token "root()")
      (let [copy (created from token)]
        (jj! from false "restore" "--from" fixed "--into" copy)
-       (jj! from false "abandon" merge)
+       (when merge (jj! from false "abandon" merge))
        (if (fs/exists? (fs/path dir ".jj"))
          (let [prior (jj! dir false "log" "-r" "@" "--no-graph" "-T" "change_id")
                held  (into {} (keep #(when (fs/exists? %) [% (fs/read-all-bytes %)]))

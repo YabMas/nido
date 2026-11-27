@@ -334,3 +334,21 @@
       (is (= {a "a"} (:members (state/read-session "p--solo"))) "a is still on its own runtime")
       (is (= {b "b"} (:members (state/read-session "p--ws"))))
       (is (not (fs/exists? (fs/path (checkout/checkout-dir "p--ws") v3)))))))
+
+(deftest a-move-onto-a-shared-runtime-writes-what-it-admitted-before-the-source-stopped
+  (with-engine :shared
+    (fn [{:keys [a b]}]
+      (fs/create-dirs (state/instance-state-dir "p--solo"))
+      (spit (state/pg-mode-override-file "p--solo") (pr-str {:mode :isolated}))
+      (engine/start-session! a {:runtime-key "solo" :session-name "a"})
+      (up! b "b")
+      (put! a "f.txt" "edited\n")
+      (with-redefs [service/stop-service!
+                    ;; A migration lands in a's working copy while its own runtime stops.
+                    (fn [_ _] (put! a v3 "create table three ();\n") nil)]
+        (is (nil? (refusal #(engine/start-session! a {:runtime-key "ws" :session-name "a"})))
+            "nothing is refused once the source has stopped"))
+      (let [dir (checkout/checkout-dir "p--ws")]
+        (is (= {a "a" b "b"} (:members (state/read-session "p--ws"))) "a moved")
+        (is (= "edited\n" (slurp (str (fs/path dir "f.txt")))) "the admitted tree is served")
+        (is (not (fs/exists? (fs/path dir v3))) "and not the migration added after it")))))

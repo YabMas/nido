@@ -653,6 +653,11 @@
                                                                        :paths ["x"]})))
                                          (swap! refreshes conj (set (vals members)))
                                          (str "/state/" id "/checkout"))
+                checkout/examine!      (fn [_ _ _]
+                                         (when @conflict?
+                                           (throw (ex-info "conflict" {:reason :checkout-conflict
+                                                                       :paths ["x"]})))
+                                         "candidate")
                 checkout/remove!       (fn [id _] (swap! refreshes conj [:removed id]) nil)
                 checkout/git-dir       (constantly "/src/.git")]
     (f)))
