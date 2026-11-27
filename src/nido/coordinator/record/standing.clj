@@ -766,29 +766,41 @@
      :passed          at least one walk counts, and none failed
      :owed            otherwise: no plan, or no walk of it since the newest build
 
+   FAILS CLOSED like the rest of standing: where the index claims a plan, or a walk of a :product
+   plan, that cannot be read, the reading is :owed with :indeterminate? and :blocked
+   {:reason :unreadable-ledger} — never :passed or :not-applicable from the records that remain,
+   since the one dropped may be the failed walk or the newest plan. The plan it then names is the
+   newest readable one only where the plans all read; otherwise none.
+
    Derived on every read from the plans, the walks and the builds, and stored nowhere. Every
    reader of a workstream's QA — the fold, the arc, show, the brief — asks this, and takes the
    plan from it."
   [project ws-id w design declared?]
-  (let [span  (in-span w)
-        dseq  (:seq design)
-        plan  (when dseq
-                (->> (ws/entries-of project ws-id :qa-plan)
-                     (filter #(and (span (:seq %)) (= dseq (get-in % [:design :seq]))))
-                     last))
+  (let [dseq  (:seq design)
+        plans (readable project ws-id w :qa-plan)
+        plan  (when (and dseq (not= ::unreadable plans))
+                (->> plans (filter #(= dseq (get-in % [:design :seq]))) last))
         built (or (:seq (newest-build w)) 0)
         walks (when (= :product (:surface plan))
-                (->> (ws/entries-of project ws-id :qa-walk)
-                     (filter #(and (span (:seq %)) (= (:seq plan) (get-in % [:plan :seq]))
-                                   (> (:seq %) built)))))
+                (let [ws* (readable project ws-id w :qa-walk)]
+                  (if (= ::unreadable ws*)
+                    ws*
+                    (filter #(and (= (:seq plan) (get-in % [:plan :seq])) (> (:seq %) built)) ws*))))
+        lost? (and declared? (or (= ::unreadable plans) (= ::unreadable walks)))
+        walks (if (= ::unreadable walks) [] walks)
         state (cond
                 (not declared?)               :off
+                lost?                         :owed
                 (= :none (:surface plan))     :not-applicable
                 (some #(not (report/walk-passed? %)) walks) :failed
                 (seq walks)                   :passed
                 :else                         :owed)]
     (cond-> {:state state :walks (mapv :seq walks)}
-      plan (assoc :plan (:seq plan) :surface (:surface plan)))))
+      plan  (assoc :plan (:seq plan) :surface (:surface plan))
+      lost? (assoc :indeterminate? true
+                   :blocked {:reason :unreadable-ledger
+                             :detail (str "a QA plan or walk could not be read on " ws-id
+                                          " — its QA cannot be derived, so it reads owed")}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :map]}
   qa

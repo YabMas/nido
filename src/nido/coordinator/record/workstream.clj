@@ -1928,6 +1928,7 @@
                 _     (refuse-design-between-phases! w (:kind entry))
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
+                _     (check-qa-citations! w (:kind entry) payload)
                 _     (check-fork-citation! project w (:kind entry) payload)
                 _     (check-merge-citation! project w (:kind entry) payload)
                 _     (check-clearance-owed! w (:kind entry) payload)

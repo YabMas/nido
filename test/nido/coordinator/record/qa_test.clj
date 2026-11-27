@@ -206,6 +206,50 @@
             (let [p2 (add! :qa-plan (product-plan d ["one"]))]
               (is (= {:state :owed :plan p2 :surface :product :walks []} (r))))))))))
 
+(deftest the-conditional-append-checks-a-walk-as-the-plain-append-does
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d   (designed! add!)
+            p   (add! :qa-plan (product-plan d))
+            at! #(ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id)))
+                                      {:kind :qa-walk} (pr-str %))]
+        (is (thrown-with-msg? Exception #"missing: check" (at! (walk p [["open" :pass]]))))
+        (is (thrown-with-msg? Exception #"not in the plan: zap"
+                              (at! (walk p [["open" :pass] ["check" :pass] ["zap" :pass]]))))
+        (is (int? (at! (walk p [["open" :pass] ["check" :pass]]))))))))
+
+(deftest the-qa-reading-fails-closed-on-a-record-it-cannot-read
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d     (designed! add!)
+            r     #(standing/qa :brian id true)
+            lose  (fn [lost f]
+                    (let [orig ws/entries-of]
+                      (with-redefs [ws/entries-of (fn [& args]
+                                                    (remove #(contains? lost (:seq %)) (apply orig args)))]
+                        (f))))]
+        (build! add! d)
+        (let [p1 (add! :qa-plan (product-plan d))
+              w1 (add! :qa-walk (walk p1 [["open" :pass] ["check" :fail]]))
+              _  (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]]))]
+          (testing "an unreadable failed walk does not let a later one pass"
+            (lose #{w1} #(let [q (r)]
+                           (is (= :owed (:state q)))
+                           (is (= p1 (:plan q)))
+                           (is (= :unreadable-ledger (get-in q [:blocked :reason])))))))
+        (let [n  (add! :qa-plan (none-plan d))
+              p2 (add! :qa-plan (product-plan d ["one"]))]
+          (testing "an unreadable newest plan does not fall back to an earlier :none plan"
+            (lose #{p2} #(let [q (r)]
+                           (is (= :owed (:state q)))
+                           (is (nil? (:plan q)))
+                           (is (:indeterminate? q)))))
+          (is (some? n))
+          (testing "undeclared, it reads :off all the same"
+            (lose #{p2} #(is (= :off (:state (standing/qa :brian id false)))))))))))
+
 (deftest implementation-review-passed-reads-the-newest-build-from-standing
   (with-tmp
     (fn [_]
