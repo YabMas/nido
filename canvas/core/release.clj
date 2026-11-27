@@ -10,7 +10,10 @@
    provisioner assembled into one supervised JVM process, started, health-gated and upgraded.
 
    HIDES how the daemon is assembled from its modules, what its health gate checks, and how an
-   upgrade hands the command socket from one release to the next."
+   upgrade hands the command socket from one release to the next.
+
+   It supplies the conductor rules the readers that ask nido's own verbs in the checkout: what the
+   recipe owes a workstream, and a drain's coordinator brief."
   (Operation nido-home
     "The nido home: NIDO_HOME, else ~/.nido."
     {:signature [:=> [:catn] :string]})

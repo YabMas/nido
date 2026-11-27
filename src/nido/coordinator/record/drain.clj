@@ -183,6 +183,14 @@
   [w]
   (first (entries-in w :exit-observed)))
 
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  open-escalations
+  "The drain's open escalations: its :blocker entries, oldest first, that no :blocker-answered
+   names."
+  [w]
+  (let [answered (into #{} (map :blocker-seq) (entries-in w :blocker-answered))]
+    (filterv #(not (answered (:seq %))) (entries-in w :blocker))))
+
 ;; ── appending ───────────────────────────────────────────────────────────────
 
 (defn- refuse! [message data]

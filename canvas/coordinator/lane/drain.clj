@@ -39,7 +39,7 @@
     "The person closing the drain: the exit observed — the newest census reads zero and every residue item is covered by a landed slice, or it is refused — then the drain's workstream closed in the core through `core`'s keyed close, so its conductor runs no more, then the drain closed done on its ledger. Answers the :exit-observed seq."
     {:signature [:=> [:catn [:core :map] [:project ProjectName] [:drain-id WorkstreamId]] :any]})
   (Operation coordinator-brief
-    "Drain `drain-id`'s coordinator brief, composed from the drain's records alone: its charter, its recipe and pending proposals, its census series, its plans, its slices and their positions, its misfits and residue, and its open escalations — and the levers it pulls."
+    "Drain `drain-id`'s coordinator brief, composed from the drain's records alone: its charter, its recipe and pending proposals, its census series, its plans, its slices and their positions, its misfits and residue, and its open escalations as record-drain reads them — and the levers it pulls, each printed runnable from the core's workstream directory. nido's drain brief verb prints it for a conductor turn on the drain."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId]] :any]})
   (Operation dispose!
     "The coordinator disposing of a residue item again."

@@ -858,6 +858,11 @@
    :doc "A slice's session records a site its recipe version does not cover, then ends its turn. :site \"…\" :note \"…\""
    :task (apply nido-drain/misfit-cmd *command-line-args*)}
 
+  nido:drain:brief
+  {:requires ([tasks.nido-drain :as nido-drain])
+   :doc "Print a drain's coordinator brief, as its conductor turn is told it when the turn starts. Exits 1 on a workstream that is no drain. :project <p> :drain <ws-id>"
+   :task (apply nido-drain/brief-cmd *command-line-args*)}
+
   nido:drain:census
   {:requires ([tasks.nido-drain :as nido-drain])
    :doc "Take a drain's census now: run its current recipe's counter against the project's main checkout and append the reading when it moved. Exits 1 on a failed reading. [:cwd <dir>] or :project <p> :drain <ws-id>"

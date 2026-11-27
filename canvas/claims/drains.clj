@@ -1,7 +1,13 @@
 (ns canvas.claims.drains
   "The claims the drains design (ws-20261112-9a89a7) commits nido to: a drain is a workstream class
    of its own, with a versioned recipe, a census nido measures, a slice roster on its own ledger,
-   one resumable coordinator, and landings by the person or under the person's standing grant.
+   one coordinator, and landings by the person.
+
+   The claims this design once made about autonomous drains — a standing grant, its brakes and a
+   recipe change returning the choice — and about landing Runs in each slice's session are no
+   longer declared: that machinery was removed, and a slice now lands by the person's :merge grant
+   on its own workstream, as [slice-landing-heard-by-slice] (canvas.claims.drain-coordinators)
+   states.
 
    Each Claim's name is the claim's id, its docstring the statement, and its :about the elements
    it is about — the same three the design record states, which the landing check compares."
@@ -48,14 +54,6 @@
   "The pipeline reads a workstream's position against the recipe of its class. A drain follows the drain recipe (charter, recipe, census, running, closing), a slice follows the slice recipe (slice plan, implementation, review against its recipe version, ready, landing), and every other workstream follows the standard recipe, whose positions and next actions are unchanged. A drain's and a slice's positions are read through record-drain's interface, which the record-status stratum the pipeline rests on provides."
   {:about [lane-pipeline] :evidence "round"})
 
-(Claim autonomy-is-the-persons-to-grant
-  "The drain page offers Continue autonomously on any drain with a recipe whose autonomy is not autonomous, and Pause on one whose autonomy is autonomous or suspended. The first records :autonomy-granted naming the person, the second :autonomy-revoked, which returns the drain to supervised."
-  {:about [ui-server lane-drain] :evidence "round"})
-
-(Claim brakes-return-to-person
-  "nido suspends an autonomous drain with an :autonomy-suspended entry naming the cause, and escalates it to the gate inbox, when a slice's landing fails or is evicted, when the first :census after a landed slice does not read fewer remaining than the :census before it citing the same :recipe entry, when lane-drain consumes a census failure source-drain fired for it, or when one of its misfits is answered escalated. Suspension stops lane-drain's own landings; the person's acts and the coordinator carry on. lane-drain lands no slice on its own unless a :census has been appended since its previous landing."
-  {:about [lane-drain] :evidence "round"})
-
 (Claim drain-closes-on-observed-exit
   "A drain is closed done only by the person, through lane-drain's close, which the drain page offers. It refuses unless the drain's newest census reads zero remaining and every residue item is covered by a landed slice, and otherwise appends an :exit-observed naming the person, the charter's exit criterion and that census's seq, then the drain's close."
   {:about [lane-drain ui-server] :evidence "round"})
@@ -72,18 +70,6 @@
   "A slice whose plan names slices it rests on is started on top of their unlanded work, or after they land, as its plan says, and is never landed before every slice it rests on has landed."
   {:about [lane-drain] :evidence "round"})
 
-(Claim landing-cleared-by-coordinator
-  "A slice that hands back ready is landed by lane-drain only after the coordinator clears it with a :slice-cleared naming the residue it leaves. A person may land a slice the coordinator has not cleared, and that landing is recorded as the person's override."
-  {:about [lane-drain record-drain] :evidence "round"})
-
 (Claim residue-is-disposed
   "A drain's residue is a set of :residue items on its ledger: the sites misfits carve out and the residue each :slice-cleared names. lane-drain appends each :residue item only together with its first :residue-disposed, the coordinator's disposition of it, in the one checked append that records the :slice-cleared or carved :misfit-answered leaving it: either a follow-up citing the :slice-planned that covers it or the closing residue slice. The coordinator may dispose of it again until a plan covers it."
   {:about [lane-drain record-drain] :evidence "round"})
-
-(Claim recipe-change-returns-the-choice
-  "While a :recipe-proposed awaits the person, lane-drain lands nothing on its own. Approving a proposal on a drain that was autonomous leaves it supervised and offers the person, on the drain page, the choice to continue autonomously under the new version or to run a supervised iteration with it first."
-  {:about [lane-drain ui-server] :evidence "round"})
-
-(Claim slices-land-from-their-own-session
-  "Every landing of a slice, a person's act's or lane-drain's, is carried out by a landing Run in the slice's own session once its recipe version's ready gates (tests and reviews among them) pass, never through the serial merge lane. Landing Runs of a drain's slices run concurrently: none waits on a sibling's landing Run unless it rests on that sibling. How often lane-drain asks for its own landings is paced by source-drain's poll, [brakes-return-to-person] and [coordinator-woken-by-events]."
-  {:about [lane-drain] :evidence "round"})

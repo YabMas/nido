@@ -149,22 +149,31 @@
     (str ws-id " (plan " plan ") — " (name (or at :unplaceable))
          (when (source-drain/landed? project ws-id) ", landed"))))
 
+(def ^:private lever-verb
+  "How the brief prints a lever: with nido's config, since the coordinator's turn runs in the core's
+   workstream directory, which holds no bb.edn of its own."
+  "bb --config ~/Code/nido/bb.edn")
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   coordinator-brief
   "Drain `drain-id`'s coordinator brief, composed from the drain's records alone: its charter, its
    recipe and pending proposals, its census series, its plans, its slices and their positions, its
-   misfits and residue, and its open escalations — and the levers it pulls."
+   misfits and residue, and its open escalations as record-drain reads them — and the levers it
+   pulls, each printed with nido's config so it runs from the core's workstream directory. The
+   drain's conductor turn is told it when it starts (`nido:drain:brief`), beside the core's own
+   rules on asking the person, so it says only what the drain is and which levers it pulls: never
+   which tools the turn may act through, nor how an ask is made."
   [project drain-id]
   (let [w   (ws/read-ws project drain-id)
         ch  (drain/charter w)
         cs  (drain/censuses w)
-        bl  (let [answered (set (map :blocker-seq (ws/entries-of project drain-id :blocker-answered)))]
-              (remove #(answered (:seq %)) (ws/entries-of project drain-id :blocker)))]
+        bl  (drain/open-escalations w)]
     (str "You coordinate drain " drain-id " of " (name project) ". You occupy no seat and write no code. "
          "You plan the roll-out slice by slice as the census moves, never once up front; you answer "
          "each slice's turn end with exactly one decision — instructing the slice, or asking the "
          "person; you clear ready slices with the residue they leave; you answer misfits. "
-         "A wake (a new census, a landing, a failed landing) owes no decision.\n\n"
+         "A wake (the charter while no recipe is approved or proposed, a new census, a landing, a failed "
+         "landing) owes no decision.\n\n"
          "Charter: established by " (pr-str (:established-by ch)) "; exit criterion: " (:exit ch) "\n"
          "Recipe: " (if-let [v (drain/version w)]
                       (str "version " v "\n" (recipe-text (:recipe (drain/recipe w)))
@@ -187,16 +196,17 @@
                         (bullet-list (map #(str "#" (:seq %) " " (:site %) " → " (pr-str (:disposition %))) rs))
                         "- none") "\n"
          "Open escalations: " (if (seq bl) (str/join "; " (map report/blocker-question-text bl)) "none") "\n\n"
-         "Your levers, each run from this session:\n"
-         "- bb nido:drain:propose :reason \"…\" :recipe '{:steps […] :ready-gates […] :standing-orders […] :counter {:command \"…\"}}'\n"
-         "- bb nido:drain:plan :sites '[…]' :rests-on '[<plan seq> …]' :start on-top|after-landing :census <seq> [:replaces <seq>] [:note \"…\"]\n"
-         "- bb nido:drain:withdraw :plan <seq> :why \"…\"\n"
-         "- bb nido:drain:clear :slice <ws-id> :residue '[{:site \"…\" :disposition {:to :closing}} …]'\n"
-         "- bb nido:drain:dispose :residue <seq> :disposition '{:to :follow-up :plan <seq>}'\n"
-         "- bb nido:drain:answer :misfit <seq> :answer '{:as :carved :site \"…\" :disposition {:to :closing}}' "
+         "Your levers, each run as printed:\n"
+         "- " lever-verb " nido:drain:propose :reason \"…\" :recipe '{:steps […] :ready-gates […] :standing-orders […] :counter {:command \"…\"}}'\n"
+         "- " lever-verb " nido:drain:plan :sites '[…]' :rests-on '[<plan seq> …]' :start on-top|after-landing :census <seq> [:replaces <seq>] [:note \"…\"]\n"
+         "- " lever-verb " nido:drain:withdraw :plan <seq> :why \"…\"\n"
+         "- " lever-verb " nido:drain:clear :slice <ws-id> :residue '[{:site \"…\" :disposition {:to :closing}} …]'\n"
+         "- " lever-verb " nido:drain:dispose :residue <seq> :disposition '{:to :follow-up :plan <seq>}'\n"
+         "- " lever-verb " nido:drain:answer :misfit <seq> :answer '{:as :carved :site \"…\" :disposition {:to :closing}}' "
          "(or {:as :proposed :proposal <seq>}, {:as :escalated :asks \"…\"})\n"
-         "Approving a recipe, landing a slice and closing the drain are the person's: escalate when one is due.\n\n"
-         "Decide on the records each hand-back and wake carries, read again then, not on this brief.")))
+         "Approving a recipe, landing a slice and closing the drain are the person's: when one is due, "
+         "ask the person.\n\n"
+         "This brief was read from the drain's records when your turn started.")))
 
 ;; ── the coordinator's levers ────────────────────────────────────────────────
 

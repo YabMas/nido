@@ -7,6 +7,8 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.lane.drain :as drain-lane]
+   [nido.coordinator.record.drain :as drain]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.work :as work]
    [nido.coordinator.source.drain :as source-drain]
    [nido.platform.task-args :as task-args]
@@ -147,6 +149,21 @@
   (let [[_ opts] (task-args/split-args args)
         [p id]   (drain-target opts)]
     (refusing #(drain-lane/answer-misfit! p id (int-arg (:misfit opts)) (edn-arg (:answer opts))))))
+
+(defn brief-cmd
+  "Print drain `:project <p> :drain <ws-id>`'s coordinator brief, as its conductor turn is told it.
+   Exits 1, printing nothing to stdout, when the workstream is no drain or the brief cannot be read."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)
+        [p id]   (drain-target opts)
+        b        (try (when (drain/drain? (ws/read-ws p id)) (drain-lane/coordinator-brief p id))
+                      (catch Exception e
+                        (binding [*out* *err*] (println (str "brief: " (ex-message e))))
+                        nil))]
+    (if (str/blank? b)
+      (do (binding [*out* *err*] (println (str "brief: " id " is no drain of " (name p) ", or has no brief")))
+          (System/exit 1))
+      (println b))))
 
 (defn misfit-cmd
   "A slice's session recording `:site \"…\" :note \"…\"` its recipe version does not cover."

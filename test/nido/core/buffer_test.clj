@@ -326,3 +326,69 @@
       (is (str/includes? text "with or without an option chosen"))
       (is (str/includes? text "re-asking or reframing") "a disputing comment is answered by a re-ask or reframe")
       (is (str/includes? text "never by proceeding on an option nobody chose")))))
+
+;; ── a drain's conductor ──────────────────────────────────────────────────────
+
+(defn- drain-state
+  "A drain's state: its ledger index holds a :drain birth entry, and its inbox a notice."
+  []
+  (-> (state-after [{:command :post-notice :notice "wake:charter:1" :text "Drain chartered: propose one."}])
+      (assoc :ledger [{:seq 1 :kind :drain}])))
+
+(def ^:private coord-brief "You coordinate drain ws-d of brian.\nYour levers, each run as printed:\n- bb --config ~/Code/nido/bb.edn nido:drain:propose")
+
+(deftest a-drain-s-conductor-is-told-its-coordinator-brief-and-the-asking-rules
+  (let [asked (atom [])
+        f     (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws")
+                                    :drain-brief (fn [ws] (swap! asked conj ws) coord-brief)})
+        s     (drain-state)
+        i     (:instructions (f "brian/ws-d" "conductor-1" s (vals (:inbox s))))]
+    (is (= ["brian/ws-d"] @asked))
+    (is (str/starts-with? i coord-brief) "the coordinator brief, as the verb printed it, comes first")
+    (is (str/includes? i "mcp__nido__ask as the ONLY tool call"))
+    (is (str/includes? i (ask-tool/briefing)) "the ask briefing")
+    (is (str/includes? i "Answer every chat message the person sent with reply_chat"))
+    (is (str/includes? i "notice wake:charter:1") "what it has not yet heard")
+    (is (not (str/includes? i "Act ONLY through the nido conductor tools")) "not the generic role")
+    (is (not (str/includes? i "You are the conductor of nido workstream")))
+    (doseq [unit-rule ["answer_call" "start_unit_turn" "settle_unknown" "Never ask the person whether to land"]]
+      (is (not (str/includes? i unit-rule)) (str "no generic Rule for conducting units: " unit-rule)))))
+
+(deftest any-other-conductor-is-briefed-as-before-and-the-reader-is-not-asked
+  (let [asked (atom 0)
+        f     (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws")
+                                    :drain-brief (fn [_] (swap! asked inc) coord-brief)})
+        g     (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws")})
+        s     (state-after [{:command :hand-over :summary "x"}])
+        items (vals (:inbox s))]
+    (is (= (f "brian/ws" "c" s items) (g "brian/ws" "c" s items)))
+    (is (= (b/brief "brian/ws" s items) (:instructions (f "brian/ws" "c" s items))))
+    (is (zero? @asked))))
+
+(deftest a-drain-wake-is-withheld-while-no-brief-is-given
+  (let [f (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws") :drain-brief (constantly nil)})
+        o {:spec-fn f :max-failures 3}
+        s (drain-state)]
+    (is (nil? (f "brian/ws-d" "c" s (vals (:inbox s)))) "no spec without the brief")
+    (is (empty? (b/decisions o "brian/ws-d" s 3)) "no command under the wake's key")
+    (is (every? :withheld? (b/wakes o {"brian/ws-d" {:state s :pos 3}} ["brian/ws-d"])))
+    (testing "the wake is decided again within the retry interval, and sent once a brief is given"
+      (let [given     (atom false)
+            submitted (atom [])
+            buf (b/start {:submit #(swap! submitted conj %) :withheld-retry-ms 50
+                          :spec-fn (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws")
+                                                         :drain-brief (fn [_] (when @given coord-brief))})})]
+        (try
+          (b/changed! buf [{:ws "brian/ws-d" :state s :pos 3}])
+          (Thread/sleep 200)
+          (is (empty? @submitted) "nothing sent while withheld")
+          (reset! given true)
+          (Thread/sleep 400)
+          (is (= ["buffer/wake/conductor-3"] (distinct (map :key @submitted))))
+          (finally (b/stop! buf)))))))
+
+(deftest a-notice-wakes-under-the-background-cap
+  (let [noticed (state-after [{:command :post-notice :notice "n" :text "census"}])]
+    (is (not (b/person-input? noticed)))
+    (is (= ["a"] (map :ws (b/wakes (assoc opts :wake-cap 1)
+                                   {"a" {:state noticed :pos 1} "b" {:state noticed :pos 2}} ["a" "b"]))))))

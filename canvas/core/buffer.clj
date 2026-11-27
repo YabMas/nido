@@ -29,6 +29,10 @@
     "What a conductor turn is told: its role, what it has not yet heard, and the workstream now —
      past a cleared design, what the recipe owes next, as the pipeline places it."
     {:signature [:=> [:catn [:ws :string] [:state :map] [:items [:sequential :map]] [:owed [:? [:maybe :map]]]] :string]})
+  (Operation drain-brief-reader
+    "A drain's coordinator brief, asked of nido's own drain brief verb: the brief is lane-drain's,
+     which the core may not require. Nil when the verb gives none, which withholds the drain's wake."
+    {:signature [:=> [:catn [:opts :map]] fn?]})
   (Operation owed-reader
     "What the recipe owes a workstream, asked of nido's own owed verb: the pipeline that places it
      is not the core's to require."
@@ -43,7 +47,7 @@
     "The conductor tools as an MCP server entry an executor hands its agent."
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation conductor-spec-fn
-    "The spec of a conductor turn as the daemon runs it: the brief, in the workstream's directory, with its tools."
+    "The spec of a conductor turn as the daemon runs it: the brief, in the workstream's directory, with its tools. A drain's turn is told its coordinator brief, read through the injected brief reader, in place of the generic role and the Rules for conducting units, keeping the Rules on asking the person and on chat; with no brief the spec is nil and the wake is withheld."
     {:signature [:=> [:catn [:opts :map]] fn?]})
   (Operation start
     "Start applying the rules to committed changes."

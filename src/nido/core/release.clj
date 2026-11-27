@@ -188,6 +188,10 @@
                               ;; of nido's own verb in the checkout, as the session verb is.
                               :owed (when nido-dir
                                       ((req 'nido.core.buffer/owed-reader) {:bb-bin bb-bin :nido-dir nido-dir}))
+;; A drain's conductor is told its coordinator brief, which is lane-drain's, asked
+                              ;; of nido's own verb in the checkout when the turn's spec is made.
+                              :drain-brief (when nido-dir
+                                             ((req 'nido.core.buffer/drain-brief-reader) {:bb-bin bb-bin :nido-dir nido-dir}))
                               :ws-dir (fn [ws] (let [d (io/file (:workstreams ps) ws)] (.mkdirs d) (str d)))})})
           prov ((req 'nido.core.provision/start) {:submit submit :nido-dir nido-dir :bb-bin bb-bin})
           all-wss ((req 'nido.core.store/changed-since) s 0)

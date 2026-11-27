@@ -66,13 +66,19 @@
                        (not-any? (fn [i] (d/person-input-kinds (:kind i))) (vals (:hears %))))
                  (conductor-turns state))))
 
-(defn- wake [{:keys [spec-fn]} ws state pos]
+(defn- wake
+  "The keyed start of the conductor turn `state` is owed. Its spec is nil when `spec-fn` gives none
+   — a drain whose coordinator brief could not be read — and such a wake is WITHHELD: marked
+   `:withheld?`, never sent, so nothing is committed under its key and a later pass decides it again."
+  [{:keys [spec-fn]} ws state pos]
   (let [turn (str "conductor-" pos)
-        items (vals (:inbox state))]
-    {:key (str "buffer/wake/" turn)
-     :command {:command :start-turn :turn turn :unit nil
-               :hears (vec (sort (map :id items)))
-               :spec (spec-fn ws turn state (sort-by :id items))}}))
+        items (vals (:inbox state))
+        spec  (spec-fn ws turn state (sort-by :id items))]
+    (cond-> {:key (str "buffer/wake/" turn)
+             :command {:command :start-turn :turn turn :unit nil
+                       :hears (vec (sort (map :id items)))
+                       :spec spec}}
+      (nil? spec) (assoc :withheld? true))))
 
 (defn- stop-content [n]
   {:question "This workstream's conductor has stopped. Wake it again?"
@@ -113,7 +119,7 @@
         :command {:command :record-provision-attempt :unit unit :want want
                   :attempt (str unit " " (name want) " " pos)}})
      (when (and (not (false? wakes?)) (wake-owed? state max-failures))
-       [(wake opts ws state pos)]))))
+       (remove :withheld? [(wake opts ws state pos)])))))
 
 (defn- ^{:malli/schema [:=> [:cat :map :int] :boolean]} backing-off?
   "Whether `state`'s conductor waits out a backoff at `now` (epoch ms): its last turns were refused
@@ -127,7 +133,8 @@
    inbox holding a person's input is issued at once; the rest only while fewer than `:wake-cap`
    conductor turns hearing no person's input run, in `owed-order`. A workstream backing off at
    `:now` (`backing-off?`) is woken by neither, a person's input included: the host refused the
-   last run resources, and a person's message does not give them back."
+   last run resources, and a person's message does not give them back. A wake whose spec could not
+   be made is answered `:withheld?`, for the caller to leave unsent and decide again."
   [{:keys [max-failures wake-cap now] :or {wake-cap 4} :as opts} states owed-order]
   (let [owed (filter #(and (wake-owed? (:state (states %)) max-failures)
                            (not (and now (backing-off? (:state (states %)) now))))
@@ -296,6 +303,23 @@
               " nido:owed` in a unit's working copy says which is owed now."))
        "  Every stage advances only by its record: direct each unit through the one owed, and on its outcome through the next."])))
 
+(def ^:private chat-rule
+  "- The person's chat messages reach you as they decided, often passed on by the workstream's chat agent, which answers their questions itself; each is the person's word. Answer every chat message the person sent with reply_chat. What you settle in chat takes effect only through the same tools.")
+
+(defn- since-and-now
+  "What a conductor turn has not yet heard, and the workstream now: its units and its recipe."
+  [state items owed]
+  (concat
+   ["Since you last heard:"]
+   (map #(str "- " (describe-item %)) items)
+   [""
+    "Units:"]
+   (for [u (sort-by :id (vals (:units state)))]
+     (str "- " (:id u) " [" (name (:status u)) (when (:held? u) ", HELD")
+          ", session " (name (get-in u [:session :status] :none)) "] in " (:project u) ": " (:goal u)))
+   [""]
+   (recipe-lines state owed)))
+
 (defn ^{:malli/schema [:=> [:cat :string :map [:sequential :map] [:? [:maybe :map]]] :string]} brief
   "What a conductor turn is told: its role, what it has not yet heard, and the workstream now.
    `owed` is what `bb nido:owed` answered for the workstream (see `owed-wanted?`), else nil."
@@ -315,17 +339,32 @@
      "- A unit with an unknown runs nothing until you settle it (settle_unknown) by observing what happened."
      "- Never ask the person whether to land. Once the implementation review converges and its QA passes or does not apply, the workstream is a release candidate, and the person lands it with its Land button; you hear it when they do."
      "- Start a unit's next turn with start_unit_turn when its goal needs more work; it runs in the unit's own session. Stop when there is nothing left to decide."
-     "- The person's chat messages reach you as they decided, often passed on by the workstream's chat agent, which answers their questions itself; each is the person's word. Answer every chat message the person sent with reply_chat. What you settle in chat takes effect only through the same tools."
+     chat-rule
+     ""]
+    (since-and-now state items owed))))
+
+(defn- drain?
+  "Whether `state` is a drain's: its ledger index holds a :drain birth entry."
+  [state]
+  (boolean (some #(= :drain (:kind %)) (:ledger state))))
+
+(defn- drain-brief
+  "What a conductor turn on a drain is told: the drain's `coordinator` brief, as nido's verb printed
+   it, in place of the generic role and the Rules for conducting units; then the generic Rules on
+   asking the person and on the person's chat, and what it has not yet heard and the workstream now
+   as `brief` gives them."
+  [coordinator state items & [owed]]
+  (str/join
+   "\n"
+   (concat
+    [(str/trim coordinator)
      ""
-     "Since you last heard:"]
-    (map #(str "- " (describe-item %)) items)
-    [""
-     "Units:"]
-    (for [u (sort-by :id (vals (:units state)))]
-      (str "- " (:id u) " [" (name (:status u)) (when (:held? u) ", HELD")
-           ", session " (name (get-in u [:session :status] :none)) "] in " (:project u) ": " (:goal u)))
-    [""]
-    (recipe-lines state owed))))
+     "Rules:"
+     "- For a decision only the person can make, ask with mcp__nido__ask as the ONLY tool call in its turn."
+     (str "- How an ask is written and read, for every ask you make:\n\n" (ask-tool/briefing) "\n")
+     chat-rule
+     ""]
+    (since-and-now state items owed))))
 
 ;; ── the conductor tools ──────────────────────────────────────────────────────
 
@@ -453,22 +492,46 @@
           (do (.destroyForcibly p) nil)))
       (catch Exception _ nil))))
 
+(defn ^{:malli/schema [:=> [:cat :map] fn?]} drain-brief-reader
+  "(fn [ws]) -> the coordinator brief `bb nido:drain:brief` prints for core workstream `ws`
+   (\"<project>/<ws-id>\"), or nil when it exits non-zero, prints nothing or takes longer than
+   `:timeout-ms`. The brief is lane-drain's, which the core may not require, so it is asked of nido's
+   own verb in the checkout, as `owed-reader` asks what the recipe owes."
+  [{:keys [bb-bin nido-dir timeout-ms] :or {timeout-ms 30000}}]
+  (fn [ws]
+    (try
+      (let [[project ws-id] (str/split ws #"/" 2)
+            p (.start (doto (ProcessBuilder. ^java.util.List
+                                             [(or bb-bin "bb") "--config" (str nido-dir "/bb.edn") "nido:drain:brief"
+                                              ":project" project ":drain" ws-id])
+                        (.redirectError java.lang.ProcessBuilder$Redirect/DISCARD)))
+            out (future (slurp (.getInputStream p)))]
+        (if (.waitFor p timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+          (let [b (str/trim (deref out 5000 ""))]
+            (when (and (zero? (.exitValue p)) (seq b)) b))
+          (do (.destroyForcibly p) nil)))
+      (catch Exception _ nil))))
+
 (defn ^{:malli/schema [:=> [:cat :map] fn?]} conductor-spec-fn
   "The spec of a conductor turn as the daemon runs it: `executor` with the brief, in the
    workstream's own directory (`(ws-dir ws)`), with the conductor tools speaking to `socket`, and
    the digests of the images the chat messages it hears carry as `:images`, each once in order,
    which the executor puts in its prompt. `owed`, (fn [ws]) -> `bb nido:owed`'s answer or nil, is
-   asked only where the brief says what the recipe owes (`owed-wanted?`)."
-  [{:keys [executor model socket src bb-bin ws-dir owed] :or {executor :claude}}]
+   asked only where the brief says what the recipe owes (`owed-wanted?`). `drain-brief`, (fn [ws]) ->
+   the drain's coordinator brief or nil, is asked only for a drain (`drain?`), whose turn is told
+   `drain-brief` in place of `brief`; when it gives none the spec is nil, and the wake is withheld."
+  [{:keys [executor model socket src bb-bin ws-dir owed] read-brief :drain-brief :or {executor :claude}}]
   (fn [ws turn state items]
     (let [images (vec (distinct (mapcat :images (filter #(= :chat (:kind %)) items))))
-          owed   (when (and owed (owed-wanted? state)) (owed ws))]
-      (cond-> {:executor executor
-               :instructions (brief ws state items owed)
-               :cwd (ws-dir ws)
-               :mcp-servers {"nido-conductor" (mcp-server {:bb-bin bb-bin :src src :socket socket :ws ws :turn turn})}}
-        (seq images) (assoc :images images)
-        model (assoc :model model)))))
+          owed   (when (and owed (owed-wanted? state)) (owed ws))
+          coord  (when (and read-brief (drain? state)) (read-brief ws))]
+      (when (or (not (drain? state)) (seq coord))
+        (cond-> {:executor executor
+                 :instructions (if (drain? state) (drain-brief coord state items owed) (brief ws state items owed))
+                 :cwd (ws-dir ws)
+                 :mcp-servers {"nido-conductor" (mcp-server {:bb-bin bb-bin :src src :socket socket :ws ws :turn turn})}}
+          (seq images) (assoc :images images)
+          model (assoc :model model))))))
 
 ;; ── running the rules ────────────────────────────────────────────────────────
 
@@ -489,9 +552,11 @@
      :spec-fn       (fn [ws turn state items]) -> the spec of a conductor turn hearing `items`
      :max-failures  consecutive conductor failures that raise the stop ask (default 3)
      :wake-cap      conductor turns hearing no person's input that may run at once (default 4)
+     :withheld-retry-ms  how soon wakes are decided again after one was withheld (default 30s)
    Feed it committed changes [{:ws :pos :state} ...] with `changed!`; a start hands it every
    workstream not closed the same way."
-  [{:keys [submit spec-fn max-failures wake-cap] :or {max-failures 3 wake-cap 4}}]
+  [{:keys [submit spec-fn max-failures wake-cap withheld-retry-ms]
+    :or {max-failures 3 wake-cap 4 withheld-retry-ms 30000}}]
   (let [q (java.util.concurrent.LinkedBlockingQueue.)
         opts {:spec-fn spec-fn :max-failures max-failures :wake-cap wake-cap}
         states (atom {})          ; ws -> {:state :pos}, as last committed
@@ -499,12 +564,15 @@
         log! (fn [ws e] (binding [*out* *err*] (println "nido.core.buffer:" ws (.getMessage ^Throwable e))))
         t (doto (Thread. ^Runnable
                          (fn []
-                           (loop [decided (System/currentTimeMillis)]
+                           (loop [decided (System/currentTimeMillis) withheld? false]
                              ;; A backoff ends with no commit to say so, so wait no longer than the
                              ;; earliest one, and then decide the wakes again over the same states.
                              ;; `decided` is the time the last wakes were decided at: a backoff still
-                             ;; pending then is waited for even when it has ended since.
-                             (let [x (if-let [ms (next-retry-in @states decided)]
+                             ;; pending then is waited for even when it has ended since. A wake
+                             ;; withheld then is decided again no later than `withheld-retry-ms` on.
+                             (let [x (if-let [ms (some->> [(next-retry-in @states decided)
+                                                          (when withheld? withheld-retry-ms)]
+                                                         (remove nil?) seq (apply min))]
                                        (or (.poll q (long (- ms (- (System/currentTimeMillis) decided)))
                                                   java.util.concurrent.TimeUnit/MILLISECONDS)
                                            [])
@@ -517,11 +585,12 @@
                                      (submit envelope)))
                                  (let [owing (set (filter #(wake-owed? (:state (@states %)) max-failures) (keys @states)))]
                                    (swap! owed-order #(into (vec (filter owing %)) (remove (set %) (sort owing)))))
-                                 (let [now (System/currentTimeMillis)]
-                                   (doseq [envelope (try (wakes (assoc opts :now now) @states @owed-order)
-                                                         (catch Throwable e (log! "wakes" e) nil))]
+                                 (let [now (System/currentTimeMillis)
+                                       ws  (try (wakes (assoc opts :now now) @states @owed-order)
+                                                (catch Throwable e (log! "wakes" e) nil))]
+                                   (doseq [envelope (remove :withheld? ws)]
                                      (submit envelope))
-                                   (recur now))))))
+                                   (recur now (boolean (some :withheld? ws))))))))
                          "nido-buffer")
             (.setDaemon true) (.start))]
     {:queue q :thread t}))

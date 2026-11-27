@@ -8,12 +8,11 @@
 
 (Module record-drain
   "A drain's records: its charter, recipe versions, census readings, slice plans, slice roster, misfits and
-   their answers, clearances, residue items and their dispositions, autonomy state and exit observation, all on the drain's ledger, and each
+   their answers, clearances, residue items and their dispositions, open escalations and exit observation, all on the drain's ledger, and each
    slice's birth and rebase entries naming its drain and recipe version.
 
    READ, NEVER STORED. A workstream is a drain because its ledger holds a :drain birth entry, a
-   slice because its ledger holds a :slice one; the recipe version is the seq of the :recipe entry,
-   and the autonomy state (supervised, autonomous, suspended) is the newest autonomy entry's. The
+   slice because its ledger holds a :slice one; the recipe version is the seq of the :recipe entry. The
    roster is on the DRAIN's ledger, so a drain lists its slices from its own records."
   (Operation answer-misfit!
     "The coordinator's answer to an open misfit. `answer` is `{:as :proposed :proposal n}`, `{:as :carved :site s :disposition d}` — whose residue item is appended with its disposition in the same step — or `{:as :escalated :asks s}`. Answers the :misfit-answered seq."
@@ -56,6 +55,9 @@
     {:signature [:=> [:catn [:w :any]] :any]})
   (Operation open-plans
     "The plans no start has consumed and none has withdrawn or replaced."
+    {:signature [:=> [:catn [:w :any]] :any]})
+  (Operation open-escalations
+    "The drain's open escalations: its :blocker entries, oldest first, that no :blocker-answered names."
     {:signature [:=> [:catn [:w :any]] :any]})
   (Operation pending-proposals
     "The proposals no approval has taken — newer than the current recipe, none approved since."

@@ -507,3 +507,18 @@
           (is (nil? (ws/closure (ws/read-ws p d))))
           (is (int? (lane/close! *core* p d)) "a retry takes the exit already observed")
           (is (= 1 (count (filter #(= :exit-observed (:kind %)) (:entries (ws/read-ws p d)))))))))))
+
+(deftest the-coordinator-brief-prints-runnable-levers-and-asks-for-a-recipe
+  (with-tmp
+    (fn []
+      (let [d (drain/start-drain! p {:established-by {:commit "abcdef1"} :exit "x"})
+            b (lane/coordinator-brief p d)
+            levers (filter #(re-find #"nido:drain:" %) (str/split-lines b))]
+        (is (str/includes? b "none approved yet — propose one"))
+        (is (seq levers))
+        (is (every? #(str/includes? % "bb --config ~/Code/nido/bb.edn nido:drain:") levers)
+            "every lever runs from the core's workstream directory")
+        (is (str/includes? b "a failed landing") "a failed landing is among its wakes")
+        (is (str/includes? b "ask the person"))
+        (is (not (re-find #"(?i)act only|mcp__|conductor tools" b))
+            "the brief says nothing of the tools the turn acts through, nor how an ask is made")))))
