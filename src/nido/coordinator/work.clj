@@ -2617,6 +2617,8 @@
 
 (declare core-resolve! start-ticket! resolve-ref open-fire!)
 
+(declare drain-act!)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :any]}
   set-stage!
   "Move a workstream to `target` stage — the single mutation behind the
@@ -2644,9 +2646,8 @@
                      {:decision :refused
                       :message  "A slice is done when it lands — land it from the drains page."}
                      (rdrain/drain? w)
-                     (try (drain-lane/close! (keyword (name project)) ws-id) {:decision :done}
-                          (catch clojure.lang.ExceptionInfo e
-                            {:decision :refused :message (ex-message e)}))
+                     (let [{:keys [refused]} (drain-act! project ws-id :close nil)]
+                       (if refused {:decision :refused :message refused} {:decision :done}))
                      :else
                      (core-resolve! project ws-id :done nil))
       (do (cws/advance-stage! project ws-id target :person)
@@ -4631,11 +4632,16 @@
 
 (def ^:private drain-core
   "How lane-drain reaches the core: a drain's state, a notice to its conductor keyed by its event, a
-   slice's unit opened on its brief, and a slice's landing granted."
+   slice's unit opened on its brief, a slice's landing granted, and a drain's workstream closed."
   {:state       (fn [project ws-id] (wcore/state project ws-id))
    :notice!     (fn [project ws-id k text]
                   (wcore/act! project ws-id {:command :post-notice :notice k :text text}
                               {:key (str "drain/" (name project) "/" ws-id "/" k)}))
+   ;; Keyed by the drain, so a close retried — by the person, or by a wakes pass finding the ledger
+   ;; closed and the core open — closes it once.
+   :close!      (fn [project ws-id]
+                  (wcore/act! project ws-id {:command :close-workstream}
+                              {:key (str "drain/" (name project) "/" ws-id "/close")}))
    :open-slice! (fn [project slice-id unit brief]
                   (let [r (wcore/act! project slice-id
                                       {:command :open-unit :unit unit :project (name project)
@@ -4673,16 +4679,18 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword [:maybe :string]] :map]}
   drain-act!
-  "Carry out one of the person's acts on drain `ws-id` from the drains page: :approve the recipe
-   proposal whose seq is `arg`, :land the slice `arg`, or :close the drain. Answers {:ok result}
-   or {:refused message}: a refusal names what the act's records did not support."
+  "Carry out one of the person's acts on drain `ws-id` — from the drains page, the drain verbs, or a
+   drain marked done: :approve the recipe proposal whose seq is `arg`, :land the slice `arg`, or
+   :close the drain, which closes it in the core too (`lane-drain/close!`, handed the drain-core
+   map; every close of a drain comes through here). Answers {:ok result} or {:refused message}: a
+   refusal names what the act's records did not support."
   [project ws-id act arg]
   (let [project (keyword (name project))]
     (try
       {:ok (case act
              :approve (drain-lane/approve! project ws-id (parse-long (str arg)))
              :land    (:slice (drain-land! project (str arg)))
-             :close   (drain-lane/close! project ws-id))}
+             :close   (drain-lane/close! drain-core project ws-id))}
       (catch clojure.lang.ExceptionInfo e
         {:refused (ex-message e)}))))
 

@@ -36,8 +36,8 @@
     "The coordinator clearing a slice for landing with the residue it leaves."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:slice-id WorkstreamId] [:residue-items :any]] :any]})
   (Operation close!
-    "The person closing the drain: the exit observed — the newest census reads zero and every residue item is covered by a landed slice, or it is refused — then the drain closed done. Answers the :exit-observed seq."
-    {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId]] :any]})
+    "The person closing the drain: the exit observed — the newest census reads zero and every residue item is covered by a landed slice, or it is refused — then the drain's workstream closed in the core through `core`'s keyed close, so its conductor runs no more, then the drain closed done on its ledger. Answers the :exit-observed seq."
+    {:signature [:=> [:catn [:core :map] [:project ProjectName] [:drain-id WorkstreamId]] :any]})
   (Operation coordinator-brief
     "Drain `drain-id`'s coordinator brief, composed from the drain's records alone: its charter, its recipe and pending proposals, its census series, its plans, its slices and their positions, its misfits and residue, and its open escalations — and the levers it pulls."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId]] :any]})
@@ -69,7 +69,7 @@
     "Whether drain `drain-id`'s coordinator has not yet heard one of its wakes — its charter, a census, a landing or a failed landing: a wake not posted, or posted and still in its conductor's inbox. While one is pending, no slice of the drain starts."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:core :map]] :any]})
   (Operation wakes!
-    "Post to each drain the core holds open the wake for each event its coordinator has not been woken for — a notice to its conductor whose id is the event's key, so each is posted once. Answers what each post answered."
+    "Post to each drain the core holds open the wake for each event its coordinator has not been woken for — a notice to its conductor whose id is the event's key, so each is posted once — and close in the core each drain whose ledger is closed while the core holds it open. Answers what each post and close answered."
     {:signature [:=> [:catn [:project ProjectName] [:core :map]] :any]})
   (Operation withdraw!
     "The coordinator withdrawing an open plan."

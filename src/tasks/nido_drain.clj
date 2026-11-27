@@ -95,7 +95,10 @@
   [& args]
   (let [[_ opts] (task-args/split-args args)
         [p id]   (drain-target opts)]
-    (refusing #(drain-lane/close! p id))))
+    (let [{:keys [ok refused]} (work/drain-act! p id :close nil)]
+      (if refused
+        (do (println (str "Refused — " refused)) (System/exit 1))
+        (prn ok)))))
 
 (defn propose-cmd
   "The coordinator proposing a recipe: `:reason \"…\" :recipe '{…}'`."

@@ -40,6 +40,11 @@
                                               (assoc-in [:notice-texts k] text)
                                               (assoc-in [:inbox k] {:kind :notice :notice k :text text}))))
                           {:events [:notice-posted]})))
+     :close!      (fn [_ ws-id]
+                    (if (get-in @states [ws-id :closed?])
+                      {:refused {:reason :workstream-closed}}
+                      (do (swap! states assoc-in [ws-id :closed?] true)
+                          {:events [:workstream-closed]})))
      :open-slice! (fn [proj slice unit brief]
                     (swap! opened conj [slice unit brief])
                     (units/open-unit! proj slice unit {:session unit}))
@@ -381,10 +386,10 @@
                (refused #(ws/append-entry! p d {:kind :closed} (pr-str {:format :closed :outcome :done :by :person})))))
         (is (nil? (ws/closure (ws/read-ws p d))))
         (drain/record-census! p d {:recipe (drain/version (ws/read-ws p d)) :remaining 0 :groups []})
-        (is (int? (lane/close! p d)))
+        (is (int? (lane/close! *core* p d)))
         (is (= :done (:outcome (ws/closure (ws/read-ws p d)))))
         (let [n (count (:entries (ws/read-ws p d)))]
-          (is (= :closed (refused #(lane/close! p d))) "a closed drain is not closed again")
+          (is (= :closed (refused #(lane/close! *core* p d))) "a closed drain is not closed again")
           (is (= n (count (:entries (ws/read-ws p d))))))))))
 
 (deftest a-slice-is-reviewed-against-its-recipe-version-and-plan
@@ -478,3 +483,27 @@
         (is (= [(str "wake:landing-failed:" sa ":t1")]
                (filterv #(str/starts-with? % "wake:landing-failed:") (map :id (wakes d))))
             "only the marked turn, and once")))))
+
+(deftest closing-a-drain-closes-it-in-the-core-and-a-pass-retires-one-closed-elsewhere
+  (with-tmp
+    (fn []
+      (let [[d _] (coordinated-drain)]
+        (drain/record-census! p d {:recipe (drain/version (ws/read-ws p d)) :remaining 0 :groups []})
+        (lane/close! *core* p d)
+        (is (true? (:closed? ((:state *core*) p d))) "closed in the core")
+        (is (= :done (:outcome (ws/closure (ws/read-ws p d))))))
+      (testing "a drain closed on its ledger alone is closed in the core by the next pass"
+        (let [[d _] (coordinated-drain)]
+          (ws/append-entry! p d {:kind :closed} (pr-str {:format :closed :outcome :dropped :by :person}))
+          (is (not (:closed? ((:state *core*) p d))))
+          (lane/wakes! p *core*)
+          (is (true? (:closed? ((:state *core*) p d))))
+          (is (empty? (wakes d)) "and a closed drain is woken for nothing")))
+      (testing "a close the core refuses leaves the ledger open"
+        (let [[d _] (coordinated-drain)]
+          (drain/record-census! p d {:recipe (drain/version (ws/read-ws p d)) :remaining 0 :groups []})
+          (is (= :core-refused
+                 (refused #(lane/close! (assoc *core* :close! (fn [_ _] {:refused {:reason :units-not-landed}})) p d))))
+          (is (nil? (ws/closure (ws/read-ws p d))))
+          (is (int? (lane/close! *core* p d)) "a retry takes the exit already observed")
+          (is (= 1 (count (filter #(= :exit-observed (:kind %)) (:entries (ws/read-ws p d)))))))))))

@@ -18,7 +18,8 @@
    the work plane that calls it: {:state (fn [project ws-id]) the core's state of a workstream or
    nil, :notice! (fn [project ws-id key text]) a notice to its conductor whose id is `key`,
    :open-slice! (fn [project slice-id unit brief]) the slice's unit opened with `brief` as its first
-   turn, :land! (fn [project slice-id]) the person's landing granted on the slice}.
+   turn, :land! (fn [project slice-id]) the person's landing granted on the slice, :close! (fn
+   [project ws-id]) the workstream closed in the core, keyed so a retry closes it once}.
 
    WAKES. The coordinator is given a turn on its drain's charter while no recipe is approved or
    proposed, and on each census, landing and failed landing: a notice to the drain's conductor whose
@@ -27,6 +28,10 @@
    While one has not been heard — not posted, or still in the conductor's inbox — no slice of the
    drain starts: the coordinator plans from what it has seen, and a start must not race what it has
    not.
+
+   RETIRING. Closing a drain closes its workstream in the core, so its conductor runs no more; a
+   drain whose ledger is closed while the core still holds it open is closed there by the next wakes
+   pass.
 
    LANDING. A slice lands by the person's merge grant on its workstream: sibling slices land side
    by side, and none while a slice it rests on has not landed."
@@ -261,6 +266,18 @@
   [core project drain-id]
   (let [st ((:state core) project drain-id)] (boolean (and st (not (:closed? st))))))
 
+(defn- retire!
+  "Close drain `drain-id`'s workstream in the core, through `core`'s keyed close, unless the core
+   holds it closed already. Refused (:core-refused) when the core does not admit it."
+  [core project drain-id]
+  (when (has-coordinator? core project drain-id)
+    (let [r ((:close! core) project drain-id)]
+      (when-not (contains? r :events)
+        (when-not (= :workstream-closed (get-in r [:refused :reason]))
+          (refuse! (str "The core did not close " drain-id ": " (pr-str (or (:refused r) (:error r))))
+                   :core-refused {:ws-id drain-id})))
+      r)))
+
 ;; ── the person's acts ───────────────────────────────────────────────────────
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
@@ -282,20 +299,26 @@
   [project drain-id proposal-seq]
   (drain/approve-recipe! project drain-id proposal-seq))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :ProjectName :WorkstreamId] :any]}
   close!
   "The person closing the drain: refused (:closed) on a drain closed already; then the exit observed
    — the newest census reads zero and every residue item is covered by a landed slice, or it is
-   refused — then the drain closed done, the one close record-workstream takes as a drain's :done.
+   refused; an exit observed by an earlier close that went no further is taken as it stands — then
+   the drain's workstream closed in the core through `core`'s keyed close, so its conductor runs no
+   more, and only then the drain closed done on its ledger, the one close record-workstream takes as
+   a drain's :done. A close the core refuses is refused (:core-refused) before the ledger is closed.
    Answers the :exit-observed seq."
-  [project drain-id]
-  (when (some-> (ws/read-ws project drain-id) ws/closure)
-    (refuse! (str drain-id " is closed already") :closed {:ws-id drain-id}))
-  (let [n (drain/observe-exit! project drain-id #(source-drain/landed? project %))]
-    (ws/append-entry! project drain-id {:kind :closed}
-                      (pr-str {:format :closed :outcome :done :by :person
-                               :note (str "the drain's exit was observed at entry " n)}))
-    n))
+  [core project drain-id]
+  (let [w (ws/read-ws project drain-id)]
+    (when (some-> w ws/closure)
+      (refuse! (str drain-id " is closed already") :closed {:ws-id drain-id}))
+    (let [n (or (:seq (drain/exit-observed w))
+                (drain/observe-exit! project drain-id #(source-drain/landed? project %)))]
+      (retire! core project drain-id)
+      (ws/append-entry! project drain-id {:kind :closed}
+                        (pr-str {:format :closed :outcome :done :by :person
+                                 :note (str "the drain's exit was observed at entry " n)}))
+      n)))
 
 ;; ── wakes ───────────────────────────────────────────────────────────────────
 
@@ -348,18 +371,33 @@
   [core project drain-id {:keys [key text]}]
   ((:notice! core) project drain-id key text))
 
+(defn- drains
+  "Every one of `project`'s drains, open or closed."
+  [project]
+  (into [] (filter drain/drain?) (ws/project-records project)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   wakes!
   "Post to each open drain's coordinator the wake for each event it has not been woken for, keyed by
-   the event, so each is posted once. Answers what each post answered."
+   the event, so each is posted once; and close in the core each drain whose ledger is closed while
+   the core still holds it open. Answers what each post and close answered."
   [project core]
-  (vec
-   (for [d (source-drain/open-drains project)
-         :when (has-coordinator? core project d)
-         :let [done (posted ((:state core) project d))]
-         e (wake-events core project (ws/read-ws project d))
-         :when (not (done (:key e)))]
-     (wake! core project d e))))
+  (let [ds (drains project)]
+    (vec
+     (concat
+      (for [w ds
+            :when (and (nil? (ws/closure w)) (has-coordinator? core project (:id w)))
+            :let [done (posted ((:state core) project (:id w)))]
+            e (wake-events core project w)
+            :when (not (done (:key e)))]
+        (wake! core project (:id w) e))
+      (for [w ds
+            :when (and (ws/closure w) (has-coordinator? core project (:id w)))]
+        (try (retire! core project (:id w))
+             (catch clojure.lang.ExceptionInfo e
+               (binding [*out* *err*]
+                 (println (str "nido drain: closing " (:id w) " in the core failed — " (ex-message e))))
+               nil)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   wake-pending?
