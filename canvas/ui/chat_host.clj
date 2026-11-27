@@ -59,6 +59,12 @@
     "An uploaded image as an Image — its media type read from its bytes' signature, one of the four
      the agent accepts, at most 5 MB decoded — or a refusal naming why."
     {:signature [:=> [:catn [:upload :map]] :map]})
+  (Operation take-staged!
+    "Move the images staged on one host onto another's stage, after what it holds — none staged
+     twice, at most four — and re-render both: how a first message written where no conversation
+     exists yet carries its images into the conversation it starts."
+    {:signature [:=> [:catn [:from :map] [:to :map]] :any]
+     :delegates [part html broadcast! patch-elements-event]})
   (Operation handle!
     "One request under the host's path — the stream, a send, a stop, a reset, a permission
      answer, and, for a panel whose view offers attaching, staging an image, unstaging one and

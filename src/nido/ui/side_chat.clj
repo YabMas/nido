@@ -345,6 +345,20 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
 (defn- view-of [id]
   {:id (str "chat-" id) :router (host/router (str "/_chat/c/" id)) :attach? true})
 
+(def ^:private draft-chat
+  "What the panel with no conversation yet stands on: a transcript that is empty and never
+   changes, so its stream carries only the images staged for the first message — which starts a
+   chat and takes them with it."
+  {:backend {:transcript (fn [_] {:items []})
+             :subscribe! (fn [_ _] (fn []))}})
+
+(defn- draft-host
+  "The host serving the empty panel's composer under /_chat/new: its stream, and the images
+   staged before any chat exists."
+  []
+  (host/host draft-chat {:id draft-id :router (host/router "/_chat/new") :attach? true}
+             ["_chat" "new"] (constantly [])))
+
 (defn- chat-host
   "The host serving chat `id`'s conversation under /_chat/c/<id>."
   [id]
@@ -438,7 +452,7 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
                                                      {:transcript t :bare? true :attach? true :live? true}
                                                      {} router)))}))
       :empty      (block/render panel/panel draft-id
-                                {:transcript {:items []} :bare? true}
+                                {:transcript {:items []} :bare? true :attach? true :live? true}
                                 {} (host/router "/_chat/new"))
       :extra      [[:span {:hidden true
                            "data-effect" (str "document.cookie = '" cookie "=' + ($" open " ? 1 : 0)"
@@ -514,6 +528,8 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
             p      (place/place req)]
         (append! id :started (anchor-of p))
         (seen! id)
+        ;; The images staged in the empty panel go with the message that starts the chat.
+        (host/take-staged! (draft-host) (chat-host id))
         (host/handle! (assoc (chat-host id)
                              :view (assoc (view-of id) :id draft-id :attach? false)
                              :on-sent (fn [] [(panel-patch req)]))
@@ -522,7 +538,8 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   handle!
   "One request under /_chat: the chats visible at the place the request states (`here`), a new
-   chat pinned there (`new`, or a first message sent from the empty panel, `new/send`), opening,
+   chat pinned there (`new`, or a first message sent from the empty panel, `new/send`, taking the
+   images staged there — `new/attach`, `new/unattach`, `new/image`, over `new/stream`), opening,
    pinning, unlinking or closing one (`open`, `pin`, `unlink`, `close`, each `/<id>`), the panel
    saying it shows one expanded or collapsed (`shown`, `hidden`), or one
    request of one chat's conversation (`c/<id>/…`) — or nil for any other path."
@@ -531,20 +548,22 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
         now-at (fn [] (anchor-of (place/place req)))
         redraw (fn [] (host/sse (panel-patch req)))]
     (when (= "_chat" root)
-      (case [request-method verb]
-        [:post "here"]   (redraw)
-        [:post "new"]    (if (= "send" id)
-                           (start-from-draft! req)
-                           (let [nid (new-id)] (append! nid :started (now-at)) (seen! nid) (redraw)))
-        [:post "open"]   (when (live-chat? id) (swap! shown assoc id true) (seen! id) (redraw))
-        [:post "shown"]  (when (live-chat? id) (swap! shown assoc id true) (seen! id) {:status 204})
-        [:post "hidden"] (when (live-chat? id) (swap! shown assoc id false) {:status 204})
-        [:post "pin"]    (when (live-chat? id)
-                           (when-let [a (now-at)] (append! id :pinned a))
-                           (redraw))
-        [:post "unlink"] (when (live-chat? id)
-                           (when-let [a (:anchor (where (read-log id)))] (append! id :unlinked a))
-                           (redraw))
-        [:post "close"]  (when (live-chat? id) (append! id :closed (now-at)) (redraw))
-        (when (and (= "c" verb) (live-chat? id) (seq more))
-          (host/handle! (chat-host id) req))))))
+      (if (and (= "new" verb) (#{"stream" "attach" "unattach" "image"} id))
+        (host/handle! (draft-host) req)
+        (case [request-method verb]
+          [:post "here"]   (redraw)
+          [:post "new"]    (if (= "send" id)
+                             (start-from-draft! req)
+                             (let [nid (new-id)] (append! nid :started (now-at)) (seen! nid) (redraw)))
+          [:post "open"]   (when (live-chat? id) (swap! shown assoc id true) (seen! id) (redraw))
+          [:post "shown"]  (when (live-chat? id) (swap! shown assoc id true) (seen! id) {:status 204})
+          [:post "hidden"] (when (live-chat? id) (swap! shown assoc id false) {:status 204})
+          [:post "pin"]    (when (live-chat? id)
+                             (when-let [a (now-at)] (append! id :pinned a))
+                             (redraw))
+          [:post "unlink"] (when (live-chat? id)
+                             (when-let [a (:anchor (where (read-log id)))] (append! id :unlinked a))
+                             (redraw))
+          [:post "close"]  (when (live-chat? id) (append! id :closed (now-at)) (redraw))
+          (when (and (= "c" verb) (live-chat? id) (seq more))
+            (host/handle! (chat-host id) req)))))))

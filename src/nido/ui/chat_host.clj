@@ -183,6 +183,24 @@
 (defn- attachments-event [{:keys [view staged]}]
   (wire/patch-elements-event (html (part view :attachments {:staged @staged}))))
 
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  take-staged!
+  "Move every image staged on host `from` onto host `to`'s stage, after what `to` holds already,
+   and re-render both stages on their open panels. How a first message written in a panel with
+   no conversation yet carries the images staged there into the conversation it starts. An image
+   `to` already holds is not staged twice, and `to` holds at most four."
+  [from to]
+  (locking (:staged from)
+    (locking (:staged to)
+      (let [taken @(:staged from)]
+        (when (seq taken)
+          (reset! (:staged from) [])
+          (swap! (:staged to)
+                 (fn [xs] (let [held (set (map :digest xs))]
+                            (vec (take max-staged (into xs (remove #(held (:digest %))) taken))))))
+          (broadcast! from (attachments-event from))
+          (broadcast! to (attachments-event to)))))))
+
 (defn- status-of [view t] (part view :status {:transcript t}))
 
 (defn- status-event [view t]

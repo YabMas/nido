@@ -176,6 +176,24 @@
     (is (str/includes? (page-panel "/workstreams/nido/ws-1") "is this ready to land?")
         "the chat is labelled by its first message")))
 
+(def ^:private png
+  "The smallest bytes the host reads as a PNG: its signature, then anything."
+  (byte-array (concat [0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A] (repeat 8 0))))
+
+(deftest an-image-attached-where-there-is-no-chat-goes-with-the-first-message
+  (let [panel (page-panel "/workstreams/nido/ws-1")]
+    (is (str/includes? panel "data-attach-url=\"/_chat/new/attach\"") "the empty panel attaches too")
+    (is (str/includes? panel "/_chat/new/stream") "and streams its staged images"))
+  (is (= 204 (:status (side-chat/handle! {:request-method :post :uri "/_chat/new/attach"
+                                          :headers (at "/workstreams/nido/ws-1")
+                                          :body (java.io.ByteArrayInputStream. png)}))))
+  (post! "/_chat/new/send" "/workstreams/nido/ws-1"
+         (json/generate-string {"chat" {"chat_new" {"text" "what is in this picture?"}}}))
+  (is (= 1 (count (:images (first @sent)))) "the staged image is sent with the message")
+  (post! "/_chat/new/send" "/workstreams/nido/ws-2"
+         (json/generate-string {"chat" {"chat_new" {"text" "and now?"}}}))
+  (is (empty? (:images (second @sent))) "and leaves the empty panel's stage"))
+
 (deftest a-turn-that-ends-while-the-person-is-away-marks-its-workstream
   (let [id (new-chat! "/workstreams/nido/ws-1")
         c  (#'side-chat/operator id)]
