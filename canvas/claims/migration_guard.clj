@@ -11,8 +11,9 @@
 (Claim shared-checkout-holds-only-main-migrations
   "A runtime that runs out of a checkout of its own and whose effective pg mode is :shared never
    has its checkout written with a tree in which a file under the project's migrations directory
-   is absent from main@origin or differs from main@origin's file at the same path; such a refresh
-   is refused before the checkout's files change, and the checkout keeps the files it had."
+   is absent from main@origin as admitted — the main@origin commit pinned when that tree was
+   examined — or differs from that commit's file at the same path; such a refresh is refused
+   before the checkout's files change, and the checkout keeps the files it had."
   {:about [session-engine start-session! sync-runtime!] :evidence "round"})
 
 (Claim refusal-routed-like-conflict
