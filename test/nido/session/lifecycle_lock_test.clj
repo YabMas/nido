@@ -33,6 +33,9 @@
                     nido.session.lifecycle/effective-pg-mode    (constantly :isolated)
                     engine/resolve-instance-id                  (constantly "brian--feat")
                     engine/stop-session!                        stop
+                    engine/restart-session!                     (fn [wt opts stop! _]
+                                                                  (stop!)
+                                                                  (engine/start-session! wt opts))
                     engine/start-session!                       start
                     profiles/resolve-profile                    (constantly {:worktree {:strategy :jj}})
                     state/pg-data-dir                           (constantly (str (fs/path tmp "no-pgdata")))

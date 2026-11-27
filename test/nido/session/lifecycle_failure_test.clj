@@ -28,6 +28,9 @@
                     nido.session.lifecycle/effective-pg-mode  (constantly :isolated)
                     engine/resolve-instance-id                (constantly "brian--feat")
                     engine/stop-session!                      (constantly nil)
+                    engine/restart-session!                     (fn [wt opts stop! _]
+                                                                  (stop!)
+                                                                  (engine/start-session! wt opts))
                     engine/start-session!                     start
                     profiles/resolve-profile                  (constantly {:worktree {:strategy :jj}})
                     state/write-pg-mode-override!             (constantly nil)

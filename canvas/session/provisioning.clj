@@ -126,6 +126,11 @@
      :delegates [load-session-edn resolve-project-name resolve-instance-id
                  write-profile-for-session! sstate/write-session! sstate/upsert-registry!
                  refresh! examine!]})
+  (Operation restart-session!
+    "Stop a worktree's session and bring it up again, admitting the start before the caller's
+     stop — and whatever it does between the two — runs, and writing the tree it admitted."
+    {:signature [:=> [:catn [:project-dir Path] [:opts :map] [:stop! :any] [:refused! [:maybe :any]]] :any]
+     :delegates [resolve-project-name load-session-edn sstate/read-session examine! start-session!]})
   (Operation stop-session! "Bring a worktree's services down."
     {:signature [:=> [:catn [:project-dir Path]] :any]
      :delegates [resolve-instance-id sstate/read-session sstate/remove-from-registry!]})

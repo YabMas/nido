@@ -12,6 +12,7 @@
    [nido.session.checkout :as checkout]
    [nido.session.engine :as engine]
    [nido.session.launcher :as launcher]
+   [nido.session.lifecycle :as lifecycle]
    [nido.session.service :as service]
    [nido.session.services.eval :as eval-svc]
    [nido.session.services.postgresql :as pg]
@@ -352,3 +353,24 @@
         (is (= {a "a" b "b"} (:members (state/read-session "p--ws"))) "a moved")
         (is (= "edited\n" (slurp (str (fs/path dir "f.txt")))) "the admitted tree is served")
         (is (not (fs/exists? (fs/path dir v3))) "and not the migration added after it")))))
+
+(deftest a-share-refused-for-a-migration-keeps-the-session-isolated-with-its-data
+  (with-engine :shared
+    (fn [{:keys [a stopped]}]
+      (fs/create-dirs (state/instance-state-dir "p--ws"))
+      (spit (state/pg-mode-override-file "p--ws") (pr-str {:mode :isolated}))
+      (put! a v3 "create table three ();\n")
+      (up! a "a")
+      (let [pg-data (state/pg-data-dir "p--ws")]
+        (fs/create-dirs pg-data)
+        (spit (str (fs/path pg-data "PG_VERSION")) "16\n")
+        (with-redefs [lifecycle/resolve-project (constantly ["p" {}])
+                      lifecycle/with-context
+                      (fn [_ _] {:project-name "p" :instance-id "p--ws" :on "p--ws"
+                                 :runtime-key "ws" :wt-path a})]
+          (is (refusal #(lifecycle/share! "a" {:project "p" :runtime-key "ws"}))
+              "the share is refused"))
+        (is (= [] @stopped) "nothing was stopped")
+        (is (fs/exists? (fs/path pg-data "PG_VERSION")) "its private database is kept")
+        (is (= {:mode :isolated} (state/read-pg-mode-override "p--ws")) "it stays isolated")
+        (is (= {a "a"} (:members (state/read-session "p--ws"))))))))

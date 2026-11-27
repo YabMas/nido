@@ -1038,6 +1038,38 @@
       (start-services! project-dir project-name instance-id session-edn opts
                        (if existing (still-on project-dir existing) {}) project-dir)))))
 
+(defn ^{:malli/schema [:=> [:cat :Path :map :any [:maybe :any]] :any]}
+  restart-session!
+  "Stop the session in `project-dir` and bring it up again on runtime `(:runtime-key opts)`, as
+   `start-session!` does, with `stop!` doing the stop and whatever must happen between the two —
+   dropping a database, changing its pg mode. The start is admitted FIRST: the tree the runtime
+   would be brought up from once the session has stopped — joining the members still on it, else
+   started cold — is examined (`checkout/examine!`) before `stop!` runs, and is what the start
+   then writes. So a conflict or a migration the runtime would refuse refuses the restart with
+   the session still running and nothing deleted; `refused!`, when given, is called first, to
+   undo what the caller changed before asking. Read the pg mode the start will have before
+   calling: it is what admits."
+  [project-dir opts stop! refused!]
+  (let [opts         (assoc opts :profile (or (:profile opts) {:services :all
+                                                                :worktree {:strategy :git-worktree}}))
+        project-name (resolve-project-name project-dir)
+        instance-id  (runtime-instance-id project-dir project-name (:runtime-key opts))
+        session-edn  (load-session-edn project-name)
+        existing     (state/read-session instance-id)
+        join?        (boolean (and existing (session-alive? existing)
+                                   (seq (still-on project-dir existing))))
+        {:keys [code refuses?]} (destination project-dir project-name instance-id session-edn
+                                             opts existing join?)
+        candidate    (when (checkout? (keys code))
+                       (try (checkout/examine! instance-id code
+                                               (admission project-name refuses? code
+                                                          (:session-name opts)))
+                            (catch Throwable e
+                              (when refused! (refused!))
+                              (throw e))))]
+    (stop!)
+    (start-session! project-dir (cond-> opts candidate (assoc :candidate candidate)))))
+
 ;; ---------------------------------------------------------------------------
 ;; Legacy session detection
 ;; ---------------------------------------------------------------------------

@@ -1000,10 +1000,10 @@
      name opts :restart
      (fn [{:keys [runtime-key] :as ctx}]
        (let [opts (carried-across-stop opts project-name name)]
-         (down! name opts)
          (keeping-failure :restart name opts ctx true
-                          #(engine/start-session! wt-path (assoc opts :session-name name
-                                                                :runtime-key runtime-key))))))))
+                          #(engine/restart-session! wt-path (assoc opts :session-name name
+                                                                  :runtime-key runtime-key)
+                                                    (fn [] (down! name opts)) nil)))))))
 
 (defn- effective-pg-mode
   "Resolved PG mode for a session: the per-session override if set, else the
@@ -1064,14 +1064,25 @@
       (keeping-failure
        :reset name opts ctx true
        (fn []
-         (try (engine/stop-session! wt-path)
-              (catch Exception e
-                (core/log-step (str "warning: stop during reset: " (ex-message e)))))
-         (let [pg-data (state/pg-data-dir instance-id)]
-           (when (fs/exists? pg-data)
-             (core/log-step (str "Dropping PGDATA at " pg-data))
-             (fs/delete-tree pg-data)))
-         (engine/start-session! wt-path (assoc opts :session-name name :runtime-key runtime-key))))))))
+         (engine/restart-session!
+          wt-path (assoc opts :session-name name :runtime-key runtime-key)
+          (fn []
+            (try (engine/stop-session! wt-path)
+                 (catch Exception e
+                   (core/log-step (str "warning: stop during reset: " (ex-message e)))))
+            (let [pg-data (state/pg-data-dir instance-id)]
+              (when (fs/exists? pg-data)
+                (core/log-step (str "Dropping PGDATA at " pg-data))
+                (fs/delete-tree pg-data))))
+          nil)))))))
+
+(defn- restore-pg-mode-override!
+  "Put runtime `instance-id`'s pg-mode override back to `prior`, what `state/read-pg-mode-override`
+   read before it was changed — nil for none."
+  [instance-id prior]
+  (if-let [mode (:mode prior)]
+    (state/write-pg-mode-override! instance-id mode)
+    (state/clear-pg-mode-override! instance-id)))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   isolate!
@@ -1086,14 +1097,18 @@
     (with-runtime-to-itself
      :isolate name opts
      (fn [{:keys [instance-id runtime-key] :as ctx}]
-       (state/write-pg-mode-override! instance-id :isolated)
-       (keeping-failure
-        :isolate name opts ctx true
-        (fn []
-          (try (engine/stop-session! wt-path)
-               (catch Exception e
-                 (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
-          (engine/start-session! wt-path (assoc opts :session-name name :runtime-key runtime-key))))))))
+       (let [prior (state/read-pg-mode-override instance-id)]
+         (state/write-pg-mode-override! instance-id :isolated)
+         (keeping-failure
+          :isolate name opts ctx true
+          (fn []
+            (engine/restart-session!
+             wt-path (assoc opts :session-name name :runtime-key runtime-key)
+             (fn []
+               (try (engine/stop-session! wt-path)
+                    (catch Exception e
+                      (core/log-step (str "warning: stop during isolate: " (ex-message e))))))
+             #(restore-pg-mode-override! instance-id prior)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   share!
@@ -1108,18 +1123,24 @@
     (with-runtime-to-itself
      :share name opts
      (fn [{:keys [instance-id runtime-key] :as ctx}]
-       (state/clear-pg-mode-override! instance-id)
-       (keeping-failure
-        :share name opts ctx true
-        (fn []
-          (try (engine/stop-session! wt-path)
-               (catch Exception e
-                 (core/log-step (str "warning: stop during share: " (ex-message e)))))
-          (let [pg-data (state/pg-data-dir instance-id)]
-            (when (fs/exists? pg-data)
-              (core/log-step (str "Dropping private PGDATA at " pg-data))
-              (fs/delete-tree pg-data)))
-          (engine/start-session! wt-path (assoc opts :session-name name :runtime-key runtime-key))))))))
+       (let [prior (state/read-pg-mode-override instance-id)]
+         (state/clear-pg-mode-override! instance-id)
+         (keeping-failure
+          :share name opts ctx true
+          (fn []
+            ;; Admitted against the shared cluster before the session stops or its private copy
+            ;; goes: a refused share leaves it running, isolated, with its data.
+            (engine/restart-session!
+             wt-path (assoc opts :session-name name :runtime-key runtime-key)
+             (fn []
+               (try (engine/stop-session! wt-path)
+                    (catch Exception e
+                      (core/log-step (str "warning: stop during share: " (ex-message e)))))
+               (let [pg-data (state/pg-data-dir instance-id)]
+                 (when (fs/exists? pg-data)
+                   (core/log-step (str "Dropping private PGDATA at " pg-data))
+                   (fs/delete-tree pg-data))))
+             #(restore-pg-mode-override! instance-id prior)))))))))
 
 (defn- drop-test-databases!
   "Drop the test database keyed by `db-key` — a runtime's instance id, or a session's own key for
