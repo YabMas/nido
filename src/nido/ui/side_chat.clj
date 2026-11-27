@@ -303,15 +303,20 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
                            (when (watching? id) (seen! id)))
                          (swap! watched assoc id nil))))))
 
-(defn- label-of [words]
-  (let [line (str/trim (first (str/split-lines (str words))))]
-    (if (> (count line) 60) (str (subs line 0 59) "…") line)))
+(defn- label-of
+  "A chat's label from a message's words: their first line, cut to 60; nil when they have none,
+   so a message of images alone leaves the chat to be labelled by the next one with words."
+  [words]
+  (let [line (str/trim (str (first (str/split-lines (str words)))))]
+    (cond (str/blank? line)    nil
+          (> (count line) 60) (str (subs line 0 59) "…")
+          :else               line)))
 
 (defn- operator
   "nido's operator in chat `id`'s conversation: one session of nido's, told `instructions`, run in
    its home (`operator-home`). A send keeps each image it carries for a relay before the agent
    hears of it, names it to the agent by digest, and gives a chat its label from its first
-   message; a turn's end is when the chat has something the person has not seen, unless a panel
+   message with words; a turn's end is when the chat has something the person has not seen, unless a panel
    has it open."
   [id]
   {:project "nido" :session "operator" :name id :instructions instructions
@@ -322,7 +327,8 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
    :backend {:send! (fn [c words refs images]
                       (doseq [img images] (wcore/keep-chat-image! img))
                       (when-let [sent (chat/send! c words (into (vec refs) (image-refs images)) images)]
-                        (when-not (:label (read-state id)) (update-state! id assoc :label (label-of words)))
+                        (when-let [label (when (str/blank? (:label (read-state id))) (label-of words))]
+                          (update-state! id assoc :label label))
                         (watch! id)
                         sent))}})
 
@@ -441,7 +447,7 @@ Answer briefly, and name workstreams and tickets as the dashboard does.")
                              :let [t  (chat/transcript (operator id))
                                    o? (= id open-id)]]
                          {:id      id
-                          :label   (or (get-in states [id :label]) "New chat")
+                          :label   (or (not-empty (get-in states [id :label])) "New chat")
                           :where   (when-not (pinned? id) "follows you")
                           :pinned? (boolean (pinned? id))
                           :status  (status-of id t)

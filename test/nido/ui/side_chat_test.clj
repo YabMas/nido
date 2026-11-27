@@ -214,6 +214,18 @@
          (json/generate-string {"chat" {"chat_new" {"text" ""}}}))
   (is (= 1 (count (:images (first @sent)))) "the image stayed staged for the next message"))
 
+(deftest a-chat-started-with-an-image-alone-is-labelled-by-its-first-words
+  (let [label (fn [] (second (re-find #"chat-row-label\">([^<]*)<" (page-panel "/workstreams/nido/ws-1"))))]
+    (with-redefs [wcore/keep-chat-image! (fn [img] (:digest img))]
+      (side-chat/handle! {:request-method :post :uri "/_chat/new/attach"
+                          :headers (at "/workstreams/nido/ws-1")
+                          :body (java.io.ByteArrayInputStream. png)})
+      (post! "/_chat/new/send" "/workstreams/nido/ws-1"
+             (json/generate-string {"chat" {"chat_new" {"text" ""}}}))
+      (is (= "New chat" (label)) "an image alone gives the chat no blank title")
+      (say! (first (chats-shown "/workstreams/nido/ws-1")) "/workstreams/nido/ws-1" "what is this?")
+      (is (= "what is this?" (label)) "the first words label it"))))
+
 (deftest a-turn-that-ends-while-the-person-is-away-marks-its-workstream
   (let [id (new-chat! "/workstreams/nido/ws-1")
         c  (#'side-chat/operator id)]
