@@ -565,7 +565,8 @@
    session name) admits: for one on the shared cluster (`shared?`), no merged tree holding a
    migration main lacks or holds otherwise, refused with `shared-pg/migration-refusal` naming
    `session`, the session whose verb asked; for any other, everything. Main is `main`, the commit
-   pinned when the tree was first examined (`pinned-main`), else main@origin as it is now."
+   pinned when the tree was first examined (`pinned-main`), else the commit main@origin names
+   when the tree is compared."
   ([project-name shared? members session] (admission project-name shared? members session nil))
   ([project-name shared? members session main]
   (if-not shared?

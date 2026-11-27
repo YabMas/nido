@@ -131,6 +131,21 @@
         (is (= [] (shared-pg/offending-migrations a "@" pin))
             "against the pinned main, it is what was admitted")))))
 
+(deftest an-unpinned-comparison-reads-the-one-main-it-resolved
+  ;; With no pin given, main is resolved to a commit once and every read of the comparison uses
+  ;; it: a fetch landing after that resolution cannot mix two mains into one answer.
+  (with-repo
+    (fn [src a _]
+      (sh a "jj" "status")
+      (let [pin (shared-pg/main-commit a)]
+        (put! src (str mig "/V2__two.sql") "create table two (id int);\n")
+        (sh src "jj" "commit" "-m" "main changes V2")
+        (sh src "jj" "bookmark" "set" "main" "-r" "@-")
+        (sh src "jj" "git" "push" "-b" "main")
+        (with-redefs [shared-pg/main-commit (constantly pin)]
+          (is (= [] (shared-pg/offending-migrations a "@"))
+              "every read saw the main resolved before the fetch"))))))
+
 ;; ---------------------------------------------------------------------------
 ;; The checkout refresh asks before it writes
 ;; ---------------------------------------------------------------------------

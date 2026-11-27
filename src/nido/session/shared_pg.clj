@@ -794,12 +794,13 @@
    in front of a shared cluster: every path under the migrations directory that `rev` holds and
    main either lacks or holds with other content — read from the same directory
    `advance-shared-to-main!` applies. Main is `main`, a commit `main-commit` pinned, else
-   main@origin as it is now. A migration identical to main's is not one, nor is one `rev`
+   the commit main@origin names now, resolved once so every read below sees that one commit
+   even while a fetch moves main. A migration identical to main's is not one, nor is one `rev`
    deletes. Paths are relative to the repository root, sorted. Throws on a jj error, which
    admits nothing."
   ([repo rev] (offending-migrations repo rev nil))
   ([repo rev main]
-  (let [main-rev (or main main-rev)
+  (let [main-rev (or main (main-commit repo))
         dir     (str "root:" migrations-subdir)
         held    (set (jj-lines repo "file list" "file" "list" "-r" rev dir))
         on-main (set (jj-lines repo "file list" "file" "list" "-r" main-rev dir))
