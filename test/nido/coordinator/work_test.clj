@@ -3750,6 +3750,20 @@
             (is (empty? (:gates (work/read-gates))))
             (is (some? w))))))))
 
+(deftest a-drain-whose-slice-the-core-closed-waits-on-no-slice
+  ;; Done and Drop close a slice in the core alone, recording no ledger closure; its row reads it
+  ;; settled, so its drain is no longer waiting on it.
+  (let [slice-closed-in-core? (atom false)]
+    (with-redefs [nido.coordinator.record.workstream/read-ws    (fn [_ id] {:id id})
+                  nido.coordinator.record.workstream/closure    (constantly nil)
+                  nido.coordinator.record.drain/drain?          (fn [w] (= "d" (:id w)))
+                  nido.coordinator.record.drain/slices          (constantly [{:ws-id "s"}])
+                  work/core-of (fn [_ id] (when (= "s" id) {:state {:closed? @slice-closed-in-core?}}))]
+      (is (= :open-slice (#'work/waits-on :brian "d" :drained)) "an open slice is waited on")
+      (reset! slice-closed-in-core? true)
+      (is (nil? (#'work/waits-on :brian "d" :drained))
+          "a slice the core closed is no deliberate wait"))))
+
 (deftest a-queued-arrival-waits-on-the-person-and-is-no-stall
   ;; enqueue-inbox! creates it activated at :incoming, its :intake position owing an agent move
   ;; and the core idle until the person promotes it: a deliberate wait, not a stall.

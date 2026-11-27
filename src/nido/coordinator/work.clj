@@ -604,7 +604,8 @@
 (defn- waits-on
   "The deliberate wait workstream `ws-id`, open in band `band`, rests on, or nil: :person-act for
    a row on an intake band, :open-slice for a drain while a slice of it is open — that slice's
-   own row says whether it is stalled."
+   own row says whether it is stalled. A slice is closed as its row reads it: by its ledger's
+   closure, or by the core's, which Done and Drop record without one."
   [project ws-id band]
   (cond
     (contains? intake-bands band) :person-act
@@ -613,7 +614,8 @@
       (when (and w (rdrain/drain? w)
                  (some (fn [{sid :ws-id}]
                          (let [c (some->> sid (cws/read-ws project) cws/closure)]
-                           (or (nil? c) (= :between-phases (:outcome c)))))
+                           (and (or (nil? c) (= :between-phases (:outcome c)))
+                                (not (get-in (some->> sid (core-of project)) [:state :closed?])))))
                        (rdrain/slices w)))
         :open-slice))))
 
