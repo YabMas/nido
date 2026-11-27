@@ -163,7 +163,9 @@
     {:signature [:=> [:catn [:state [:maybe :map]]] [:vector :map]]})
   (Operation read-gates
     "Every registered project's gates: the core's asks — a stopped conductor among them, as a
-     :system-error — one request per project, then the cards of the rows this process already
+     :system-error — one request per project, then every stall the core holds, as a :system-error
+     offering Wake, read from the core's state and the workstream's records whatever rows this
+     process holds, then the cards of the rows this process already
      holds whose activity answers :needs-you with no core ask beside them — a landing, a failed
      start, a move their position owes — building no row — the boundary where each project's core
      reply becomes its outcome, its gates or its reason in :unavailable. A workstream its ledger
@@ -203,9 +205,10 @@
   (Operation resolve-gate!
     "Apply a gate follow-action. Position-carrying actions check the ledger has not moved, which
      is what makes two people clicking the same button safe. An action the core answers — an
-     option, a reply or a withdrawal of a question, Wake on a stopped conductor, Land, Retry,
-     Promote, Done, Drop — is sent to it as the person's keyed command (`core-resolve!`). An option, a reply
-     or a withdrawal never reaches a machine failure, and Wake reaches nothing else."
+     option, a reply or a withdrawal of a question, Wake, Land, Retry, Promote, Done, Drop — is
+     sent to it as the person's keyed command (`core-resolve!`). An option, a reply or a
+     withdrawal never reaches a machine failure; Wake answers a stopped conductor's stop, and
+     otherwise wakes a stalled conductor with :wake-conductor."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
      :delegates [set-stage!]})

@@ -31,12 +31,29 @@
   (testing "an ask waits on the person whatever a claim says"
     (is (nil? (:doing (act/of (assoc quiet :core {:kind :asking} :claim claim)))))))
 
-(deftest a-stall-is-the-cores-open-unit-left-unmoved
-  (let [a (act/of (assoc quiet :movable? true))]
-    (is (:stalled a))
-    (is (= :stalled (:engagement a))))
+(deftest a-stall-needs-you-as-a-system-error
+  (testing "an open unit nobody holds, owed to an agent or the machine, the core idle"
+    (doseq [owed [:agent :machine]]
+      (let [a (act/of (assoc quiet :movable? true :held? true :owed-by owed))]
+        (is (:stalled a) (str owed))
+        (is (:needs-you a) "a stall needs the person")
+        (is (= :system-error (:needs a)) "as a system error")
+        (is (= :person (:owed-by a)) "their Wake is the next move")
+        (is (= :parked-at-gate (:engagement a)))
+        (is (not (:live a))))))
+  (testing "an activated workstream the core holds with no open unit at all — done-when 2: it
+            used to read :queued and show nowhere"
+    (let [a (act/of {:closed? false :band :in-progress :owed-by :machine :activated? true
+                     :paused? false :held? true :core nil :movable? false :claim nil})]
+      (is (:stalled a))
+      (is (= :system-error (:needs a)))
+      (is (= :parked-at-gate (:engagement a)))))
   (testing "nothing stalls"
-    (is (not (:stalled (act/of quiet))) "with no open unit nobody holds: nothing is the core's to move")
+    (is (not (:stalled (act/of quiet))) "with the core holding nothing of it: nothing is the core's to move")
+    (is (not (:stalled (act/of (assoc quiet :held? true :activated? false))))
+        "held, but neither activated nor with an open unit nobody holds")
+    (is (not (:stalled (act/of (assoc quiet :held? true :band :shipping :owed-by :machine))))
+        "while a merge waits its turn: a move is underway")
     (is (not (:stalled (act/of (assoc quiet :movable? true :paused? true)))) "while a pause stands")
     (is (not (:stalled (act/of (assoc quiet :movable? true :core {:kind :deciding})))) "while the core is owed a move")
     (is (not (:stalled (act/of (assoc quiet :movable? true :core {:kind :asking})))) "while it asks the person")
@@ -193,10 +210,11 @@
         core       [nil {:kind :asking} {:kind :working :turn "t"} {:kind :deciding}
                     {:kind :stuck :turn "t"} {:kind :asking :stuck {:turn "t"}}]
         band       [:in-progress :shipping]
-        movable?   [false true]
+        held?      [false true]
+        movable?   (if held? [false true] [false])
         claim      [nil claim]]
     {:closed? closed? :activated? activated? :landing? landing? :failure failure :paused? paused?
-     :owed-by owed-by :core core
+     :owed-by owed-by :core core :held? held?
      :band band :movable? movable? :claim claim}))
 
 (deftest the-facets-cannot-disagree
@@ -216,16 +234,25 @@
         (str "the category is one of the named ones " (pr-str obs)))
     (is (or (not= :landing (:needs a)) (:landing? obs))
         (str "only a landing the position owes is said as a landing " (pr-str obs)))
-    (is (or (not= :system-error (:needs a)) (some? (:failure obs)))
-        (str "only a failure is said as a system error " (pr-str obs)))
+    (is (or (not= :system-error (:needs a)) (some? (:failure obs)) (:stalled a))
+        (str "only a failure or a stall is said as a system error " (pr-str obs)))
+    (is (or (not (:stalled a)) (= :system-error (:needs a)))
+        (str "a stall needs the person as a system error " (pr-str obs)))
     (is (or (not (:needs-you a)) (some? (:core obs)) (not (:live a)))
         (str "waiting on the person with the core idle lights no working dot " (pr-str obs)))
     (is (or (not (:stalled a))
-            (and (not (:live a)) (not (:paused a)) (not (:needs-you a)) (#{:agent :machine} (:owed-by a))))
-        (str "a stall runs nothing, is unpaused and is an agent's or the machine's move " (pr-str obs)))
+            (and (not (:live a)) (nil? (:doing a)) (not (:paused a)) (nil? (:core obs))
+                 (#{:agent :machine} (:owed-by obs))
+                 (or (:movable? obs) (and (:held? obs) (:activated? obs)))))
+        (str "a stall runs nothing, is unpaused, the core's to move and an agent's or the machine's move " (pr-str obs)))
+    (is (or (:stalled a) (not (and (not (:closed? obs)) (nil? (:core obs)) (not (:paused? obs))
+                                   (nil? (:failure obs)) (not= :shipping (:band obs))
+                                   (#{:agent :machine} (:owed-by obs))
+                                   (or (:movable? obs) (and (:held? obs) (:activated? obs))))))
+        (str "the core's to move, owed to an agent or the machine, and nothing underway is a stall " (pr-str obs)))
     (is (or (:activated? obs) (not (:needs-you a)) (= :asking (:kind (:core obs)))
-            (= :start-failed (:failure obs)))
-        (str "nothing not activated needs the person but the core: an ask or a failed start " (pr-str obs)))
+            (= :start-failed (:failure obs)) (:stalled a))
+        (str "nothing not activated needs the person but the core: an ask, a failed start or a stall " (pr-str obs)))
     (is (or (not (:closed? obs)) (and (not (:needs-you a)) (not (:stalled a)) (nil? (:doing a))
                                       (not (:live a)) (= :settled (:engagement a))))
         (str "settled is settled " (pr-str obs)))
@@ -235,5 +262,5 @@
         (str "a stuck turn has nothing underway " (pr-str obs)))
     (is (= (:engagement a)
            (cond (:closed? obs) :settled (:needs-you a) :parked-at-gate (:live a) :active
-                 (:stalled a) :stalled (= :machine (:owed-by a)) :queued :else :idle))
+                 (= :machine (:owed-by a)) :queued :else :idle))
         (str "engagement is read off the other facets " (pr-str obs)))))

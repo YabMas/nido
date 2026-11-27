@@ -142,12 +142,13 @@
   (render-str (first (filter #(= scene-title (:title %)) (scenes-of block-name)))))
 
 (deftest a-state-mark-scene-tells-a-pause-from-a-fault
-  ;; The two glyphs a person must never confuse: ‖ is their own pause and ⚠ is a workstream
-  ;; nothing is moving and nothing is asking about.
+  ;; The two marks a person must never confuse: ‖ is their own pause, and a workstream nothing
+  ;; is moving is a fault — it needs them as a system error.
   (let [html (html-of "state-mark" "needs you, running, paused, stalled, stuck, quiet")]
     (is (str/includes? html "class=\"needs\""))
     (is (str/includes? html "st-mark paused"))
-    (is (str/includes? html "st-mark stalled"))
+    (is (str/includes? html "kind-system-error") "a stall is a fault: it needs you as a system error")
+    (is (str/includes? html "st-mark stalled") "a run that will not end is marked ⚠")
     (is (str/includes? html "st-mark live"))
     (is (str/includes? html "scene-empty") "and a quiet row renders no mark at all")))
 

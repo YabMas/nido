@@ -36,7 +36,10 @@
    [nido.platform.process]
    [nido.session.lifecycle]
    [nido.session.state]
-   [nido.coordinator.work :as work]))
+   [nido.coordinator.work :as work]
+   [nido.coordinator.work.core]
+   [nido.core.buffer]
+   [tasks.nido-workstream]))
 
 (defn- write-run!
   "A run owning session `sname` on `ws-id`, registered with the workstream as create-run! does —
@@ -798,6 +801,8 @@
             (is (= 1 @reads)
                 "shared, the second projection reuses the first's rows")))))))
 
+(defn- core-state* [ws-id] (nido.coordinator.work.core/state :brian ws-id))
+
 (def ^:private stop-content
   {:question "This workstream's conductor has stopped. Wake it again?" :explored "e"
    :recommendation "r" :options [{:option "Wake it"}]})
@@ -862,8 +867,13 @@
           (testing "waking it answers the stop and takes it off Needs you"
             (is (= {:decision :woken} (work/resolve-gate! :brian (:id a) :wake)))
             (is (= [(:id b)] (map :ws-id (work/all-gates))))
-            (is (= {:decision :core-refused :because "its conductor is not stopped"}
-                   (work/resolve-gate! :brian (:id a) :wake))))
+            (is (= {:decision :woken} (work/resolve-gate! :brian (:id a) :wake))
+                "a Wake once it is no longer stopped wakes it directly, as a stall's does")
+            (is (= :woken (:kind (last (sort-by :id (vals (:inbox (core-state* (:id a)))))))))
+            (is (= {:decision :core-refused :because "workstream-closed"}
+                   (do (client/command! (client/ws-key :brian (:id a)) "close-a" {:command :close-workstream})
+                       (work/resolve-gate! :brian (:id a) :wake)))
+                "and is refused on a closed workstream"))
           (testing "a workstream holding a question and a stop needs the person as a system error first"
             (stop-conductor! (:id b))
             (let [g (work/gate :brian (:id b))]
@@ -3682,3 +3692,94 @@
             "a notice refused while the drain was closed is posted once it is open")
         (is (= :notice-exists (get-in (notice! :brian "ws-d" "wake:census:9" "census") [:refused :reason]))
             "and once only")))))
+
+;; ── a silent stall needs the person; their answer and their Wake reach the conductor ──────────
+
+
+(deftest a-stall-is-on-needs-you-in-a-process-holding-no-rows
+  ;; Done-when 2: an activated workstream the core holds, owed a move by an agent, with nothing
+  ;; running, scheduled or owed and no pause, no open unit at all — it used to read :queued or
+  ;; :idle and showed nowhere.
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects (constantly {"brian" {:directory "/tmp/brian"}})
+                    work/held-ledger-gates (fn [_ _] [])]
+        (let [w  (workstream/create! :brian {:external-refs [] :activated? true})
+              id (:id w)]
+          (with-redefs [pipeline/of (constantly {:at :intent-owed :next {:stage :intent :mode :authoring}})]
+            (let [row (first (filter #(= id (:ws-id %)) (work/list-workstreams :brian)))]
+              (is (= :agent (pipeline/owed-by (:position row))) "an agent owes the move")
+              (is (= {:owed-by :person :live false :stalled true :paused false :needs-you true
+                      :needs :system-error}
+                     (:status row))
+                  "the row reads stalled, needing the person as a system error"))
+            (let [{:keys [gates unavailable]} (work/read-gates)
+                  g (first (filter #(= id (:ws-id %)) gates))]
+              (is (empty? unavailable))
+              (is (some? g) "it is on Needs you, read from the core and its records, not held rows")
+              (is (= :system-error (:needs g)))
+              (is (= [:wake] (map :id (:actions g))) "its one action is Wake, which takes no words")
+              (is (= g (work/gate :brian id)) "the pane's card is the list's"))
+            (testing "Wake puts the person's waking in the conductor's inbox"
+              (is (= {:decision :woken} (work/resolve-gate! :brian id :wake)))
+              (let [st (core-state* id)]
+                (is (= [:woken] (map :kind (vals (:inbox st)))))
+                (is (nido.core.buffer/wake-owed? st 3) "the conductor is owed a wake")
+                (is (nido.core.buffer/person-input? st) "as by the person's input")))
+            (testing "and it is no longer stalled: the core is owed a move"
+              (is (not (some #(= id (:ws-id %)) (:gates (work/read-gates))))))))))))
+
+(deftest nothing-the-core-is-not-the-mover-of-stalls
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects (constantly {"brian" {:directory "/tmp/brian"}})
+                    work/held-ledger-gates (fn [_ _] [])]
+        (let [w (workstream/create! :brian {:external-refs []})]
+          (with-redefs [pipeline/of (constantly {:at :intent-owed :next {:stage :intent :mode :authoring}})]
+            (is (not (get-in (first (work/list-workstreams :brian)) [:status :stalled]))
+                "not activated, no open unit: nothing of it is the core's to move")
+            (is (empty? (:gates (work/read-gates))))
+            (is (some? w))))))))
+
+(deftest an-answered-blocker-with-no-live-session-runs-again-or-needs-you
+  ;; The incident: a review's blocker answered with no session live recorded the answer on the
+  ;; ledger, and nothing heard it — the workstream sat with nothing running and on no list.
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.platform.project/list-projects (constantly {"brian" {:directory "/tmp/brian"}})
+                    work/held-ledger-gates (fn [_ _] [])
+                    work/live-session-names (constantly #{})]
+        (doseq [[how answer!] [["a gate click" (fn [id n] (work/resolve-gate! :brian id :option-a n))]
+                               ["the CLI verb" (fn [id _]
+                                                 (with-redefs [tasks.nido-workstream/here (fn [_] [:brian id])]
+                                                   (tasks.nido-workstream/blocker-answer* {:answer "Left"})))]]]
+          (testing how
+            (let [w  (workstream/create! :brian {:external-refs [] :activated? true})
+                  id (:id w)
+                  _  (workstream/append-entry! :brian id {:kind :blocker}
+                                               (pr-str {:format :blocker :summary "stuck" :needs "Which way?"
+                                                        :after "it resumes"
+                                                        :options [{:label "Left" :summary "l"} {:label "Right" :summary "r"}]}))
+                  n  (pipeline/owed-blocker :brian id)]
+              (answer! id n)
+              (let [st (core-state* id)
+                    a  (:seq (last (workstream/entries-of :brian id :blocker-answered)))]
+                (is (= [{:kind :blocker-answered :seq a}] (map #(dissoc % :id) (vals (:inbox st))))
+                    "the answer is in the conductor's inbox, naming its entry")
+                (is (nido.core.buffer/wake-owed? st 3) "so the conductor runs again")
+                (is (= [:start-turn] (map (comp :command :command) (nido.core.buffer/decisions
+                                                                     {:spec-fn (constantly {:executor :fake :instructions "i"})
+                                                                      :max-failures 3}
+                                                                     (client/ws-key :brian id) st 1)))))
+              (testing "and should its turn end moving nothing, the workstream is on Needs you"
+                (let [k (client/ws-key :brian id)
+                      t (str "conductor-" id)]
+                  (is (:events (client/command! k (str t "/start") {:command :start-turn :turn t :unit nil
+                                                                    :hears (vec (keys (:inbox (core-state* id))))
+                                                                    :spec {:executor :fake :instructions "i"}})))
+                  (is (:events (client/command! k (str t "/end") {:command :record-outcome :turn t :run 1
+                                                                  :outcome :completed})))
+                  (with-redefs [pipeline/of (constantly {:at :implementing :next {:stage :implement :mode :authoring}})]
+                    (let [g (first (filter #(= id (:ws-id %)) (:gates (work/read-gates))))]
+                      (is (= :system-error (:needs g)) "a stall, carded as a system error")
+                      (is (= [:wake] (map :id (:actions g)))))))))))))))

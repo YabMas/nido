@@ -342,7 +342,8 @@
                          [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}])
         (testing "an open unit the core does nothing on and is owed nothing for is stalled"
           (is (= {:live false :stalled true :paused false} (dissoc (status) :owed-by)))
-          (is (= :stalled (:engagement (row)))))
+          (is (= :parked-at-gate (:engagement (row))) "and a stall needs the person")
+          (is (= :system-error (get-in (row) [:status :needs]))))
         (fake-core/seed! c :brian ws-id
                          [{:command :start-turn :turn "u1" :unit "u" :spec {:executor :fake :instructions "i"}}])
         (testing "a turn the core runs is live, and is what is underway"
@@ -410,7 +411,8 @@
 
 (deftest a-land-the-core-already-holds-is-no-landing
   ;; Placed :land-granted, the seat lands it by its project's procedure: an agent's move, not the
-  ;; person's, so it is no landing and nobody's Needs you card.
+  ;; person's, so it is no landing. With the core idle and owed nothing, nothing makes that move:
+  ;; a stall, carded as a system error offering Wake — never as a landing.
   (with-ws
     (fn [c ws-id]
       (fake-core/seed! c :brian ws-id
@@ -418,10 +420,15 @@
       (with-redefs [pipeline/of (constantly {:at :land-granted :next {:stage :land :mode :working-copy}})
                     nido.coordinator.record.standing/activated? (constantly true)]
         (let [row (first (work/list-workstreams :brian))]
-          (is (= :agent (get-in row [:status :owed-by])))
-          (is (not (get-in row [:status :needs-you])))
-          (is (nil? (get-in row [:status :needs])))
-          (is (empty? (work/gates :brian))))))))
+          (is (get-in row [:status :stalled]))
+          (is (= :system-error (get-in row [:status :needs])) "a stall, not a landing")
+          (is (= [[:system-error [:wake]]] (map (juxt :needs #(map :id (:actions %))) (work/gates :brian))))
+          (testing "while the core is owed a move, it is the seat's and nobody's Needs you card"
+            (fake-core/seed! c :brian ws-id [{:command :hand-over :summary "land it"}])
+            (let [row (first (work/list-workstreams :brian))]
+              (is (= :agent (get-in row [:status :owed-by])))
+              (is (not (get-in row [:status :needs-you])))
+              (is (empty? (work/gates :brian))))))))))
 
 (deftest a-candidate-whose-land-the-core-holds-is-the-seat-s-move
   ;; The grant placed the candidate :land-granted; who owes it and whether it is landing are read

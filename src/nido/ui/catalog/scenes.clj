@@ -212,7 +212,7 @@
                                                                     :progress {:round 2 :phase :fixing
                                                                                :findings 3}}]
                               ["paused" {:owed-by :agent :paused true} nil]
-                              ["stalled" {:owed-by :agent :stalled true} nil]
+                              ["stalled" {:owed-by :person :stalled true :needs-you true :needs :system-error} nil]
                               ["stuck" {:owed-by :agent :stuck true} nil]
                               ["stuck, needs you" {:owed-by :person :needs-you true :needs :ask :stuck true} nil]
                               ["quiet" {:owed-by :person} nil]]

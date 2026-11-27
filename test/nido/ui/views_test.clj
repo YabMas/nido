@@ -1996,11 +1996,12 @@
   (let [html (views/workstreams-fragment
               {:groups [{:project "nido"
                          :grouped {:in-progress [{:ws-id "ws-s" :origin :notion :label "s" :stage :in-progress
-                                                  :status {:owed-by :agent :stalled true}}]
+                                                  :status {:owed-by :person :stalled true :needs-you true
+                                                           :needs :system-error}}]
                                    :triage {:in-flight [] :queued []} :incoming [] :ready []}}]
                :selection nil :scope "all"})]
-    (is (str/includes? html "st-mark stalled") "a stalled workstream reads as a fault")
-    (is (str/includes? html "⚠"))
+    (is (str/includes? html "kind-system-error") "a stalled workstream reads as a fault: a system error")
+    (is (str/includes? html "stalled — nothing runs and nothing is owed") "said as a stall")
     (is (not (str/includes? html "‖")) "never as paused"))
   (let [html (views/workstreams-fragment
               {:groups [{:project "nido"

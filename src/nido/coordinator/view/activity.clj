@@ -38,6 +38,7 @@
      :paused?    a person's standing pause, on the ledger or holding the core's units.
 
    The core's state of it:
+     :held?      the core holds it.
      :core       its activity (`nido.core.domain/activity`: {:kind …}), or nil when the core does
                  nothing on it, is owed nothing, or does not hold it.
      :movable?   the core holds an open unit of it that no person holds.
@@ -53,6 +54,7 @@
    [:landing?   {:optional true} :boolean]
    [:failure    {:optional true} [:maybe [:enum :conductor-stopped :start-failed]]]
    [:paused?    {:optional true} :boolean]
+   [:held?      {:optional true} :boolean]
    [:core       {:optional true} [:maybe :map]]
    [:movable?   {:optional true} :boolean]
    [:claim      {:optional true} [:maybe :map]]])
@@ -113,7 +115,17 @@
           [:stalled [:= false]]
           [:stuck :boolean]
           [:needs-you [:= true]]
-          [:needs [:enum :ask :landing :system-error]]]]]
+          [:needs [:enum :ask :landing :system-error]]]
+     [:map {:closed true}
+          [:engagement [:= :parked-at-gate]]
+          [:doing :nil]
+          [:live [:= false]]
+          [:owed-by [:= :person]]
+          [:paused [:= false]]
+          [:stalled [:= true]]
+          [:stuck :boolean]
+          [:needs-you [:= true]]
+          [:needs [:= :system-error]]]]]
    [:active
     [:map {:closed true}
           [:engagement [:= :active]]
@@ -122,17 +134,6 @@
           [:owed-by [:enum :agent :machine :nobody]]
           [:paused [:= false]]
           [:stalled [:= false]]
-          [:stuck :boolean]
-          [:needs-you [:= false]]
-          [:needs :nil]]]
-   [:stalled
-    [:map {:closed true}
-          [:engagement [:= :stalled]]
-          [:doing [:maybe QueuedMerge]]
-          [:live [:= false]]
-          [:owed-by [:enum :agent :machine]]
-          [:paused [:= false]]
-          [:stalled [:= true]]
           [:stuck :boolean]
           [:needs-you [:= false]]
           [:needs :nil]]]
@@ -214,8 +215,9 @@
      :ask           the person is asked: a core ask, or a blocker, question, verdict or gate the
                     position owes them;
      :landing       a release candidate waits on the person's Land;
-     :system-error  a failure only the person clears: the conductor stopped after failing, or a
-                    unit's session failed to start and nothing in the core will retry it."
+     :system-error  a failure only the person clears: the conductor stopped after failing, a
+                    unit's session failed to start and nothing in the core will retry it, or the
+                    workstream stalled (`of`'s :stalled) — the person's Wake is what moves it."
   [:ask :landing :system-error])
 
 (defn ^{:malli/schema [:=> [:cat :Observation] :Activity]}
@@ -229,35 +231,39 @@
                   (`merge-queued`) and anything while a person's pause stands
       :needs-you  the person owes the next move: the core asks them; a failure only they clear
                   (`:failure`) stands — a failed start only while the core does nothing and no
-                  pause stands; or the position of an activated, unpaused workstream owes them a
-                  move. One answer from every source, so a blocker the ledger holds, a landing
-                  waiting on Land and a stopped conductor all put the workstream on Needs you.
+                  pause stands; the position of an activated, unpaused workstream owes them a
+                  move; or it is stalled. One answer from every source, so a blocker the ledger
+                  holds, a landing waiting on Land, a stopped conductor and a stall all put the
+                  workstream on Needs you.
       :needs      which of `needs-categories` it is, exactly while :needs-you, else nil: a
-                  failure outranks an ask, which outranks a landing
+                  failure outranks an ask, which outranks a landing; a stall is a :system-error
       :owed-by    :person exactly when it needs you; else the position's, a position's :person
                   that nothing makes theirs (not activated, or paused) reading :nobody
       :paused     a person's pause stands
-      :stalled    a move is owed to an agent or the machine, yet the core holds an open unit
-                  nobody holds, does nothing and is owed nothing, and no pause stands: no turn's
-                  end, inbox item or ask will wake it, so only a person moves it again — a fault,
-                  never a resting state. A workstream with no such unit is never stalled: nothing
-                  of it is the core's to move; nor is one whose move is the person's or nobody's.
+      :stalled    the core is its mover and nothing will move it: the core holds it with the
+                  recipe activated on it, or holds an open unit of it nobody holds; a move is owed
+                  to an agent or the machine; the core does nothing and is owed nothing; nothing
+                  is underway (a merge waiting its turn included); no pause stands and nothing
+                  else needs the person. No turn's end, inbox item or ask will wake it, so only a
+                  person moves it again — a fault, never a resting state, so it needs the person
+                  as a :system-error. A workstream the core is not the mover of is never stalled,
+                  nor is one whose move is the person's or nobody's.
       :stuck      the core's turn is stuck (`nido.core.domain/activity` :stuck, or an ask carrying
                   the stuck run): its run was ended and its process lives on. A fact about a
                   process, not about who owes the move, so it is read apart from every other
                   facet — settled or not, asked or not, paused or not: closing a workstream ends
                   no process, and an answer to an ask ends none either
-      :engagement :settled, :parked-at-gate (needs you), :active (live), :stalled, :queued (the
-                  machine owes it) or :idle}
+      :engagement :settled, :parked-at-gate (needs you, a stall included), :active (live),
+                  :queued (the machine owes it) or :idle}
 
    Invariants, over every observation (the tests check them exhaustively):
      underway ⇒ live, except a merge waiting its turn or a pause;
      live ⇒ underway, and never paused;
      :owed-by :person ⇔ :needs-you ⇔ :needs names a category — no exception;
-     a stall never needs you;
+     a stall needs you, as a :system-error;
      stuck ⇒ nothing underway, and so nothing live;
      settled ⇒ nothing underway, needed or stalled."
-  [{:keys [closed? owed-by activated? landing? failure paused? core movable?] :as obs}]
+  [{:keys [closed? owed-by activated? landing? failure paused? held? core movable?] :as obs}]
   (let [doing     (when-not closed? (underway obs))
         paused    (boolean paused?)
         asking?   (and (not closed?) (= :asking (:kind core)))
@@ -268,16 +274,19 @@
                          :start-failed      (and (nil? core) (not paused))
                          false))
         persons?  (and (not closed?) activated? (not paused) (= :person owed-by))
+        stalled   (boolean (and (not closed?) (or (and held? activated?) movable?)
+                                (nil? core) (nil? doing) (not paused) (not failed?)
+                                (not= :conductor-stopped failure)
+                                (#{:agent :machine} owed-by)))
         needs     (cond failed?                   :system-error
                         asking?                   :ask
                         (and persons? landing?)   :landing
-                        persons?                  :ask)
+                        persons?                  :ask
+                        stalled                   :system-error)
         needs-you (some? needs)
         owed-by   (cond needs-you            :person
                         (= :person owed-by)  :nobody
                         :else                (or owed-by :nobody))
-        stalled   (boolean (and (not closed?) movable? (nil? core) (not paused)
-                                (not needs-you) (#{:agent :machine} owed-by)))
         ;; The core's reading alone: it reads a stuck run on a closed workstream too, and beside
         ;; an ask, which carries it.
         stuck     (boolean (or (= :stuck (:kind core)) (:stuck core)))]
@@ -293,7 +302,6 @@
                    closed?              :settled
                    needs-you            :parked-at-gate
                    live                 :active
-                   stalled              :stalled
                    (= :machine owed-by) :queued
                    :else                :idle)}))
 

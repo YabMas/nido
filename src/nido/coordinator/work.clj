@@ -615,6 +615,7 @@
      :landing?   (contains? landing-positions (get-in facts [:position :at]))
      :failure    (wcore/failure cw)
      :paused?    (boolean (or (:paused facts) (wcore/held-units? cw)))
+     :held?    (some? cw)
      :core     core
      :movable? (boolean (some #(and (= :open (:status %)) (not (:held? %)))
                               (vals (get-in cw [:state :units]))))
@@ -660,7 +661,8 @@
    what keeps a refresh to the rows a person can see. It is still SHOWN, with status's position,
    when it is dismissed or a pane is open on it (`whole?`)."
   ([project row] (with-status project row false))
-  ([project row whole?]
+  ([project row whole?] (with-status project row whole? nil))
+  ([project row whole? held]
    (if (:bare? row)
      (to-spine row)
      (let [ws-id   (:ws-id row)
@@ -668,7 +670,8 @@
            closed  (cws/closure w)
            outcome (:outcome closed)
            spine   (to-spine row)
-           cw      (core-of project ws-id)
+           ;; `held`, the core's entry as a caller already read it, else the one held here.
+           cw      (or held (core-of project ws-id))
            obs     #(act/of (observation project ws-id cw %1 %2 %3))
            settled (and closed (not= :between-phases outcome))
            stuck?  (let [a (wcore/activity cw)] (boolean (or (= :stuck (:kind a)) (:stuck a))))]
@@ -1982,19 +1985,67 @@
                  (str ": " d)))
           (gate-actions (:stage row) false nil {:awaiting :retry-start}))))
 
+(defn- stall-gate
+  "The :system-error card of spine row `row` whose activity reads it stalled (`act/of`'s
+   :stalled): a move is owed to an agent or the machine and nothing the core runs, schedules or
+   is owed will make it. It offers Wake, which takes no words and puts the person's waking in its
+   conductor's inbox. nil when the row is not stalled."
+  [project row]
+  (when (get-in row [:status :stalled])
+    (card project row :wake nil
+          "Stalled — an agent or the machine owes its next move, and nothing is running, scheduled or owed that would make it."
+          [{:id :wake :label "Wake" :kind :mutation :style :primary
+            :title "Its conductor hears that you woke it, and directs the next move."}])))
+
 (defn- row-gate
   "The card `row`'s activity puts on Needs you, in the category it needs the person in (its
    :needs): the core's ask when it holds one — a stopped conductor's among them — else the
-   landing a candidate waits on, the failed start, or the move its position owes them. nil for a
-   row whose activity does not need the person."
+   landing a candidate waits on, the failed start, the stall, or the move its position owes
+   them. nil for a row whose activity does not need the person."
   [project row]
   (when-let [needs (get-in row [:status :needs])]
     (some-> (or (core-gate project row)
                 (case needs
                   :landing      (landing-gate project row)
-                  :system-error (failure-gate project row)
+                  :system-error (or (failure-gate project row) (stall-gate project row))
                   :ask          (ledger-gate project row)))
             (assoc :needs needs))))
+
+(defn- stall-candidate?
+  "Whether held core entry `cw` could be stalled, read off the core's state alone, so a reading
+   of stalls builds rows only for these: open, the core doing nothing and owed nothing on it, and
+   either the recipe activated on it by its ledger index or an open unit nobody holds. The row
+   built from its records says whether it is."
+  [cw]
+  (let [st (:state cw)]
+    (boolean
+     (and st
+          (not (:closed? st))
+          (not (:discarded? st))
+          (nil? (domain/activity st))
+          (or (= :activated (:kind (last (filter #(#{:activated :deactivated} (:kind %)) (:ledger st)))))
+              (some #(and (= :open (:status %)) (not (:held? %))) (vals (:units st))))))))
+
+(defn- stall-gates
+  "The Needs you cards of every workstream of `project` the core holds whose activity reads it
+   stalled (`stall-gate`), each built from the core's held state and that workstream's own
+   records — never from rows this process holds, so a process that holds none, or has built
+   none yet, still cards every stall. Leaves out the workstreams in `asked`."
+  [project asked]
+  (let [facts (delay (notion-cache/project-page-facts project))
+        ;; One request for the project's open workstreams, read now: a stall is read from what
+        ;; the core holds, never from a cache of it a moment old.
+        open  (core-client/value! (core-client/project-states project {:open? true}) :states)]
+    (into []
+          (keep (fn [[k st]]
+                  (when-let [[_ ws-id] (core-client/split-key k)]
+                    (when (and (not (contains? asked ws-id)) (stall-candidate? {:state st}))
+                      (when-let [w (cws/read-ws project ws-id)]
+                        (let [row (with-status project (wsv/workstream-row project w @facts) false
+                                               (wcore/of-state st))]
+                          (when (not= :dismissed (:stage row))
+                            (some-> (stall-gate project row) (assoc :needs :system-error)))))))))
+          (sort-by key open))))
 
 (defn- asking-gate
   "What Needs you shows of workstream `ws-id`, which the core answered as asking with `held`
@@ -2102,11 +2153,16 @@
 
 (defn- project-gates
   "`project`'s gates as `read-gates` lists them: the core's asks, in key order, from one request
-   (`asking-gates`), then the cards of the rows this process holds that no core ask makes
-   (`held-ledger-gates`). Throws when the core does not answer."
+   (`asking-gates`), then every stall the core holds (`stall-gates`), then the cards of the rows
+   this process holds that neither makes (`held-ledger-gates`). Throws when the core does not
+   answer."
   [project]
-  (let [asked (asking-gates project)]
-    (into asked (held-ledger-gates project (into #{} (map :ws-id) asked)))))
+  (let [asked   (asking-gates project)
+        asked-ids (into #{} (map :ws-id) asked)
+        stalled (stall-gates project asked-ids)]
+    (-> asked
+        (into stalled)
+        (into (held-ledger-gates project (into asked-ids (map :ws-id) stalled))))))
 
 (defn ^{:malli/schema [:=> [:cat] GateReading]}
   read-gates
@@ -2115,8 +2171,9 @@
    core does — then the cards the rows this process already holds need the person for with no
    core ask beside them — a landing, a failed start, a move their position owes
    (`held-ledger-gates`) — building and refreshing no row. A stopped conductor is among the
-   core's: a :system-error card offering Wake (`asks-gate`).
-   A process that holds no rows has only the core's asks. The boundary where each project's core
+   core's: a :system-error card offering Wake (`asks-gate`). So is every stall, carded from the
+   core's held state and the workstream's own records (`stall-gates`), whatever rows this process
+   holds. A process that holds no rows has only the core's asks and its stalls. The boundary where each project's core
    reply becomes its outcome: its gates, or its key in :unavailable with the reason it could not
    be read."
   []
@@ -3569,11 +3626,13 @@
       (and named (not-any? #(= named (:id %)) open))
       {:decision :option-stale}
 
+      ;; Wake answers a stopped conductor's stop ask — how that one is woken — and otherwise wakes
+      ;; a stalled conductor directly: the person's waking is put in its inbox.
       (= :wake action-id)
       (if-let [stop (pick (filter domain/machine-ask? open))]
         (core-decision (act! {:command :answer-operator-ask :ask (:id stop) :answer "Wake it" :by :person})
                        :woken)
-        {:decision :core-refused :because "its conductor is not stopped"})
+        (core-decision (act! {:command :wake-conductor :by :person}) :woken))
 
       (option-action? action-id)
       (let [opt (nth (ask-options (get-in ask [:content :options])) (option-index action-id) nil)]

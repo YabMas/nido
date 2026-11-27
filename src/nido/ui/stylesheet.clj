@@ -158,7 +158,6 @@
         .pos.pos-you .pos-at { color:var(--needs-dim); }
         .st-mark { flex:none; font-size:var(--fs-xs); line-height:1; }
         .st-mark.paused { color:var(--dormant); }
-        .st-mark.stalled { color:var(--failed); }
         .pause-line { display:flex; align-items:center; gap:var(--space-8); margin:-4px 0 var(--space-10);
                       font-size:var(--fs-xs); color:var(--dormant); }
         .pause-ctl { margin-left:auto; }

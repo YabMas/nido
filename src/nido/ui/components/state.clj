@@ -208,12 +208,12 @@
      ⚠ in the failed colour when a turn is stuck — its run was ended and its process will not
        exit, so only a person ends it — ahead of a pause, which ends no process either;
      ‖ in the dormant colour while a person's pause stands;
-     ⚠ in the failed colour when it is stalled — an agent owes the move, nothing runs and nobody
-       paused it, which is a fault and never a resting state;
      the breathing dot in the working colour while something is live — the one the arc's running
        stage carries;
      nothing otherwise.
-   What runs, and who owes the next move, are the mark's title. Only :live lights the working dot:
+   A stall needs the person as a :system-error, so it carries that category's mark, said as a
+   stall in its title. What runs, and who owes the next move, are the mark's title. Only :live
+   lights the working dot:
    the activity already makes everything underway live, so a second test here could only
    disagree with it."
   [{:keys [owed-by live stalled stuck paused needs-you needs]} doing]
@@ -225,14 +225,14 @@
                                                     (when (seq tip) (str " · " tip)))} "⚠"])]
     (cond
       (or needs-you (= :merge (:source doing)))
-      (let [dot   (when needs-you (needs-kind-mark needs (str (needs-words needs) (when what (str " · " what)))))
+      (let [dot   (when needs-you (needs-kind-mark needs (str (needs-words needs)
+                                                               (when stalled " · stalled — nothing runs and nothing is owed")
+                                                               (when what (str " · " what)))))
             badge (when (= :merge (:source doing)) (doing-badge doing))
             marks (remove nil? [dot stuck badge])]
         (if (next marks) (apply list (interpose " " marks)) (first marks)))
       stuck                      stuck
       paused                     [:span.st-mark.paused {:title "paused by you"} "‖"]
-      stalled                    [:span.st-mark.stalled {:title (str "stalled — nothing runs and nothing asks you"
-                                                                     (when (seq tip) (str " · " tip)))} "⚠"]
       live                       [:span.st-mark.live {:title (if (seq tip) tip "running")}])))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
