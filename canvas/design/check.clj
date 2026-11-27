@@ -17,6 +17,7 @@
         [:spec-dirs [:vector :string]]
         [:cmd [:vector :string]]
         [:select [:maybe :any]]
+        [:load-cmd {:optional true} [:vector :string]]
         [:files {:optional true} [:vector :string]]])
 
 (Kind CheckResult
@@ -84,8 +85,12 @@
    The one reading of the declaration that is neither a document nor a verdict, and still asked of
    FUKAN — nido parses no model to get it. A claim's subjects are resolved against it, a declared
    claim's statement and subjects are read off it, and a claim's code is read through it.
-   `:undecidable` when fukan did not answer, never an empty listing."
+   `:undecidable` when fukan did not answer, never an empty listing — with a `:cause` saying, as
+   data, why: `:timeout`, `:load-failure` (a canvas namespace does not load, and the error is that
+   namespace's own load error) or `:unanswered`. A caller branches on the cause, never the text."
   [:map [:status [:enum :unmodelled :listed :undecidable]]
+        [:cause {:optional true} [:enum :timeout :load-failure :unanswered]]
+        [:limit-ms {:optional true} :int]
         [:elements {:optional true} [:vector [:map [:id :string] [:name :string] [:sort :keyword]
                                                    [:declaration :string]
                                                    [:doc {:optional true} :string]
@@ -184,6 +189,11 @@
   (Operation elements
     "The declared elements and their code correspondents, as fukan lists them for this worktree.
      A reading, like the rest: an element the declaration holds is listed whether or not its code
-     exists, and one that pairs with nothing carries no namespace rather than a guessed one."
-    {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]] DeclaredElements]
+     exists, and one that pairs with nothing carries no namespace rather than a guessed one.
+
+     A listing refused because a canvas namespace does not load is traced to the namespace that
+     broke, by requiring the `changed` canvas files a caller names, then the one fukan named, on
+     their own — fukan's own error names whichever namespace required the broken one first."
+    {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]
+                            [:changed [:? [:maybe [:vector :string]]]]] DeclaredElements]
      :delegates [design-of]}))

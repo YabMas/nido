@@ -220,13 +220,72 @@
                {:status :undecidable
                 :error  (or (:error report) (str/trim (str err)) (str "exit " exit))}))))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :DeclaredElements]}
+(def ^:private load-trace-timeout-ms
+  "How long to wait for a canvas namespace to be required on its own. One JVM and one namespace's
+   load — a few seconds — so it has the renderer's budget, not the check's."
+  60000)
+
+(def ^:private unloaded-ns
+  "The namespace fukan names when a canvas namespace fails to load. Fukan prints this phrase in the
+   report it writes on stdout; it is read in this one place, and a caller reads the `:cause` it
+   becomes, never the text."
+  #"failed to load canvas namespace (\S+)")
+
+(defn- canvas-ns
+  "The namespace a canvas file under `worktree` declares, read off its path: `canvas/review/core.clj`
+   is `canvas.review.core`. Nil for a path that is not a .clj file."
+  [worktree file]
+  (let [rel (str (fs/relativize (fs/absolutize worktree) (fs/absolutize (fs/path worktree file))))]
+    (when (str/ends-with? rel ".clj")
+      (-> rel (subs 0 (- (count rel) 4)) (str/replace "/" ".") (str/replace "_" "-")))))
+
+(defn- load-cmd
+  "The command that evaluates one form on the project's fukan classpath — `:load-cmd` when the
+   project names one, else `:cmd` up to its `-m` (the main it runs), with `-e`. Nil when neither
+   says how, in which case fukan's own error is all there is."
+  [{:keys [cmd] :as design}]
+  (or (:load-cmd design)
+      (let [[head tail] (split-with #(not= "-m" %) cmd)]
+        (when (seq tail) (vec (concat head ["-e"]))))))
+
+(defn- load-error
+  "What requiring `ns-name` on its own in `worktree` says, or nil when it loads. Clojure's own
+   compiler error, with the classpath's warnings and the pointer to its report file dropped: that
+   is the text that names the form which broke — for a duplicated (Operation …), the module that
+   authors two instances of one name — where fukan's names whichever namespace required it first."
+  [design worktree ns-name]
+  (when-let [argv (load-cmd design)]
+    (let [proc (process/process (concat argv [(str "(require '" ns-name ")")])
+                                {:dir (str worktree) :out :string :err :string})
+          done (deref proc load-trace-timeout-ms ::timeout)]
+      (when (= ::timeout done) (process/destroy-tree proc))
+      (when (and (not= ::timeout done) (not (zero? (long (:exit done)))))
+        (let [lines (->> (str/split-lines (str (:err done)))
+                         (remove #(str/starts-with? % "WARNING:"))
+                         (remove #(str/starts-with? % "Full report at"))
+                         (remove #(re-find #"^/\S+\.edn$" (str/trim %))))]
+          (not-empty (str/trim (str/join "\n" lines))))))))
+
+(defn- load-failure
+  "The `:load-failure` answer for a listing fukan refused because `named` would not load: the
+   first of the `changed` canvas namespaces, then `named` itself, that fails to load on its own,
+   with its own load error — or fukan's error alone when none can be traced."
+  [design worktree named changed fukan-error]
+  (let [candidates (distinct (concat (keep #(canvas-ns worktree %) changed) [named]))
+        traced     (some (fn [n] (when-let [e (load-error design worktree n)] [n e])) candidates)]
+    {:status :undecidable
+     :cause  :load-failure
+     :error  (if-let [[n e] traced]
+               (str "canvas namespace " n " does not load: " e)
+               fukan-error)}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string [:? [:maybe [:vector :string]]]] :DeclaredElements]}
   elements
   "The declared design's elements as data, as fukan lists them for `worktree`:
 
-     {:status :unmodelled}                     no design declared — nothing to list
-     {:status :listed      :elements [...]}    one row per authored element
-     {:status :undecidable :error \"…\"}         fukan did not answer
+     {:status :unmodelled}                                no design declared — nothing to list
+     {:status :listed      :elements [...]}               one row per authored element
+     {:status :undecidable :cause c :error \"…\"}         fukan did not answer
 
    A row's `:id` is the element's canvas identity (`canvas.review.record/review-record`) and its
    `:sort` the qualified sort it is declared under; `:ns` and `:file` are there only where its
@@ -235,29 +294,44 @@
    An empty listing is an answer only when fukan printed one. A caller resolving names against a
    listing reads every name missing from it as undeclared, so a run that timed out, failed, or
    printed something that is not a listing is `:undecidable`, never `[]`. The code is read to
-   pair elements with it, which is why this has the check's budget and not the renderer's."
-  [project-name worktree]
-  (if-let [{:keys [src spec-dirs] :as design} (design-of project-name worktree)]
-    (let [done (run-fukan design worktree "elements"
-                          ["--src" src "--spec-dirs" (str/join "," spec-dirs)] check-timeout-ms)]
-      (if (= ::timeout done)
-        {:status :undecidable
-         :error  (str "the element listing did not finish within "
-                      (quot check-timeout-ms 1000) "s")}
-        (let [{:keys [exit out err]} done
-              listing (parse-report out)]
-          (cond
-            (not (zero? (long exit)))
-            {:status :undecidable
-             :error  (let [e (str/trim (str err))]
-                       (if (str/blank? e) (str "fukan exited " exit) e))}
+   pair elements with it, which is why this has the check's budget and not the renderer's.
 
-            (vector? (:elements listing))
-            {:status :listed :elements (:elements listing)}
+   `:cause` says, as data, why there is no listing, and a caller branches on it rather than on the
+   error's text: `:timeout` when fukan did not finish, `:load-failure` when a canvas namespace does
+   not load, `:unanswered` for any other run that printed no listing. A load failure's `:error` is
+   that namespace's own load error, read by requiring it directly — first each of `changed` (paths
+   relative to `worktree`, the canvas files a caller knows were edited), then the one fukan named —
+   because fukan's error names the first namespace whose load failed, often a bystander that
+   merely requires the one that broke."
+  ([project-name worktree] (elements project-name worktree nil))
+  ([project-name worktree changed]
+   (if-let [{:keys [src spec-dirs] :as design} (design-of project-name worktree)]
+     (let [done (run-fukan design worktree "elements"
+                           ["--src" src "--spec-dirs" (str/join "," spec-dirs)] check-timeout-ms)]
+       (if (= ::timeout done)
+         {:status :undecidable
+          :cause  :timeout
+          :limit-ms check-timeout-ms
+          :error  (str "the element listing did not finish within "
+                       (quot check-timeout-ms 1000) "s")}
+         (let [{:keys [exit out err]} done
+               listing (parse-report out)]
+           (cond
+             (not (zero? (long exit)))
+             (let [e (or (some-> (:error listing) str str/trim not-empty)
+                         (not-empty (str/trim (str err)))
+                         (str "fukan exited " exit))]
+               (if-let [[_ named] (re-find unloaded-ns e)]
+                 (load-failure design worktree named changed e)
+                 {:status :undecidable :cause :unanswered :error e}))
 
-            :else
-            {:status :undecidable :error (str "unreadable listing: " (str/trim (str out)))}))))
-    {:status :unmodelled}))
+             (vector? (:elements listing))
+             {:status :listed :elements (:elements listing)}
+
+             :else
+             {:status :undecidable :cause :unanswered
+              :error (str "unreadable listing: " (str/trim (str out)))}))))
+     {:status :unmodelled})))
 
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   claim-text

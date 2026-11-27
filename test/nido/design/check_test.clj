@@ -72,6 +72,69 @@
         (is (= :undecidable (:status (listed "not a listing" 0)))))
       (finally (fs/delete-tree wt)))))
 
+(deftest a-listing-says-why-there-is-none-as-data
+  (let [wt     (worktree-with {"canvas/a.clj" "(ns canvas.a)" "src/a.clj" "(ns a)"})
+        listed (fn [out code]
+                 (with-redefs [project/get-project (constantly {:design {:cmd (answering out code)}})]
+                   (design/elements "p" wt)))]
+    (try
+      (testing "a run that printed no listing for any reason but a load is :unanswered"
+        (is (= :unanswered (:cause (listed "" 2))))
+        (is (= :unanswered (:cause (listed "not a listing" 0))))
+        (is (= :unanswered (:cause (listed (pr-str {:undecidable true :error "a law would not compile"}) 2)))))
+      (testing "a listing is never tagged"
+        (is (not (contains? (listed "{:elements []}" 0) :cause))))
+      (finally (fs/delete-tree wt)))))
+
+(deftest a-load-failure-names-the-namespace-that-broke
+  ;; ws-20261126-da4bc4: an amender added a second (Operation payload …) to canvas/review/core.clj,
+  ;; and fukan answered "failed to load canvas namespace canvas.claims.amend-refusal" — a bystander
+  ;; that merely requires the module that broke. Requiring the edited namespace on its own is what
+  ;; names the form.
+  (let [wt       (worktree-with {"canvas/review/core.clj"         "(ns canvas.review.core)"
+                                 "canvas/claims/amend_refusal.clj" "(ns canvas.claims.amend-refusal)"})
+        fukan    (answering (pr-str {:undecidable true
+                                     :error "canvas-source: failed to load canvas namespace canvas.claims.amend-refusal"
+                                     :because []})
+                            2)
+        ;; requires canvas.review.core as Clojure would report it; the bystander loads
+        loader   ["sh" "-c" (str "case \"$1\" in *canvas.review.core*)"
+                                 " echo 'WARNING: run! already refers to: #clojure.core/run!' >&2;"
+                                 " echo 'Syntax error macroexpanding Module at (canvas/review/core.clj:22:1).' >&2;"
+                                 " echo 'Module review-analysis: authors 2 instances named `payload` — one `def`, so only the last survives and the others are lost. Rename them.' >&2;"
+                                 " echo 'Full report at:' >&2; echo '/tmp/clojure-1.edn' >&2; exit 1;;"
+                                 " *) exit 0;; esac")
+                  "loader"]
+        listing  (fn [changed]
+                   (with-redefs [project/get-project (constantly {:design {:cmd fukan :load-cmd loader}})]
+                     (design/elements "p" wt changed)))]
+    (try
+      (testing "the edited namespace is required on its own, and its own error is the one handed on"
+        (let [r (listing ["canvas/review/core.clj"])]
+          (is (= :undecidable (:status r)))
+          (is (= :load-failure (:cause r)))
+          (is (str/includes? (:error r) "canvas.review.core"))
+          (is (str/includes? (:error r) "authors 2 instances named `payload`"))
+          (is (not (str/includes? (:error r) "WARNING")) "the classpath's warnings are not the cause")
+          (is (not (str/includes? (:error r) "Full report")))))
+      (testing "with no edited namespace named, the one fukan named is required — and its load
+                error, which Clojure reports at the form that broke, is still the cause"
+        (let [r (with-redefs [project/get-project
+                              (constantly {:design {:cmd fukan
+                                                    :load-cmd ["sh" "-c" (str "echo 'Syntax error macroexpanding Module at (canvas/review/core.clj:22:1).' >&2;"
+                                                                              " echo 'Module review-analysis: authors 2 instances named `payload`.' >&2; exit 1")
+                                                               "loader"]}})]
+                  (design/elements "p" wt))]
+          (is (= :load-failure (:cause r)))
+          (is (str/includes? (:error r) "canvas/review/core.clj:22"))))
+      (testing "a load nothing can trace keeps fukan's own error, still tagged as a load failure"
+        (let [r (with-redefs [project/get-project
+                              (constantly {:design {:cmd fukan :load-cmd ["sh" "-c" "exit 0" "loader"]}})]
+                  (design/elements "p" wt))]
+          (is (= :load-failure (:cause r)))
+          (is (str/includes? (:error r) "canvas.claims.amend-refusal"))))
+      (finally (fs/delete-tree wt)))))
+
 (deftest a-project-with-no-canvas-lists-no-elements
   (let [wt (worktree-with {"src/a.clj" "(ns a)"})]
     (try
