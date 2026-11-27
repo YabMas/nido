@@ -395,3 +395,45 @@
           (is (some #{[:failure-held? true]} @log) "the failure is kept before the lock is let go")
           (is (some #{[:record-held? true :failed]} @log) "and the start recorded failed under it")))
       (finally (cleanup fx)))))
+
+(defn- tcp-echo!
+  "An echo server on loopback TCP `port`, standing in for an app. Returns a fn that stops it."
+  [port]
+  (let [ss (ServerSocket. (int port) 50 (java.net.InetAddress/getLoopbackAddress))]
+    (future
+      (try
+        (loop []
+          (let [c (.accept ss)]
+            (future (try (let [in (.getInputStream c) out (.getOutputStream c) b (byte-array 4096)]
+                           (loop [] (let [n (.read in b)]
+                                      (when (pos? n) (.write out b 0 n) (.flush out) (recur)))))
+                         (catch Exception _ nil)
+                         (finally (.close c))))
+            (recur)))
+        (catch Exception _ nil)))
+    #(.close ss)))
+
+(deftest each-app-port-waits-for-its-own-app-alone
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {})
+        [pa ba pb bb] (repeatedly 4 free-port)
+        cfg   (assoc cfg :apps [{:service :a :port pa :bind-port ba} {:service :b :port pb :bind-port bb}])
+        _     (swap! front assoc :cfg cfg)
+        app-a (tcp-echo! ba)
+        la    {:kind :app :service :a :port pa :bind-port ba}
+        ssa   (#'front/listen! la)]
+    (future (loop [] (let [c (.accept ssa)] (future (#'front/serve! front la c)) (recur))))
+    (try
+      (with-redefs-fn (assoc redefs
+                             #'state/read-session (fn [_] {:name "t"
+                                                           :service-defs [{:type :eval :name :a} {:type :eval :name :b}]
+                                                           :service-states {:a {:bind-port ba} :b {:bind-port bb}}})
+                             #'eval-svc/start-app! (fn [d & _] (if (= :a (:name d)) true (do (Thread/sleep 1500) false))))
+        (fn []
+          (is (= "hi" (call pa "hi" 1000))
+              "app a's call is relayed once a answers, not once every app on the JVM has")
+          (await-phase front :absent)
+          (Thread/sleep 100)
+          (let [recs (keep #(when (and (vector? %) (= :record (first %))) (second %)) @log)]
+            (is (= [:ready] (map :outcome recs)) "b failing later does not fail the start a triggered")
+            (is (= :app (:port (first recs)))))))
+      (finally (.close ssa) (app-a) (cleanup fx)))))

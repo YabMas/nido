@@ -155,14 +155,25 @@
       (record-start! front :failed (or (ex-message e) (str (class e))) (core/now-iso)))
     (swap! front assoc :phase :absent :jvm-pid nil)))
 
+(defn- listener-key
+  "What a listener's readiness is kept under: :repl for the nREPL, the app's service name for an
+   app port — so each port waits for its own target alone."
+  [l]
+  (if (= :repl (:kind l)) :repl (:service l)))
+
+(defn- readiness
+  "One promise per listener of front config `cfg`, under its `listener-key`."
+  [cfg]
+  (into {:repl (promise)} (map (fn [a] [(listener-key (assoc a :kind :app)) (promise)])) (:apps cfg)))
+
 (defn- ready!
-  "Deliver port `kind`'s readiness, and when it is the port that triggered the start, record the
-   start ready at this instant."
-  [front kind]
+  "Deliver the readiness kept under `key`, and when it is the listener that triggered the start,
+   record the start ready at this instant."
+  [front key]
   (let [at (core/now-iso)
         {:keys [ready start]} @front]
-    (deliver (get ready kind) {:ok true})
-    (when (= kind (:port start))
+    (some-> (get ready key) (deliver {:ok true}))
+    (when (= key (:key start))
       (record-start! front :ready nil at))))
 
 (defn- run-start!
@@ -189,8 +200,8 @@
                 (when-not (eval-svc/start-app! d s (:context session))
                   (throw (ex-info (str "The app " (name (:name d)) " did not open port " (:bind-port s)
                                        " after its start form")
-                                  {:service (:name d) :bind-port (:bind-port s)}))))
-              (ready! front :app)
+                                  {:service (:name d) :bind-port (:bind-port s)})))
+                (ready! front (:name d)))
               (swap! front assoc :phase :running :last-traffic (now-ms)))
             (catch Throwable e
               (reset! handled? true)
@@ -198,24 +209,26 @@
               (throw e)))))
       (catch Throwable e
         (when-not @handled? (fail-start! front e false))
-        (deliver (:repl ready) {:error e})
-        (deliver (:app ready) {:error e})))))
+        ;; A listener already ready keeps its answer: a promise is delivered once.
+        (doseq [p (vals ready)] (deliver p {:error e}))))))
 
 (defn- demand!
-  "The readiness `kind` (:repl or :app) waits on for connection `conn`: a promise delivered
-   {:ok true} once its target answers, or {:error e}. Starts the group when none runs — once, for
-   however many connections ask — and waits out a stop in progress before starting it again."
-  [front kind conn]
+  "The readiness connection `conn` waits on — its listener's (`listener-key`): a promise delivered
+   {:ok true} once that listener's target answers, or {:error e}. Starts the group when none runs
+   — once, for however many connections ask — and waits out a stop in progress before starting it
+   again."
+  [front conn]
   (locking front
     (case (:phase @front)
-      (:running :starting) (get-in @front [:ready kind])
-      :absent  (let [ready {:repl (promise) :app (promise)}]
+      (:running :starting) (get-in @front [:ready (:key conn)])
+      :absent  (let [ready (readiness (:cfg @front))]
                  (swap! front assoc :phase :starting :ready ready
-                        :start {:requested-at (core/now-iso) :port kind :first conn :gave-up? false})
+                        :start {:requested-at (core/now-iso) :port (:kind conn) :key (:key conn)
+                                :first conn :gave-up? false})
                  (future (run-start! front))
-                 (get ready kind))
+                 (get ready (:key conn)))
       :stopping (let [p (promise) stopped (:stopped @front)]
-                  (future (deref stopped) (deliver p @(demand! front kind conn)))
+                  (future (deref stopped) (deliver p @(demand! front conn)))
                   p))))
 
 (defn- idle?
@@ -362,7 +375,7 @@
   "Relay one accepted client connection on listener `l`. It stays open — and counted among the
    front's open connections — until both directions have ended, or either fails."
   [front l ^Socket client]
-  (let [conn        {:kind (:kind l) :id (Object.)}
+  (let [conn        {:kind (:kind l) :key (listener-key l) :id (Object.)}
         in          (.getInputStream client)
         held        (java.io.ByteArrayOutputStream.)
         inner       (atom nil)
@@ -386,7 +399,7 @@
           (do
             (traffic! front (:kind conn))
             (.write held buf 0 n)
-            (let [ready (demand! front (:kind conn) conn)]
+            (let [ready (demand! front conn)]
               (future (pump-client! front conn in held inner released client-eof? end! close!))
               (let [r @ready]
                 (if (or (:error r) @closed?)

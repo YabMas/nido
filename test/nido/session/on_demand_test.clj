@@ -32,6 +32,17 @@
           ports [(get-in ctx [:repl :port]) (get-in ctx [:app :port]) (get-in ctx [:app :bind-port])]]
       (is (= 3 (count (distinct ports))) (str "the front's ports and the app's bound port differ: " ports)))))
 
+(deftest a-port-picked-after-the-allocation-avoids-the-fronts
+  (with-redefs [nido.platform.process/deterministic-port (fn [_ low _] low)
+                nido.platform.process/port-free?         (constantly true)]
+    (binding [nido.platform.process/*picked-ports* (atom #{})]
+      (let [svcs [{:type :process :name :repl :command "clojure" :on-demand {:idle-ms 1 :port-range [5500 5501]}}]
+            ctx  (#'engine/pre-allocate-ports svcs "/tmp/wt-pg")
+            ;; What Postgres picks at its own start, from a range beginning at the same port.
+            pg   (nido.platform.process/find-available-port 5500 1)]
+        (is (= 5500 (get-in ctx [:repl :port])))
+        (is (not= 5500 pg) "a later pick in the same start does not take the front's unbound port")))))
+
 (deftest an-eager-runtime-allocates-as-before
   (let [ctx (#'engine/pre-allocate-ports (update services 1 dissoc :on-demand) "/tmp/wt-eager")]
     (is (nil? (:repl ctx)) "the JVM's nREPL picks its own port, as it always did")

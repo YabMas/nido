@@ -254,17 +254,27 @@
     6665 6666 6667 6668 6669 6679 6697  ; irc
     10080})   ; amanda
 
+(def ^:dynamic *picked-ports*
+  "Within a runtime start, an atom of every port `find-available-port` has handed out in it — ports
+   whose services have not bound them yet, so a free-socket probe alone would hand one out twice;
+   nil outside a start. Bound once around the start, so every port its services pick, in or out of
+   the pre-allocation, is drawn from one set."
+  nil)
+
 (defn ^{:malli/schema [:=> [:cat :int :int] :int]}
   find-available-port
   "The first port at or above `preferred-port` that is free AND openable by a
-   browser. See `browser-blocked-ports` for why free is not sufficient."
+   browser, and not one this runtime start already handed out (`*picked-ports*`), which it is
+   then recorded as. See `browser-blocked-ports` for why free is not sufficient."
   [preferred-port max-attempts]
   (loop [port preferred-port
          attempts 0]
     (cond
       (and (not (contains? browser-blocked-ports port))
+           (not (some-> *picked-ports* deref (contains? port)))
            (port-free? port))
-      port
+      (do (some-> *picked-ports* (swap! conj port))
+          port)
 
       (>= attempts max-attempts)
       (throw (ex-info "Could not find free port"
