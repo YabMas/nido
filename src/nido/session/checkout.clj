@@ -114,7 +114,7 @@
 (defn- merge-of
   "A new commit merging the working copies of `members` (worktree to session name): each member's
    working copy is snapshotted first (`snapshot-members!`, which refuses one it cannot snapshot),
-   and a member whose working copy another's contains adds no parent. Returns its commit id."
+   and a member whose working copy another's contains adds no parent. Returns its change id."
   [dir members token]
   (snapshot-members! members)
   (let [ids   (mapv #(commit-id % false "@") (keys members))
@@ -195,7 +195,8 @@
    edits.
 
    `admit!` is asked about the merged tree before anything is written: it is called with a working
-   copy of the project and the merge's revision, and a throw refuses the refresh the same way —
+   copy of the project and the merge's commit id — the very commit the checkout is then written
+   from, whatever a member snapshots meanwhile — and a throw refuses the refresh the same way —
    nothing is changed, and its error goes on to the caller."
   ([instance-id members] (refresh! instance-id members (fn [_])))
   ([instance-id members setup!] (refresh! instance-id members setup! (fn [_ _])))
@@ -203,21 +204,24 @@
    (let [dir   (checkout-dir instance-id)
          from  (first (keys members))
          token (str "nido runtime " instance-id " " (System/nanoTime))
-         merge (merge-of from members (str token " merge"))]
-     (when (conflict? from merge)
-       (let [paths (conflicted-paths from merge)]
+         merge (merge-of from members (str token " merge"))
+         ;; The change id moves whenever a member snapshots while the merge exists, so what is
+         ;; examined and what is copied are one commit, pinned here.
+         fixed (commit-id from false merge)]
+     (when (conflict? from fixed)
+       (let [paths (conflicted-paths from fixed)]
          (jj! from false "abandon" merge)
          (throw (ex-info (str "The working copies of " (str/join ", " (sort (remove nil? (vals members))))
                               " conflict in " (str/join ", " paths)
                               "; the runtime keeps serving the checkout it had")
                          {:reason :checkout-conflict :members (vec (vals members)) :paths paths}))))
-     (try (admit! from merge)
+     (try (admit! from fixed)
           (catch Throwable e
             (jj! from false "abandon" merge)
             (throw e)))
      (jj! from false "new" "--no-edit" "-m" token "root()")
      (let [copy (created from token)]
-       (jj! from false "restore" "--from" merge "--into" copy)
+       (jj! from false "restore" "--from" fixed "--into" copy)
        (jj! from false "abandon" merge)
        (if (fs/exists? (fs/path dir ".jj"))
          (let [prior (jj! dir false "log" "-r" "@" "--no-graph" "-T" "change_id")

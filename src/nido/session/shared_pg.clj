@@ -789,9 +789,24 @@
   [repo rev]
   (let [dir     (str "root:" migrations-subdir)
         held    (set (jj-lines repo "file list" "file" "list" "-r" rev dir))
-        changed (jj-lines repo "diff" "diff" "--from" main-rev "--to" rev "--name-only" dir)]
+        on-main (set (jj-lines repo "file list" "file" "list" "-r" main-rev dir))
+        changed (jj-lines repo "diff" "diff" "--from" main-rev "--to" rev "--name-only" dir)
+        bytes   (fn [r path]
+                  (let [res (shell {:dir (str repo) :continue true :out :bytes :err :string}
+                                   "jj" "--ignore-working-copy" "file" "show" "-r" r
+                                   (str "root:" path))]
+                    (when-not (zero? (:exit res))
+                      (throw (ex-info (str "jj file show failed in " repo ": " (str/trim (:err res)))
+                                      {:error (:err res) :repo (str repo) :rev r :path path})))
+                    (:out res)))]
     ;; A changed path `rev` does not hold is one it deleted; a rename lists only its new path.
-    (vec (sort (filter held changed)))))
+    ;; A path the diff names may differ from main's in its executable bit alone, so a path both
+    ;; hold offends only when its bytes differ.
+    (vec (sort (filter #(and (held %)
+                             (or (not (on-main %))
+                                 (not (java.util.Arrays/equals ^bytes (bytes main-rev %)
+                                                               ^bytes (bytes rev %)))))
+                       changed)))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   migration-refusal

@@ -479,6 +479,17 @@ Three cluster roles:
 - `bb nido:session:isolate :project <p> <session>` — sets a per-session `:isolated` override (persisted at `~/.nido/state/<instance-id>/pg-mode-override.edn`) and restarts the session against its own clone.
 - `bb nido:session:share :project <p> <session>` — clears the override, drops the private PGDATA, and restarts against the shared cluster.
 
+**A shared session never serves a branch migration.** Every refresh of a shared-mode runtime's
+checkout — a cold `session:up`, a join, `session:sync` — first compares the members' merged tree
+with `main@origin` under `resources/db/migrations`, and a migration it adds or changes refuses the
+refresh before the checkout is written (`:refused :migration-on-shared-db`): an up starts neither
+Postgres nor the JVM, a join records nothing and stops nothing, a sync throws to whoever ran it.
+A member leaving only warns. The refusal names the files and the way out — `isolate` the session,
+take the migration out, or land it on main first. Identical or deleted migrations pass;
+`:isolated`/`:clone` runtimes are never compared. Not covered: a runtime run straight out of a
+plain-git worktree (it has no checkout to refuse), and a runtime already serving a branch
+migration, which is checked at its next start, join or sync.
+
 `bb nido:session:reset` refuses on a shared-mode session (it would reset the DB for everyone) — use `bb nido:shared:pg:reset` for the shared cluster, or `isolate` the session first. After a `template:pg:refresh`, `:clone`/`:isolated` sessions still hold their original clone — `reset` them to re-clone; for the shared cluster run `bb nido:shared:pg:reset`. APFS clones are essentially free, so this is fast.
 
 ### session.edn shape

@@ -102,6 +102,16 @@
                         [:refused :reason]))
         "two sessions' refusals are one failure cause")))
 
+(deftest a-migration-whose-executable-bit-alone-changed-does-not-offend
+  (with-repo
+    (fn [_ a _]
+      (sh a "chmod" "+x" (str (fs/path a mig "V1__one.sql")))
+      (sh a "jj" "status")
+      (is (seq (:out (sh a "jj" "--ignore-working-copy" "diff" "--from" "main@origin" "--to" "@"
+                         "--name-only")))
+          "jj reads the bit as a change")
+      (is (= [] (shared-pg/offending-migrations a "@"))))))
+
 ;; ---------------------------------------------------------------------------
 ;; The checkout refresh asks before it writes
 ;; ---------------------------------------------------------------------------
@@ -126,3 +136,167 @@
                                     "description(substring:\"nido runtime\") ~ ::nido-runtime-p--ws@"
                                     "-T" "change_id")))
               "the merge it was asked about is abandoned"))))))
+
+(deftest what-is-admitted-is-what-is-written-though-a-member-snapshots-in-between
+  (with-repo
+    (fn [_ a _]
+      (let [dir (checkout/refresh! "p--ws" {a "a"})]
+        (put! a "f.txt" "edited\n")
+        ;; Admission passes, then the member snapshots a migration before the copy is written.
+        (checkout/refresh! "p--ws" {a "a"} (fn [_])
+                           (fn [_ _]
+                             (put! a (str mig "/V3__three.sql") "create table three ();\n")
+                             (sh a "jj" "status")))
+        (is (= "edited\n" (slurp (str (fs/path dir "f.txt")))) "the admitted tree is written")
+        (is (not (fs/exists? (fs/path dir mig "V3__three.sql")))
+            "a migration snapshotted after admission is not")))))
+
+;; ---------------------------------------------------------------------------
+;; The engine's verbs refuse a shared runtime, and only a shared one
+;; ---------------------------------------------------------------------------
+
+(defn- with-engine
+  "Run `f` with `with-repo`'s workspaces under project `p`, whose session.edn declares Postgres in
+   `mode` and a REPL. Services are stubbed: a started one is recorded in `started`, the Postgres
+   state records its resolved mode as the real one does."
+  [mode f]
+  (with-repo
+    (fn [src a b]
+      (let [started (atom [])
+            stopped (atom [])]
+        (with-redefs [engine/resolve-project-name (constantly "p")
+                      engine/load-session-edn     (constantly {:services [{:type :postgresql :name :pg :mode mode}
+                                                                          {:type :process :name :repl}]})
+                      proc/process-alive?         (constantly true)
+                      launcher/write-artifacts!   (fn [& _] nil)
+                      launcher/remove-artifacts!  (fn [& _] nil)
+                      eval-svc/start-app!         (fn [& _] true)
+                      service/start-service!      (fn [d _ _]
+                                                    (swap! started conj (:name d))
+                                                    {:state   (if (= :postgresql (:type d))
+                                                                {:mode (pg/resolve-pg-mode d)}
+                                                                {:pid 1})
+                                                     :context {}})
+                      service/stop-service!       (fn [d _] (swap! stopped conj (:name d)) nil)
+                      service/stop-recorded!      (fn [& _] nil)]
+          (f {:src src :a a :b b :started started :stopped stopped}))))))
+
+(defn- up! [wt session]
+  (engine/start-session! wt {:runtime-key "ws" :session-name session}))
+
+(defn- refusal [thunk]
+  (try (thunk) nil
+       (catch clojure.lang.ExceptionInfo e
+         (when (= :migration-on-shared-db (:refused (ex-data e))) e))))
+
+(def ^:private v3 (str mig "/V3__three.sql"))
+(def ^:private v2 (str mig "/V2__two.sql"))
+
+(deftest a-shared-session-holding-a-branch-migration-is-refused-by-up-before-anything-starts
+  (with-engine :shared
+    (fn [{:keys [a started]}]
+      (put! a v3 "create table three ();\n")
+      (let [e (refusal #(up! a "a"))]
+        (is e "up is refused")
+        (is (= [v3] (:paths (ex-data e))))
+        (is (str/includes? (ex-message e) "bb nido:session:isolate :project p a")))
+      (is (= [] @started) "neither Postgres nor the JVM started")
+      (is (nil? (state/read-session "p--ws")))
+      (is (not (fs/exists? (fs/path (checkout/checkout-dir "p--ws") v3)))
+          "the checkout does not hold the migration"))))
+
+(deftest a-shared-session-is-refused-by-sync-and-its-checkout-keeps-what-it-had
+  (with-engine :shared
+    (fn [{:keys [a]}]
+      (up! a "a")
+      (let [dir (checkout/checkout-dir "p--ws")]
+        (testing "an added migration"
+          (put! a v3 "create table three ();\n")
+          (is (refusal #(engine/sync-runtime! a)))
+          (is (not (fs/exists? (fs/path dir v3)))))
+        (testing "a changed one keeps the bytes it had"
+          (fs/delete (fs/path a v3))
+          (put! a v2 "create table two (id int);\n")
+          (is (refusal #(engine/sync-runtime! a)))
+          (is (= "create table two ();\n" (slurp (str (fs/path dir v2))))))
+        (testing "an only-deleted or identical tree syncs"
+          (fs/delete (fs/path a v2))
+          (put! a "f.txt" "edited\n")
+          (is (= dir (engine/sync-runtime! a)))
+          (is (= "edited\n" (slurp (str (fs/path dir "f.txt")))))
+          (is (not (fs/exists? (fs/path dir v2)))))))))
+
+(deftest a-shared-join-is-refused-before-the-joiner-is-recorded-or-anything-stops
+  (with-engine :shared
+    (fn [{:keys [a b stopped]}]
+      (up! a "a")
+      (put! b v3 "create table three ();\n")
+      (let [e (refusal #(up! b "b"))]
+        (is e "the join is refused")
+        (is (str/includes? (ex-message e) "bb nido:session:isolate :project p b")))
+      (is (= {a "a"} (:members (state/read-session "p--ws"))) "b is not on the runtime")
+      (is (= [] @stopped) "nothing was stopped")
+      (is (not (fs/exists? (fs/path (checkout/checkout-dir "p--ws") v3))))
+      (testing "a restarting join is refused the same way"
+        (with-redefs [engine/load-session-edn
+                      (constantly {:services [{:type :postgresql :name :pg :mode :shared}
+                                              {:type :process :name :repl}
+                                              {:type :process :name :extra}]})]
+          (is (refusal #(up! b "b")))
+          (is (= [] @stopped))
+          (is (= {a "a"} (:members (state/read-session "p--ws")))))))))
+
+(deftest a-member-leaving-a-shared-runtime-only-warns
+  (with-engine :shared
+    (fn [{:keys [a b]}]
+      (up! a "a")
+      (up! b "b")
+      ;; b's working copy now holds a migration a's departure would merge into the checkout.
+      (put! b v3 "create table three ();\n")
+      (let [out (with-out-str (engine/stop-session! a))]
+        (is (str/includes? out "warning: Refused: b on p's shared Postgres cluster") out))
+      (is (= {b "b"} (:members (state/read-session "p--ws"))) "a has left")
+      (is (not (fs/exists? (fs/path (checkout/checkout-dir "p--ws") v3)))))))
+
+(deftest an-isolated-or-clone-session-is-never-compared
+  (doseq [mode [:isolated :clone]]
+    (testing (name mode)
+      (with-engine mode
+        (fn [{:keys [a b]}]
+          (put! a v3 "create table three ();\n")
+          (with-redefs [shared-pg/offending-migrations (fn [& _] (throw (ex-info "compared" {})))]
+            (up! a "a")
+            (put! b v2 "create table two (id int);\n")
+            (up! b "b")
+            (is (= (checkout/checkout-dir "p--ws") (engine/sync-runtime! a))))
+          (let [dir (checkout/checkout-dir "p--ws")]
+            (is (fs/exists? (fs/path dir v3)) "its checkout holds the migration")
+            (is (= "create table two (id int);\n" (slurp (str (fs/path dir v2)))))))))))
+
+(deftest an-isolate-override-takes-a-shared-session-out-of-the-guard
+  (with-engine :shared
+    (fn [{:keys [a]}]
+      (fs/create-dirs (state/instance-state-dir "p--ws"))
+      (spit (state/pg-mode-override-file "p--ws") (pr-str {:mode :isolated}))
+      (put! a v3 "create table three ();\n")
+      (up! a "a")
+      (is (fs/exists? (fs/path (checkout/checkout-dir "p--ws") v3))))))
+
+(deftest a-restarting-join-onto-an-isolated-runtime-writes-no-migration-the-shared-one-still-serves
+  (with-engine :shared
+    (fn [{:keys [a b]}]
+      (up! a "a")
+      (spit (state/pg-mode-override-file "p--ws") (pr-str {:mode :isolated}))
+      (put! b v3 "create table three ();\n")
+      (let [dir        (checkout/checkout-dir "p--ws")
+            while-held (atom [])]
+        (with-redefs [engine/load-session-edn
+                      (constantly {:services [{:type :postgresql :name :pg :mode :shared}
+                                              {:type :process :name :repl}
+                                              {:type :process :name :extra}]})
+                      service/stop-service!
+                      (fn [d _] (swap! while-held conj (fs/exists? (fs/path dir v3))) nil)]
+          (up! b "b"))
+        (is (seq @while-held) "the shared runtime was stopped")
+        (is (not-any? true? @while-held) "its checkout never held the migration while it ran")
+        (is (fs/exists? (fs/path dir v3)) "the isolated runtime it restarted as serves it")))))

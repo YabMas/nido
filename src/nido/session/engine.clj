@@ -21,7 +21,7 @@
    ;; toggle directly (see `reconcile-app!`).
    nido.session.services.config-file
    [nido.session.services.eval :as eval-svc]
-   nido.session.services.postgresql
+   [nido.session.services.postgresql :as pg]
    nido.session.services.process
    [nido.session.test-pg :as test-pg]
    [nido.session.state :as state]))
@@ -545,28 +545,69 @@
   (boolean (and runtime (not (:checkout runtime))
                 (checkout? (keys (code-members (:project-name runtime) (state/members runtime)))))))
 
+(defn- shared-defs?
+  "Do service definitions `defs` — override-applied, as a start runs them — put the runtime on
+   the project's shared cluster?"
+  [defs]
+  (boolean (some #(and (= :postgresql (:type %)) (= :shared (pg/resolve-pg-mode %))) defs)))
+
+(defn- shared-runtime?
+  "Is live runtime record `runtime` on the project's shared cluster — by the mode its running
+   :postgresql service recorded when it started?"
+  [runtime]
+  (boolean (some (fn [{:keys [type name]}]
+                   (and (= :postgresql type)
+                        (= :shared (get-in runtime [:service-states name :mode]))))
+                 (:service-defs runtime))))
+
+(defn- admission
+  "What a checkout refresh of a runtime of project `project-name` serving `members` (worktree to
+   session name) admits: for one on the shared cluster (`shared?`), no merged tree holding a
+   migration main lacks or holds otherwise, refused with `shared-pg/migration-refusal` naming
+   `session`, the session whose verb asked; for any other, everything."
+  [project-name shared? members session]
+  (if-not shared?
+    (fn [_ _])
+    (fn [repo rev]
+      (when-let [paths (seq (shared-pg/offending-migrations repo rev))]
+        (throw (shared-pg/migration-refusal
+                {:project project-name :session session
+                 :sessions (vec (remove nil? (vals members))) :paths (vec paths)}))))))
+
+(defn- migration-refusal? [e]
+  (= :migration-on-shared-db (:refused (ex-data e))))
+
 (defn- runtime-dir
   "Where runtime `instance-id`, serving `members` (worktree to session name; `code-members`), runs out of: its own
    checkout, brought up to date with them, when `checkout?` holds; else `fallback`, a member's
-   worktree. Throws, changing nothing, when the members' working copies conflict."
-  [instance-id members session-edn fallback]
+   worktree. Throws, changing nothing, when the members' working copies conflict, or when `admit!`
+   (`admission`) refuses their merge."
+  [instance-id members session-edn fallback admit!]
   (if (checkout? (keys members))
     (checkout/refresh! instance-id members
-                       (fn [dir] (doseq [step (:setup session-edn)] (run-setup-step! step dir))))
+                       (fn [dir] (doseq [step (:setup session-edn)] (run-setup-step! step dir)))
+                       admit!)
     fallback))
 
 (defn- sync-checkout!
   "Bring runtime `runtime`'s checkout up to date with `members` (`code-members`), when it runs out of one. A
    conflict, or a working copy that cannot be snapshotted, is reported and the checkout kept as it
    was: a member coming up or going down is not refused for what another member's working copy
-   holds."
-  [runtime members]
+   holds. A merge holding a migration the shared cluster would not accept (`admission`) is
+   refused to `session`, a member joining, and only reported when `session` is nil, a member
+   leaving."
+  [runtime members session]
   (when (and (:checkout runtime) (checkout? (keys members)))
-    (try (checkout/refresh! (:instance-id runtime) members)
+    (try (checkout/refresh! (:instance-id runtime) members (fn [_])
+                            (admission (:project-name runtime) (shared-runtime? runtime)
+                                       members session))
          (catch clojure.lang.ExceptionInfo e
-           (if (#{:checkout-conflict :checkout-unsnapshottable} (:reason (ex-data e)))
+           (cond
+             (and (migration-refusal? e) session) (throw e)
+             (or (migration-refusal? e)
+                 (#{:checkout-conflict :checkout-unsnapshottable} (:reason (ex-data e))))
              (core/log-step (str "warning: " (ex-message e)))
-             (throw e))))))
+             :else (throw e))))))
 
 (defn- start-services!
   "Start runtime `instance-id` cold for the session in `project-dir`, under the union of what it
@@ -579,8 +620,11 @@
   (let [session-name (:session-name opts)
         all      (assoc others (str project-dir) session-name)
         code     (code-members project-name all {(str project-dir) (:profile opts)})
-        run-dir  (runtime-dir instance-id code session-edn fallback-dir)
         services (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
+        ;; Refreshed before any service starts, so a refused merge starts neither Postgres nor
+        ;; the JVM.
+        run-dir  (runtime-dir instance-id code session-edn fallback-dir
+                              (admission project-name (shared-defs? services) code session-name))
         pre-allocated (pre-allocate-ports services run-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
         init-ctx (merge pre-allocated
@@ -856,8 +900,19 @@
         moving? (and (not (:checkout existing)) (checkout? (keys code)))]
     (if (or (seq missing) moving?)
       (do
-        ;; A conflict between the working copies refuses the join before anything is stopped.
-        (when (checkout? (keys code)) (runtime-dir (:instance-id existing) code session-edn nil))
+        ;; A conflict between the working copies, or a migration the shared cluster would not
+        ;; take, refuses the join before anything is stopped. The checkout written here is still
+        ;; served by the running runtime, so its mode admits too: a migration only it refuses is
+        ;; not written now, and comes in with the restart once the shared runtime has stopped.
+        (when (checkout? (keys code))
+          (let [target-shared? (shared-defs? defs)]
+            (try (runtime-dir (:instance-id existing) code session-edn nil
+                              (admission (:project-name existing)
+                                         (or target-shared?
+                                             (and (:checkout existing) (shared-runtime? existing)))
+                                         code session-name))
+                 (catch clojure.lang.ExceptionInfo e
+                   (when (or target-shared? (not (migration-refusal? e))) (throw e))))))
         (core/log-step (str "Restarting " (:instance-id existing) " for " session-name
                             (if (seq missing)
                               (str ", which asks for " (str/join ", " (map (comp name :name) missing)))
@@ -868,8 +923,10 @@
         nil)
       (let [runtime (assoc existing :members (assoc (state/members existing) (str project-dir) session-name))]
         (println "Joining running session" (:instance-id runtime))
+        ;; Brought up to date before the joiner is recorded: a merge refused for a migration
+        ;; leaves the runtime without it.
+        (sync-checkout! runtime code session-name)
         (state/write-session! (:instance-id runtime) runtime)
-        (sync-checkout! runtime code)
         (rebrief! project-dir session-name (:runtime-key opts) runtime session-edn
                   (select-keys opts [:run-dir :profile]))
         (reconcile-app! runtime)
@@ -945,7 +1002,7 @@
     (state/write-session! instance-id (-> (unrender-member! project-dir session)
                                           (assoc :members others)))
     (state/remove-from-registry! (str project-dir))
-    (sync-checkout! session (code-members (:project-name session) others))
+    (sync-checkout! session (code-members (:project-name session) others) nil)
     (when session-name
       (try (launcher/remove-artifacts! (:project-name session) session-name)
            (catch Exception e
@@ -1029,7 +1086,8 @@
    member's working copy, snapshotting each, so what they changed — code or not — is what the
    runtime's JVM and app read. Returns the checkout's directory; nil when the runtime runs out of a
    member's worktree, where there is nothing to bring up to date. Throws when no session is up in
-   `project-dir`, and, changing nothing, when the members' working copies conflict.
+   `project-dir`, and, changing nothing, when the members' working copies conflict or, on the
+   shared cluster, hold a migration main@origin does not (`admission`).
 
    Membership is read here, so a caller runs this holding the lock of runtime `instance-id` — the
    one `resolve-instance-id` gave it before taking that lock — as every join and departure does:
@@ -1042,7 +1100,9 @@
        (throw (ex-info (str "No session is up in " project-dir) {:reason :no-session})))
      (let [code (code-members (:project-name runtime) (state/members runtime))]
        (when (and (:checkout runtime) (seq code))
-         (checkout/refresh! (:instance-id runtime) code))))))
+         (checkout/refresh! (:instance-id runtime) code (fn [_])
+                            (admission (:project-name runtime) (shared-runtime? runtime) code
+                                       (get (state/members runtime) (str project-dir)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   session-status
