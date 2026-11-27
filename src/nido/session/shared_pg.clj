@@ -665,6 +665,11 @@
 
 (def ^:private migrations-subdir "resources/db/migrations")
 
+(def ^:private main-rev
+  "The revision whose migrations are the shared schema's: what `advance-shared-to-main!` applies,
+   and what `offending-migrations` measures a candidate against."
+  "main@origin")
+
 (defn ^{:malli/schema [:=> [:cat :Path] [:vector :string]]}
   list-main-migration-files
   "Basenames of main@origin's migration files, via jj — one cheap subprocess,
@@ -673,7 +678,7 @@
   [source-repo]
   (let [res (shell {:continue true :out :string :err :string}
                    "jj" "--ignore-working-copy" "-R" source-repo
-                   "file" "list" "-r" "main@origin" (str "root:" migrations-subdir))]
+                   "file" "list" "-r" main-rev (str "root:" migrations-subdir))]
     (when-not (zero? (:exit res))
       (throw (ex-info "jj file list (main@origin migrations) failed"
                       {:error (:err res) :source-repo source-repo})))
@@ -690,7 +695,7 @@
   [source-repo dest-dir filename]
   (let [show (shell {:continue true :out :string :err :string}
                     "jj" "--ignore-working-copy" "-R" source-repo
-                    "file" "show" "-r" "main@origin"
+                    "file" "show" "-r" main-rev
                     (str "root:" migrations-subdir "/" filename))]
     (when-not (zero? (:exit show))
       (throw (ex-info "jj file show failed" {:file filename :error (:err show)})))
@@ -761,6 +766,57 @@
                        (dissoc reversioned matched)))))
           (finally
             (fs/delete-tree tmp)))))))
+
+(defn- jj-lines
+  "The lines jj prints for `args`, run in `repo` without touching its working copy. Throws,
+   naming `what`, on a non-zero exit."
+  [repo what & args]
+  (let [res (apply shell {:dir (str repo) :continue true :out :string :err :string}
+                   "jj" "--ignore-working-copy" args)]
+    (when-not (zero? (:exit res))
+      (throw (ex-info (str "jj " what " failed in " repo ": " (str/trim (:err res)))
+                      {:error (:err res) :repo (str repo) :args (vec args)})))
+    (->> (str/split-lines (:out res)) (map str/trim) (remove str/blank?))))
+
+(defn ^{:malli/schema [:=> [:cat :Path :string] [:vector :string]]}
+  offending-migrations
+  "The migration files revision `rev` of the repository `repo` (any working copy of it) would put
+   in front of a shared cluster: every path under the migrations directory that `rev` holds and
+   main@origin either lacks or holds with other content — read from the same directory and main
+   revision `advance-shared-to-main!` applies. A migration identical to main's is not one, nor is
+   one `rev` deletes. Paths are relative to the repository root, sorted. Throws on a jj error,
+   which admits nothing."
+  [repo rev]
+  (let [dir     (str "root:" migrations-subdir)
+        held    (set (jj-lines repo "file list" "file" "list" "-r" rev dir))
+        changed (jj-lines repo "diff" "diff" "--from" main-rev "--to" rev "--name-only" dir)]
+    ;; A changed path `rev` does not hold is one it deleted; a rename lists only its new path.
+    (vec (sort (filter held changed)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  migration-refusal
+  "The error a shared runtime's checkout refresh is refused with when the members' working copies
+   hold `paths` (`offending-migrations`): the runtime's `sessions`, `session` the one whose verb
+   asked, of project `project`. Its data names no session, so every such refusal of one project
+   is one failure cause."
+  [{:keys [project session sessions paths]}]
+  (let [session (or session (first sessions) "<session>")]
+    (ex-info
+     (str "Refused: " (str/join ", " (sort sessions)) " on " project
+          "'s shared Postgres cluster would serve migrations main@origin does not hold — "
+          (str/join ", " paths) ". The app's Flyway would apply them to the database every "
+          project " session shares. The runtime keeps the checkout it had.\n"
+          "To run them, isolate the session's database:\n"
+          "  bb nido:session:isolate :project " project " " session "\n"
+          "  (or, from inside the session: nido session:isolate)\n"
+          "Isolating restarts the session on a private copy-on-write clone of " project
+          "'s template database; the shared cluster and every other session are untouched. "
+          "It is refused while another session is on the same runtime. "
+          "`bb nido:session:share :project " project " " session "` (nido:session:share) returns "
+          "the session to the shared cluster, dropping the private copy.\n"
+          "Or take the migration out of the working copy, or land it on main first.")
+     {:refused :migration-on-shared-db :reason :branch-migration
+      :project project :paths (vec paths)})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   ensure-ready!

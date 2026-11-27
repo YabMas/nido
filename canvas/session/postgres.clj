@@ -108,6 +108,16 @@
     {:signature [:=> [:catn [:source-repo Path]] [:vector :string]]})
   (Operation materialize-one! "Write one `main@origin` migration file into a directory."
     {:signature [:=> [:catn [:source-repo Path] [:dest-dir Path] [:filename :string]] :any]})
+  (Operation offending-migrations
+    "The migration files a revision would put in front of the shared cluster: every one it holds
+     that `main@origin` lacks or holds with other content, read from the same directory and main
+     revision `advance-shared-to-main!` applies. One identical to main's, or one deleted, is not."
+    {:signature [:=> [:catn [:repo Path] [:rev :string]] [:vector :string]]})
+  (Operation migration-refusal
+    "The error a shared runtime's checkout refresh is refused with for its offending migrations:
+     it names them and the runtime's sessions, and says how to isolate the session's database,
+     what isolating does, how `share` returns it, and the other ways out."
+    {:signature [:=> [:catn [:refused :map]] :any]})
   (Operation advance-shared-to-main! "Apply every pending `main@origin` migration."
     {:signature [:=> [:catn [:opts :map]] :any]
      :delegates [list-main-migration-files pending-migrations materialize-one! shared-applied-history history-insert-sql]})
