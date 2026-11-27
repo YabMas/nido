@@ -53,7 +53,7 @@
    :triage-awaiting   "Triage to accept"
    :reviewed          "Reviewed"
    :awaiting-gate     "Awaiting gate"
-   :published         "Draft PR open"
+   :published         "Ready for your Land"
    :land-granted      "Landing"
    :release-candidate "Release candidate"
    :shipped           "Merged"

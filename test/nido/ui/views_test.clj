@@ -1541,7 +1541,7 @@
 
 (deftest a-terminal-row-names-no-next-stage
   (let [html (str (h/html (board-row {:at :published :next nil})))]
-    (is (str/includes? html "Draft PR open"))
+    (is (str/includes? html "Ready for your Land"))
     (is (not (str/includes? html "→")))))
 
 (deftest a-row-with-no-position-renders-as-it-always-did
@@ -1730,7 +1730,7 @@
 (deftest the-status-heading-carries-the-position
   ;; It was a bold word at the top of a section whose heading said nothing —
   ;; two lines to say one thing, and the heading was the emptier of them.
-  (is (= "Status — Draft PR open" (state/status-heading {:at :published})))
+  (is (= "Status — Ready for your Land" (state/status-heading {:at :published})))
   (is (= "Status — Baseline verified" (state/status-heading {:at :baseline-verified})))
   (is (= "Status" (state/status-heading nil)) "no position, no dash"))
 
@@ -1748,7 +1748,7 @@
 (deftest a-merge-waiting-its-turn-reads-as-the-board-reads-it
   (let [doing  {:source :merge :phase :queued}
         status {:owed-by :machine :live false :stalled false :paused false :needs-you false}]
-    (is (= "Status — Draft PR open" (state/status-heading {:at :published} doing status))
+    (is (= "Status — Ready for your Land" (state/status-heading {:at :published} doing status))
         "the heading keeps the position; the merge's words are the mark's")
     (is (= "merging · queued" (last (state/state-mark status doing))) "the row's mark is the merge badge")
     (is (not (re-find #"st-mark\.live" (pr-str (state/state-mark status doing)))) "and no working dot")))

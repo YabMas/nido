@@ -686,8 +686,11 @@
         ;; one that stands; the presence check holds a caller that passes the fact bare to it.
         review-stands? (and review-passed? (contains? trail-ks :review))
         ;; Landable as it stands: a PR-landing project lands its open PR, any other its working
-        ;; copy, so a converged review is the whole of it there.
-        landable?      (or (contains? trail-ks :pr-opened) (and (false? lands-pr?) review-stands?))
+        ;; copy — so there a review standing in the trail is the whole of it, passed or not, and
+        ;; the arc never asks for a draft PR the landing does not take. Whether the review passed
+        ;; only decides which landing position it is.
+        landable?      (or (contains? trail-ks :pr-opened)
+                           (and (false? lands-pr?) (contains? trail-ks :review)))
         design-stands? (not (and (= :design (:stage re-entry))
                                  (not (:indeterminate? re-entry))))
         ;; QA that holds the landing: owed, or failed. Under :off, :not-applicable or :passed —
@@ -737,7 +740,8 @@
     ;; move is the seat's, which nido instructs, so no gate offers Land again.
     (and merge-granted? landable? (not qa-holds?)) :land-granted
     (and review-stands? landable? (not qa-holds?)) :release-candidate
-    (and (contains? trail-ks :pr-opened) (not qa-holds?)) :published
+    (and landable? (not qa-holds?))      :published
+    ;; Only where the landing names a PR: anywhere else a review in the trail is landable.
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
     ;; Layer entries cite the design they were built under, and `layers` counts only those
@@ -795,7 +799,8 @@
   "The :seq of the record `place` read to put the workstream at `pos` when a person owes the move
    it names, or nil: the blocker it halts on, the invalidating verdict re-entry names, the
    verdict nobody accepted, the newest
-   publication among the trail records that placed :published, the recipe proposal pending
+   publication among the trail records that placed :published (the newest review, where the
+   landing names no PR and none was opened), the recipe proposal pending
    approval, the census that read the drain exhausted. :awaiting-gate is placed by a close,
    a status entry; the question it owes is the phase's exit criterion, not a record's. A cleared
    slice is placed by its drain's :slice-cleared, a record on another ledger, so none of its own
@@ -803,12 +808,15 @@
 
    Read from the same facts `place` read, so the record a gate asks from is the one that put
    the workstream there — never a second, per-kind reading of the ledger."
-  [pos {:keys [blocker-seq re-entry trail-records verdict-seq drain-records]}]
+  [pos {:keys [blocker-seq re-entry trail-records verdict-seq drain-records lands-pr?]}]
   (case pos
     :blocked            blocker-seq
     :design-invalidated (get-in re-entry [:because :seq])
     :triage-awaiting    verdict-seq
-    :published          (:seq (last (filter #(= :pr-opened (:kind %)) trail-records)))
+    ;; What lands: the newest PR opened, else — where the landing names no PR — the newest review.
+    :published          (:seq (last (or (seq (filter #(= :pr-opened (:kind %)) trail-records))
+                                        (when (false? lands-pr?)
+                                          (filter #(= :review (:kind %)) trail-records)))))
     ;; The converged review that made it a candidate: what a Land is checked against.
     :release-candidate  (:seq (last (filter #(= :review (:kind %)) trail-records)))
     :recipe-proposed    (:proposal drain-records)

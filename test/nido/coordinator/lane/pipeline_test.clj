@@ -1525,7 +1525,9 @@
     (is (= :reviewed (#'p/place {:ks #{:intent :review} :review-passed? true :lands-pr? true})))
     (is (= :release-candidate (#'p/place {:ks #{:intent :review :pr-opened} :review-passed? true :lands-pr? true}))))
   (testing "a review that did not pass makes no candidate"
-    (is (= :reviewed (#'p/place {:ks #{:intent :review} :review-passed? false :lands-pr? false})))
+    (is (= :published (#'p/place {:ks #{:intent :review} :review-passed? false :lands-pr? false}))
+        "but where no PR is landed it is landable as it stands: the person's Land, not a draft PR")
+    (is (= :reviewed (#'p/place {:ks #{:intent :review} :review-passed? false :lands-pr? true})))
     (is (= :published (#'p/place {:ks #{:intent :review :pr-opened} :review-passed? false :lands-pr? true}))))
   (testing "a granted landing outranks the candidate"
     (is (= :land-granted (#'p/place {:ks #{:intent :review} :review-passed? true :lands-pr? false :merge-granted? true}))))
@@ -1536,6 +1538,62 @@
 (defn- a-review [status]
   {:format :review-report :status status :base "main" :base-rev nil :rounds 1 :fix-attempts 0
    :defects-settled 0 :findings-remaining 0 :report-path "r.edn"})
+
+
+(defn- placed-after-review
+  "Where workstream `id` of a project landing by `landing` stands after a review of `status` over
+   its cleared and built design, and again after a person's Land grant: [after-review after-grant
+   review-seq]. No QA is declared, so nothing but the landing decides."
+  [landing status]
+  (with-redefs [project/landing (constantly landing)
+                project/qa      (constantly nil)]
+    (let [[id add!] (ledger)
+          [_ d]     (cleared-and-implemented! add!)
+          rv        (add! :review (assoc (a-review status) :design {:seq d}))
+          before    (p/of :brian id)]
+      (add! :grant {:format :grant :grants [:merge] :words "Land"})
+      [before (p/of :brian id) rv])))
+
+(deftest a-push-main-workstream-goes-from-its-review-to-its-landing-with-no-pr
+  (with-tmp
+    (fn [_]
+      (doseq [status [:unresolved :converged]]
+        (let [[r granted rv] (placed-after-review :push-main status)
+              passed?        (= :converged status)]
+          (testing (str "a " status " review on a project that lands no PR")
+            (is (= (if passed? :release-candidate :published) (:at r))
+                "landable as it stands: never :reviewed, which owes a draft PR")
+            (is (= :land (:stage (:next r))) "its next stage is the person's Land")
+            (is (not= :publish-draft-pr (:stage (:next r))))
+            (is (= rv (:placed-by r)) "the review placed it: what Land is offered from")
+            (is (= :person (#'p/owed-by-mode (:mode (:next r))))
+                "Land is the person's move, offered rather than asked")
+            (is (= :land-granted (:at granted)) "under the grant the seat lands it")
+            (is (= {:stage :land :mode :working-copy} (:next granted))
+                "the seat runs the declared procedure through pr:land, and no person is asked")))))))
+
+(deftest a-pr-landing-workstream-is-placed-as-before
+  (with-tmp
+    (fn [_]
+      (doseq [landing [:pr-auto :pr-squash]
+              status  [:unresolved :converged]]
+        (testing (str landing " after a " status " review")
+          (let [[r granted] (placed-after-review landing status)]
+            (is (= :reviewed (:at r)) "no PR is open, so the draft PR is owed")
+            (is (= :publish-draft-pr (:stage (:next r))))
+            (is (not= :land-granted (:at granted)) "a grant with no PR open lands nothing")))
+        (testing (str landing " once its PR is open after a " status " review")
+          (with-redefs [project/landing (constantly landing)
+                        project/qa      (constantly nil)]
+            (let [[id add!] (ledger)
+                  [_ d]     (cleared-and-implemented! add!)
+                  _         (add! :review (assoc (a-review status) :design {:seq d}))
+                  pr        (add! :pr-opened {:format :pr-opened :url "https://example.test/pr/1" :title "t"
+                                                :design {:seq d}})
+                  r         (p/of :brian id)]
+              (is (= (if (= :converged status) :release-candidate :published) (:at r)))
+              (when (= :unresolved status)
+                (is (= pr (:placed-by r)) "the PR opened places :published")))))))))
 
 (deftest a-late-passing-review-of-a-superseded-design-passes-nothing
   ;; D2 is built and its review did not pass; a converged review citing D1 is appended after it.

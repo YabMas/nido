@@ -592,8 +592,9 @@
 ;; this is the band that reaches every source it takes (records and the core).
 
 (def ^:private landing-positions
-  "The positions the person's Land lands: a release candidate, or a draft published before
-   candidates were read. What the observation's :landing?, the landing card and Land's resolver
+  "The positions the person's Land lands: a release candidate, or a change landable as it stands
+   whose review did not pass (:published — a draft PR, or the working copy where the landing names
+   no PR). What the observation's :landing?, the landing card and Land's resolver
    all read."
   #{:release-candidate :published})
 
@@ -630,8 +631,8 @@
      :band       band
      :owed-by    (:owed-by facts)
      :activated? (boolean (:activated? facts))
-     ;; A Land the person makes — a candidate's or a published draft's. A Land the core already
-     ;; holds as a grant (placed :land-granted) is the seat's move, owed by an agent: no landing.
+     ;; A Land the person makes — a candidate's, or a landable change's whose review did not
+     ;; pass. A Land the core already holds as a grant (placed :land-granted) is the seat's move, owed by an agent: no landing.
      ;; Read off the declared landing positions, never the move's mode: a cleared slice's :land
      ;; is its drain's to make.
      :landing?   (contains? landing-positions (get-in facts [:position :at]))
@@ -3690,7 +3691,7 @@
         {:decision :core-refused :because "nothing is asked"})
 
       ;; Land is the person's grant, and only over a change that is landable as it stands: a
-      ;; release candidate, or a PR published before candidates were read. A grant given
+      ;; release candidate, or one whose review did not pass (:published). A grant given
       ;; anywhere else would be spent on whatever the arc reaches next.
       (= :land action-id)
       (if (landing-positions (:at (pipeline/of project ws-id)))
