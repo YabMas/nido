@@ -16,15 +16,17 @@
 
    THE CORE IS REACHED THROUGH `core`, a map the work plane supplies, since this lane may not reach
    the work plane that calls it: {:state (fn [project ws-id]) the core's state of a workstream or
-   nil, :post! (fn [project ws-id key text]) a chat post to its conductor keyed `key`,
+   nil, :notice! (fn [project ws-id key text]) a notice to its conductor whose id is `key`,
    :open-slice! (fn [project slice-id unit brief]) the slice's unit opened with `brief` as its first
    turn, :land! (fn [project slice-id]) the person's landing granted on the slice}.
 
-   WAKES. The coordinator is given a turn on each new census and landing of its drain: a chat post
-   to the drain's conductor whose message id is the event's key, so each is posted once. A wake owes
-   no decision. While one has not been heard — not posted, or still in the conductor's inbox — no
-   slice of the drain starts: the coordinator plans from what it has seen, and a start must not
-   race what it has not.
+   WAKES. The coordinator is given a turn on its drain's charter while no recipe is approved or
+   proposed, and on each census, landing and failed landing: a notice to the drain's conductor whose
+   id is the event's key, so each is posted once — a notice is nido's, never the person's chat. It
+   carries the event; the coordinator brief is read when the turn starts. A wake owes no decision.
+   While one has not been heard — not posted, or still in the conductor's inbox — no slice of the
+   drain starts: the coordinator plans from what it has seen, and a start must not race what it has
+   not.
 
    LANDING. A slice lands by the person's merge grant on its workstream: sibling slices land side
    by side, and none while a slice it rests on has not landed."
@@ -252,6 +254,13 @@
        (refuse! "A misfit is recorded from a turn of a slice of the drain" :not-a-slice {:drain d}))
      {:drain d :misfit (drain/record-misfit! project d {:slice slice :site site :note note})})))
 
+;; ── the core's view of a drain ──────────────────────────────────────────────
+
+(defn- has-coordinator?
+  "Whether the core holds drain `drain-id` open, so a conductor turn of it can hear a wake."
+  [core project drain-id]
+  (let [st ((:state core) project drain-id)] (boolean (and st (not (:closed? st))))))
+
 ;; ── the person's acts ───────────────────────────────────────────────────────
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
@@ -290,29 +299,54 @@
 
 ;; ── wakes ───────────────────────────────────────────────────────────────────
 
+(defn- failed-landings
+  "Each unit turn of each of drain `w`'s slices that the core marks as having ended under the
+   slice's :merge grant — a failed landing — as {:slice :turn :status}."
+  [core project w]
+  (for [{:keys [ws-id]} (drain/slices w)
+        :let [st ((:state core) project ws-id)]
+        t (sort-by :id (vals (:turns st)))
+        :when (:ended-under-merge? t)]
+    {:slice ws-id :turn (:id t) :status (:status t)}))
 
 (defn- wake-events
-  "The events drain `w` wakes its coordinator for, each {:key :text} keyed by its event: every census
-   reading and each landed slice — every one, never a newest per kind, so a reading appended before
-   the last pass is woken too; the keys post each once. Grouped by kind, not ordered by when each
+  "The events drain `w` wakes its coordinator for, each {:key :text} keyed by its event: its charter
+   while it has no recipe version and no pending proposal, every census reading, each landed slice
+   and each failed slice landing — every one, never a newest per kind, so one appended before the
+   last pass is woken too; the keys post each once. Grouped by kind, not ordered by when each
    happened."
-  [project w]
+  [core project w]
   (concat
+   (when-let [ch (and (nil? (drain/version w)) (empty? (drain/pending-proposals w)) (drain/charter w))]
+     [{:key (str "wake:charter:" (:seq ch))
+       :text (str "Drain " (:id w) " is chartered (entry " (:seq ch) ") and no recipe is approved or proposed: "
+                  "propose one.")}])
    (for [c (drain/censuses w)]
      {:key (str "wake:census:" (:seq c))
       :text (str "Census #" (:seq c) " under recipe version " (:recipe c) ": " (:remaining c) " remaining.")})
    (for [{:keys [ws-id]} (drain/slices w) :when (source-drain/landed? project ws-id)]
-     {:key (str "wake:landed:" ws-id) :text (str "Slice " ws-id " landed.")})))
+     {:key (str "wake:landed:" ws-id) :text (str "Slice " ws-id " landed.")})
+   (for [{:keys [slice turn status]} (failed-landings core project w)]
+     {:key (str "wake:landing-failed:" slice ":" turn)
+      :text (str "Slice " slice "'s landing failed: its turn " turn " ended " (name status)
+                 " while its landing was granted.")})))
 
-(defn- has-coordinator?
-  "Whether the core holds drain `drain-id` open, so a conductor turn of it can hear a wake."
-  [core project drain-id]
-  (let [st ((:state core) project drain-id)] (boolean (and st (not (:closed? st))))))
+(defn- posted
+  "The event keys drain state `st` holds as posted: every notice id, and every chat message id — a
+   wake posted as chat before notices existed is posted already."
+  [st]
+  (into (set (:notices st)) (map :id) (:chat st)))
+
+(defn- unheard
+  "The event keys drain state `st` holds in its conductor's inbox, not yet heard: a notice's id, or a
+   chat message's from before notices existed."
+  [st]
+  (set (keep #(case (:kind %) :notice (:notice %) :chat (:message %) nil) (vals (:inbox st)))))
 
 (defn- wake!
-  "Post wake `e` to drain `drain-id`'s coordinator, keyed by its event, with its brief read now."
+  "Post wake `e` to drain `drain-id`'s coordinator as a notice whose id is its event's key."
   [core project drain-id {:keys [key text]}]
-  ((:post! core) project drain-id key (str text "\n\n" (coordinator-brief project drain-id))))
+  ((:notice! core) project drain-id key text))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   wakes!
@@ -322,22 +356,23 @@
   (vec
    (for [d (source-drain/open-drains project)
          :when (has-coordinator? core project d)
-         e (wake-events project (ws/read-ws project d))
-         :when (not (some #(= (:key e) (:id %)) (:chat ((:state core) project d))))]
+         :let [done (posted ((:state core) project d))]
+         e (wake-events core project (ws/read-ws project d))
+         :when (not (done (:key e)))]
      (wake! core project d e))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   wake-pending?
-  "Whether drain `drain-id`'s coordinator has not yet heard one of its wakes — a census reading or a
-   landing: a wake not posted, or posted and still in its conductor's inbox. Every event is checked,
-   not the last of `wake-events`, whose order is by kind and not by when each happened. While one is
-   pending, no slice of the drain starts."
+  "Whether drain `drain-id`'s coordinator has not yet heard one of its wakes — its charter, a census
+   reading, a landing or a failed landing: a wake not posted, or posted and still in its conductor's
+   inbox. Every event is checked, not the last of `wake-events`, whose order is by kind and not by
+   when each happened. While one is pending, no slice of the drain starts."
   [project drain-id core]
-  (let [evs     (wake-events project (ws/read-ws project drain-id))
-        st      ((:state core) project drain-id)
-        posted  (set (map :id (:chat st)))
-        unheard (set (keep #(when (= :chat (:kind %)) (:message %)) (vals (:inbox st))))]
-    (boolean (some #(or (not (posted (:key %))) (unheard (:key %))) evs))))
+  (let [evs (wake-events core project (ws/read-ws project drain-id))
+        st  ((:state core) project drain-id)
+        p   (posted st)
+        u   (unheard st)]
+    (boolean (some #(or (not (p (:key %))) (u (:key %))) evs))))
 
 ;; ── starting a slice ────────────────────────────────────────────────────────
 

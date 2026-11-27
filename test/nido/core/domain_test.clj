@@ -258,6 +258,7 @@
       (gen/fmap (fn [g] {:command :give-grant :grant g :by "p"}) (gen/elements [:merge :intent]))
       (gen/fmap (fn [g] {:command :spend-grant :grant g}) (gen/elements [:merge :intent]))
       (gen/fmap (fn [m] {:command :post-chat :message m :text "hi"}) (gen/elements ["m1" "m2"]))
+      (gen/fmap (fn [n] {:command :post-notice :notice n :text "census"}) (gen/elements ["n1" "n2" "m1"]))
       (gen/fmap (fn [[m t]] {:command :reply-chat :message m :text "yo" :turn t}) (gen/tuple (gen/elements ["r1" "r2"]) mturn))
       (gen/return {:command :hand-over :summary "s"})
       (gen/fmap (fn [a] {:command :answer-operator-ask :ask a :answer "x" :by :person}) ask)
@@ -809,3 +810,56 @@
                      {:event :provision-recorded :unit "u" :attempt "a" :outcome :failed :cwd "/src/p"
                       :detail "x"}])]
       (is (nil? (get-in s [:units "u" :session :cwd]))))))
+
+;; ── notices and the landing mark ─────────────────────────────────────────────
+
+(deftest a-notice-is-posted-once-and-is-no-persons-input
+  (let [[s] (run [{:command :post-notice :notice "wake:census:3" :text "Census #3: 2 remaining."}])
+        item (first (vals (:inbox s)))]
+    (is (= #{"wake:census:3"} (:notices s)))
+    (is (= {:kind :notice :notice "wake:census:3" :text "Census #3: 2 remaining."} (dissoc item :id)))
+    (is (empty? (:chat s)) "a notice never reaches the chat")
+    (is (not (contains? d/person-input-kinds (:kind item))))
+    (is (= :notice-exists (refusal s {:command :post-notice :notice "wake:census:3" :text "again"})))
+    (testing "once heard, its id is still held"
+      (let [[s2] (run [{:command :post-notice :notice "wake:census:3" :text "t"}
+                       {:command :start-turn :turn "c1" :unit nil :spec spec :hears :whole-inbox}])]
+        (is (empty? (:inbox s2)))
+        (is (= :notice-exists (refusal s2 {:command :post-notice :notice "wake:census:3" :text "t"})))))
+    (is (= :workstream-closed
+           (refusal (assoc s :closed? true) {:command :post-notice :notice "n" :text "t"})))))
+
+(def ^:private landing-unit
+  [{:command :open-unit :unit "u" :project "brian" :goal "g" :session-cwd "/w"}
+   {:command :start-turn :turn "t1" :unit "u" :spec spec}])
+
+(deftest a-unit-turn-ending-under-the-merge-grant-is-marked
+  (testing "ended failed while the grant is held: marked"
+    (let [[s] (run (into landing-unit [{:command :give-grant :grant :merge :by "person"}
+                                       {:command :record-outcome :turn "t1" :outcome :failed}]))]
+      (is (true? (get-in s [:turns "t1" :ended-under-merge?])))))
+  (testing "a turn already running when the grant is given is marked too"
+    (let [[s] (run (into landing-unit [{:command :give-grant :grant :merge :by "person"}
+                                       {:command :record-outcome :turn "t1" :outcome :cancelled}]))]
+      (is (true? (get-in s [:turns "t1" :ended-under-merge?])))))
+  (testing "completed, or ended with no grant held: not marked"
+    (let [[s] (run (into landing-unit [{:command :give-grant :grant :merge :by "person"}
+                                       {:command :record-outcome :turn "t1" :outcome :completed}]))]
+      (is (nil? (get-in s [:turns "t1" :ended-under-merge?]))))
+    (let [[s] (run (conj landing-unit {:command :record-outcome :turn "t1" :outcome :failed}))]
+      (is (nil? (get-in s [:turns "t1" :ended-under-merge?])))))
+  (testing "a hold cancelling the unit's turn under the grant marks it"
+    (let [[s] (run (into landing-unit [{:command :give-grant :grant :merge :by "person"}
+                                       {:command :hold-unit :unit "u"}]))]
+      (is (true? (get-in s [:turns "t1" :ended-under-merge?])))))
+  (testing "an ask concerning the unit, cancelling its running turn under the grant, marks it"
+    (let [[s] (run (into landing-unit [{:command :open-unit :unit "v" :project "brian" :goal "g" :session-cwd "/w"}
+                                       {:command :start-turn :turn "t2" :unit "v" :spec spec}
+                                       {:command :record-outcome :turn "t2" :outcome :asked :call {:id "c" :question "Go?" :explored "x" :options [{:option "A" :consequence "x"}] :recommendation "A"}}
+                                       {:command :give-grant :grant :merge :by "person"}
+                                       {:command :raise-operator-ask :ask "a" :binds ["t2"] :concerns "u" :content ready}]))]
+      (is (true? (get-in s [:turns "t1" :ended-under-merge?])))))
+  (testing "once the unit merged, the grant is gone and nothing is marked"
+    (let [[s] (run (into landing-unit [{:command :give-grant :grant :merge :by "person"}
+                                       {:command :record-merge :unit "u"}]))]
+      (is (nil? (get-in s [:turns "t1" :ended-under-merge?]))))))

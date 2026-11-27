@@ -30,15 +30,16 @@
   (let [states (atom {}) opened (atom []) landed (atom [])]
     {:states states :opened opened :landed landed
      :state       (fn [_ ws-id] (get @states ws-id {:chat [] :inbox {}}))
-     ;; As the core decides :post-chat: a message id already posted is refused, not posted again.
-     :post!       (fn [_ ws-id k text]
-                    (if (some #(= k (:id %)) (get-in @states [ws-id :chat]))
-                      {:refused {:reason :message-exists}}
+     ;; As the core decides :post-notice: an id it already holds is refused, not posted again.
+     :notice!     (fn [_ ws-id k text]
+                    (if (contains? (get-in @states [ws-id :notices] #{}) k)
+                      {:refused {:reason :notice-exists}}
                       (do (swap! states update ws-id
                                  (fn [st] (-> (or st {:chat [] :inbox {}})
-                                              (update :chat conj {:id k :from :person :text text})
-                                              (assoc-in [:inbox k] {:kind :chat :message k :text text}))))
-                          {:events [:chat-posted]})))
+                                              (update :notices (fnil conj #{}) k)
+                                              (assoc-in [:notice-texts k] text)
+                                              (assoc-in [:inbox k] {:kind :notice :notice k :text text}))))
+                          {:events [:notice-posted]})))
      :open-slice! (fn [proj slice unit brief]
                     (swap! opened conj [slice unit brief])
                     (units/open-unit! proj slice unit {:session unit}))
@@ -104,7 +105,11 @@
   (passed-review! slice)
   (ws/append-entry! p slice {:kind :closed} (pr-str {:format :closed :outcome :done :note "landed"})))
 
-(defn- wakes [d] (filterv #(str/starts-with? (str (:id %)) "wake:") (:chat ((:state *core*) p d))))
+(defn- wakes
+  "The wakes posted to drain `d`, as {:id :text}: every notice the fake core holds."
+  [d]
+  (let [st ((:state *core*) p d)]
+    (vec (for [k (sort (:notices st))] {:id k :text (get-in st [:notice-texts k])}))))
 
 (defn- deliver-wakes!
   "Post every wake owed and let the coordinator's turn hear them."
@@ -131,7 +136,9 @@
         (is (lane/wake-pending? p d *core*) "the census's wake is not yet posted")
         (lane/wakes! p *core*)
         (is (= 1 (count (wakes d))))
-        (is (str/includes? (:text (first (wakes d))) "You coordinate drain") "a wake carries the coordinator brief")
+        (is (not (str/includes? (:text (first (wakes d))) "You coordinate drain"))
+            "a wake carries its event, not the coordinator brief — that is read when the turn starts")
+        (is (empty? (:chat ((:state *core*) p d))) "a wake is a notice, never the person's chat")
         (lane/wakes! p *core*)
         (is (= 1 (count (wakes d))) "posted once per event")
         (is (= :wake-pending (refused #(start-slice! d plan))) "posted is not heard")
@@ -423,3 +430,51 @@
         (is (some? (ws/close! p sb :done nil :person)))
         (is (some? (ws/close! p sc :dropped nil :person)) "a slice given up on closes without either")))))
 
+
+;; ── the charter, failed landings, and retiring ───────────────────────────────
+
+(deftest a-chartered-drain-wakes-its-coordinator-until-a-recipe-is-proposed
+  (with-tmp
+    (fn []
+      (let [d (drain/start-drain! p {:established-by {:commit "abcdef1"} :exit "wrap-conn deleted"})
+            k (str "wake:charter:" (:seq (drain/charter (ws/read-ws p d))))]
+        (is (lane/wake-pending? p d *core*) "the charter's wake is owed with no person's act")
+        (lane/wakes! p *core*)
+        (is (= [k] (mapv :id (wakes d))))
+        (is (str/includes? (:text (first (wakes d))) "propose one"))
+        (lane/wakes! p *core*)
+        (is (= 1 (count (wakes d))) "posted once")
+        (testing "a drain with a pending proposal is owed no charter wake"
+          (let [d2 (drain/start-drain! p {:established-by {:commit "abcdef1"} :exit "x"})]
+            (drain/propose-recipe! p d2 {:reason "r" :recipe a-recipe})
+            (lane/wakes! p *core*)
+            (is (empty? (wakes d2)))))))))
+
+(deftest a-wake-posted-as-chat-before-notices-is-not-posted-again
+  (with-tmp
+    (fn []
+      (let [[d _] (coordinated-drain)
+            k     (str "wake:census:" (:seq (drain/newest-census (ws/read-ws p d))))]
+        (swap! (:states *core*) assoc d {:chat [{:id k :from :person :text "old wake"}] :inbox {}})
+        (lane/wakes! p *core*)
+        (is (empty? (wakes d)) "the old chat id counts as posted")
+        (is (not (lane/wake-pending? p d *core*)) "and, out of the inbox, as heard")))))
+
+(deftest a-slice-turn-ended-under-its-landing-grant-wakes-its-drain-once
+  (with-tmp
+    (fn []
+      (let [[d c] (coordinated-drain)
+            census (:seq (drain/newest-census (ws/read-ws p d)))
+            a      (in-turn c #(lane/plan! p d {:sites ["a"] :rests-on [] :census census}))
+            _      (deliver-wakes! d)
+            sa     (:slice (start-slice! d a))]
+        (swap! (:states *core*) assoc sa
+               {:chat [] :inbox {}
+                :turns {"t1" {:id "t1" :unit "u" :status :failed :ended-under-merge? true}
+                        "t2" {:id "t2" :unit "u" :status :failed}}})
+        (is (lane/wake-pending? p d *core*) "the failed landing is a wake not yet heard")
+        (lane/wakes! p *core*)
+        (lane/wakes! p *core*)
+        (is (= [(str "wake:landing-failed:" sa ":t1")]
+               (filterv #(str/starts-with? % "wake:landing-failed:") (map :id (wakes d))))
+            "only the marked turn, and once")))))

@@ -66,10 +66,10 @@
     "The person starting a drain from a pattern established elsewhere. Answers its ws-id."
     {:signature [:=> [:catn [:project ProjectName] [:charter :any]] :any]})
   (Operation wake-pending?
-    "Whether drain `drain-id`'s coordinator has not yet heard one of its wakes: a wake not posted, or posted and still in its conductor's inbox. While one is pending, no slice of the drain starts."
+    "Whether drain `drain-id`'s coordinator has not yet heard one of its wakes — its charter, a census, a landing or a failed landing: a wake not posted, or posted and still in its conductor's inbox. While one is pending, no slice of the drain starts."
     {:signature [:=> [:catn [:project ProjectName] [:drain-id WorkstreamId] [:core :map]] :any]})
   (Operation wakes!
-    "Post to each drain the core holds open the wake for each event its coordinator has not been woken for — to the conductor's chat, keyed by the event, so each is posted once. Answers what each post answered."
+    "Post to each drain the core holds open the wake for each event its coordinator has not been woken for — a notice to its conductor whose id is the event's key, so each is posted once. Answers what each post answered."
     {:signature [:=> [:catn [:project ProjectName] [:core :map]] :any]})
   (Operation withdraw!
     "The coordinator withdrawing an open plan."

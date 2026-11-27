@@ -63,9 +63,13 @@
                         ; :refused: its destroy was refused because its working copy is not the
                         ; session's own to remove; terminal, never attempted again
    :turns         {}    ; turn-id -> {:id :unit (nil = conductor) :status :spec :run
-                        ;             :call :resolution :resolved-call :ended-by :detail :stuck :exited}
+                        ;             :call :resolution :resolved-call :ended-by :detail :stuck :exited
+                        ;             :ended-under-merge?}
                         ; :stuck {:run :reason}: the runner ended that run and saw it alive past its grace
                         ; :exited run: the latest run whose exit is recorded (every recorded outcome sets it)
+                        ; :ended-under-merge? marks a unit turn that ended other than completed
+                        ; while the workstream held the :merge grant and its unit had not merged —
+                        ; a failed landing, which no later state can recompute (`under-merge`).
                         ; :spec {:executor kw :instructions str ...} is what the executor runs;
                         ; :run counts the turn's runs, 1 at start and one more per resumption, so
                         ; an outcome names the run it is for and a stale one is refused.
@@ -83,6 +87,9 @@
    :conductor-retry-at nil ; epoch ms before which the conductor is not woken again, or nil
    :conductor-stopped? false ; a stop ask is open on the conductor; nothing wakes it until answered
    :grants        {}    ; grant kind -> {:by str}: what the person granted and has not yet spent
+   ;; :notices     #{}  ; every notice id posted to the workstream, kept for its life, so a notice
+                        ; is posted once (`:post-notice`). Absent until the first notice, so a
+                        ; state that never had one reads as it did before notices were a kind.
    :chat          []    ; [{:id :from #{:person :conductor} :text :turn :images}] in the order posted;
                         ; :images, on a person's message that carried any, are their digests: the
                         ; bytes and media type are kept by digest outside the events (`nido.core.images`)
@@ -351,6 +358,20 @@
   (cond-> {:kind :turn-ended :unit unit :turn id :run run :outcome outcome}
     actions-unknown? (assoc :actions-unknown? true)))
 
+(defn- under-merge
+  "`state` with unit turn `turn-id`, which is ending as `outcome`, marked :ended-under-merge? when it
+   ends other than completed while the workstream holds the :merge grant and its unit has not
+   merged: a failed landing. Marked by the fold that ends it, because the grant records no time and
+   leaves :grants once spent or the unit merges, so no later state can tell."
+  [state turn-id outcome]
+  (let [{:keys [unit]} (get-in state [:turns turn-id])]
+    (cond-> state
+      (and unit
+           (not= :completed outcome)
+           (contains? (:grants state) :merge)
+           (not= :merged (get-in state [:units unit :status])))
+      (assoc-in [:turns turn-id :ended-under-merge?] true))))
+
 (defn- close-ask
   "Close operator ask `ask-id` as `status`, and resolve every call it binds with `resolution`."
   [state ask-id status resolution]
@@ -467,8 +488,10 @@
 (defmethod evolve :turn-ended [state {:keys [turn outcome detail actions-unknown?]}]
   (let [{:keys [unit run hears] :as t} (get-in state [:turns turn])
         disposed? (= :completed outcome)]
-    (cond-> (update-in state [:turns turn] #(cond-> (assoc % :status outcome :exited run)
-                                              detail (assoc :detail detail)))
+    (cond-> (-> state
+                (update-in [:turns turn] #(cond-> (assoc % :status outcome :exited run)
+                                            detail (assoc :detail detail)))
+                (under-merge turn outcome))
       (and actions-unknown? unit)
       (update-in [:units unit :unknowns] conj (run-unknown-key turn run))
 
@@ -503,6 +526,7 @@
         running (filter #(and (contains? held (:unit %)) (= :running (:status %))) (vals (:turns state)))]
     (reduce (fn [s t] (-> s
                           (update-in [:turns (:id t)] assoc :status :cancelled :ended-by :concerned-ask)
+                          (under-merge (:id t) :cancelled)
                           (hear-later (turn-ended-item t :cancelled false))))
             state running)))
 
@@ -550,6 +574,13 @@
 (defmethod evolve :chat-replied [state {:keys [message text turn]}]
   (update state :chat (fnil conj []) {:id message :from :conductor :text text :turn turn}))
 
+(defmethod evolve :notice-posted [state {:keys [notice text]}]
+  ;; A notice is nido's, never the person's: kept in :notices for the workstream's life and heard
+  ;; as a :notice item, and never put in :chat.
+  (-> state
+      (update :notices (fnil conj #{}) notice)
+      (hear-later {:kind :notice :notice notice :text text})))
+
 (defmethod evolve :handed-over [state {:keys [summary]}]
   (hear-later state {:kind :hand-over :summary summary}))
 
@@ -566,6 +597,7 @@
     (reduce (fn [s t] (-> s
                           (update-in [:turns t] #(-> % (assoc :status :cancelled :ended-by :takeover)
                                                      (dissoc :call)))
+                          (under-merge t :cancelled)
                           (hear-later (turn-ended-item (get-in s [:turns t]) :cancelled false))))
             (assoc-in state [:units unit :held?] true)
             unit-turns)))
@@ -958,6 +990,16 @@
     (not= :running (get-in state [:turns turn :status])) (refuse :turn-not-running :turn turn)
     (some? (get-in state [:turns turn :unit]))           (refuse :only-the-conductor-replies)
     :else (accept {:event :chat-replied :message message :text text :turn turn})))
+
+(defmethod decide :post-notice [state {:keys [notice text]}]
+  ;; nido telling the conductor of an event it observed: posted once per id, for the workstream's
+  ;; life, which is what lets a pass that sees the same event again post nothing.
+  (cond
+    (:closed? state)                          (refuse :workstream-closed)
+    (not (string? notice))                    (refuse :notice-needs-an-id)
+    (contains? (:notices state) notice)       (refuse :notice-exists :notice notice)
+    (not (string? text))                      (refuse :notice-needs-text)
+    :else (accept {:event :notice-posted :notice notice :text text})))
 
 (defmethod decide :hand-over [state {:keys [summary]}]
   (cond

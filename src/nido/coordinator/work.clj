@@ -4630,11 +4630,11 @@
           {:refused (ex-message e)})))))
 
 (def ^:private drain-core
-  "How lane-drain reaches the core: a drain's state, a keyed post to its conductor, a slice's unit
-   opened on its brief, and a slice's landing granted."
+  "How lane-drain reaches the core: a drain's state, a notice to its conductor keyed by its event, a
+   slice's unit opened on its brief, and a slice's landing granted."
   {:state       (fn [project ws-id] (wcore/state project ws-id))
-   :post!       (fn [project ws-id k text]
-                  (wcore/act! project ws-id {:command :post-chat :message k :text text}
+   :notice!     (fn [project ws-id k text]
+                  (wcore/act! project ws-id {:command :post-notice :notice k :text text}
                               {:key (str "drain/" (name project) "/" ws-id "/" k)}))
    :open-slice! (fn [project slice-id unit brief]
                   (let [r (wcore/act! project slice-id

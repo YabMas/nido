@@ -184,6 +184,7 @@
                           (str ", answering:\n" (indent-answer (str (:answer item))))))
     :hand-over     (str "this workstream was handed over to you from the old coordinator: " (:summary item))
     :arrival       (str "work arrived and waits for the person to promote or dismiss it: " (:summary item))
+    :notice        (str "nido observed (notice " (:notice item) ", not the person's word; it owes no reply): " (:text item))
     (pr-str kind)))
 
 (defn- recipe-running? [state]
