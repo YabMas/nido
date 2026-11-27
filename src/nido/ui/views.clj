@@ -3068,15 +3068,14 @@
   (shell {:title "404"} [:h1 "Not found"]))
 
 ;; ---------------------------------------------------------------------------
-;; Drains — each open drain with its slices beneath it (nido.coordinator.view.drains)
-
-(def ^:private drain-phase-label
-  {:chartered "chartered — the coordinator proposes a recipe"
-   :recipe-proposed "a recipe awaits your approval"
-   :awaiting-census "awaiting its first census"
-   :draining "draining"
-   :exhausted "census reads zero — yours to close"
-   :closed "closed"})
+;; Drains — each open drain as an operating surface (nido.coordinator.view.drains)
+;;
+;; A card per open drain. It leads with the drain's phase and the one act it owes the person, then
+;; says everything the drain's value carries: its escalations, each pending recipe proposal as the
+;; recipe it would install diffed against the current one, its census and trend, its slices with
+;; their misfits and Land, its open plans and its residue. Nothing in #drains is folded — the poll
+;; re-renders it every five seconds and morphs it in, so a fold the person opened would be shut
+;; under them. Everything here is computed from the value on each render and stored nowhere.
 
 (defn- drain-base [{:keys [project ws-id]}] (str "/drains/" project "/" ws-id))
 
@@ -3086,53 +3085,247 @@
   [scope]
   (if (and scope (not= "all" scope)) (str "?scope=" scope) ""))
 
-(defn- drain-button [label url scope]
-  (c/button {"data-on:click" (str "@post('" url (drains-scope-query scope) "')")} label))
+(defn- drain-button
+  ([label url scope] (drain-button label url scope :default))
+  ([label url scope emphasis]
+   (c/button {:emphasis emphasis "data-on:click" (str "@post('" url (drains-scope-query scope) "')")}
+             label)))
 
-(defn- trend-line [trend]
-  (when (seq trend) (str/join " → " trend)))
+(defn- escalation-href
+  "Where escalation `e` of drain `d` is answered: the page of the workstream that raised it."
+  [{:keys [project ws-id]} e]
+  (ws-page-href project (or (:slice e) ws-id)))
 
-(defn- slice-row [d scope {:keys [ws-id state sites misfits]}]
-  [:tr
-   [:td.mono ws-id]
-   [:td (str/join ", " sites)]
-   [:td (name state) (when (pos? misfits) [:span.meta (str " · " misfits " open misfit" (when (> misfits 1) "s"))])]
-   [:td (when (#{:started :cleared} state)
-          (drain-button (if (= :cleared state) "Land" "Land (override)")
-                        (str (drain-base d) "/land/" ws-id) scope))]])
+(defn- lead-act
+  "The one act drain `d` owes the person, highest first: Answer its first open escalation (in the
+   order the value lists them — the drain's own, then each slice's), Approve its oldest pending
+   proposal, Land its oldest-started cleared slice, Close it once its census reads zero. Nil when
+   it owes the person none. Answers {:act :label ...} with what the act needs."
+  [{:keys [phase escalations proposals slices]}]
+  (let [cleared (first (sort-by :started-at (filter #(= :cleared (:state %)) slices)))]
+    (cond
+      (seq escalations)    {:act :answer :escalation (first escalations)}
+      (seq proposals)      {:act :approve :proposal (first (sort-by :seq proposals))}
+      cleared              {:act :land :slice cleared}
+      (= :exhausted phase) {:act :close})))
 
-(defn- drain-card [scope {:keys [ws-id project charter phase version census trend proposals plans
-                                 slices by-state misfits residue escalations] :as d}]
-  [:div.drain-card {:id (str "drain-" ws-id)}
-   [:div.ops-head
-    [:strong (:exit charter)]
-    [:span.meta (str project " · " ws-id)]]
-   [:p (get drain-phase-label phase (name phase))
-    [:span.meta (str " · recipe " (if version (str "v" version) "none")
-                     (when census (str " · census " (:remaining census) " remaining"))
-                     (when (> (count trend) 1) (str " (" (trend-line trend) ")")))]]
-   (when (seq escalations)
-     [:div [:strong "Escalated to you"]
-      [:ul (for [e escalations] [:li (when (:slice e) [:span.mono (str (:slice e) ": ")])
-                                 (or (:summary e) (:question e))
-                                 " " [:a {:href (ws-page-href project (or (:slice e) ws-id))}
-                                      "answer"]])]])
-   (for [p proposals]
-     [:div.meta.drain-line
-      (str "Recipe proposal #" (:seq p) ": " (:reason p) " ")
-      (drain-button "Approve" (str (drain-base d) "/approve/" (:seq p)) scope)])
-   (when (= :exhausted phase)
-     [:div.drain-line (drain-button "Close the drain" (str (drain-base d) "/close") scope)])
-   [:p.meta (str (count slices) " slices"
-                 (when (seq by-state)
-                   (str " — " (str/join ", " (for [[st n] (sort-by key by-state)] (str n " " (name st))))))
-                 (when (seq plans) (str " · " (count plans) " planned"))
-                 (when (seq misfits) (str " · " (count misfits) " open misfits"))
-                 (when (seq residue) (str " · " (count residue) " residue items")))]
-   (when (seq slices)
-     [:table
-      [:thead [:tr [:th "slice"] [:th "sites"] [:th "state"] [:th ""]]]
-      [:tbody (for [s slices] (slice-row d scope s))]])])
+(defn- lead-button
+  "The card's one primary button, for `lead` as `lead-act` reads it."
+  [d scope {:keys [act escalation proposal slice]}]
+  (case act
+    :answer  (c/link-button {:emphasis :primary :href (escalation-href d escalation)} "Answer")
+    :approve (drain-button (str "Approve proposal #" (:seq proposal))
+                           (str (drain-base d) "/approve/" (:seq proposal)) scope :primary)
+    :land    (drain-button (str "Land " (:ws-id slice))
+                           (str (drain-base d) "/land/" (:ws-id slice)) scope :primary)
+    :close   (drain-button "Close the drain" (str (drain-base d) "/close") scope :primary)))
+
+(defn- drain-section [heading & content]
+  (into [:section.drain-section [:h3.drain-section-h heading]] content))
+
+(defn- established-by [{:keys [project]} {:keys [ws-id commit]}]
+  (cond
+    ws-id  (list "workstream " [:a.mono {:href (ws-page-href project ws-id)} ws-id])
+    commit (list "commit " [:span.mono commit])
+    :else  "nothing recorded"))
+
+;; ── a recipe, line by line, against the current one ────────────────────────
+
+(def ^:private recipe-field-order
+  "The fields of a recipe in the order a person reads them; any other field follows, by name."
+  [:steps :ready-gates :standing-orders :plan-template :counter])
+
+(def ^:private recipe-field-label
+  {:steps "steps" :ready-gates "ready gates" :standing-orders "standing orders"
+   :plan-template "plan template" :counter "census counter"})
+
+(defn- field-lines
+  "A recipe field's value as the physical lines it is read in: each list item, each text and each
+   map entry's `key: value` split at its own newlines, so a multiline step or command diffs line
+   by line rather than as one line."
+  [v]
+  (let [physical #(vec (mapcat str/split-lines %))]
+    (cond
+      (nil? v)        []
+      (sequential? v) (physical (map str v))
+      (map? v)        (physical (map (fn [[k x]] (str (name k) ": " x)) (sort-by key v)))
+      (string? v)     (str/split-lines v)
+      :else           [(pr-str v)])))
+
+(defn- line-diff
+  "The ordered line diff of `old` to `new`, as [mark line] pairs in reading order, mark :same,
+   :add or :del — the longest common subsequence held, every other line added or removed, so a
+   reorder reads as a removal and an addition rather than as no change."
+  [old new]
+  (let [a (vec old) b (vec new) n (count a) m (count b)
+        lcs (reduce (fn [t [i j]]
+                      (assoc-in t [i j] (if (= (a i) (b j))
+                                          (inc (get-in t [(inc i) (inc j)] 0))
+                                          (max (get-in t [(inc i) j] 0) (get-in t [i (inc j)] 0)))))
+                    {}
+                    (for [i (range (dec n) -1 -1) j (range (dec m) -1 -1)] [i j]))
+        at  #(get-in lcs [%1 %2] 0)]
+    (loop [i 0 j 0 out []]
+      (cond
+        (and (< i n) (< j m) (= (a i) (b j))) (recur (inc i) (inc j) (conj out [:same (a i)]))
+        (and (< j m) (or (= i n) (>= (at i (inc j)) (at (inc i) j)))) (recur i (inc j) (conj out [:add (b j)]))
+        (< i n) (recur (inc i) j (conj out [:del (a i)]))
+        :else out))))
+
+(defn- recipe-diff
+  "Every field of `proposed`, and any `current` holds that it drops, each as its ordered line
+   diff against the same field of `current` — every line added when there is no current recipe."
+  [current proposed]
+  (let [ks (distinct (concat (filter #(or (contains? proposed %) (contains? current %)) recipe-field-order)
+                             (sort (remove (set recipe-field-order) (concat (keys proposed) (keys current))))))]
+    (for [k ks]
+      [k (line-diff (field-lines (get current k)) (field-lines (get proposed k)))])))
+
+(def ^:private diff-mark
+  {:add ["rd-add" "+" "added"] :del ["rd-del" "−" "removed"] :same ["rd-same" " " "unchanged"]})
+
+(defn- recipe-diff-block [current proposed]
+  [:div.recipe-diff
+   (for [[k lines] (recipe-diff current proposed)]
+     [:div.rd-field
+      [:div.rd-field-h (get recipe-field-label k (name k))]
+      (if (empty? lines)
+        [:p.meta "empty in both"]
+        [:ol.rd-lines
+         (for [[mark line] lines
+               :let [[cls sign words] (diff-mark mark)]]
+           [:li {:class cls :title words} [:span.rd-sign sign] line])])])])
+
+;; ── the card's parts ───────────────────────────────────────────────────────
+
+(defn- escalations-section [d escalations]
+  (when (seq escalations)
+    (drain-section
+     "Escalations"
+     [:ul.drain-list
+      (for [e escalations]
+        [:li
+         (when (:slice e) [:span.mono (str (:slice e) ": ")])
+         (or (:summary e) (:question e))
+         (when (and (:summary e) (:question e) (not= (:summary e) (:question e)))
+           [:div.meta (:question e)])
+         [:div.drain-acts (c/link-button {:href (escalation-href d e)} "Answer")]])])))
+
+(defn- proposal-section [d scope current p]
+  (drain-section
+   (str "Recipe proposal #" (:seq p))
+   [:p (:reason p)]
+   [:p.meta (str "proposed " (ago (:at p)) " · " (:at p)
+                 (if current " · diffed against the current recipe" " · the drain has no recipe yet"))]
+   (recipe-diff-block current (:recipe p))
+   [:div.drain-acts (drain-button "Approve" (str (drain-base d) "/approve/" (:seq p)) scope)]))
+
+(defn- group-line [g]
+  (if (map? g)
+    (str/join " · " (for [[k v] g] (str (name k) " " (if (sequential? v) (str/join ", " v) v))))
+    (str g)))
+
+(defn- census-section [d scope lead {:keys [census trend phase]}]
+  (drain-section
+   "Census"
+   (if census
+     (list
+      [:p (str (:remaining census) " remaining")
+       [:span.meta (str " · taken " (ago (:at census)) " · " (:at census))]]
+      (when (> (count trend) 1)
+        [:div.drain-trend (c/sparkline {:values trend :label "census readings under the current recipe"})])
+      (if (seq (:groups census))
+        [:ul.drain-list (for [g (:groups census)] [:li (group-line g)])]
+        [:p.meta "no groups"]))
+     [:p.meta "no census under the current recipe yet"])
+   ;; Close keeps its own act here when a higher one leads the card.
+   (when (and (= :exhausted phase) (not= :close (:act lead)))
+     [:div.drain-acts (drain-button "Close the drain" (str (drain-base d) "/close") scope)])))
+
+(defn- slice-rows [d scope misfits-by-slice {:keys [ws-id state sites]}]
+  (let [mine (get misfits-by-slice ws-id)]
+    (cons
+     [:tr
+      [:td.mono [:a {:href (ws-page-href (:project d) ws-id)} ws-id]]
+      [:td (state/slice-state-tag state)]
+      [:td (str/join ", " sites)]
+      [:td (when (#{:started :cleared} state)
+             (drain-button (if (= :cleared state) "Land" "Land (override)")
+                           (str (drain-base d) "/land/" ws-id) scope))]]
+     (when (seq mine)
+       [[:tr.drain-misfits
+         [:td]
+         [:td {:colspan "3"}
+          [:div.meta (str (count mine) " open misfit" (when (> (count mine) 1) "s"))]
+          [:ul.drain-list (for [m mine] [:li [:span.mono (:site m)] " — " (:note m)])]]]]))))
+
+(defn- slices-section [d scope {:keys [slices misfits by-state]}]
+  (let [by-slice (group-by :slice misfits)
+        listed   (set (map :ws-id slices))
+        orphans  (remove #(listed (:slice %)) misfits)]
+    (drain-section
+     "Slices"
+     (if (seq slices)
+       (list
+        [:p.meta (interpose ", " (for [[st n] (sort-by key by-state)] (list (str n " ") (state/slice-state-tag st))))]
+        [:table
+         [:thead [:tr [:th "slice"] [:th "state"] [:th "sites"] [:th ""]]]
+         [:tbody (mapcat #(slice-rows d scope by-slice %) slices)]])
+       [:p.meta "no slice started yet"])
+     (when (seq orphans)
+       [:ul.drain-list (for [m orphans]
+                         [:li [:span.mono (str (:slice m) ": ")] [:span.mono (:site m)] " — " (:note m)])]))))
+
+(def ^:private plan-start-words
+  {:on-top "starts on top of their unlanded work" :after-landing "starts after they land"})
+
+(defn- plans-section [plans]
+  (when (seq plans)
+    (drain-section
+     "Open plans"
+     [:ul.drain-list
+      (for [{n :seq :keys [sites rests-on start state]} plans]
+        [:li [:span.mono (str "#" n)] " " (str/join ", " sites)
+         [:div.meta (str (if (seq rests-on)
+                           (str "rests on " (str/join ", " (map #(str "#" %) rests-on)) " · "
+                                (get plan-start-words start (some-> start name)))
+                           "rests on nothing")
+                         " · " (some-> state name))]])])))
+
+(defn- disposition-words [{:keys [to plan]}]
+  (case to
+    :follow-up (str "to a follow-up slice, plan #" plan)
+    :closing   "to the closing residue slice"
+    (if to (name to) "no disposition yet")))
+
+(defn- residue-section [residue]
+  (when (seq residue)
+    (drain-section
+     "Residue"
+     [:ul.drain-list
+      (for [{:keys [site disposition]} residue]
+        [:li [:span.mono site] " — " (if disposition (disposition-words disposition) "no disposition yet")])])))
+
+(defn- drain-card [scope {:keys [ws-id project charter phase version recipe proposals plans residue
+                                 escalations] :as d}]
+  (let [lead (lead-act d)]
+    [:div.drain-card {:id (str "drain-" ws-id)}
+     [:div.ops-head
+      [:strong (:exit charter)]
+      [:span.meta (str project " · " ws-id)]]
+     [:div.drain-lead
+      (state/drain-phase-tag phase)
+      (when lead (lead-button d scope lead))]
+     [:p.meta
+      "recipe " (if version (str "v" version) "none")
+      " · established by " (established-by d (:established-by charter))
+      (when (:at charter) (str " · chartered " (ago (:at charter)) " · " (:at charter)))]
+     (escalations-section d escalations)
+     (for [p (sort-by :seq proposals)] (proposal-section d scope recipe p))
+     (census-section d scope lead d)
+     (slices-section d scope d)
+     (plans-section plans)
+     (residue-section residue)]))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:? [:maybe :string]] [:? [:maybe :string]]] :string]}
   drains-fragment
@@ -3149,30 +3342,39 @@
 
 (defn- drain-start-form
   "The person's start of a drain: the project (fixed by the scope when it names one), the exit
-   criterion, and the workstream or landed commit that established the pattern. Posts to
-   /drains/start, which routes through lane-drain's start."
-  [{:keys [scope projects]}]
-  (let [scoped? (and scope (not= "all" scope))
-        input   (fn [sig placeholder]
-                  (c/text-input {"data-bind" sig :placeholder placeholder :aria-label placeholder}))]
-    [:div.drain-start
+   criterion, and what established the pattern — one choice between a workstream and a landed
+   commit, with the field for the chosen one. Posts to /drains/start, which routes through
+   lane-drain's start. Folded below the drains while any is open, open when none is."
+  [{:keys [scope projects]} open?]
+  (let [scoped? (and scope (not= "all" scope))]
+    [:details.drain-start (when open? {:open true})
+     [:summary "Start a drain"]
      (c/form-section
-      "Start a drain"
+      "What the drain rolls out"
       (if scoped?
         [:p.meta (str "in " scope)]
-        (c/select {"data-bind" "drain_project" :aria-label "Project"}
-                  (cons ["" "project…"] projects)))
-      (input "drain_exit" "exit criterion — what is true when the drain is done")
-      (input "drain_established_ws" "established by workstream (ws-id)")
-      (input "drain_established_commit" "or by landed commit (rev)")
+        (c/labelled "Project"
+                    (c/select {"data-bind" "drain_project"} (cons ["" "project…"] projects))))
+      (c/labelled "Exit criterion"
+                  (c/text-input {"data-bind" "drain_exit"
+                                 :placeholder "what is true when the drain is done"}))
+      (c/labelled "Established by"
+                  (c/select {"data-bind" "drain_source"}
+                            [["ws" "a workstream"] ["commit" "a landed commit"]]))
+      [:div {"data-show" "$drain_source !== 'commit'"}
+       (c/labelled "Workstream"
+                   (c/text-input {"data-bind" "drain_established_ws" :placeholder "ws-id"}))]
+      [:div {"data-show" "$drain_source === 'commit'"}
+       (c/labelled "Landed commit"
+                   (c/text-input {"data-bind" "drain_established_commit" :placeholder "rev"}))]
       [:div (c/button {"data-on:click" (str "@post('/drains/start" (drains-scope-query scope) "')")}
                       "Start the drain")])]))
 
 (defn ^{:malli/schema [:=> [:cat :map [:vector :map]] :any]}
   drains-page
-  "The Structure slice's drains view: every open drain of the focused project — its phase, recipe
-   version, newest census and its trend, its slices by state, and what it has escalated — with the
-   person's acts on it: start a drain, approve a recipe, land a slice, close the drain."
+  "The Structure slice's drains view: every open drain of the focused project, each leading with
+   its phase and the one act it owes the person, then its escalations, recipe proposals, census,
+   slices, plans and residue — with the start of a drain below them, folded while any is open."
   [ctx drains]
   (shell
    (assoc ctx :active :structure :title "Drains")
@@ -3181,5 +3383,5 @@
                                                        (drains-scope-query (:scope ctx))
                                                        "')")}
     [:h1 "Drains"]
-    (drain-start-form ctx)
-    (h/raw (drains-fragment drains nil (:scope ctx)))]))
+    (h/raw (drains-fragment drains nil (:scope ctx)))
+    (drain-start-form ctx (empty? drains))]))

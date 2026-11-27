@@ -132,6 +132,53 @@
     [:span.phase-chip {:title "phase of the design's plan"} (str "phase " current "/" of)]))
 
 ;; ---------------------------------------------------------------------------
+;; A drain's phase, and each of its slices' states
+
+(def ^:private drain-phase-word
+  "Each drain phase -> its words, the party that owes the next move, and what hovering it reads.
+   The person owes it where a recipe waits on their approval or a drain on their close; nido or
+   its coordinator otherwise; and a closed drain owes nothing."
+  {:chartered       ["chartered"        :working "the coordinator proposes a recipe"]
+   :recipe-proposed ["recipe to approve" :you    "a recipe proposal awaits your approval"]
+   :awaiting-census ["awaiting census"  :working "nido takes its first census under the recipe"]
+   :draining        ["draining"         :working "slices are under way"]
+   :exhausted       ["census at zero"   :you     "the census reads zero — yours to close"]
+   :closed          ["closed"           :ok      "the drain is closed"]})
+
+(def ^:private slice-state-word
+  "Each slice state -> its words, the party that owes the next move, and what hovering it reads."
+  {:started ["started" :working "the slice's session is building it"]
+   :cleared ["cleared" :you     "cleared by the coordinator — yours to land"]
+   :landing ["landing" :working "a landing is granted and under way"]
+   :landed  ["landed"  :ok      "landed"]})
+
+(def ^:private owed-tag-class
+  {:you "tag-you" :working "tag-working" :ok "tag-ok"})
+
+(defn- state-tag
+  "One of `table`'s states as a chip in the hue of the party that owes its next move; a state the
+   table does not word reads as its own name, muted."
+  [table state]
+  (let [[words owes title] (get table state [(name state) nil nil])]
+    [:span (cond-> {:class (str "chip " (get owed-tag-class owes "tag-muted"))}
+             title (assoc :title title))
+     words]))
+
+(defn ^{:malli/schema [:=> [:cat :keyword] :any]}
+  drain-phase-tag
+  "A drain's phase as a chip: in the person's hue while the move is theirs (a recipe to approve,
+   a drain to close), the working hue while nido or the coordinator has it, ok once closed."
+  [phase]
+  (state-tag drain-phase-word phase))
+
+(defn ^{:malli/schema [:=> [:cat :keyword] :any]}
+  slice-state-tag
+  "A drain slice's state as a chip: in the person's hue once it is cleared for them to land, the
+   working hue while it is built or landing, ok once landed."
+  [state]
+  (state-tag slice-state-word state))
+
+;; ---------------------------------------------------------------------------
 ;; Whether anything is happening in it
 
 (declare needs-mark needs-kind-mark)

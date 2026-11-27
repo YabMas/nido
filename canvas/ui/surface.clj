@@ -66,11 +66,12 @@
    that styles it. The kinds are the button (default, primary, danger), the quiet and icon-only
    button, the link drawn as a button, the selectable choice card, the sunken text input,
    textarea and select at one size, the labelled field, the form section with its heading, the
-   meter that shows a fraction (the fleet bar's fill), and the hidden and file inputs.
+   meter that shows a fraction (the fleet bar's fill), the sparkline that draws a series (a
+   drain's census trend), and the hidden and file inputs.
 
    Its interface is one public function per kind, returning that control's hiccup over the
    caller's own attributes (data-bind, data-on:*, placeholder, label, title) and a closed set of
-   emphases; and the rules for those classes, which reach the assembled stylesheet through
+   emphases — the sparkline, a series of non-negative numbers drawn as an SVG figure, among them; and the rules for those classes, which reach the assembled stylesheet through
    ui-stylesheet. It is the only writer of a button, input, textarea or select element in the
    dashboard's markup."
   (Operation button "A button in one of three emphases: default, primary, danger."
@@ -95,6 +96,10 @@
   (Operation form-section "A small form: its heading, then its fields and actions."
     {:signature [:=> [:catn [:heading :any] [:content [:* :any]]] :any]})
   (Operation meter "A fraction as a bar, carried by the element's own value."
+    {:signature [:=> [:catn [:attrs :map]] :any]})
+  (Operation sparkline
+    "A series of non-negative numbers as a line, oldest at the left: its points computed into the
+     SVG's own geometry, no style attribute, and the readings in its accessible name."
     {:signature [:=> [:catn [:attrs :map]] :any]})
   (Operation hidden-input "A value the page's script writes and a signal reads."
     {:signature [:=> [:catn [:attrs :map]] :any]})
@@ -136,7 +141,8 @@
   "A workstream's state as a reader sees it: the words each facet is said in, and the mark that
    says it.
 
-   HIDES how a state is worded and how it is marked — which word a position reads as, which
+   HIDES how a state is worded and how it is marked — a drain's phase and a slice's state among
+   them — which word a position reads as, which
    glyph and which semantic colour mark it, the kind the person is needed in among them, and
    when a mark is lit rather than muted. One table
    per facet, so a second wording cannot exist. What it publishes is the marks, and the words
@@ -174,6 +180,15 @@
     {:signature [:=> [:catn [:trail [:maybe :map]]] [:maybe :string]]})
   (Operation phase-chip "Which landing of a phased plan a row is in, or nothing."
     {:signature [:=> [:catn [:phase [:maybe :map]]] :any]})
+  (Operation drain-phase-tag
+    "A drain's phase as a chip in the hue of the party owing its next move: the person's where a
+     recipe waits on their approval or the drain on their close, the working hue while nido or the
+     coordinator has it, ok once closed."
+    {:signature [:=> [:catn [:phase :keyword]] :any]})
+  (Operation slice-state-tag
+    "A drain slice's state as a chip: the person's hue once it is cleared for them to land, the
+     working hue while it is built or landing, ok once landed."
+    {:signature [:=> [:catn [:state :keyword]] :any]})
   (Operation status-heading "The status section's heading: the position label, which nothing replaces
     — what runs, a merge's words included, is the state mark's beside it — and that the person is
     needed, in the category's words, while the workstream's activity needs them."
@@ -408,13 +423,16 @@
   (Operation not-found-page "The 404."
     {:signature [:=> [:catn] :any] :delegates [shell]})
   (Operation drains-fragment
-    "The drains list — each open drain with its slices beneath it, and what an act was refused for;
-     every act it renders posts under the scope the page was requested from."
+    "The drains list — each open drain leading with its phase and the one act it owes the person,
+     then its escalations, its recipe proposals each diffed against the current recipe, its census
+     and trend, its slices with their misfits, its open plans and its residue — and what an act
+     was refused for; every act it renders posts under the scope the page was requested from.
+     Nothing in it is folded, since the poll re-renders it whole."
     {:signature [:=> [:catn [:drains [:vector :map]] [:notice [:? [:maybe :string]]]
                  [:scope [:? [:maybe :string]]]] :string]})
   (Operation drains-page
-    "Every open drain, with the person's acts on it: start a drain, approve a recipe, land a slice,
-     close the drain."
+    "Every open drain, with the person's acts on it: approve a recipe, land a slice, close the
+     drain — and, below the drains and folded while any is open, the start of a drain."
     {:signature [:=> [:catn [:ctx :map] [:drains [:vector :map]]] :any]
      :delegates [shell drains-fragment]}))
 

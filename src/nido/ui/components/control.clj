@@ -6,7 +6,7 @@
    that styles it. The kinds are the button (default, primary, danger), the quiet button and its
    icon-only form, the link drawn as a button, the selectable choice card, the sunken text input,
    textarea and select at one size, the labelled field, the form section with its heading, the
-   meter that shows a fraction, and the hidden and file inputs.
+   meter that shows a fraction, the sparkline that draws a series, and the hidden and file inputs.
 
    This is the only namespace that writes a button, input, textarea, select or meter element in
    the dashboard's markup; pages and blocks call these functions and own only the layout of the
@@ -147,6 +147,52 @@
     [:meter (merge (with-class (dissoc attrs :value :over?) (str "meter" (when over? " over")))
                    {:min "0" :max "1" :value (format "%.3f" v)})]))
 
+(def ^:private sparkline-w 120)
+(def ^:private sparkline-h 24)
+(def ^:private sparkline-pad 2)
+
+(defn- sparkline-points
+  "Each of `values` as an x,y pair across the sparkline's box: evenly spaced left to right, the
+   largest at the top and the smallest at the bottom, a flat series along the middle."
+  [values]
+  (let [n    (count values)
+        lo   (apply min values)
+        hi   (apply max values)
+        span (- hi lo)
+        inner (- sparkline-h (* 2 sparkline-pad))]
+    (map-indexed
+     (fn [i v]
+       [(if (= 1 n)
+          (/ sparkline-w 2.0)
+          (+ sparkline-pad (* i (/ (double (- sparkline-w (* 2 sparkline-pad))) (dec n)))))
+        (if (zero? span)
+          (/ sparkline-h 2.0)
+          (+ sparkline-pad (* inner (- 1.0 (/ (double (- v lo)) span)))))])
+     values)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  sparkline
+  "A series of non-negative numbers as a line, oldest at the left: `:values` the readings, and
+   `:label` what they are, which with the readings is the figure's accessible name. The points
+   are computed into the SVG's own geometry, so the figure needs no style; its stroke is the
+   rule's. An empty series draws nothing."
+  [{:keys [values label] :as attrs}]
+  (let [vs (vec (map #(max 0 %) values))]
+    (when (seq vs)
+      (let [pts  (sparkline-points vs)
+            fmt  #(String/format java.util.Locale/ROOT "%.1f" (object-array [(double %)]))
+            [lx ly] (last pts)]
+        [:svg (merge (with-class (dissoc attrs :values :label) "sparkline")
+                     {:viewBox (str "0 0 " sparkline-w " " sparkline-h)
+                      :width (str sparkline-w) :height (str sparkline-h)
+                      :role "img"
+                      :aria-label (str (when-not (str/blank? (str label)) (str label ": "))
+                                       (str/join ", " vs))})
+         (when (> (count pts) 1)
+           [:polyline {:class "sparkline-line" :fill "none"
+                       :points (str/join " " (map (fn [[x y]] (str (fmt x) "," (fmt y))) pts))}])
+         [:circle {:class "sparkline-end" :cx (fmt lx) :cy (fmt ly) :r "2"}]]))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   hidden-input
   "A value the page's script writes and a bound signal reads: never shown."
@@ -212,4 +258,7 @@
         .meter.over::-webkit-meter-optimum-value, .meter.over::-webkit-meter-suboptimum-value,
         .meter.over::-webkit-meter-even-less-good-value { background:var(--warning); }
         .meter.over::-moz-meter-bar { background:var(--warning); }
+        .sparkline { display:inline-block; vertical-align:middle; overflow:visible; }
+        .sparkline-line { stroke:var(--working); stroke-width:1.5; stroke-linejoin:round; stroke-linecap:round; }
+        .sparkline-end { fill:var(--working); }
 ")

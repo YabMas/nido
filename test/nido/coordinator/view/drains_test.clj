@@ -34,6 +34,8 @@
         (let [prop (drain/propose-recipe! p d {:reason "first cut" :recipe a-recipe})]
           (is (= :recipe-proposed (:phase (view/drain p d))))
           (is (= [prop] (map :seq (:proposals (view/drain p d)))))
+          (is (= a-recipe (:recipe (first (:proposals (view/drain p d)))))
+              "a pending proposal carries the recipe it would install")
           (let [v  (drain/approve-recipe! p d prop)
                 _  (drain/record-census! p d {:recipe v :remaining 5 :groups []})
                 c  (drain/record-census! p d {:recipe v :remaining 4 :groups []})

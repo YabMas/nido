@@ -1,5 +1,6 @@
 (ns nido.coordinator.view.drains
-  "Each open drain as the /drains page shows it: its phase, recipe version and pending proposals,
+  "Each open drain as the /drains page shows it: its phase, recipe version and pending proposals —
+   each with the recipe it would install, so the page can show what approving it changes —
    its newest census and the trend of its readings, its plans and slices by state, and its open
    misfits and escalations. Pure read model over the drain's records — NO WRITES.
 
@@ -69,7 +70,7 @@
          :phase        (phase w)
          :version      version
          :recipe       (:recipe (drain/recipe w))
-         :proposals    (mapv #(select-keys % [:seq :reason :at]) (drain/pending-proposals w))
+         :proposals    (mapv #(select-keys % [:seq :reason :at :recipe]) (drain/pending-proposals w))
          :census       (some-> (drain/newest-census w) (select-keys [:seq :remaining :groups :at]))
          :trend        (mapv :remaining (filter #(= version (:recipe %)) (drain/censuses w)))
          :plans        (mapv #(select-keys % [:seq :sites :rests-on :start :state]) (drain/open-plans w))

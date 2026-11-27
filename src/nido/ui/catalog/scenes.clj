@@ -142,6 +142,19 @@
     :scenes [{:title "phased, and not"
               :render #(list (state/phase-chip {:current 2 :of 3}) " "
                              (or (state/phase-chip {}) [:span.scene-empty "unphased: nothing"]))}]}
+   {:name "drain-phase-tag"
+    :note "Where a drain stands on its recipe. The person's hue where the move is theirs — a recipe
+           to approve, a drain to close — the working hue while nido or the coordinator has it."
+    :scenes [{:title "every phase"
+              :note "Hover each: the title says who owes the move."
+              :render #(rail name [:chartered :recipe-proposed :awaiting-census :draining :exhausted
+                                   :closed :unknown]
+                             state/drain-phase-tag)}]}
+   {:name "slice-state-tag"
+    :note "Where one slice of a drain stands. Cleared is the person's to land, so it alone is in
+           the person's hue; landed is done."
+    :scenes [{:title "every state"
+              :render #(rail name [:started :cleared :landing :landed] state/slice-state-tag)}]}
    {:name "needs-mark"
     :note "The next move is a person's, in no kind in particular: the dot an aggregate — a
            project's drop-down entry — carries, and the mark of a category nothing names."
@@ -359,6 +372,12 @@
               :render #(rail first [["62%" 0.62 false] ["104%" 1.04 true]]
                              (fn [[l v o]] [:div {:class "scene-meter"}
                                             (c/meter {:value v :over? o :aria-label l})]))}]}
+   {:name "sparkline"
+    :note "A series of readings as a line, oldest at the left — a drain's census under its recipe.
+           The points are the SVG's own geometry, and the readings are its accessible name."
+    :scenes [{:title "falling, flat, and one reading"
+              :render #(rail first [["falling" [12 9 9 5 2]] ["flat" [4 4 4]] ["one" [3]]]
+                             (fn [[l vs]] (c/sparkline {:values vs :label l})))}]}
    {:name "hidden-input"
     :note "A value the page's script writes and a signal reads. It renders nothing visible."
     :scenes [{:title "hidden"

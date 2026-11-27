@@ -452,7 +452,30 @@
         .host-note { margin-top:var(--space-10); }
         .rq-levers { margin-bottom:var(--space-14); }
         .drain-card, .drain-start { margin:0 0 var(--space-28); }
-        .drain-line { margin:var(--space-6) 0; }
+        .drain-start > summary { cursor:pointer; color:var(--text-muted); font-size:var(--fs-xs);
+                                 text-transform:uppercase; letter-spacing:0.04em; margin-bottom:var(--space-8); }
+        .drain-lead { display:flex; gap:var(--space-10); align-items:center; flex-wrap:wrap; margin:0 0 var(--space-8); }
+        .drain-section { margin:var(--space-14) 0 0; }
+        .drain-section-h { margin:0 0 var(--space-6); color:var(--text-strong); font-size:var(--fs-xs); font-weight:normal;
+                           text-transform:uppercase; letter-spacing:0.04em; }
+        .drain-list { margin:var(--space-4) 0; padding-left:var(--space-16); }
+        .drain-list li { margin:var(--space-3) 0; }
+        .drain-acts { margin:var(--space-6) 0 0; }
+        .drain-trend { margin:var(--space-4) 0; }
+        .drain-misfits td { padding-top:0; }
+        .chip.tag-you { background:var(--needs-bg); color:var(--needs); }
+        .chip.tag-working { background:var(--working-bg); color:var(--working); }
+        .chip.tag-ok { background:var(--ok-bg); color:var(--ok); }
+        .chip.tag-muted { background:var(--neutral-bg); color:var(--neutral); }
+        .recipe-diff { margin:var(--space-6) 0; }
+        .rd-field { margin:var(--space-6) 0; }
+        .rd-field-h { color:var(--text-muted); font-size:var(--fs-xs); }
+        .rd-lines { list-style:none; margin:var(--space-2) 0; padding:0; font-family:var(--font-mono); font-size:var(--fs-xs); }
+        .rd-lines li { overflow-wrap:anywhere; padding:0 var(--space-4); border-radius:var(--radius-2); }
+        .rd-sign { display:inline-block; width:1.5em; color:var(--text-faint); }
+        .rd-add { background:var(--ok-bg); color:var(--ok); }
+        .rd-del { background:var(--failed-bg); color:var(--failed); text-decoration:line-through; }
+        .rd-same { color:var(--text-muted); }
         .ops-head { display:flex; gap:var(--space-14); align-items:baseline; margin-bottom:var(--space-14); flex-wrap:wrap; }
         /* One reading column. Not .gate-wrap's queue+pane grid: nothing opens
            beside a proposal, so its 38% column would leave the evidence — the

@@ -852,16 +852,19 @@
 
       ;; POST /drains/start — the person starts a drain: the exit criterion and what established
       ;; the pattern ride the JSON signal body; the project is the focused one, or the one the
-      ;; person picked when nothing is focused.
+      ;; person picked when nothing is focused. The pattern's source is the one the person chose
+      ;; — a workstream unless they chose a landed commit — and only that field is handed on, so
+      ;; a value left in the other field never rides along.
       ;; Every drains POST carries ?scope= and answers the list under that scope.
       (= ["drains" "start"] segs)
-      (let [scope (:scope (view-state/parse req))
-            b     (parse-json-body body)
+      (let [scope   (:scope (view-state/parse req))
+            b       (parse-json-body body)
+            commit? (= "commit" (:drain_source b))
             {:keys [refused]} (work/start-drain!
                                (or scope (not-empty (str (:drain_project b))))
                                {:exit                  (:drain_exit b)
-                                :established-by-ws     (:drain_established_ws b)
-                                :established-by-commit (:drain_established_commit b)})]
+                                :established-by-ws     (when-not commit? (:drain_established_ws b))
+                                :established-by-commit (when commit? (:drain_established_commit b))})]
         (sse-response (sse-fragment (views/drains-fragment (work/drains scope) refused scope))))
 
       ;; POST /drains/:project/:ws-id/:act[/:arg] — the person's acts on a drain: approve a
