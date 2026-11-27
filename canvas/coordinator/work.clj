@@ -276,17 +276,18 @@
     {:signature [:=> [:catn [:rows-fn [:? :any]] [:projects [:? :any]]] [:vector :map]]})
   (Operation session-recovery
     "Session recovery as the Operations page shows it. The door, not the derivation: it gathers
-     kept failures, the recovery workstreams of every project declaring a :session-failure trigger
-     with their entries, and that trigger's pacing, and hands them to the recovery read model."
+     kept failures, the recoveries of every project declaring a :session-failure trigger — its
+     recovery runs, archived recovery holders and recovery journal, as the recovery source reads
+     them — and that trigger's pacing, and hands them to the recovery read model."
     {:signature [:=> [:catn [:opts [:? [:maybe :map]]]] :map]})
   (Operation improvement-holds
-    "What holds each project's improvement sweep, and whether anyone is working on it. The
-     open :improvement workstreams are the hold itself — the sweep polls on nothing else — so
-     this reads them rather than the copy the poll writes to its state file, and pairs each with
-     what the core says of it: a hold the core runs no turn on and asks nothing about is one
-     nothing will ever release."
+    "What holds each project's improvement sweep: one hold per improvement attempt run not yet
+     over, always working — a run's end is recorded whatever its agent did, so nothing is waited
+     on and nothing is stuck. Read from the core on every call, rather than the copy the sweep's
+     poll writes to its state file, and only for projects whose triggers declare an
+     :improvement-sweep source."
     {:signature [:=> [:catn] [:vector :map]]
-     :delegates [triggers/load-for-project workstream/project-records]})
+     :delegates [triggers/load-for-project]})
   (Operation review-queues
     "The latest review-queue grooming of every project whose triggers declare the plan trigger —
      its stage, its plan's tickets in rank order each with its proposed writes, and what was

@@ -283,43 +283,27 @@
 
 ;; ── what holds the sweep ────────────────────────────────────────────────────
 
-(def ^:private stuck
-  {:project "nido" :ws-id "ws-20260911-b365db" :address "ws-p/1#8"
-   :title "improve: stop re-reading a layer" :state :stuck
-   :started-at "2026-09-11T09:07:51Z" :ended-at "2026-09-11T09:47:21Z"})
+(def ^:private hold
+  {:project "nido" :ws-id "improve-1a2b3c4d" :address "ws-p/1#8"
+   :title "improve: stop re-reading a layer" :state :working
+   :started-at "2026-09-11T09:07:51Z"})
 
-(deftest a-stuck-sweep-is-said-on-the-page
+(deftest a-hold-is-one-line-on-the-page
   (with-one-proposal
     (fn [_id]
-      (with-redefs [work/improvement-holds (constantly [stuck])]
+      (with-redefs [work/improvement-holds (constantly [hold])]
         (doseq [body [(board) (page "/operations/improvements")]]
           (is (str/includes? body "id=\"sweep\"") "patched under its own id, on the page and the poll")
-          (is (str/includes? body "sweep stuck"))
-          (is (str/includes? body "ws-20260911-b365db") "naming what holds it")
-          (is (str/includes? body "nothing is planned or implemented until it is closed"))
-          (is (str/includes? body "its last session ended") "and since when")
-          (is (str/includes? body "the clean path forgets") "with the backlog still beneath it"))))))
-
-(deftest a-sweep-someone-is-working-on-is-not-called-stuck
-  (with-one-proposal
-    (fn [_id]
-      (with-redefs [work/improvement-holds (constantly [(assoc stuck :state :working :ended-at nil)
-                                                        (assoc stuck :ws-id "ws-g" :state :waiting-on-you
-                                                               :ended-at nil)])]
-        (let [body (board)]
-          (is (not (str/includes? body "sweep stuck")))
-          (is (str/includes? body "Sweep working on run ws-20260911-b365db"))
-          (is (not (str/includes? body "/workstreams/nido/ws-20260911-b365db"))
+          (is (str/includes? body "Sweep working on run improve-1a2b3c4d — improve: stop re-reading a layer"))
+          (is (not (str/includes? body "/workstreams/nido/improve-1a2b3c4d"))
               "a run has no workstream page to link to")
-          (is (str/includes? body "sweep waiting on you"))
-          (is (str/includes? body "/workstreams/nido/ws-g") "pointing at the gate"))))))
+          (is (str/includes? body "the clean path forgets") "with the backlog still beneath it"))))))
 
 (deftest a-free-sweep-shows-nothing
   (with-one-proposal
     (fn [_id]
       (with-redefs [work/improvement-holds (constantly [])]
         (let [body (board)]
-          (is (not (str/includes? body "sweep stuck")))
           (is (not (str/includes? body "Sweep working on"))))))))
 
 (deftest an-unreadable-hold-says-so-and-keeps-the-backlog

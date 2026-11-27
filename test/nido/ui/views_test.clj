@@ -2162,11 +2162,6 @@
     (is (str/includes? page (str "/workstreams?scope=brian&amp;sel=" (:project sample-ws) ":" (:ws-id sample-ws)))
         "a way back to the board, with this workstream selected")))
 
-(deftest links-naming-one-workstream-go-to-its-page
-  (let [holds (views/sweep-fragment [{:project "nido" :ws-id "ws-h" :title "t" :state :stuck}])]
-    (is (str/includes? holds "href=\"/workstreams/nido/ws-h\""))
-    (is (not (str/includes? holds "sel=")))))
-
 ;; ── The sidebar's rail: collapsed until the person opens it, the choice kept in the browser ──
 
 (def ^:private chrome-ctx

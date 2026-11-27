@@ -2359,33 +2359,11 @@
                (when (:next feed) [:a {:href (feed-href (:next feed))} "older →"])]]))))]))))
 
 (defn- hold-row
-  [{:keys [project ws-id title state started-at ended-at]}]
-  (let [ws-link [:a {:href (ws-page-href project ws-id)} ws-id]]
-    (case state
-      :stuck
-      [:div.prop
-       [:div.prop-head
-        [:span.prop-verdict.sweep-stuck "sweep stuck"]
-        [:span.prop-where title]]
-       [:p.prop-sum "No session is working on " ws-link
-        (if ended-at
-          (str " — its last session ended " (ago ended-at) ".")
-          " — no session was ever started for it.")
-        " It holds the improvement sweep, so nothing is planned or implemented until it is closed."]
-       [:p.prop-fix "Close it to release the sweep: "
-        [:code (str "bb nido:workstream:close :project " project " :ws-id " ws-id " :outcome dropped")]
-        " — or " [:code ":outcome vetoed"] " to return the proposals it covered to the backlog."]]
-      :waiting-on-you
-      [:div.prop
-       [:div.prop-head
-        [:span.prop-verdict.prop-waiting "sweep waiting on you"]
-        [:span.prop-where title]]
-       [:p.prop-sum ws-link " is parked at a gate, and the sweep waits until it is answered. "
-        [:a {:href (ws-page-href project ws-id)} "open the gate"]]]
-      ;; a working hold is a run, which has no workstream page to link to
-      :working
-      [:p.meta "Sweep working on run " ws-id " — " title
-       (when started-at (str " · started " (ago started-at)))])))
+  "One improvement hold as one line: the attempt run working on it, which has no workstream page
+   to link to. A hold is a run not yet over, so it is always working (`work/improvement-holds`)."
+  [{:keys [ws-id title started-at]}]
+  [:p.meta "Sweep working on run " ws-id " — " title
+   (when started-at (str " · started " (ago started-at)))])
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]]] :string]}
   sweep-fragment

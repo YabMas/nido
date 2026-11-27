@@ -10,7 +10,7 @@
             [canvas.ui.surface :refer [ui-server ui-views]]))
 
 (Claim overview-derived-on-read
-  "work/session-recovery reads kept failures, recovery workstreams with their entries, recovery Runs and sessions on each call and derives the whole overview from them through view-recoveries, which reads nothing itself and stores nothing."
+  "work/session-recovery reads kept failures and the recovery source's readings of its recoveries — recovery runs, archived recovery holders and the recovery journal — on each call and derives the whole overview from them through view-recoveries, which reads nothing itself and stores nothing."
   {:about [view-recoveries coordinator-work] :evidence "round"})
 
 (Claim overview-uses-the-sources-decisions
@@ -28,3 +28,11 @@
 (Claim feed-page-kept-across-polls
   "The Operations page shows the feed page at the position its URL names, the newest when it names none, and links to the next older page when the view names one and to the newest when it is not on it; its five-second poll requests that same position, so a person reading an older page is not returned to the newest."
   {:about [ui-server ui-views] :evidence "round"})
+
+(Claim one-row-one-state
+  "Each cause with an owed failure or a recovery run not yet over is one row with exactly one state — needs-you when its latest recovery run stopped for a person, else recovering when one is queued or running, else waiting when its next due time is after now, else owed — and a cause with neither is a row only when its latest recovery ended within the last seven days, restored when it ended :done and dismissed otherwise."
+  {:about [view-recoveries] :evidence "round"})
+
+(Claim due-at-answers-when
+  "due-at answers when a cause may next be recovered from its recovery runs, oldest first: after k runs in a row at the end that left it owed, the last one's end plus the poll interval doubled k-1 times, capped at the ceiling; nil when the latest did not leave it owed. due? holds exactly when due-at is nil or not after the given time."
+  {:about [source-start-failures] :evidence "round"})

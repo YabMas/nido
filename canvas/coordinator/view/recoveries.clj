@@ -31,7 +31,7 @@
      what the latest error was; it counts the rest from their ids."
     {:signature [:=> [:catn [:ids [:sequential :string]]] [:vector :string]]})
   (Operation shown?
-    "Whether a recovery workstream is shown now: open, or closed within the window."
+    "Whether a recovery is shown now: not yet over, or ended within the window."
     {:signature [:=> [:catn [:r :map] [:now :any]] :boolean]})
   (Operation feed-page
     "The page of every recovery fact that follows a feed position — the newest when there is none

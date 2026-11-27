@@ -16,10 +16,11 @@
 
    An arrival rather than a direct fire from where the start failed, because the session substrate
    cannot reach the queue and because one cause failing five sessions is one thing to recover, not
-   five. A recovery is one run of the recovery trigger, its records what that run did; recoveries
-   from before runs are workstreams, read and never written. Owed is DERIVED on every poll: a
+   five. A recovery is one run of the recovery trigger, its records what that run did; a recovery
+   from before runs is read as one from its archived holder. Owed is DERIVED on every poll: a
    failure stops being owed when a recovery run records it restored or withdrawn, or when a
-   recovery workstream closed having named it. Nothing else marks a failure as handled, so a
+   recovery that named it closed — a person's dismissal of the run in the project's recovery
+   journal, or an archived recovery's own close. Nothing else marks a failure as handled, so a
    recovery that dies or gives up leaves its failures owed and the cause is fired again.
 
    PACED PER CAUSE, not braked per trigger. A breaker counts a trigger, so one cause whose recovery
@@ -39,8 +40,7 @@
      at the end of the list."
     {:signature [:=> [:catn [:runs [:vector :map]]] :int]})
   (Operation pacing-runs
-    "The runs that pace a cause, oldest first: every recovery run of it, and those on an open
-     recovery workstream from before runs."
+    "The runs that pace a cause, oldest first: every recovery run of it."
     {:signature [:=> [:catn [:recoveries [:vector :map]] [:cause :string]] [:vector :map]]})
   (Operation due-at
     "When a cause may next be recovered — nil when it may be at any time. After k consecutive
@@ -48,9 +48,9 @@
     {:signature [:=> [:catn [:runs [:vector :map]] [:pacing :map]] :any]
      :delegates [failed-in-a-row]})
   (Operation recoveries
-    "Every recovery of a project as data — the workstreams from before runs, then one per recovery
-     run: its cause, whether it closed, the failures named on it and those it settled, its runs,
-     its sessions, and a run's records by kind."
+    "Every recovery of a project as data, oldest first — one per recovery run, a recovery from
+     before runs read from its archived holder: its cause, whether and when it ended, the failures
+     named on it and those it settled, its runs, and its records by kind."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]})
   (Operation owed
     "The failures still owed a recovery: not settled, and not the start of a recovery Run from
@@ -58,7 +58,7 @@
     {:signature [:=> [:catn [:failures [:vector :map]] [:recoveries [:vector :map]]] [:vector :map]]})
   (Operation discharged-ids
     "The ids of every failure settled — recorded restored or withdrawn by a recovery run, or named
-     by a recovery workstream that closed — known without opening a record."
+     by a recovery that closed — known without opening a record."
     {:signature [:=> [:catn [:recoveries [:vector :map]]] [:set :string]]})
   (Operation undischarged-failures
     "Every kept failure not settled, read from disk; settled records stay unopened."
@@ -68,8 +68,7 @@
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [recoveries undischarged-failures owed]})
   (Operation in-flight?
-    "Whether a recovery of a cause is in flight: a recovery run of it starting or running, or one
-     from before runs parked on a workstream still open."
+    "Whether a recovery of a cause is in flight: a recovery run of it starting or running."
     {:signature [:=> [:catn [:recoveries [:vector :map]] [:cause :string]] :boolean]})
   (Operation due?
     "Whether a cause may be recovered now, given the runs that pace it: always when the latest did
