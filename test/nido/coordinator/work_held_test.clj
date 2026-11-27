@@ -14,7 +14,8 @@
    [nido.coordinator.work.core :as wcore]
    [nido.platform.core :as core]
    [nido.platform.project :as project]
-   [nido.test.fake-core :as fake-core]))
+   [nido.test.fake-core :as fake-core]
+   [nido.test.sessions :as sessions]))
 
 (defn- with-store
   "Run `f` against an empty store holding project :p, with `live` the session names the
@@ -358,7 +359,7 @@
           (work/hold! {:sweep? false})
           (work/grouped :p)
           (is (empty? (work/gates :p)) "nothing is asked yet")
-          (doseq [c fake-core/asking]
+          (doseq [c (sessions/expand fake-core/asking)]
             (is (wcore/admitted? (wcore/act! :p a c)) (str "the core admits " (:command c))))
           ;; The feed delivers the commit before it calls the refresh; this process reads the
           ;; in-process core instead, through a two-second cache the feed would have bypassed.

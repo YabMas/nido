@@ -2537,6 +2537,38 @@
         (let [u (owed-revivals)] (swap! model #(when % (assoc % :casualties u))) u))
     (owed-revivals)))
 
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  refused-sessions
+  "Every unit session whose destroy session-lifecycle refused, because its working copy is not the
+   session's own to remove, on any workstream or run of any project — closed and discarded ones
+   above all, which no other read shows: [{:project :ws :run? :unit :path :detail :closed? :discarded?}],
+   by project and workstream. A refusal is terminal, so one is listed for as long as it reads
+   refused; a run's lists its run id as :ws and carries :run? true. Read off the core's own
+   records, never the project registry, so a project removed from it keeps its refusals listed:
+   the core's keys name every project it holds a workstream or run of, and each project's
+   summaries and runs are read from there; a read that fails throws, so a surface says it could
+   not read rather than that nothing was refused."
+  []
+  (vec (for [pname (->> (core-client/value! (core-client/workstreams) :workstreams)
+                        (keep #(let [k (str/replace-first % #"^run:" "")
+                                     i (str/index-of k "/")]
+                                 (when (and (core-client/workstream-key? k) i (pos? i)) (subs k 0 i))))
+                        distinct sort)
+             [ws run? sm] (concat
+                           (for [[k sm] (sort-by key (core-client/value! (core-client/summaries pname) :summaries))]
+                             [(or (second (core-client/split-key k)) k) false sm])
+                           (for [[id sm] (sort-by key (core-client/value! (core-client/runs pname) :runs))]
+                             [id true sm]))
+             {:keys [unit cwd detail]} (:refused-sessions sm)]
+         {:project    (name pname)
+          :ws         ws
+          :run?       run?
+          :unit       unit
+          :path       cwd
+          :detail     detail
+          :closed?    (boolean (:closed? sm))
+          :discarded? (boolean (:discarded? sm))})))
+
 (def ^:private canonical-default-target
   "Fallback when a project hasn't configured a default for the action."
   {:promote :in-progress :new :in-progress})

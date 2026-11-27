@@ -25,7 +25,12 @@
    inside a worktree needs no arguments at all.
 
    Down PRESERVES the worktree and the state directory; destroy is the one that does not. Two
-   verbs rather than a flag, because the destructive one should have to be named."
+   verbs rather than a flag, because the destructive one should have to be named.
+
+   It also hides which directories are a session's own to remove: only its worktree-path inside
+   the project's worktrees dir, never the project directory, anything above it, or a source
+   checkout. destroy! and the recreating up! refuse any other with {:reason :not-owned :path …},
+   before they stop or remove anything — the one place every removal path ends."
   {:child [BootHandoff]}
   (Operation resolve-project "The active project: explicit, then cwd, then registry."
     {:signature [:=> [:catn [:opts :map]] [:maybe ProjectName]]})
@@ -92,7 +97,7 @@
   (Operation share! "Move a session back onto the shared cluster."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [sstate/clear-pg-mode-override!]})
-  (Operation destroy! "Bring a session down and remove its worktree and state. The one that does not preserve — except the state of a process the stop could not show was gone, which is its only record, and a runtime other sessions are still on.
+  (Operation destroy! "Bring a session down and remove its worktree and state — REFUSING, before it stops anything, a worktree that is not the session's own (`:not-owned`). The one that does not preserve — except the state of a process the stop could not show was gone, which is its only record, and a runtime other sessions are still on.
      Drops the runtime's test database itself once no other session is on it: the service protocol has no destroy, and stop keeps it."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [tpg/drop-session-db!]})

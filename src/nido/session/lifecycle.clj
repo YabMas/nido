@@ -505,6 +505,53 @@
     "it may hold only ASCII letters, digits, `.`, `_`, `-` and `/`, starting with a letter or digit"
     (re-find #"\.\.|//|[/.]$" s)              "it may not contain `..` or `//`, or end in `/` or `.`"))
 
+(defn- unfollowed
+  "`p` absolute, every directory above it resolved through the filesystem and `p`'s own last
+   segment not: so a worktree that is itself a symlink is judged as the link, never as whatever
+   it points at. The parent is resolved BEFORE any `..` is collapsed, as the kernel does, so
+   `/wt/link/../s` is judged where removing it acts — beside `link`'s target, not at `/wt/s`. A
+   last segment of `.` or `..` names no link and is resolved with the rest."
+  [p]
+  (let [a    (fs/absolutize (fs/expand-home (str p)))
+        leaf (some-> (fs/file-name a) str)]
+    (if-let [parent (and (not (#{"." ".."} leaf)) (fs/parent a))]
+      (str (fs/path (canonical parent) leaf))
+      (canonical a))))
+
+(defn- not-owned-why
+  "Why the directory `wt-path` is not session `name`'s own to remove, or nil when it is. A
+   session owns exactly its worktree-path — the worktrees dir joined with its name — and only
+   while that lies strictly inside the worktrees dir, is neither the project directory nor above
+   it, and is no source checkout: a `.jj/repo` or `.git` DIRECTORY is a repository's own store,
+   where a workspace or worktree holds a file pointing at one."
+  [{:keys [name wt-path own-path worktrees-dir project-dir]}]
+  (let [path (unfollowed wt-path)
+        wtd  (canonical worktrees-dir)
+        pd   (some-> project-dir canonical)]
+    (cond
+      (not= path (unfollowed own-path))
+      (str "it is not session " name "'s own worktree " (unfollowed own-path))
+
+      (not (str/starts-with? path (str wtd "/")))
+      (str "it lies outside the project's worktrees dir " wtd)
+
+      (and pd (or (= path pd) (str/starts-with? pd (str path "/"))))
+      (str "it is the project directory " pd " or holds it")
+
+      (and (not (fs/sym-link? path))
+           (some #(fs/directory? (fs/path path %)) [".jj/repo" ".git"]))
+      "it holds a repository of its own (a .jj/repo or .git directory)")))
+
+(defn- refuse-not-owned!
+  "Throw {:reason :not-owned} when the worktree of the session in `ctx` is not its own to remove —
+   before the verb stops, detaches or removes anything."
+  [verb ctx]
+  (when-let [why (not-owned-why ctx)]
+    (throw (ex-info (str "Refusing to " (clojure.core/name verb) " session " (:name ctx) ": "
+                         (:wt-path ctx) " is not its own to remove — " why)
+                    {:reason :not-owned :path (str (:wt-path ctx)) :session (:name ctx)
+                     :verb verb :why why}))))
+
 (defn- refuse-unnameable!
   "Throw when `name`, or the bookmark it starts on, cannot name a session. A
    refusal: thrown before the start, so it is never kept as a start failure
@@ -524,7 +571,9 @@
    `:instance-id` is that runtime's; `:on` is the runtime it is on now, nil when it is down."
   [name opts]
   (let [[project-name {:keys [directory]}] (resolve-project opts)
-        wt-path (or (some-> (:path opts) str fs/expand-home str)
+        ;; Absolute, so the path the ownership guard judges is the one git and jj act on: run
+        ;; from the project directory, they would read a relative one against it instead.
+        wt-path (or (some-> (:path opts) str fs/expand-home fs/absolutize str)
                     (worktree-path project-name directory name))
         branch (or (:branch opts) name)
         base   (or (:base opts) "origin/main")
@@ -533,6 +582,8 @@
      :project-dir  directory
      :name name
      :wt-path wt-path
+     :own-path (worktree-path project-name directory name)
+     :worktrees-dir (worktrees-dir project-name directory)
      :branch branch
      :base base
      :runtime-key runtime-key
@@ -855,7 +906,8 @@
    place either way.
 
    Worktree creation routes by source-repo VCS: jj-colocated → `jj
-   workspace add`; plain git → `git worktree add`."
+   workspace add`; plain git → `git worktree add`. A poisoned jj worktree is recreated, which
+   removes it, so that is refused {:reason :not-owned} like destroy! for one not the session's own."
   [name opts]
   (let [{:keys [project-name project-dir branch base]} (with-context name opts)
         _       (refuse-unnameable! name branch)
@@ -867,7 +919,9 @@
        (let [existed?  (fs/exists? wt-path)
              poisoned? (and existed? (jj-worktree-poisoned? wt-path))]
          ;; A refusal, so before the start that keeps a failure: recreating removes the worktree.
-         (when poisoned? (engine/refuse-backing-worktree! :recreate name wt-path nil))
+         (when poisoned?
+           (refuse-not-owned! :recreate ctx)
+           (engine/refuse-backing-worktree! :recreate name wt-path nil))
          (keeping-failure
           :up name opts ctx existed?
           (fn []
@@ -1097,13 +1151,20 @@
    legacy detection applies: `.jj/` dir → `jj workspace forget`; a
    `.git` entry → `git worktree remove`. Mixed-vintage trees (a project
    that became jj-colocated after some sessions were already created with
-   `git worktree`) tear down on the same path they were created with."
+   `git worktree`) tear down on the same path they were created with.
+
+   Throws ex-info {:reason :not-owned :path …}, having touched nothing, when the worktree (`:path`
+   or the default) is not the session's own to remove: anything but its worktree-path strictly
+   inside the project's worktrees dir, the project directory or above it, or a source checkout."
   [name opts]
   (let [{:keys [project-dir project-name wt-path branch]} (with-context name opts)
         delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))]
     (with-lifecycle-locks
      name opts :destroy
      (fn [{:keys [on] :as ctx}]
+      ;; Before anything is stopped, detached or removed: a directory that is not this session's
+      ;; own worktree — a source checkout above all — is never the destroy's to touch.
+      (refuse-not-owned! :destroy ctx)
       (let [instance-id (or on (:instance-id ctx))
             profile     (engine/read-profile-for-session project-name name)]
          (try

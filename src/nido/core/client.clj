@@ -179,6 +179,12 @@
 
 ;; ── reads and commands ───────────────────────────────────────────────────────
 
+(defn ^{:malli/schema [:=> [:cat] ReadReply]} workstreams
+  "{:workstreams [key …]}: the key of every workstream, run and journal the core holds, whatever
+   project it names and whether or not that project is still registered — or `Unavailable`."
+  []
+  (request! {:op :workstreams}))
+
 (defn ^{:malli/schema [:=> [:cat :string] ReadReply]} state
   "Workstream `k`'s committed state as {:state st} — the state before any event when the core
    never heard of it — or `Unavailable`."

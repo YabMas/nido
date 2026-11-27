@@ -60,7 +60,8 @@
       (with-redefs [lock/locks-dir                      (constantly (fs/path tmp "locks"))
                     nido.session.lifecycle/resolve-project (constantly ["p" {}])
                     nido.session.lifecycle/with-context
-                    (fn [_ _] {:project-name "p" :instance-id "p--ws-1" :on "p--ws-1" :wt-path (str tmp)})
+                    (fn [_ _] {:project-name "p" :instance-id "p--ws-1" :on "p--ws-1" :wt-path (str tmp)
+                               :name "a" :own-path (str tmp) :worktrees-dir (str (fs/parent tmp))})
                     engine/sessions-backed-by           (fn [_ _] ["b"])
                     engine/stop-session!                (fn [& _] (swap! touched conj :stop))]
         (is (= :runtime-backed

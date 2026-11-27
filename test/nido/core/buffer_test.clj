@@ -3,7 +3,8 @@
             [clojure.string :as str]
             [nido.core.ask-tool :as ask-tool]
             [nido.core.buffer :as b]
-            [nido.core.domain :as d]))
+            [nido.core.domain :as d]
+            [nido.test.sessions :as sessions]))
 
 (def spec {:executor :fake :instructions "i"})
 (def opts {:spec-fn (fn [_ws turn _state items] {:executor :fake :instructions (str turn " hears " (count items))})
@@ -11,10 +12,12 @@
 
 (defn- state-after-from [s commands]
   (reduce (fn [s c]
-            (let [c (cond-> c (= :inbox (:hears c)) (assoc :hears (vec (keys (:inbox s)))))
-                  [s2 _ r] (d/step s c)]
-              (assert (nil? r) (pr-str r c))
-              s2))
+            (if (:session-cwd c)
+              (sessions/settle s [c])
+              (let [c (cond-> c (= :inbox (:hears c)) (assoc :hears (vec (keys (:inbox s)))))
+                    [s2 _ r] (d/step s c)]
+                (assert (nil? r) (pr-str r c))
+                s2)))
           s commands))
 
 (defn- state-after [commands] (state-after-from d/empty-state commands))

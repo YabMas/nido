@@ -4,7 +4,7 @@
    [charm.components.text-input :as text-input]
    [charm.message :as msg]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.coordinator.control]
    [nido.coordinator.work :as work]
@@ -26,6 +26,25 @@
 ;; ---------------------------------------------------------------------------
 ;; TUI up/add/destroy act on a person's own session, which is no workstream's
 ;; ---------------------------------------------------------------------------
+
+(deftest destroy-reports-a-surviving-worktree-and-removes-nothing-itself
+  ;; It used to delete-tree whatever worktree the listing still named, after destroy! returned —
+  ;; a second removal path no ownership check stood in front of.
+  (let [tmp (fs/create-temp-dir {:prefix "nido-tui-destroy-"})
+        wt  (str (fs/path tmp "wt"))]
+    (try
+      (fs/create-dirs wt)
+      (spit (str (fs/path wt "f")) "kept")
+      (with-redefs [lifecycle/destroy!      (fn [_ _] nil)
+                    lifecycle/list-all-data (constantly {:sessions [{:name "s" :worktree wt}]})]
+        (let [out (with-out-str (#'tui/destroy-session! "s" {:project "p"}))]
+          (is (str/includes? out wt) "the surviving worktree is reported")))
+      (is (= "kept" (slurp (str (fs/path wt "f")))) "and left in place")
+      (testing "nor after destroy! throws"
+        (with-redefs [lifecycle/destroy! (fn [_ _] (throw (ex-info "refused" {:reason :not-owned})))]
+          (is (thrown? clojure.lang.ExceptionInfo (#'tui/destroy-session! "s" {:project "p"}))))
+        (is (fs/exists? (fs/path wt "f"))))
+      (finally (fs/delete-tree tmp)))))
 
 (deftest add-and-up-bring-a-persons-own-session-up
   (doseq [verb [:add :up]]

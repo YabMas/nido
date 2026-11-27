@@ -7,8 +7,13 @@
    session into no conductor, seat or agent. The verb is idempotent, so an attempt a kill left
    unresolved is simply made again by the daemon that starts next.
 
-   What a unit's session is called: the last segment of the working directory it was recorded
-   ready at, else the unit's id — so a session the cut-over adopted keeps its own name.
+   What a unit's session is called: its unit's id, when it has no working directory yet or the
+   one it was recorded ready at ends in that id — so a slash-namespaced unit is destroyed under
+   the name whose worktree-path that is — else that directory's last segment, so a session the
+   cut-over adopted keeps its own name.
+
+   A destroy the verb refuses because the directory is not the session's own to remove is
+   recorded :refused, never :failed: the refusal is deterministic, so it is not attempted again.
 
    Asleep, nothing here runs: it acts only on the commits it is handed, one attempt at a time per
    unit, on a virtual thread each."
@@ -25,7 +30,9 @@
 (defn ^{:malli/schema [:=> [:cat :map] :string]} session-name
   "The session attempt `a` ({:unit :cwd}) works on."
   [{:keys [unit cwd]}]
-  (or (some-> cwd io/file .getName not-empty) unit))
+  (if (or (nil? cwd) (= cwd unit) (str/ends-with? cwd (str "/" unit)))
+    unit
+    (or (some-> cwd io/file .getName not-empty) unit)))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] [:sequential :string]]} verb-argv
   "The argv of the session verb for attempt `a` ({:unit :want :project :cwd :profile})."
@@ -55,11 +62,12 @@
   "The keyed command recording attempt `a`'s outcome, from the verb's run `r` ({:exit :out})."
   [{:keys [ws unit attempt want]} {:keys [exit out]}]
   (let [res (parse-result out)
-        ok? (and (= 0 exit) (not (:error res)))]
+        ok? (and (= 0 exit) (not (:error res)))
+        refused? (and (not ok?) (= :destroyed want) (= :not-owned (:refused res)))]
     {:key (str "provision/" ws "/" unit "/" attempt)
      :ws ws
      :command (cond-> {:command :record-provision-outcome :unit unit :attempt attempt
-                       :outcome (if ok? :done :failed)}
+                       :outcome (cond ok? :done refused? :refused :else :failed)}
                 (and ok? (= :up want)) (assoc :cwd (:cwd res))
                 (not ok?) (assoc :detail (str/trim (str (or (:error res)
                                                             (if exit (str "exit " exit) "timed out"))

@@ -8,7 +8,8 @@
             [nido.core.store :as store]
             [nido.core.turn :as turn]
             [nido.core.writer :as writer]
-            [nido.executor.claude :as claude])
+            [nido.executor.claude :as claude]
+            [nido.test.sessions :as sessions])
   (:import [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
 
@@ -29,7 +30,8 @@
           cmd! #(deref (writer/submit! w {:key (str "k" (swap! n inc)) :ws "ws" :command %}) 10000 nil)
           t #(get-in (store/state s "ws") [:turns "t"])]
       (try
-        (cmd! {:command :open-unit :unit "u" :project "p" :goal "name the project" :session-cwd (str work)})
+        (doseq [c (sessions/ready {:command :open-unit :unit "u" :project "p" :goal "name the project"} (str work))]
+          (cmd! c))
         (cmd! {:command :start-turn :turn "t" :unit "u"
                :spec {:executor :claude :model "sonnet" :cwd (str work) :deadline-ms 600000
                       :instructions (str "Use nido's ask tool (mcp__nido__ask) to ask whether this project "

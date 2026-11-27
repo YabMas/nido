@@ -4,7 +4,8 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [clojure.string :as str]
-            [nido.core.domain :as d]))
+            [nido.core.domain :as d]
+            [nido.test.sessions :as sessions]))
 
 (def ready {:question "Go?" :explored "tried A and B" :options [{:option "A" :consequence "x"}] :recommendation "A"})
 (def spec {:executor :fake :instructions "do the thing"})
@@ -24,7 +25,13 @@
               [s es refused] (d/step state c)]
               (is (nil? refused) (str "refused " (pr-str c) " -> " (pr-str refused)))
               [s (into events es)]))
-          [d/empty-state []] commands))
+          [d/empty-state []] (sessions/expand commands)))
+
+(defn- steps
+  "Apply `commands` to `state` in order, `sessions/expand`ed, asserting each is admitted; the state."
+  [state commands]
+  (reduce (fn [s c] (let [[s2 _ r] (d/step s c)] (is (nil? r) (pr-str c r)) s2))
+          state (sessions/expand commands)))
 
 (defn- refusal [state command] (:reason (nth (d/step state command) 2)))
 
@@ -216,8 +223,7 @@
         mturn (gen/elements turn-ids)
         ask   (gen/elements ask-ids)]
     (gen/one-of
-     [(gen/fmap (fn [u] {:command :open-unit :unit u :project u :goal "g" :session-cwd "/w"}) unit)
-      (gen/fmap (fn [[t u]] (cond-> {:command :start-turn :turn t :unit u :spec spec}
+     [(gen/fmap (fn [[t u]] (cond-> {:command :start-turn :turn t :unit u :spec spec}
                                (nil? u) (assoc :hears :whole-inbox)))
                 (gen/tuple mturn (gen/one-of [unit (gen/return nil)])))
       (gen/fmap (fn [[t o r u?]] (cond-> {:command :record-outcome :turn t :outcome o :call {:id (str "c-" t)}}
@@ -245,8 +251,9 @@
       (gen/fmap (fn [u] {:command :open-unit :unit u :project u :goal "g"}) unit)
       (gen/fmap (fn [[u w]] {:command :record-provision-attempt :unit u :attempt (str "p-" u) :want w})
                 (gen/tuple unit (gen/elements [:up :stopped :destroyed])))
-      (gen/fmap (fn [[u o]] {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome o :cwd "/w"})
-                (gen/tuple unit (gen/elements [:done :failed])))
+      (gen/fmap (fn [[u o]] (cond-> {:command :record-provision-outcome :unit u :attempt (str "p-" u) :outcome o}
+                                   (= :done o) (assoc :cwd "/w")))
+                (gen/tuple unit (gen/elements [:done :failed :refused])))
       (gen/fmap (fn [u] {:command :retry-provision :unit u}) unit)
       (gen/fmap (fn [g] {:command :give-grant :grant g :by "p"}) (gen/elements [:merge :intent]))
       (gen/fmap (fn [g] {:command :spend-grant :grant g}) (gen/elements [:merge :intent]))
@@ -291,10 +298,12 @@
   (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
                   {:command :start-turn :turn "t" :unit "u" :spec spec}
                   {:command :record-outcome :turn "t" :outcome :completed}])
-        [item] (keys (:inbox s))]
+        ;; Its session coming up with nothing to run put a :unit-ready before it.
+        item (some (fn [[id i]] (when (= :turn-ended (:kind i)) id)) (:inbox s))
+        all  (vec (keys (:inbox s)))]
     (is (= {:id item :kind :turn-ended :unit "u" :turn "t" :run 1 :outcome :completed} (get-in s [:inbox item])))
     (is (= :only-the-conductor-hears (refusal s {:command :start-turn :turn "x" :unit "u" :spec spec :hears [item]})))
-    (let [[s2] (d/step s {:command :start-turn :turn "k1" :unit nil :spec spec :hears [item]})]
+    (let [[s2] (d/step s {:command :start-turn :turn "k1" :unit nil :spec spec :hears all})]
       (is (empty? (:inbox s2)) "hearing takes the item out")
       (is (= :not-in-inbox (refusal (assoc-in s2 [:turns "k1" :status] :completed)
                                     {:command :start-turn :turn "k2" :unit nil :spec spec :hears [item]}))
@@ -314,7 +323,7 @@
                        {:command :release-unit :unit "u"}
                        {:command :record-merge :unit "u"}])]
         (is (= [[:turn-ended :cancelled] [:unit-released nil] [:unit-merged nil]]
-               (map (juxt :kind :outcome) (sort-by :id (vals (:inbox s2))))))))))
+               (map (juxt :kind :outcome) (remove #(= :unit-ready (:kind %)) (sort-by :id (vals (:inbox s2)))))))))))
 
 (deftest an-ask-halts-every-unit-it-concerns-in-its-own-commit
   (let [[s] (run [{:command :open-unit :unit "x" :project "p" :goal "g" :session-cwd "/w"}
@@ -330,7 +339,7 @@
     (testing "an ask naming no unit concerns every unit"
       (let [[s2] (d/step s {:command :raise-operator-ask :ask "a" :binds ["ty"] :concerns nil :content ready})]
         (is (= :cancelled (get-in s2 [:turns "tx" :status])))
-        (let [[s3] (d/step s2 {:command :open-unit :unit "z" :project "p" :goal "g" :session-cwd "/w"})]
+        (let [s3 (steps s2 [{:command :open-unit :unit "z" :project "p" :goal "g" :session-cwd "/w"}])]
           (is (= :unit-has-open-operator-ask (refusal s3 {:command :start-turn :turn "tz" :unit "z" :spec spec}))
               "a unit opened while it is open is held still too"))))))
 
@@ -372,7 +381,7 @@
         (is (nil? r))
         (is (= :destroyed (d/session-want s4 (get-in s4 [:units "u"]))))))
     (testing "nor is one with a turn running discarded"
-      (let [[s2] (d/step s {:command :open-unit :unit "u" :project "nido" :goal "g" :session-cwd "/w"})
+      (let [s2 (steps s [{:command :open-unit :unit "u" :project "nido" :goal "g" :session-cwd "/w"}])
             [s3 _ r] (d/step s2 {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "i"}})]
         (is (nil? r) "the turn starts")
         (is (= :work-in-flight (refusal s3 {:command :discard-workstream})))))))
@@ -453,15 +462,20 @@
       (is (empty? (:inbox (d/fold [{:event :unit-opened :unit "u" :project "p" :goal "g"}
                                    {:event :provision-attempted :unit "u" :attempt "a" :want :up}
                                    {:event :provision-recorded :unit "u" :attempt "a" :outcome :done :cwd "/w"}])))))
-    (testing "a unit given a session of its own never waits on provisioning"
-      (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}])]
-        (is (empty? (:inbox s)))))))
+    (testing "a unit is never given a session of its own: the core provisions every one (FU-803)"
+      (is (= :session-cwd-not-accepted
+             (refusal d/empty-state {:command :open-unit :unit "u" :project "p" :goal "g"
+                                     :session-cwd "/home/me/Code/nido"})))
+      (is (= {:status :ready :cwd "/w"}
+             (get-in (d/fold [{:event :unit-opened :unit "u" :project "p" :goal "g" :session-cwd "/w"}])
+                     [:units "u" :session]))
+          "a unit already folded from an adopted :session-cwd keeps it"))))
 
 (deftest what-the-core-is-doing-is-named-between-turns-too
-  (let [after   (fn [cmds] (reduce (fn [s c] (let [[s2 _ r] (d/step s c)]
+  (let [after   (fn [cmds] (reduce (fn [s c] (let [[s2 _ r] (d/step s (resolve-command s c))]
                                                 (when r (throw (ex-info "refused" {:c c :r r})))
                                                 s2))
-                                   d/empty-state cmds))
+                                   d/empty-state (sessions/expand cmds)))
         kind    #(:kind (d/activity (after %)))
         open    {:command :open-unit :unit "u" :project "p" :goal "g"}
         ready   {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/w"}
@@ -473,7 +487,11 @@
                  :content {:question "q?" :explored "x" :options ["y" "n"] :recommendation "y"}}]
     (is (nil? (d/activity d/empty-state)) "nothing opened: nothing doing")
     (is (= :starting (kind [open])) "a unit whose session is not up yet is starting")
-    (is (nil? (kind [ready])) "a ready unit with nothing to run is idle")
+    (is (= :deciding (kind [ready])) "a unit come up with nothing to run wakes the conductor")
+    (is (nil? (kind [ready {:command :start-turn :turn "c0" :unit nil :hears :whole-inbox
+                            :spec {:executor :fake :instructions "i"}}
+                     {:command :record-outcome :turn "c0" :run 1 :outcome :completed}]))
+        "once it has heard so, a ready unit with nothing to run is idle")
     (is (= {:kind :working :turn "t" :unit "u"} (d/activity (after [ready unit-t]))))
     (is (= :deciding (kind [ready unit-t asked])) "a unit's call waits on the conductor")
     (is (= :deciding (kind [ready cond-t])) "the conductor running")
@@ -648,3 +666,75 @@
   (let [cs [a-journal {:command :append-record :record {:kind :k} :after 0}]
         [s events] (reduce (fn [[st evs] c] (let [[st' e] (d/step st c)] [st' (into evs e)])) [d/empty-state []] cs)]
     (is (= s (d/fold events)))))
+
+;; ── a refused destroy ───────────────────────────────────────────────────────
+
+(defn- unit-ready-at
+  "Commands opening unit `u` and recording its session up at `cwd`."
+  [u cwd]
+  [{:command :open-unit :unit u :project "p" :goal "g"}
+   {:command :record-provision-attempt :unit u :attempt (str "up-" u) :want :up}
+   {:command :record-provision-outcome :unit u :attempt (str "up-" u) :outcome :done :cwd cwd}])
+
+(def ^:private refusal-detail
+  "Refusing to destroy session p: /src/p is not its own to remove — it is the project directory /src/p")
+
+(deftest a-refused-destroy-is-terminal-and-never-reads-destroyed
+  (doseq [[how ends] [[:closed [{:command :record-merge :unit "u"} {:command :close-workstream}]]
+                      [:discarded [{:command :retract-unit-goal :unit "u"} {:command :discard-workstream}]]]]
+    (testing (str "on a " (name how) " workstream")
+      (let [begin (cons {:command :create-workstream :identity id*} (unit-ready-at "u" "/src/p"))
+            [s0] (run (into (vec begin) ends))
+            _    (is (= [{:unit "u" :want :destroyed}] (d/sessions-owed s0)))
+            [s]  (run (into (into (vec begin) ends)
+                            [{:command :record-provision-attempt :unit "u" :attempt "d1" :want :destroyed}
+                             {:command :record-provision-outcome :unit "u" :attempt "d1" :outcome :refused
+                              :detail refusal-detail}]))
+            sess (get-in s [:units "u" :session])]
+        (is (= :refused (:status sess)) "never :destroyed, never :failed")
+        (is (= "/src/p" (:cwd sess)) "the path kept stays on the session")
+        (is (= refusal-detail (:detail sess)) "with the refusal's detail")
+        (is (empty? (d/sessions-owed s)) "and nothing is owed for it again")
+        (is (= :session-not-owed
+               (refusal s {:command :record-provision-attempt :unit "u" :attempt "d2" :want :destroyed}))
+            "so no second attempt is admitted")
+        (is (= :session-not-failed (refusal s {:command :retry-provision :unit "u"}))
+            "nor a retry")
+        (is (not-any? #(= :session-failed (:kind %)) (vals (:inbox s))) "a refusal is no failure")))))
+
+(deftest only-a-destroy-is-recorded-refused
+  (doseq [want [:up :stopped]]
+    (let [[s] (run (cond-> [{:command :open-unit :unit "u" :project "p" :goal "g"}]
+                     (= :stopped want) (into [{:command :record-provision-attempt :unit "u" :attempt "a" :want :up}
+                                              {:command :record-provision-outcome :unit "u" :attempt "a"
+                                               :outcome :done :cwd "/w"}
+                                              {:command :retract-unit-goal :unit "u"}])
+                     true (conj {:command :record-provision-attempt :unit "u" :attempt "b" :want want})))]
+      (is (= :refused-is-a-destroys
+             (refusal s {:command :record-provision-outcome :unit "u" :attempt "b" :outcome :refused
+                         :detail "x"}))
+          (str "refused for a " want " attempt"))
+      (is (nil? (refusal s {:command :record-provision-outcome :unit "u" :attempt "b" :outcome :failed
+                            :detail "x"}))
+          (str "a " want " attempt that met the refusal records it :failed")))))
+
+(deftest only-an-up-that-came-up-sets-the-sessions-cwd
+  (testing "a failed :up carrying a cwd is refused, and the unit keeps no cwd"
+    (let [[s] (run [{:command :open-unit :unit "u" :project "p" :goal "g"}
+                    {:command :record-provision-attempt :unit "u" :attempt "a" :want :up}])]
+      (is (= :cwd-only-from-an-up
+             (refusal s {:command :record-provision-outcome :unit "u" :attempt "a" :outcome :failed
+                         :cwd "/src/p" :detail "x"})))))
+  (testing "a refused destroy carrying a cwd is refused, so it cannot overwrite the kept path"
+    (let [[s] (run (into (vec (cons {:command :create-workstream :identity id*} (unit-ready-at "u" "/w/u")))
+                         [{:command :record-merge :unit "u"} {:command :close-workstream}
+                          {:command :record-provision-attempt :unit "u" :attempt "d1" :want :destroyed}]))]
+      (is (= :cwd-only-from-an-up
+             (refusal s {:command :record-provision-outcome :unit "u" :attempt "d1" :outcome :refused
+                         :cwd "/elsewhere" :detail "x"})))))
+  (testing "a ledger whose failed :up carried a cwd folds without it"
+    (let [s (d/fold [{:event :unit-opened :unit "u" :project "p" :goal "g"}
+                     {:event :provision-attempted :unit "u" :attempt "a" :want :up}
+                     {:event :provision-recorded :unit "u" :attempt "a" :outcome :failed :cwd "/src/p"
+                      :detail "x"}])]
+      (is (nil? (get-in s [:units "u" :session :cwd]))))))

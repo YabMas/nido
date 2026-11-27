@@ -83,7 +83,7 @@
     {:signature [:=> [:catn [:state :map] [:unit :map]] [:maybe :keyword]]})
   (Operation sessions-owed
     "Every unit whose session is not what it should be and has no attempt pending, with the want. A
-     failed bring-up is not owed again until it is retried."
+     failed bring-up is not owed again until it is retried; a refused destroy is never owed again."
     {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
   (Operation attempts-pending
     "Every provisioning attempt recorded and not yet resolved."
@@ -99,12 +99,16 @@
   (Operation latest-seq
     "The seq of the newest entry on a workstream's ledger; 0 when it holds none."
     {:signature [:=> [:catn [:state :map]] :int]})
+  (Operation refused-sessions
+    "Every unit whose session's destroy was refused, with the working copy kept and why — read
+     whatever the stream's standing, since a refusal is terminal."
+    {:signature [:=> [:catn [:state :map]] [:sequential :map]]})
   (Operation summary
     "What a reader of many workstreams needs of one, read off its state alone — project, title,
      refs, facets, birth, closure, ledger position, liveness and the asks awaiting the person, and
-     whether a person owes it a move now."
+     whether a person owes it a move now — and, only when there is one, its refused sessions."
     {:signature [:=> [:catn [:state :map]] :map]
-     :delegates [awaiting-person]})
+     :delegates [awaiting-person refused-sessions]})
   (Operation exhausted?
     "Whether a turn's ending detail says the host refused its run resources. Such a conductor run
      is no failure — it counts toward no stop ask — but defers the next wake."

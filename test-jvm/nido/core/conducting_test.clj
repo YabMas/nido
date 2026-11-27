@@ -11,7 +11,8 @@
             [nido.core.feed :as feed]
             [nido.core.store :as store]
             [nido.core.turn :as turn]
-            [nido.core.writer :as writer])
+            [nido.core.writer :as writer]
+            [nido.test.sessions :as sessions])
   (:import [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
 
@@ -63,6 +64,25 @@
       (body-fn {:s s :cmd! #(deref (writer/submit! w {:key (str "person-" (swap! n inc)) :ws "ws" :command %}) 10000 nil)})
       (finally (buffer/stop! b) (turn/stop! r) (api/close! srv) (writer/stop! w) (store/close s))))))
 
+(defn- up!
+  "Record unit `u`'s session up at `cwd` by resolving the attempt the buffer records for its owed
+   :up as soon as the unit opens, rather than racing it with one of its own."
+  [s cmd! u cwd]
+  (let [attempt (await-until #(get-in (store/state s "ws") [:units u :session :attempt :id]) 10000)]
+    (is attempt "the buffer recorded the attempt the unit's owed :up asks for")
+    (is (:events (cmd! {:command :record-provision-outcome :unit u :attempt attempt :outcome :done :cwd cwd}))
+        "the unit's session came up")))
+
+(defn- open-up!
+  "Open unit `u` with `first-turn-spec` as its first turn and record its session up: the core's
+   buffer then starts that turn, as `\"u first\"`. A unit is never opened over a working copy.
+   The buffer records the attempt the owed :up asks for as soon as the unit opens, so this
+   resolves that attempt rather than racing it with one of its own — the loser of that race is
+   refused, and nothing in this core makes the winner's."
+  [s cmd! u goal first-turn-spec]
+  (cmd! {:command :open-unit :unit u :project "p" :goal goal :first-turn {:spec first-turn-spec}})
+  (up! s cmd! u "/tmp"))
+
 (defn- d-awaiting [s] (filter #(= :open (:status %)) (vals (:operator-asks (store/state s "ws")))))
 
 (defn- conductor-turns [s] (filter #(nil? (:unit %)) (vals (get-in (store/state s "ws") [:turns]))))
@@ -74,13 +94,12 @@
                               (tool-line sock ws t "answer_call" {:turn (:turn i) :answer "use Postgres"}))
                             ["echo '{:outcome :completed}'"])))
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "pick a database" :session-cwd "/tmp"})
-     (cmd! {:command :start-turn :turn "t" :unit "u"
-            :spec {:executor :fake :instructions "echo '{:outcome :asked :call {:id \"c\" :question \"which db?\"}}'"
-                   :on-resume "echo \"{:outcome :completed :detail {:summary \\\"done\\\"}}\""}})
-     (is (await-until #(= :completed (get-in (store/state s "ws") [:turns "t" :status])) 30000)
+     (open-up! s cmd! "u" "pick a database"
+               {:executor :fake :instructions "echo '{:outcome :asked :call {:id \"c\" :question \"which db?\"}}'"
+                :on-resume "echo \"{:outcome :completed :detail {:summary \\\"done\\\"}}\""})
+     (is (await-until #(= :completed (get-in (store/state s "ws") [:turns "u first" :status])) 30000)
          "the unit turn asked, the conductor answered, the rules resumed it, and it finished")
-     (is (= {:answered "use Postgres"} (get-in (store/state s "ws") [:turns "t" :resolution])))
+     (is (= {:answered "use Postgres"} (get-in (store/state s "ws") [:turns "u first" :resolution])))
      (is (await-until #(and (empty? (:inbox (store/state s "ws")))
                             (every? (comp #{:completed} :status) (conductor-turns s))
                             (= 2 (count (conductor-turns s))))
@@ -93,8 +112,7 @@
    (fn [_sock _ws _t _state _items]
      "echo '{:outcome :asked :call {:id \"c\" :question \"open unit b?\" :explored \"x\" :options [\"yes\" \"no\"] :recommendation \"yes\"}}'")
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
-     (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
+     (open-up! s cmd! "u" "g" {:executor :fake :instructions "echo '{:outcome :completed}'"})
      (is (await-until #(seq (d-awaiting s)) 30000) "the rules raised the conductor's ask to the person")
      (let [[a] (d-awaiting s)]
        (is (= "open unit b?" (get-in a [:content :question])))
@@ -106,8 +124,7 @@
   (run-core
    (fn [& _] "echo 'not an outcome'")
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
-     (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
+     (open-up! s cmd! "u" "g" {:executor :fake :instructions "echo '{:outcome :completed}'"})
      (is (await-until #(= 3 (:conductor-failures (store/state s "ws"))) 30000))
      (Thread/sleep 1000)
      (is (= 3 (count (conductor-turns s))) "no fourth wake")
@@ -120,7 +137,8 @@
     (run-core
      (fn [& _] "echo 'no outcome, the host refused a thread' >&2")
      (fn [{:keys [s cmd!]}]
-       (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+       (cmd! {:command :open-unit :unit "u" :project "p" :goal "g"})
+       (up! s cmd! "u" "/tmp")
        (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
        (is (await-until #(= 1 (:conductor-exhaustions (store/state s "ws"))) 30000))
        (Thread/sleep 1500)
@@ -141,7 +159,8 @@
     (run-core
      (fn [& _] "exec 2>/dev/null; for i in 1 2 3 4 5 6; do sleep 1 & done; wait")
      (fn [{:keys [s cmd!]}]
-       (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/tmp"})
+       (cmd! {:command :open-unit :unit "u" :project "p" :goal "g"})
+       (up! s cmd! "u" "/tmp")
        (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "echo '{:outcome :completed}'"}})
        (is (await-until #(= 1 (:conductor-exhaustions (store/state s "ws"))) 30000))
        (let [st (store/state s "ws")
@@ -158,7 +177,8 @@
   (run-core
    (fn [& _] "echo '{:outcome :completed}'")
    (fn [{:keys [s cmd!]}]
-     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g" :session-cwd "/nonexistent/nido-test"})
+     (cmd! {:command :open-unit :unit "u" :project "p" :goal "g"})
+     (up! s cmd! "u" "/nonexistent/nido-test")
      (cmd! {:command :start-turn :turn "t" :unit "u" :spec {:executor :fake :instructions "true"}})
      (is (await-until #(= :failed (get-in (store/state s "ws") [:turns "t" :status])) 30000)
          "a launch that throws ends the turn rather than leaving it running")
@@ -194,7 +214,9 @@
         dead (turn/start {:root root :executors {:fake fake} :submit (fn [_] nil) :refusals (constantly 3)})
         detail #(get-in (store/state s "ws") [:turns % :detail])]
     (try
-      (doseq [u ["a" "b"]] (cmd! {:command :open-unit :unit u :project "p" :goal "g" :session-cwd "/tmp"}))
+      (doseq [u ["a" "b"]
+              c (sessions/ready {:command :open-unit :unit u :project "p" :goal "g"} "/tmp")]
+        (cmd! c))
       (cmd! {:command :start-turn :turn "ended" :unit "a" :spec {:executor :fake :instructions "echo boom >&2; exit 1"}})
       (cmd! {:command :start-turn :turn "still" :unit "b" :spec {:executor :fake :instructions "sleep 2; echo boom >&2; exit 1"}})
       (turn/changed! dead [{:ws "ws" :state (store/state s "ws")}])

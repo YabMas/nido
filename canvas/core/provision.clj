@@ -20,7 +20,8 @@
     "Hand the provisioner a commit's changes. Never blocks."
     {:signature [:=> [:catn [:provisioner :map] [:changes [:sequential :map]]] :nil]})
   (Operation session-name
-    "The session an attempt works on: its working copy's, else its unit's name."
+    "The session an attempt works on: its unit's id, when it has no working copy yet or its
+     working copy's path ends in that id; else the working copy's last segment."
     {:signature [:=> [:catn [:attempt :map]] :string]})
   (Operation verb-argv
     "The argv of the session verb for an attempt."
@@ -29,5 +30,7 @@
     "The verb's result: the last line of its output that reads as an EDN map, or nil."
     {:signature [:=> [:catn [:out :string]] [:maybe :map]]})
   (Operation outcome-command
-    "The keyed command recording an attempt's outcome, from the verb's run."
+    "The keyed command recording an attempt's outcome, from the verb's run: :refused for a
+     destroy the verb refused as not the session's own to remove, :failed for any other attempt
+     that met that refusal."
     {:signature [:=> [:catn [:attempt :map] [:run :map]] :map]}))

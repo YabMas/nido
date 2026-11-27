@@ -58,8 +58,10 @@
   "A stream before its first event: a workstream until `:start-run` makes it a run."
   {:units         {}    ; unit-id -> {:id :project :goal :status #{:open :merged :retracted :finished}
                         ;             :held? bool :unknowns #{key} :landing? bool :session session}
-                        ; session: {:status #{:none :ready :failed :stopped :destroyed}
+                        ; session: {:status #{:none :ready :failed :stopped :destroyed :refused}
                         ;           :cwd str|nil :attempt {:id :want}|nil :detail}
+                        ; :refused: its destroy was refused because its working copy is not the
+                        ; session's own to remove; terminal, never attempted again
    :turns         {}    ; turn-id -> {:id :unit (nil = conductor) :status :spec :run
                         ;             :call :resolution :resolved-call :ended-by :detail}
                         ; :spec {:executor kw :instructions str ...} is what the executor runs;
@@ -128,12 +130,14 @@
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} sessions-owed
   "Every unit of `state` whose session is not what it should be and has no attempt pending, with
    the want: [{:unit :want}]. A failed bring-up is not owed again until it is retried: the
-   conductor hears the failure and decides."
+   conductor hears the failure and decides. A refused destroy is owed nothing ever again: the
+   refusal is deterministic, and retrying it would only refuse again."
   [state]
   (for [u (sort-by :id (vals (:units state)))
         :let [want (session-want state u)
               {:keys [status attempt]} (:session u)]
         :when (and (nil? attempt)
+                   (not= :refused status)
                    (not= (reached want) status)
                    ;; a session is never taken down under a turn still active in it
                    (or (= :up want) (empty? (active-turns state (:id u))))
@@ -322,6 +326,7 @@
   (fn [_state event] (:event event)))
 
 (defmethod evolve :unit-opened [state {:keys [unit project goal session-cwd trigger first-turn]}]
+  ;; :session-cwd is no longer admitted; a unit folded from an event that adopted one keeps it.
   (assoc-in state [:units unit] (cond-> {:id unit :project project :goal goal :status :open
                                          :held? false :unknowns #{} :landing? false
                                          :session (if session-cwd
@@ -355,10 +360,12 @@
 
 (defmethod evolve :provision-recorded [state {:keys [unit outcome cwd detail unit-ready?]}]
   (let [want (get-in state [:units unit :session :attempt :want])
-        status (if (= :failed outcome) :failed (reached want))]
+        status (case outcome :failed :failed :refused :refused (reached want))]
     (cond-> (update-in state [:units unit :session]
                        #(cond-> (-> % (dissoc :attempt :detail) (assoc :status status))
-                          cwd    (assoc :cwd cwd)
+                          ;; Only an :up that came up sets it; a ledger whose other outcomes
+                          ;; carried one folds without it.
+                          (and cwd (= :done outcome) (= :up want)) (assoc :cwd cwd)
                           detail (assoc :detail detail)))
       ;; A run has no conductor to hear a failure; one whose session never came up is over.
       (and (:run state) (= :failed outcome) (= :up want)) (assoc-in [:units unit :status] :finished)
@@ -636,6 +643,9 @@
 
 (defmethod decide :open-unit [state {:keys [unit project goal session-cwd trigger first-turn]}]
   (cond
+    ;; A unit's session is the core's to provision: its cwd is set only by an :up outcome. One
+    ;; opened over a working copy the core did not make is one its destroy could not tell apart.
+    (some? session-cwd)                    (refuse :session-cwd-not-accepted)
     (:closed? state)                       (refuse :workstream-closed)
     (contains? (:units state) unit)        (refuse :unit-exists :unit unit)
     (or (nil? project) (nil? goal))        (refuse :unit-needs-project-and-goal)
@@ -643,7 +653,6 @@
                               (string? (get-in first-turn [:spec :instructions])))))
     (refuse :turn-needs-executor-and-instructions)
     :else (accept (cond-> {:event :unit-opened :unit unit :project project :goal goal}
-                    session-cwd (assoc :session-cwd session-cwd)
                     trigger     (assoc :trigger trigger)
                     first-turn  (assoc :first-turn first-turn)))))
 
@@ -687,9 +696,17 @@
   (let [a (get-in state [:units unit :session :attempt])]
     (cond
       (not= attempt (:id a))                    (refuse :no-such-attempt :unit unit :attempt attempt)
-      (not (#{:done :failed} outcome))          (refuse :unknown-outcome :outcome outcome)
+      (not (#{:done :failed :refused} outcome)) (refuse :unknown-outcome :outcome outcome)
+      ;; Only a destroy is refused as not the session's own to remove: any other attempt that
+      ;; meets the refusal reports it :failed.
+      (and (= :refused outcome) (not= :destroyed (:want a)))
+      (refuse :refused-is-a-destroys :unit unit :want (:want a))
       (and (= :done outcome) (= :up (:want a)) (not (string? cwd)))
       (refuse :ready-needs-a-cwd)
+      ;; A session's cwd is set only by an :up that came up: one carried by any other outcome
+      ;; would adopt a path the core never provisioned, or overwrite the path a refusal kept.
+      (and (some? cwd) (not (and (= :done outcome) (= :up (:want a)))))
+      (refuse :cwd-only-from-an-up :unit unit :want (:want a) :outcome outcome)
       :else (accept (cond-> {:event :provision-recorded :unit unit :attempt attempt :outcome outcome}
                       cwd    (assoc :cwd cwd)
                       detail (assoc :detail detail)
@@ -979,34 +996,48 @@
   "The ledger kinds that say what a workstream was born as: a drain, a slice, a one-off."
   #{:drain :slice :scratch})
 
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]} refused-sessions
+  "Every unit of `state` whose session's destroy was refused, as [{:unit :cwd :detail}] by unit id:
+   the working copy kept, and why. Read whatever the stream's standing — a refusal is terminal, so
+   it is found on closed and discarded workstreams above all."
+  [state]
+  (vec (for [u (sort-by :id (vals (:units state)))
+             :when (= :refused (get-in u [:session :status]))]
+         {:unit (:id u) :cwd (get-in u [:session :cwd]) :detail (get-in u [:session :detail])})))
+
 (defn- workstream-summary
   [state]
   (let [{:keys [project title external-refs facets intake created-at]} (:identity state)
         closed? (boolean (:closed? state))
         asks    (vec (sort (map :id (awaiting-person state))))
         last-e  (peek (vec (:ledger state)))
-        open-us (filter #(= :open (:status %)) (vals (:units state)))]
-    {:project       (some-> project name)
-     :title         (get title :text)
-     :external-refs (vec external-refs)
-     :facets        facets
-     :intake?       (some? intake)
-     :created-at    created-at
-     :born          (into (sorted-set) (comp (map :kind) (filter birth-kinds)) (:ledger state))
-     :closed?       closed?
-     :discarded?    (boolean (:discarded? state))
-     :last-seq      (or (:seq last-e) 0)
-     :last-at       (:at last-e)
-     :asks          asks
-     :asking?       (boolean (and (seq asks) (not closed?)))
-     :running?      (boolean (some #(= :running (:status %)) (vals (:turns state))))
-     :held?         (boolean (and (seq open-us) (every? :held? open-us)))}))
+        open-us (filter #(= :open (:status %)) (vals (:units state)))
+        refused (refused-sessions state)]
+    (cond->
+     {:project       (some-> project name)
+      :title         (get title :text)
+      :external-refs (vec external-refs)
+      :facets        facets
+      :intake?       (some? intake)
+      :created-at    created-at
+      :born          (into (sorted-set) (comp (map :kind) (filter birth-kinds)) (:ledger state))
+      :closed?       closed?
+      :discarded?    (boolean (:discarded? state))
+      :last-seq      (or (:seq last-e) 0)
+      :last-at       (:at last-e)
+      :asks          asks
+      :asking?       (boolean (and (seq asks) (not closed?)))
+      :running?      (boolean (some #(= :running (:status %)) (vals (:turns state))))
+      :held?         (boolean (and (seq open-us) (every? :held? open-us)))}
+      (seq refused) (assoc :refused-sessions refused))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]} summary
   "What a reader of many workstreams needs of one, read off its state alone: its project, title,
    refs, facets and birth, whether it is closed, where its ledger stands, whether a turn runs or a
    person holds its units, and the ids of the asks awaiting the person. `:asking?` is whether a
    person owes it a move now — an open ask on a workstream that is not closed.
+   `:refused-sessions` (`refused-sessions`) is there only when some unit's destroy was refused, so a
+   summary kept before the key existed still reads equal to its state's.
 
    A run's summary is its identity under :run, its `run-status`, the detail its turn or session
    ended with, :closed? once it is over, and its records; it never asks. A journal's is its
@@ -1018,13 +1049,14 @@
   (if-let [run (:run state)]
     (let [u (get-in state [:units (:id run)])
           t (first (vals (:turns state)))]
-      {:project (:project run)
-       :run     run
-       :status  (run-status state)
-       :detail  (or (:detail t) (get-in u [:session :detail]))
-       :closed? (not= :open (:status u))
-       :asking? false
-       :records (vec (:records state))})
+      (cond-> {:project (:project run)
+               :run     run
+               :status  (run-status state)
+               :detail  (or (:detail t) (get-in u [:session :detail]))
+               :closed? (not= :open (:status u))
+               :asking? false
+               :records (vec (:records state))}
+        (seq (refused-sessions state)) (assoc :refused-sessions (refused-sessions state))))
     (if-let [j (:journal state)]
       {:project (:project j) :journal j :last-seq (count (:records state)) :closed? false
        :asking? false}
