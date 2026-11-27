@@ -183,14 +183,14 @@
     ;; answer, so it carries the emphasis — and the reply's send button is demoted from
     ;; btn-primary to btn, because two primaries on one decision is the thing ui-principles §4
     ;; forbids. Asserting both is what makes this a check and not a spelling.
-    (is (str/includes? one "qc-opt primary") "the recommended answer is the one primary")
+    (is (str/includes? one "choice primary") "the recommended answer is the one primary")
     (is (not (str/includes? one "btn btn-primary"))
         "and nothing else on the card is primary beside it")
     (is (str/includes? one "/_catalog/nowhere/") "every POST goes to the route the scene gave it")
     (is (not (str/includes? one "/workstreams/")) "and to no real route"))
   (let [many (html-of "card" "several questions")]
     (is (str/includes? many "qc-nav") "one stepper")
-    (is (= 2 (count (re-seq #"class=\"qc-mark\"" many))) "one marker per question")
+    (is (= 2 (count (re-seq #"class=\"qbtn qbtn-icon qc-mark\"" many))) "one marker per question")
     (is (str/includes? many "data-signals__ifmissing") "the choices are page state")
     (is (= 1 (count (re-seq #"class=\"btn btn-primary\"" many)))
         "one submitting action, and no choice that submits on its own"))

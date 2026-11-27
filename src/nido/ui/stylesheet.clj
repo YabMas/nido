@@ -111,7 +111,6 @@
         .qcard .md ul, .qcard .md ol { margin:var(--space-2) 0 var(--space-6); padding-left:var(--space-20); }
         .qcard .md li { margin:0 0 var(--space-3); }
         .qcard .md > :last-child, .qcard .md li > :last-child { margin-bottom:0; }
-        .ans-row .btn { font-size:var(--fs-sm); padding:var(--space-6) var(--space-12); text-align:left; }
         .ans-body .chip { margin-left:0; }
         .md h1 { font-size:var(--fs-lg); } .md h2 { font-size:var(--fs-md); } .md h3, .md h4 { font-size:var(--fs-sm); }
         .chip { padding:0 var(--space-7); border-radius:var(--radius-3); font-size:var(--fs-xs); text-transform:uppercase; }
@@ -573,14 +572,11 @@
         .chat-change-done { color:var(--text-muted); }
         .chat-change-refused { color:var(--failed-strong); }
         .chat-compose { display:flex; flex-direction:column; gap:var(--space-6); }
-        /* The send/stop button sits inside the field's bottom-right corner, not on a row of its own. */
-        .chat-field { position:relative; }
-        .chat-compose textarea { display:block; width:100%; resize:vertical; background:var(--surface-sunken);
-                    color:var(--text); border:1px solid var(--border); border-radius:var(--radius-4);
-                    padding:var(--space-6) var(--space-72) var(--space-6) var(--space-8); font:inherit; }
-        .chat-compose[data-attach-url] textarea { padding-right:var(--space-136); }
-        .chat-compose textarea:focus { outline:none; border-color:var(--accent-border); }
-        .chat-actions { position:absolute; right:6px; bottom:6px; display:flex; gap:var(--space-8); }
+        /* The composer's one line: the attach control, the field, then Send or Stop. */
+        .chat-field { display:flex; gap:var(--space-6); align-items:flex-end; }
+        .chat-field > .field { flex:1; min-width:0; }
+        .chat-attach { flex:none; }
+        .chat-actions { flex:none; display:flex; gap:var(--space-6); }
         /* The turn's status row: a breathing mark, the phase in words, the seconds so far. The mark
            is in the working colour whatever the agent is doing — the words tell thinking from
            running from writing — and in the needs colour, still, when it waits on your answer. */
@@ -605,13 +601,10 @@
         .chat-side-bar { display:flex; gap:var(--space-8); align-items:center; }
         .chat-side-bar h1 { margin:0; font-size:var(--fs-md); flex:1; }
         /* New conversation, and the ask that replaces the heading while it is confirmed. */
-        .chat-new { flex:none; font-size:var(--fs-xs); }
+        .chat-new { flex:none; }
         .chat-new-ask { flex:1; display:flex; gap:var(--space-6); align-items:center; font-size:var(--fs-xs); }
         .chat-new-ask span { flex:1; color:var(--text); }
-        .chat-toggle { position:relative; flex:none; width:30px; height:30px; padding:0; border-radius:var(--radius-6); cursor:pointer;
-                       background:none; border:1px solid transparent; color:var(--text-muted); }
-        .chat-toggle:hover, .chat-side.open .chat-toggle { color:var(--text-strong); }
-        .chat-toggle:hover { border-color:var(--border); }
+        .chat-toggle { position:relative; flex:none; width:30px; height:30px; }
         .chat-toggle svg { position:absolute; inset:0; margin:auto; width:18px; height:18px;
                            transition:opacity var(--dur-180) ease-out; }
         .chat-toggle .chat-i-close, .chat-side.open .chat-toggle .chat-i-open { opacity:0; }
@@ -635,16 +628,12 @@
         .chat-row.open { flex:1; }
         .chat-row.open > .chat { flex:1; margin-top:var(--space-8); }
         .chat-row-head { display:flex; align-items:center; gap:var(--space-4); }
-        .chat-row-title { flex:1; min-width:0; display:flex; align-items:center; gap:var(--space-6); padding:var(--space-4) var(--space-2);
-                          background:none; border:none; cursor:pointer; text-align:left; color:var(--text); font:inherit; font-size:var(--fs-sm); }
-        .chat-row.open .chat-row-title { color:var(--text-strong); font-weight:600; }
+        .chat-row-title { flex:1; min-width:0; text-align:left; }
+        .chat-row-label { color:var(--text); font-size:var(--fs-sm); }
+        .chat-row.open .chat-row-label { color:var(--text-strong); font-weight:600; }
         .chat-row-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .chat-row-where { flex:none; color:var(--text-faint); font-size:var(--fs-xs); }
-        .chat-row-btn { flex:none; width:26px; height:26px; padding:0; display:grid; place-items:center; cursor:pointer;
-                        background:none; border:1px solid transparent; border-radius:var(--radius-6); color:var(--text-muted); }
-        .chat-row-btn:hover { color:var(--text-strong); border-color:var(--border); }
-        .chat-row-btn svg { width:15px; height:15px; }
-        .chat-pin.pinned { color:var(--text-strong); }
+        .chat-pin, .chat-close { flex:none; }
         .chat-dot { width:8px; height:8px; border-radius:50%; background:var(--accent, var(--working)); flex:none; }
         /* A needs kind's mark (state/kind-mark): every kind is a move the person owes. Sized by
            where it sits — a row's is the size of its text. */
@@ -676,9 +665,7 @@
         .chat-pick-n { min-width:16px; text-align:center; border-radius:var(--radius-2); background:var(--accent-bg);
                        color:var(--accent-strong); font-variant-numeric:tabular-nums; }
         .chat-pick-l { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .chat-pick-x { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-xs);
-                       padding:0 var(--space-2); }
-        .chat-pick-x:hover { color:var(--text-strong); }
+        .chat-pick-x { width:16px; height:16px; }
         /* Images: staged ones as removable thumbnails above the text box, sent ones above the
            message's words; a panel being dragged over with a file is outlined. */
         .chat-attachments { display:flex; flex-wrap:wrap; gap:var(--space-6); }
@@ -686,10 +673,7 @@
         .chat-att { position:relative; display:inline-block; }
         .chat-att img { display:block; width:56px; height:56px; object-fit:cover; border-radius:var(--radius-4);
                         border:1px solid var(--border); background:var(--surface-sunken); }
-        .chat-att-x { position:absolute; top:-6px; right:-6px; width:18px; height:18px; padding:0; border-radius:50%;
-                      border:1px solid var(--border); background:var(--surface); color:var(--text-muted);
-                      cursor:pointer; font-size:var(--fs-xs); line-height:16px; }
-        .chat-att-x:hover { color:var(--text-strong); }
+        .chat-att-x { position:absolute; top:-6px; right:-6px; width:18px; height:18px; }
         .chat-attach-err { margin:0; font-size:var(--fs-xs); color:var(--failed-strong); }
         .chat-attach-err:empty { display:none; }
         .chat-imgs { display:flex; flex-wrap:wrap; gap:var(--space-6); margin:0 0 var(--space-6); }

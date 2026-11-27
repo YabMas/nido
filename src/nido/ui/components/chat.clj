@@ -37,6 +37,7 @@
    re-renders the composer and never loses a draft or a pick."
   (:require [clojure.string :as str]
             [nido.libraries.ui.block :as block]
+            [nido.ui.components.control :as c]
             [nido.libraries.ui.names :as names]
             [nido.ui.markdown :as md]))
 
@@ -96,12 +97,12 @@
      [:p.chat-perm-q title]
      (into [:div.chat-perm-opts]
            (for [{oid :id oname :name kind :kind} options]
-             [:button {:class (case kind
-                                (:allow_once :allow_always) "btn btn-primary"
-                                (:reject_once :reject_always) "btn btn-danger"
-                                "btn")
-                       "data-on:click" (action :answer {:params {:item item-id :option oid}})}
-              oname]))]))
+             (c/button {:emphasis (case kind
+                                    (:allow_once :allow_always) :primary
+                                    (:reject_once :reject_always) :danger
+                                    :default)
+                        "data-on:click" (action :answer {:params {:item item-id :option oid}})}
+                       oname)))]))
 
 (defn- sent-picks
   "The picks a sent message carried, numbered as the person numbered them."
@@ -196,9 +197,9 @@
                        [:span.chat-pick {:title (or title label)}
                         [:span.chat-pick-n (inc i)]
                         [:span.chat-pick-l label]
-                        [:button.chat-pick-x {:title "Remove" :type "button"
-                                              "data-on:click" (action :unpick {:params {:index i}})}
-                         "✕"]])
+                        (c/icon-button {:label "Remove" :class "chat-pick-x"
+                                        "data-on:click" (action :unpick {:params {:index i}})}
+                                       "✕")])
                      ps)))
 
 (defn- render-attachments [{:keys [part action router]} images]
@@ -206,9 +207,9 @@
         (for [{:keys [digest]} images]
           [:span.chat-att
            [:img {:src (router :image {:digest digest}) :alt "Image to send"}]
-           [:button.chat-att-x {:type "button" :title "Remove" :aria-label "Remove image"
-                                "data-on:click" (action :unattach {:params {:digest digest}})}
-            "✕"]])))
+           (c/icon-button {:label "Remove image" :class "chat-att-x"
+                           "data-on:click" (action :unattach {:params {:digest digest}})}
+                          "✕")])))
 
 (def ^:private attach-types
   "The media types the browser offers to upload: the ones the agent accepts. The host checks the
@@ -269,21 +270,20 @@
      (when attach?
        (list (render-attachments kit (or staged []))
              [:p.chat-attach-err (merge (part :attach-err) {:role "alert"})]))
+     ;; The attach control leads the field and Send/Stop follows it, on one line: the field
+     ;; keeps the house look, and nothing is drawn over the text the person is writing.
      [:div.chat-field
-      [:textarea {"data-bind" (signal :text) :rows 3 :placeholder "Message the agent"
-                  "data-on:keydown" (str "if (!$" busy " && evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) "
-                                         "{ evt.preventDefault(); " (action :send) " }")}]
+      (when attach?
+        (list (c/file-input {:accept (str/join "," attach-types) :multiple true})
+              (c/icon-button {:label "Attach a file — or paste or drop one" :class "chat-attach"}
+                             "+")))
+      (c/textarea {"data-bind" (signal :text) :rows 3 :placeholder "Message the agent"
+                   :aria-label "Message the agent"
+                   "data-on:keydown" (str "if (!$" busy " && evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) "
+                                          "{ evt.preventDefault(); " (action :send) " }")})
       [:div.chat-actions
-       (when attach?
-         (list [:input {:type "file" :accept (str/join "," attach-types) :multiple true :hidden true
-                        :aria-hidden "true" :tabindex "-1"}]
-               [:button.btn.chat-attach {:type "button" :title "Attach an image — or paste or drop one"
-                                         :aria-label "Attach an image"}
-                "Image"]))
-       [:button.btn.btn-primary {"data-show" (str "!$" busy)
-                                 "data-on:click" (action :send)} "Send"]
-       [:button.btn {"data-show" (str "$" busy)
-                     "data-on:click" (action :cancel)} "Stop"]]]]))
+       (c/button {:emphasis :primary "data-show" (str "!$" busy) "data-on:click" (action :send)} "Send")
+       (c/button {"data-show" (str "$" busy) "data-on:click" (action :cancel)} "Stop")]]]))
 
 ;; ---------------------------------------------------------------------------
 ;; The log
@@ -380,22 +380,21 @@
   (let [[mark words] (row-status status)]
     [:div.chat-row {:class (when open? "open") :data-chat id}
      [:div.chat-row-head
-      [:button.chat-row-title {:type "button" :aria-expanded (str (boolean open?))
-                               "data-on:click" (action :open-chat {:params {:chat id}})}
-       (when mark [:span {:class mark :title words :aria-label words}])
-       [:span.chat-row-label label]
-       (when where [:span.chat-row-where where])]
-      [:button.chat-row-btn.chat-pin
-       {:type "button"
-        :class (if pinned? "pinned" "following")
-        :title (if pinned? "Pinned to this place — unlink it to take it with you"
-                   "Follows you — pin it to this place")
-        :aria-label (if pinned? "Unlink this chat" "Pin this chat here")
-        "data-on:click" (action (if pinned? :unlink :pin) {:params {:chat id}})}
-       (if pinned? pin-glyph pin-off-glyph)]
-      [:button.chat-row-btn.chat-close {:type "button" :title "Close this chat" :aria-label "Close this chat"
-                                        "data-on:click" (action :close {:params {:chat id}})}
-       close-glyph]]
+      (c/quiet-button {:class "chat-row-title" :aria-expanded (str (boolean open?))
+                       "data-on:click" (action :open-chat {:params {:chat id}})}
+                      (when mark [:span {:class mark :title words :aria-label words}])
+                      [:span.chat-row-label label]
+                      (when where [:span.chat-row-where where]))
+      (c/icon-button {:class "chat-pin"
+                      :aria-pressed (str (boolean pinned?))
+                      :title (if pinned? "Pinned to this place — unlink it to take it with you"
+                                 "Follows you — pin it to this place")
+                      :label (if pinned? "Unlink this chat" "Pin this chat here")
+                      "data-on:click" (action (if pinned? :unlink :pin) {:params {:chat id}})}
+                     (if pinned? pin-glyph pin-off-glyph))
+      (c/icon-button {:class "chat-close" :label "Close this chat"
+                      "data-on:click" (action :close {:params {:chat id}})}
+                     close-glyph)]
      (when open? body)]))
 
 (defn- render-section
@@ -422,33 +421,32 @@
                                   :aria-label "Chat with the agent"
                                   "data-class:open" (str "$" open)})
          (into [:div.chat-side-bar
-                [:button.chat-toggle (merge (part :toggle)
-                                            {:type "button"
-                                             :title "Chat with the agent (⌘I)" :aria-label "Chat with the agent"
-                                             :aria-expanded (str (boolean open?))
-                                             "data-attr:aria-expanded" (str "$" open)
-                                             "data-on:click" (str "$" open " = !$" open)
-                                             "data-class:busy" (str "$" busy)})
-                 (panel-icon "chat-i-open" "m10 15-3-3 3-3")
-                 (panel-icon "chat-i-close" "m8 9 3 3-3 3")
-                 [:span.chat-spin {:aria-hidden "true"}]]
+                (c/icon-button (merge (part :toggle)
+                                      {:class "chat-toggle"
+                                       :title "Chat with the agent (⌘I)" :label "Chat with the agent"
+                                       :aria-expanded (str (boolean open?))
+                                       "data-attr:aria-expanded" (str "$" open)
+                                       "data-on:click" (str "$" open " = !$" open)
+                                       "data-class:busy" (str "$" busy)})
+                               (panel-icon "chat-i-open" "m10 15-3-3 3-3")
+                               (panel-icon "chat-i-close" "m8 9 3 3-3 3")
+                               [:span.chat-spin {:aria-hidden "true"}])
                 [:h1 (when reset? {"data-show" (str "!(" asking ")")}) (or heading "Chat")]
                 (when reset?
-                  [:button.btn.chat-new {:type "button" :title "Start a new conversation"
-                                         "data-show" (str "!$" confirm " && !$" busy)
-                                         "data-on:click" (str "$" confirm " = true")}
-                   "New conversation"])
+                  (c/button {:class "chat-new" :title "Start a new conversation"
+                             "data-show" (str "!$" confirm " && !$" busy)
+                             "data-on:click" (str "$" confirm " = true")}
+                            "New conversation"))
                 (when reset?
                   [:div.chat-new-ask {"data-show" asking}
                    [:span "Start over? This conversation can't be brought back."]
-                   [:button.btn {:type "button" "data-on:click" (str "$" confirm " = false")} "Back"]
-                   [:button.btn.btn-danger {:type "button"
-                                            "data-on:click" (str "$" confirm " = false; " (action :reset))}
-                    "Start over"]])
+                   (c/button {"data-on:click" (str "$" confirm " = false")} "Back")
+                   (c/button {:emphasis :danger "data-on:click" (str "$" confirm " = false; " (action :reset))}
+                             "Start over")])
                 (when chats
-                  [:button.btn.chat-new {:type "button" :title "Start another chat, pinned to this place"
-                                         "data-on:click" (action :new-chat)}
-                   "New chat"])]
+                  (c/button {:class "chat-new" :title "Start another chat, pinned to this place"
+                             "data-on:click" (action :new-chat)}
+                            "New chat"))]
                bar)]
         (into top)
         (conj (if chats
@@ -555,26 +553,26 @@
         [:p.chat-change-desc
          (or desc [:em "Not described yet — the agent describes its change as it works."])]
         [:div.chat-change-acts {"data-show" (str "$" confirm " === ''")}
-         [:button.btn {:type "button" "data-attr:disabled" (if running? "true" (str "$" busy))
-                       "data-on:click" (str "$" confirm " = 'revert'")} "Cancel"]
-         [:button.btn.btn-primary (cond-> {:type "button"
-                                           "data-attr:disabled" (if held "true" (str "$" busy))
-                                           "data-on:click" (str "$" confirm " = 'publish'")}
-                                    (nil? desc) (assoc :title "Publish waits for the change's description")
-                                    running?    (assoc :title "Publish waits for the landing that is running"))
-          "Publish"]]
+         (c/button {"data-attr:disabled" (if running? "true" (str "$" busy))
+                    "data-on:click" (str "$" confirm " = 'revert'")} "Cancel")
+         (c/button (cond-> {:emphasis :primary
+                            "data-attr:disabled" (if held "true" (str "$" busy))
+                            "data-on:click" (str "$" confirm " = 'publish'")}
+                     (nil? desc) (assoc :title "Publish waits for the change's description")
+                     running?    (assoc :title "Publish waits for the landing that is running"))
+                   "Publish")]
         [:div.chat-change-ask {"data-show" (asking "publish")}
          [:span "Land this on main? Tests and the landing check run first."]
-         [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
-         [:button.btn.btn-primary {:type "button" "data-attr:disabled" (if held "true" (str "$" busy))
-                                   "data-on:click" (str "$" confirm " = ''; " publish)}
-          "Publish"]]
+         (c/button {"data-on:click" (str "$" confirm " = ''")} "Back")
+         (c/button {:emphasis :primary "data-attr:disabled" (if held "true" (str "$" busy))
+                    "data-on:click" (str "$" confirm " = ''; " publish)}
+                   "Publish")]
         [:div.chat-change-ask {"data-show" (asking "revert")}
          [:span "Throw these edits away? The conversation stays."]
-         [:button.btn {:type "button" "data-on:click" (str "$" confirm " = ''")} "Back"]
-         [:button.btn.btn-danger {:type "button" "data-attr:disabled" (if running? "true" (str "$" busy))
-                                  "data-on:click" (str "$" confirm " = ''; " (action :revert))}
-          "Throw away"]]))]))
+         (c/button {"data-on:click" (str "$" confirm " = ''")} "Back")
+         (c/button {:emphasis :danger "data-attr:disabled" (if running? "true" (str "$" busy))
+                    "data-on:click" (str "$" confirm " = ''; " (action :revert))}
+                   "Throw away")]))]))
 
 ;; ---------------------------------------------------------------------------
 ;; Scenes: literal conversations
@@ -756,7 +754,8 @@ for the text and keep the tint, so it still reads as **yours** without competing
                          :empty [:section.chat [:p.meta "Message the agent to start a chat here."]])}
      {:title "images attached"
       :note  "A panel that offers attaching: a sent image as a thumbnail that opens it, two staged
-              for the next message above the text box, and the Image control beside Send. The box
+              for the next message above the text box, and the + attach control leading the text
+              box, with Send after it. The box
               takes a pasted image and the panel a dropped one."
       :props (open-panel (transcript false {:kind :user :text "What is wrong with this row?" :refs []
                                             :images (subvec two-images 0 1)})

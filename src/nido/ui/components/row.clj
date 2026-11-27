@@ -19,6 +19,7 @@
    Written in `nido.ui.components.state`: a row asks for a mark and never for a word."
   (:require [clojure.string :as str]
             [nido.libraries.ui.block :as block]
+            [nido.ui.components.control :as c]
             [nido.ui.components.state :as state]))
 
 (defn- status-slot
@@ -127,9 +128,9 @@
       [:span.meta (state/winddown-words {:pending? true})]
       (list
        (when error-msg [:div.error-msg error-msg])
-       [:button.btn.btn-danger
-        {"data-on:click" (action :bring-down {:params {:project project :ws-id ws-id}})}
-        "Bring down"]))]])
+       (c/button {:emphasis :danger
+                  "data-on:click" (action :bring-down {:params {:project project :ws-id ws-id}})}
+                 "Bring down")))]])
 
 ;; ---------------------------------------------------------------------------
 ;; The arc

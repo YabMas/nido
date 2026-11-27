@@ -245,7 +245,7 @@
         at   #(or (str/index-of pane %) (throw (ex-info (str "missing " %) {})))]
     (is (str/includes? pane "Question <span data-text=\"$ask.ws_1.step + 1\">1</span> of 2")
         "it says which of how many is shown")
-    (is (= 2 (count (re-seq #"class=\"qc-mark\"" pane))) "one marker per question")
+    (is (= 2 (count (re-seq #"class=\"qbtn qbtn-icon qc-mark\"" pane))) "one marker per question")
     (is (str/includes? pane "data-show=\"$ask.ws_1.step === 1\"") "only the shown question is visible")
     (is (str/includes? pane "◂ Previous"))
     (is (str/includes? pane "Next ▸"))
@@ -255,7 +255,7 @@
         "an option's name in bold, then what it does, then its cost")
     (is (str/includes? pane "$ask.ws_1.answers.q0 = ($ask.ws_1.answers.q0 === &apos;A&apos;) ? &apos;&apos; : &apos;A&apos;")
         "choosing marks it, and choosing it again leaves the question open")
-    (is (not (re-find #"qc-opt[^\"]*\"[^>]*data-on:click=\"@post" pane))
+    (is (not (re-find #"class=\"choice[^\"]*\"[^>]*data-on:click=\"@post" pane))
         "no choice submits on its own")
     (is (not (re-find #">[A-C]\.?\s*<|>[A-C]\. " pane)) "no letter on screen")
     (is (not (str/includes? pane "option-letter")))
@@ -271,7 +271,7 @@
   (let [pane (gate-in-pane (assoc (two-question-gate) :pending? true))]
     (is (str/includes? pane "Round once"))
     (is (not (str/includes? pane "/workstreams/brian/ws-1/gate/")) "no action can be posted")
-    (is (not (str/includes? pane "class=\"qc-opt\" data")) "choices are not buttons")))
+    (is (not (str/includes? pane "class=\"choice\" data")) "choices are not buttons")))
 
 (deftest the-question-card-reads-only-its-arguments
   (let [g    (two-question-gate)
@@ -2030,8 +2030,8 @@
       (is (not (str/includes? pane "class=\"orient")))
       (is (not (str/includes? pane "action-bar")) "the card is the pane's only control"))
     (testing "each answer is its button, recommended one primary"
-      (is (re-find #"class=\"qc-opt primary\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-a\?entry=3&apos;, \{filterSignals[^\"]*\)\"[^>]*><span class=\"qc-opt-label\"><strong>Web only</strong>" pane))
-      (is (re-find #"class=\"qc-opt\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-b\?entry=3&apos;, \{filterSignals[^\"]*\)\"[^>]*><span class=\"qc-opt-label\"><strong>brian-mobile too</strong>" pane))
+      (is (re-find #"class=\"choice primary\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-a\?entry=3&apos;, \{filterSignals[^\"]*\)\"[^>]*><span class=\"qc-opt-label\"><strong>Web only</strong>" pane))
+      (is (re-find #"class=\"choice\" data-on:click=\"@post\(&apos;/workstreams/brian/ws-1/gate/option-b\?entry=3&apos;, \{filterSignals[^\"]*\)\"[^>]*><span class=\"qc-opt-label\"><strong>brian-mobile too</strong>" pane))
       (is (= 1 (count (re-seq #"option-a\?entry" pane))) "no second button for an option")
       (is (not (str/includes? pane "class=\"btn btn-primary\"")) "and no other row is primary beside it"))
     (testing "what an option does is said once"

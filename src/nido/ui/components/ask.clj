@@ -14,8 +14,8 @@
    and why a scene can host it with a router that goes nowhere. The instance id is the
    workstream's, so two cards on one page share no id and no signal."
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]
             [nido.libraries.ui.block :as block]
+            [nido.ui.components.control :as c]
             [nido.ui.markdown :as md]))
 
 ;; ---------------------------------------------------------------------------
@@ -57,8 +57,8 @@
 ;; ---------------------------------------------------------------------------
 ;; The bar
 
-(defn- style-class [style]
-  (case style :primary "btn btn-primary" :danger "btn btn-danger" "btn"))
+(defn- emphasis [style]
+  (case style :primary :primary :danger :danger :default))
 
 (defn- action-button
   "One gate button. A descriptor carrying `:seq` (blocker-option buttons — see
@@ -66,12 +66,12 @@
    rides: the letter it sends means nothing except relative to the report that drew it, so the
    resolver needs to know which report that was."
   [action project ws-id {:keys [label style title] :as d}]
-  [:button (cond-> {:class (style-class style)
-                    "data-on:click" (click action project ws-id :click d)}
-             ;; Only the lettered option buttons carry one — their label is a
-             ;; single character, so what they answer lives in the tooltip.
-             title (assoc :title title))
-   label])
+  (c/button (cond-> {:emphasis (emphasis style)
+                      "data-on:click" (click action project ws-id :click d)}
+               ;; Only the lettered option buttons carry one — their label is a
+               ;; single character, so what they answer lives in the tooltip.
+               title (assoc :title title))
+            label))
 
 (defn- render-bar
   "An action set: one-click buttons (mutations + preset-input resumes) in a row, plus a
@@ -84,41 +84,39 @@
         ;; ledger as the blocker's answer and resumes nobody, so the copy must not promise a resume.
         answer?   (= "Answer" (:label free-text))
         evidence  (some #(when (= :evidence (:kind %)) %) actions)
-        bar       [:div (part :root)
-                   (when evidence
-                     [:div.reply
-                      [:div.meta {:style "text-transform:uppercase;font-size:var(--fs-xs)"} "Assert the gate"]
-                      (when-let [c (:criterion evidence)] [:p [:span.meta "Criterion: "] c])
-                      [:textarea {"data-bind" (signal :evidence)
-                                  :placeholder "What you observed on the running system, and where…"}]
-                      [:div {:style "margin-top:var(--space-9)"}
-                       [:button.btn.btn-primary
-                        {"data-on:click" (click action project ws-id :evidence evidence)}
-                        (str (:label evidence) " ▸")]]])
-                   (when (seq buttons)
-                     (into [:div.actions {:style "margin-top:var(--space-16)"}]
-                           (for [a buttons]
-                             (if (= :link (:kind a))
-                               [:a {:class (style-class (:style a)) :href (:href a) :title (:title a)} (:label a)]
-                               (action-button action project ws-id a)))))
-                   (when free-text
-                     [:div.reply
-                      [:div.meta {:style "text-transform:uppercase;font-size:var(--fs-xs)"}
-                       (if answer? "Answer the blocker" "Reply & resume")]
-                      [:textarea {"data-bind" (signal :reply)
-                                  :placeholder (if answer?
-                                                 "Your answer, in your words. It is recorded on the ledger for whoever picks this up next…"
-                                                 "Tell the agent what to do next…")}]
-                      [:div {:style "margin-top:var(--space-9)"}
-                       [:button.btn.btn-primary
-                        {"data-on:click" (click action project ws-id :reply free-text)}
-                        (if answer? "Record answer ▸" "Send & resume ▸")]
-                       (when (and session (not answer?))
-                         [:span.meta {:style "margin-left:var(--space-10)"} "resumes " session])]])]]
-    ;; The reply's send button is drawn primary for a gate that has nothing else to press;
-    ;; beside a card's own primary it would be a second one on one decision.
-    (cond->> bar
-      demote-primary? (walk/postwalk #(if (= :button.btn.btn-primary %) :button.btn %)))))
+        ;; The reply's send button is drawn primary for a gate that has nothing else to press;
+        ;; beside a card's own primary it would be a second one on one decision.
+        send      (if demote-primary? :default :primary)]
+    [:div (part :root)
+     (when evidence
+       [:div.reply
+        (c/form-section
+         "Assert the gate"
+         (when-let [cr (:criterion evidence)] [:p.reply-criterion [:span.meta "Criterion: "] cr])
+         (c/textarea {"data-bind" (signal :evidence)
+                      :placeholder "What you observed on the running system, and where…"})
+         [:div.reply-acts
+          (c/button {:emphasis send "data-on:click" (click action project ws-id :evidence evidence)}
+                    (str (:label evidence) " ▸"))])])
+     (when (seq buttons)
+       (into [:div.actions.ask-actions]
+             (for [a buttons]
+               (if (= :link (:kind a))
+                 (c/link-button {:emphasis (emphasis (:style a)) :href (:href a) :title (:title a)} (:label a))
+                 (action-button action project ws-id a)))))
+     (when free-text
+       [:div.reply
+        (c/form-section
+         (if answer? "Answer the blocker" "Reply & resume")
+         (c/textarea {"data-bind" (signal :reply)
+                      :placeholder (if answer?
+                                     "Your answer, in your words. It is recorded on the ledger for whoever picks this up next…"
+                                     "Tell the agent what to do next…")})
+         [:div.reply-acts
+          (c/button {:emphasis send "data-on:click" (click action project ws-id :reply free-text)}
+                    (if answer? "Record answer ▸" "Send & resume ▸"))
+          (when (and session (not answer?))
+            [:span.meta "resumes " session])])])]))
 
 ;; ---------------------------------------------------------------------------
 ;; The card
@@ -154,16 +152,13 @@
                      (when-not (str/blank? consequence) [:div.qc-opt-cons (md/render consequence {:links? false})]))
         d      (when opt-action (by-id opt-action))]
     (cond
-      (or pending? (and opt-action (nil? d))) [:div.qc-opt.static body]
-      d   [:button {:type "button"
-                    :class (str "qc-opt" (when (primary-option? opt) " primary"))
-                    "data-on:click" (click action project ws-id :click d)}
-           body]
-      :else [:button {:type "button" :class "qc-opt"
-                      "data-class:chosen" chosen
-                      "data-attr:aria-pressed" chosen
-                      "data-on:click" (str (answer-signal signal i) " = (" chosen ") ? '' : '" letter "'")}
-             body])))
+      (or pending? (and opt-action (nil? d))) (apply c/choice {:static? true} body)
+      d     (apply c/choice {:primary? (boolean (primary-option? opt))
+                             "data-on:click" (click action project ws-id :click d)}
+                   body)
+      :else (apply c/choice {:chosen chosen
+                             "data-on:click" (str (answer-signal signal i) " = (" chosen ") ? '' : '" letter "'")}
+                   body))))
 
 (defn- question-section
   "Question `i` of `n`: its line, then its context, recommendation and what follows the answer as
@@ -183,14 +178,15 @@
    (cond
      (:pending? ctx) nil
      (:notes? ctx)
-     [:textarea.qc-words {"data-bind" (signal [:notes (q-key i)])
-                          :aria-label (str "Your comment on question " (inc i))
-                          :placeholder (if (seq options)
-                                         "A comment on this question — with a choice or instead of one: what it misses, or why no option fits…"
-                                         "Your answer to this question, in your words…")}]
+     (c/textarea {"data-bind" (signal [:notes (q-key i)])
+                  :aria-label (str "Your comment on question " (inc i))
+                  :placeholder (if (seq options)
+                                 "A comment on this question — with a choice or instead of one: what it misses, or why no option fits…"
+                                 "Your answer to this question, in your words…")})
      (and (:words? ctx) (empty? options))
-     [:textarea.qc-words {"data-bind" (signal [:words (q-key i)])
-                          :placeholder "Your answer to this question, in your words…"}])])
+     (c/textarea {"data-bind" (signal [:words (q-key i)])
+                  :aria-label (str "Your answer to question " (inc i))
+                  :placeholder "Your answer to this question, in your words…"}))])
 
 (defn- answered-expr
   "Whether question `i` has an answer: a letter chosen, or — on a card that takes them — words or
@@ -206,13 +202,13 @@
   (into [:div.qc-nav
          [:span "Question " [:span {"data-text" (str (step-signal signal) " + 1")} "1"] " of " n]]
         (for [i (range n)]
-          [:button {:type "button" :class "qc-mark"
-                    :aria-label (str "Question " (inc i))
-                    "data-class:answered" (answered-expr signal i field)
-                    "data-class:current" (str (step-signal signal) " === " i)
-                    "data-text" (str "(" (answered-expr signal i field) ") ? '●' : '○'")
-                    "data-on:click" (str (step-signal signal) " = " i)}
-           "○"])))
+          (c/icon-button {:label (str "Question " (inc i))
+                          :class "qc-mark"
+                          "data-attr:aria-current" (str "(" (step-signal signal) " === " i ") ? 'step' : false")
+                          "data-on:click" (str (step-signal signal) " = " i)}
+                         [:span.qc-g {"data-class:answered" (answered-expr signal i field)
+                                      "data-text" (str "(" (answered-expr signal i field) ") ? '●' : '○'")}
+                          "○"]))))
 
 (defn- submit-of [{:keys [submit]} actions]
   (when submit (some #(when (= submit (:id %)) %) actions)))
@@ -274,12 +270,10 @@
      (map-indexed #(question-section qctx %1 n %2) questions)
      (when (> n 1)
        [:div.qc-step
-        [:button {:type "button" :class "btn"
-                  "data-attr:disabled" (str (step-signal signal) " === 0")
-                  "data-on:click" (str (step-signal signal) " = Math.max(0, " (step-signal signal) " - 1)")} "◂ Previous"]
-        [:button {:type "button" :class "btn"
-                  "data-attr:disabled" (str (step-signal signal) " === " (dec n))
-                  "data-on:click" (str (step-signal signal) " = Math.min(" (dec n) ", " (step-signal signal) " + 1)")} "Next ▸"]])
+        (c/button {"data-attr:disabled" (str (step-signal signal) " === 0")
+                   "data-on:click" (str (step-signal signal) " = Math.max(0, " (step-signal signal) " - 1)")} "◂ Previous")
+        (c/button {"data-attr:disabled" (str (step-signal signal) " === " (dec n))
+                   "data-on:click" (str (step-signal signal) " = Math.min(" (dec n) ", " (step-signal signal) " + 1)")} "Next ▸")])
      (when (seq opt-does) (into [:div] (map (fn [d] [:p.ans-does d])) opt-does))
      (when note [:p.ask-note note])
      (if pending?
@@ -390,23 +384,15 @@
    .qc-head { margin:0 0 var(--space-10); color:var(--text-muted); font-size:var(--fs-sm); max-width:var(--measure); }
    .qc-nav { display:flex; align-items:center; gap:var(--space-6); margin:0 0 var(--space-10); font-size:var(--fs-xs);
              color:var(--text-faint); text-transform:uppercase; letter-spacing:0.04em; }
-   .qc-mark { background:none; border:0; padding:0 var(--space-2); cursor:pointer; color:var(--text-faint);
-              font-size:var(--fs-sm); line-height:1; }
-   .qc-mark.answered { color:var(--ok); }
-   .qc-mark.current { color:var(--text-strong); text-decoration:underline; }
+   .qc-mark { flex:none; }
+   .qc-g { color:var(--text-faint); }
+   .qc-g.answered { color:var(--ok); }
    .qc-q { font-size:var(--fs-lg); font-weight:500; color:var(--text-strong); margin:0 0 var(--space-10);
            line-height:1.4; max-width:var(--measure); }
    .qc-rec, .qc-after { font-size:var(--fs-md); color:var(--text); margin:0 0 var(--space-8);
                        max-width:var(--measure); }
    .qc-k { font-weight:600; color:var(--text-muted); margin:0 0 var(--space-2); }
    .qc-opts { display:grid; gap:var(--space-8); margin:var(--space-12) 0 var(--space-6); }
-   .qc-opt { display:block; width:100%; max-width:var(--measure); text-align:left; font:inherit;
-             color:var(--text); background:var(--surface); border:1px solid var(--border);
-             border-radius:var(--radius-6); padding:var(--space-9) var(--space-12); cursor:pointer; }
-   .qc-opt:hover { background:var(--surface-hover); }
-   .qc-opt.primary { background:var(--accent-bg); border-color:var(--accent-border); }
-   .qc-opt.chosen { background:var(--recommended-bg); border-color:var(--recommended); }
-   .qc-opt.static { cursor:default; }
    .qc-opt-label { display:block; color:var(--text-strong); }
    .qc-opt-sum { display:block; }
    .qc-opt-cons { display:block; color:var(--text-muted); font-size:var(--fs-sm); }
@@ -422,12 +408,14 @@
    .ans-cons { color:var(--text-muted); font-size:var(--fs-sm); }
    .ans-letter { font-weight:600; color:var(--text-muted); }
    .ans-does { margin:0; color:var(--text-faint); font-size:var(--fs-sm); max-width:var(--measure); }
-   .controls .reply { margin-top:0; }")
+   .controls .reply { margin-top:0; }
+   .qc-question > .field { margin-top:var(--space-8); }")
 
 (def ^:private bar-css
   ".reply { margin-top:var(--space-16); border:1px solid var(--border); border-radius:var(--radius-6); background:var(--surface-raised); padding:var(--space-12) var(--space-14); }
-   .reply textarea { width:100%; min-height:62px; background:var(--surface-sunken); border:1px solid var(--border);
-                     border-radius:var(--radius-4); color:var(--text); font:inherit; font-size:var(--fs-sm); padding:var(--space-9) var(--space-11); }")
+   .reply-criterion { margin:0; }
+   .reply-acts { display:flex; gap:var(--space-10); align-items:baseline; margin-top:var(--space-3); }
+   .ask-actions { margin-top:var(--space-16); }")
 
 ;; ---------------------------------------------------------------------------
 ;; The registrations

@@ -99,9 +99,7 @@
    :space-24 "24px"
    :space-26 "26px"
    :space-28 "28px"
-   :space-40 "40px"
-   :space-72 "72px"
-   :space-136 "136px"}
+   :space-40 "40px"}
 
  :layout
   ;; The page chrome's fixed widths: the sidebar open, and collapsed to its rail.

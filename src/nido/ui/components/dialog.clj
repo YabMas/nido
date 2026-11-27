@@ -23,7 +23,8 @@
 
    nido's block, internal to nido: the UI library supplies the machinery it is built on and
    exports no dialog."
-  (:require [nido.libraries.ui.block :as block]))
+  (:require [nido.libraries.ui.block :as block]
+            [nido.ui.components.control :as c]))
 
 (defn- dialog-id [{:keys [part]}] (:id (part :root)))
 
@@ -41,7 +42,7 @@
                           "data-on:close" (str "$" (signal :returned) " = el.returnValue")})
       [:div.dlg-head (part :head)
        [:h2.dlg-title (part :title) title]
-       [:button.dlg-x (merge (part :close) (close "dismiss") {:aria-label "Close"}) "✕"]]
+       (c/icon-button (merge (part :close) (close "dismiss") {:label "Close" :class "dlg-x"}) "✕")]
       (body (merge (part :body) {:class "dlg-body"}))
       (when footer
         (footer (merge (part :footer) {:class "dlg-foot"}) close))])))
@@ -54,24 +55,22 @@
    .dlg::backdrop { background:color-mix(in srgb, var(--bg) 70%, transparent); }
    .dlg-head { display:flex; gap:var(--space-10); align-items:baseline; margin:0 0 var(--space-10); }
    .dlg-title { margin:0; flex:1; font-size:var(--fs-lg); color:var(--text-strong); }
-   .dlg-x { flex:none; background:none; border:1px solid transparent; border-radius:var(--radius-4);
-            color:var(--text-muted); cursor:pointer; padding:var(--space-2) var(--space-6); }
-   .dlg-x:hover { border-color:var(--border); color:var(--text-strong); }
+   .dlg-x { flex:none; align-self:center; }
    .dlg-body { color:var(--text); font-size:var(--fs-md); overflow:auto; min-height:0; }
    .dlg-foot { display:flex; gap:var(--space-8); justify-content:flex-end; margin:var(--space-16) 0 0; }")
 
 ;; ---------------------------------------------------------------------------
 ;; Scenes
 
-(defn- open-button [label] (fn [attrs] [:button.btn attrs label]))
+(defn- open-button [label] (fn [attrs] (c/button attrs label)))
 
 (defn- prose [& ps] (fn [attrs] (into [:div attrs] (map (fn [p] [:p p]) ps))))
 
 (defn- confirm-footer [confirm-label]
   (fn [attrs close]
     [:div attrs
-     [:button.btn (close "cancel") "Back"]
-     [:button.btn.btn-primary (close "confirm") confirm-label]]))
+     (c/button (close "cancel") "Back")
+     (c/button (assoc (close "confirm") :emphasis :primary) confirm-label)]))
 
 ;; ---------------------------------------------------------------------------
 ;; The registration
