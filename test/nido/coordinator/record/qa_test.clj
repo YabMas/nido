@@ -8,6 +8,7 @@
    [malli.core :as m]
    [nido.platform.core :as core]
    [nido.coordinator.report :as report]
+   [nido.coordinator.record.entry :as entry]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.pipeline :as p]
@@ -249,6 +250,35 @@
           (is (some? n))
           (testing "undeclared, it reads :off all the same"
             (lose #{p2} #(is (= :off (:state (standing/qa :brian id false)))))))))))
+
+(deftest the-qa-reading-fails-closed-on-an-entry-with-no-content
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            d     (designed! add!)
+            r     #(standing/qa :brian id true)
+            blank (fn [lost f]
+                    (let [orig entry/text]
+                      (reset! @#'entry/parsed-cache {})
+                      (reset! @#'entry/texts {})
+                      (try
+                        (with-redefs [entry/text (fn [w n] (when-not (contains? lost n) (orig w n)))]
+                          (f))
+                        (finally (reset! @#'entry/parsed-cache {})))))]
+        (build! add! d)
+        (let [p1 (add! :qa-plan (product-plan d))
+              w1 (add! :qa-walk (walk p1 [["open" :pass] ["check" :fail]]))
+              _  (add! :qa-walk (walk p1 [["open" :pass] ["check" :pass]]))]
+          (testing "a failed walk with no content does not let a later one pass"
+            (blank #{w1} #(let [q (r)]
+                            (is (= :owed (:state q)))
+                            (is (= :unreadable-ledger (get-in q [:blocked :reason])))))))
+        (add! :qa-plan (none-plan d))
+        (let [p2 (add! :qa-plan (product-plan d ["one"]))]
+          (testing "a newest plan with no content does not fall back to an earlier :none plan"
+            (blank #{p2} #(let [q (r)]
+                            (is (= :owed (:state q)))
+                            (is (nil? (:plan q)))))))))))
 
 (deftest implementation-review-passed-reads-the-newest-build-from-standing
   (with-tmp

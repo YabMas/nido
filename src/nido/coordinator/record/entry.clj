@@ -52,13 +52,14 @@
 (defn ^{:malli/schema [:=> [:cat :any :int] [:maybe :map]]}
   parsed
   "The entry at `seq-n` on `w` parsed through the READ contract and stamped with its :seq and :at,
-   or nil when it is absent or does not parse — a reader following a citation has to be able to
-   find nothing without the caller crashing."
+   or nil when it is absent, holds no content, or does not parse — a reader following a citation
+   has to be able to find nothing without the caller crashing, and a reader that counts what it
+   read against the index (standing's `readable`) has to see a contentless entry as missing."
   [w seq-n]
   (when-let [row (some #(when (= seq-n (:seq %)) %) (:entries w))]
     (try (let [k (conj (text-key w seq-n) (:kind row))]
-           (-> (or (io/cache-lookup parsed-cache k)
-                   (when-let [t (text w seq-n)]
-                     (io/cache-store parsed-cache cap k (report/parse-event (:kind row) (edn/read-string t)))))
-               (assoc :seq (:seq row) :at (:at row))))
+           (some-> (or (io/cache-lookup parsed-cache k)
+                       (when-let [t (text w seq-n)]
+                         (io/cache-store parsed-cache cap k (report/parse-event (:kind row) (edn/read-string t)))))
+                   (assoc :seq (:seq row) :at (:at row))))
          (catch Throwable _ nil))))

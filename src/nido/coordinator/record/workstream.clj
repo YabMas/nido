@@ -2231,7 +2231,8 @@
   entries-of
   "Every typed entry of `kind` on this workstream, oldest first, each parsed
    through the READ contract and stamped with :seq/:at. Entries that no longer
-   parse are dropped, on the same degrade-to-nil contract latest-entry has.
+   parse, or hold no content, are dropped, on the same degrade-to-nil contract
+   latest-entry has — so a reader counting them against the index sees each as missing.
 
    `latest-entry` answers `the current one`, which is what almost every reader
    wants. This answers `was one ever written about THIS record` — the question a
