@@ -90,6 +90,12 @@
       (is (not (str/includes? (:body removed) "position-chip · every position")))
       (is (str/includes? (:body removed) "chat-panel · empty")))))
 
+(deftest a-picks-body-the-decoder-refuses-changes-no-pick
+  (doseq [uri ["/_catalog/chat/picks" "/_catalog/chat/unpick/0"]]
+    (let [r (catalog-chat/handle! {:request-method :post :uri uri
+                                   :body (java.io.ByteArrayInputStream. (.getBytes "not json" "UTF-8"))})]
+      (is (not (str/includes? (str (:body r)) "picks")) (str uri " patches neither the picks nor their chips")))))
+
 (defn- with-open-panel [f]
   (let [sent (atom [])
         streams (:streams @#'catalog-chat/chat-host)

@@ -203,10 +203,11 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
     (if (and (sequential? v) (every? map? v)) (vec v) [])))
 
 (defn- posted-picks
-  "The picks a request posted through the panel's action `k`, read by the panel's decoder; empty
-   when the decoder refused the body."
+  "The picks a request posted through the panel's action `k`, read by the panel's decoder; nil
+   when the decoder refused the body, which its caller acts on not at all."
   [k req]
-  (parse-picks (:picks (:ok (host/decode k panel-id req)))))
+  (when-let [fields (:ok (host/decode k panel-id req))]
+    (parse-picks (:picks fields))))
 
 (defn- picks-event [ps]
   (wire/patch-elements-event
@@ -224,10 +225,11 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
          :opening (fn [] (rejoin!) [(bar-event)])))
 
 (defn- unpick [req i]
-  (let [ps   (posted-picks :unpick req)
-        kept (vec (keep-indexed (fn [j p] (when (not= j i) p)) ps))]
-    (host/sse (wire/patch-signals-event (host/signals-patch panel-id {:picks (json/generate-string kept)}))
-              (picks-event kept))))
+  (if-let [ps (posted-picks :unpick req)]
+    (let [kept (vec (keep-indexed (fn [j p] (when (not= j i) p)) ps))]
+      (host/sse (wire/patch-signals-event (host/signals-patch panel-id {:picks (json/generate-string kept)}))
+                (picks-event kept)))
+    (host/sse)))
 
 (def ^:private step-line #"^land · (.+)$")
 (def ^:private refused-line #"^(?:land|land:record) REFUSED · (.+)$")
@@ -390,7 +392,7 @@ deliberate act — Publish in the catalog, or a terminal — never a consequence
       (or (host/handle! chat-host req)
           (when (= ["_catalog" "chat"] (take 2 segs))
             (case [request-method (get segs 2)]
-              [:post "picks"]   (host/sse (picks-event (posted-picks :sync-picks req)))
+              [:post "picks"]   (if-let [ps (posted-picks :sync-picks req)] (host/sse (picks-event ps)) (host/sse))
               [:post "unpick"]  (if-let [i (some-> (get segs 3) parse-long)]
                                   (unpick req i)
                                   {:status 404 :body ""})

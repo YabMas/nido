@@ -287,7 +287,8 @@
         ;; message takes, its acceptance and their leaving the stage.
         images (locking staged
                  (let [images @staged]
-                   (when (and (or (seq words) (seq images))
+                   (when (and fields
+                              (or (seq words) (seq images))
                               (let [accept #((via chat :send! chat/send!) chat words (vec (refs (assoc req :fields fields))) images)]
                                 (if guard (guard accept) (accept))))
                      (reset! staged [])

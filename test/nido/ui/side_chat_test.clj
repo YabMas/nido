@@ -203,6 +203,17 @@
   (is (= 1 (count (chats-shown "/workstreams/nido/ws-1"))))
   (is (= 1 (count (:images (first @sent)))) "the image is the message"))
 
+(deftest a-body-the-decoder-refuses-starts-no-chat-and-keeps-the-staged-image
+  (side-chat/handle! {:request-method :post :uri "/_chat/new/attach"
+                      :headers (at "/workstreams/nido/ws-1")
+                      :body (java.io.ByteArrayInputStream. png)})
+  (post! "/_chat/new/send" "/workstreams/nido/ws-1" "not json")
+  (is (empty? (chats-shown "/workstreams/nido/ws-1")) "no chat is started")
+  (is (empty? @sent) "nothing is sent")
+  (post! "/_chat/new/send" "/workstreams/nido/ws-1"
+         (json/generate-string {"chat" {"chat_new" {"text" ""}}}))
+  (is (= 1 (count (:images (first @sent)))) "the image stayed staged for the next message"))
+
 (deftest a-turn-that-ends-while-the-person-is-away-marks-its-workstream
   (let [id (new-chat! "/workstreams/nido/ws-1")
         c  (#'side-chat/operator id)]

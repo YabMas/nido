@@ -87,6 +87,17 @@
                        :body (ByteArrayInputStream. (.getBytes "{\"chat\":{\"nido_chat\":{\"text\":\"hi\"}}}"))}))
     (is (= 1 (count @(:staged h))))))
 
+(deftest a-body-the-decoder-refuses-sends-nothing-and-keeps-the-staged-images
+  (let [h    (fresh-host)
+        sent (atom nil)]
+    (post-image h png-bytes)
+    (with-redefs [chat/send! (fn [& args] (reset! sent args) true)]
+      (doseq [body ["not json" "{\"chat\":{\"nido_chat\":{}}}"]]
+        (host/handle! h {:request-method :post :uri (str "/" (str/join "/" (:prefix h)) "/send")
+                         :body (ByteArrayInputStream. (.getBytes ^String body))})))
+    (is (nil? @sent))
+    (is (= 1 (count @(:staged h))))))
+
 (deftest a-message-carries-at-most-four-images
   (let [h (fresh-host)]
     (doseq [i (range 4)]
