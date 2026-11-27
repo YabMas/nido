@@ -472,6 +472,7 @@
      :delegates [derive-screen parse-findings-lines resolve-failure-msg
                  work/session-recovery
                  work/improvement-holds
+                 work/with-request-read
                  structure/ensure! structure/forward
                  presentation/target presentation/forward]})
   (Operation start! "Start the dashboard server."

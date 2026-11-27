@@ -526,6 +526,16 @@
   [f]
   (binding [*rows-memo* (atom {})] (f)))
 
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  with-request-read
+  "Call `f` — one render — with one request read open across it: every history derivation inside
+   it (`proposals`, `improvement-holds`, `session-recovery`, and what each reads) answers from one
+   read of each project's runs, so a page cannot show a proposal decided and its hold still
+   waiting on it. Nothing it reads outlives the call. For a read-only render: a run appended
+   inside it is not seen by a later read inside it."
+  [f]
+  (records/with-request-read f))
+
 (declare live-session-names replyable? held-project winding-down* gates* board-stamp*)
 
 (defn- band-of

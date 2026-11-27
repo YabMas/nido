@@ -1191,7 +1191,8 @@
       (presentation-forward req)
       (case request-method
         :post (handle-post req)
-        (handle-get req))))
+        ;; A GET is a render: its history derivations share one read of the runs.
+        (work/with-request-read #(handle-get req)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Slow-request log

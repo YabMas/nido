@@ -97,6 +97,15 @@
        (= (str (core/nido-root)) (:home (release/paths)))
        (not (in-a-test?))))
 
+(defn ^{:malli/schema [:=> [:cat] [:tuple :keyword :string]]} core-identity
+  "Which core this process's next request would reach: `[:daemon <socket>]`, or `[:local <nido
+   home>]` for the in-process core of that home. Two requests with equal identities are answered
+   by the same core, so a value read from one may stand for what the other would read."
+  []
+  (if (daemon-answers?)
+    [:daemon (socket)]
+    [:local (str (core/nido-root))]))
+
 ;; ── what the core answers ──────────────────────────────────────────────────────
 ;; Every request is one of the variants core-api serves, and every answer is data — a command's
 ;; outcome, a read's reply, or `Unavailable` when no core answered. Nothing here throws; a caller

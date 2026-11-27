@@ -83,6 +83,11 @@
     "Run a thunk with one read of each project's rows shared across it. The board asks two
      questions of the same rows, and this is what makes them one read rather than two."
     {:signature [:=> [:catn [:f :any]] :any]})
+  (Operation with-request-read
+    "Run one render with one request read open across it: every history derivation inside it —
+     proposals, improvement holds, session recovery and the reads within each — answers from one
+     read of each project's runs. Nothing it reads outlives the call."
+    {:signature [:=> [:catn [:f :any]] :any]})
   (Operation newest-workstream
     "The id of a project's newest minted workstream the core holds, or nil."
     {:signature [:=> [:catn [:project ProjectName]] [:maybe :string]]})

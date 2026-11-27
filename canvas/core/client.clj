@@ -88,6 +88,10 @@
   (Operation socket
     "The daemon's command socket."
     {:signature [:=> [:catn] :string]})
+  (Operation core-identity
+    "Which core this process's next request would reach — the daemon by its socket, or the
+     in-process core of a nido home — so a value read from one is never taken for another's."
+    {:signature [:=> [:catn] [:tuple :keyword :string]]})
   (Operation use-local!
     "Answer every request of this process from an in-process core. For the test suite and the surface
      bench's measuring child only."
