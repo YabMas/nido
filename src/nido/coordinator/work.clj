@@ -4634,14 +4634,20 @@
   "How lane-drain reaches the core: a drain's state, a notice to its conductor keyed by its event, a
    slice's unit opened on its brief, a slice's landing granted, and a drain's workstream closed."
   {:state       (fn [project ws-id] (wcore/state project ws-id))
+   ;; Each keyed also by the core state it is decided on: the writer answers a key with the outcome
+   ;; first committed under it, a refusal included, so a key that outlived that state would replay
+   ;; a close refused while a unit was open, or a notice refused while the drain was closed, after
+   ;; the state moved. A retry over the same state is answered once; the domain keeps a notice once.
    :notice!     (fn [project ws-id k text]
                   (wcore/act! project ws-id {:command :post-notice :notice k :text text}
-                              {:key (str "drain/" (name project) "/" ws-id "/" k)}))
-   ;; Keyed by the drain, so a close retried — by the person, or by a wakes pass finding the ledger
-   ;; closed and the core open — closes it once.
+                              {:key (str "drain/" (name project) "/" ws-id "/" k "@"
+                                         (hash (wcore/state project ws-id)))}))
+   ;; A close retried — by the person, or by a wakes pass finding the ledger closed and the core
+   ;; open — over the same state closes it once.
    :close!      (fn [project ws-id]
                   (wcore/act! project ws-id {:command :close-workstream}
-                              {:key (str "drain/" (name project) "/" ws-id "/close")}))
+                              {:key (str "drain/" (name project) "/" ws-id "/close@"
+                                         (hash (wcore/state project ws-id)))}))
    :open-slice! (fn [project slice-id unit brief]
                   (let [r (wcore/act! project slice-id
                                       {:command :open-unit :unit unit :project (name project)

@@ -392,3 +392,11 @@
     (is (not (b/person-input? noticed)))
     (is (= ["a"] (map :ws (b/wakes (assoc opts :wake-cap 1)
                                    {"a" {:state noticed :pos 1} "b" {:state noticed :pos 2}} ["a" "b"]))))))
+
+(deftest a-withheld-wake-takes-no-place-under-the-background-cap
+  (let [noticed (state-after [{:command :post-notice :notice "n" :text "census"}])
+        f       (b/conductor-spec-fn {:socket "/s" :bb-bin "bb" :ws-dir (constantly "/ws") :drain-brief (constantly nil)})
+        ws      (b/wakes (assoc opts :wake-cap 1 :spec-fn f)
+                         {"d" {:state (drain-state) :pos 1} "b" {:state noticed :pos 2}} ["d" "b"])]
+    (is (= ["d"] (map :ws (filter :withheld? ws))) "the drain is withheld")
+    (is (= ["b"] (map :ws (remove :withheld? ws))) "and its place passes to the next workstream owed")))

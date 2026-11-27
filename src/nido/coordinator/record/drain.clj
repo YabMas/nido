@@ -179,9 +179,14 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   exit-observed
-  "The :exit-observed entry, or nil."
+  "The :exit-observed entry that stands for the drain's current opening — the newest, when it is
+   newer than every :closed and :reopened on the drain — or nil. One observed before the drain was
+   last closed or reopened observes an exit a close no longer stands on."
   [w]
-  (first (entries-in w :exit-observed)))
+  (let [o (last (rows-of w :exit-observed))
+        since (or (:seq (last (filter #(#{:closed :reopened} (:kind %)) (:entries w)))) 0)]
+    (when (and o (> (:seq o) since))
+      (ws/entry-at-seq (:project w) (:id w) (:seq o)))))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   open-escalations

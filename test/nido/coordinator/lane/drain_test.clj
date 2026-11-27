@@ -506,7 +506,15 @@
                  (refused #(lane/close! (assoc *core* :close! (fn [_ _] {:refused {:reason :units-not-landed}})) p d))))
           (is (nil? (ws/closure (ws/read-ws p d))))
           (is (int? (lane/close! *core* p d)) "a retry takes the exit already observed")
-          (is (= 1 (count (filter #(= :exit-observed (:kind %)) (:entries (ws/read-ws p d)))))))))))
+          (is (= 1 (count (filter #(= :exit-observed (:kind %)) (:entries (ws/read-ws p d))))))))
+      (testing "a reopened drain is closed on an exit observed again, not the one before it reopened"
+        (let [[d _] (coordinated-drain)]
+          (drain/record-census! p d {:recipe (drain/version (ws/read-ws p d)) :remaining 0 :groups []})
+          (let [n1 (lane/close! *core* p d)]
+            (ws/append-entry! p d {:kind :reopened} (pr-str {:format :reopened}))
+            (let [n2 (lane/close! *core* p d)]
+              (is (> n2 n1) "the exit is observed anew")
+              (is (= :done (:outcome (ws/closure (ws/read-ws p d))))))))))))
 
 (deftest the-coordinator-brief-prints-runnable-levers-and-asks-for-a-recipe
   (with-tmp

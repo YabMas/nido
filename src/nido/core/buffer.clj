@@ -134,16 +134,21 @@
    conductor turns hearing no person's input run, in `owed-order`. A workstream backing off at
    `:now` (`backing-off?`) is woken by neither, a person's input included: the host refused the
    last run resources, and a person's message does not give them back. A wake whose spec could not
-   be made is answered `:withheld?`, for the caller to leave unsent and decide again."
+   be made is answered `:withheld?`, for the caller to leave unsent and decide again; it takes no
+   place under the cap, which passes to the next workstream in `owed-order`."
   [{:keys [max-failures wake-cap now] :or {wake-cap 4} :as opts} states owed-order]
   (let [owed (filter #(and (wake-owed? (:state (states %)) max-failures)
                            (not (and now (backing-off? (:state (states %)) now))))
                      owed-order)
         {person true other false} (group-by #(person-input? (:state (states %))) owed)
         running (reduce + (map (comp background-running :state) (vals states)))
-        admitted (concat person (take (max 0 (- wake-cap running)) other))]
-    (for [ws admitted :let [{:keys [state pos]} (states ws)]]
-      (assoc (wake opts ws state pos) :ws ws))))
+        wake-of (fn [ws] (let [{:keys [state pos]} (states ws)] (assoc (wake opts ws state pos) :ws ws)))]
+    (concat (map wake-of person)
+            (loop [[ws & more :as left] other, room (max 0 (- wake-cap running)), out []]
+              (if (or (empty? left) (zero? room))
+                out
+                (let [w (wake-of ws)]
+                  (recur more (if (:withheld? w) room (dec room)) (conj out w))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :string :map :int] [:sequential :map]]} decisions
   "The keyed commands the rules issue for workstream `ws` at committed `state` (position `pos`),

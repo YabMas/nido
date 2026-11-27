@@ -3666,3 +3666,19 @@
                                                     {:label "Hold"}]})))
       "a question's landing option is the same Land, whatever it was called"))
 
+
+(deftest a-drain-s-keyed-close-and-notice-are-decided-again-once-the-core-state-moves
+  (fake-core/with-fake-core
+    (fn [core]
+      (let [{:keys [close! notice!]} @#'work/drain-core]
+        (fake-core/seed! core :brian "ws-d" [{:command :open-unit :unit "u" :project "brian" :goal "g"}])
+        (is (= :units-not-landed (get-in (close! :brian "ws-d") [:refused :reason])))
+        (is (= :units-not-landed (get-in (close! :brian "ws-d") [:refused :reason])) "the same state, the same answer")
+        (fake-core/seed! core :brian "ws-d" [{:command :record-merge :unit "u"}])
+        (is (contains? (close! :brian "ws-d") :events) "a close refused before the unit landed closes it after")
+        (is (= :workstream-closed (get-in (notice! :brian "ws-d" "wake:census:9" "census") [:refused :reason])))
+        (fake-core/seed! core :brian "ws-d" [{:command :reopen-workstream}])
+        (is (contains? (notice! :brian "ws-d" "wake:census:9" "census") :events)
+            "a notice refused while the drain was closed is posted once it is open")
+        (is (= :notice-exists (get-in (notice! :brian "ws-d" "wake:census:9" "census") [:refused :reason]))
+            "and once only")))))
