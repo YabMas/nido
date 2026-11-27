@@ -239,6 +239,23 @@
         /* The person awaited past the spine: a landing, or a blocker after the implementation. */
         .arc-past { display:flex; gap:var(--space-4); align-items:center; padding:var(--space-3) 0;
                     font-size:var(--fs-sm); color:var(--needs); }
+        /* The Land row's QA line: the tally the brief will report, and the walks it is built from. */
+        .arc-qa { display:flex; gap:var(--space-6); align-items:baseline; flex-wrap:wrap; padding:var(--space-2) 0 var(--space-4);
+                  font-size:var(--fs-xs); color:var(--text-muted); }
+        .arc-qa-l { color:var(--text-faint); text-transform:uppercase; letter-spacing:0.04em; }
+        .arc-qa-w { cursor:pointer; }
+        /* A QA walk: one row per step, its outcome mark, its note and its screenshots. */
+        .qa-walk { padding-left:0; list-style:none; }
+        .qa-step { padding:var(--space-6) 0; border-bottom:1px solid var(--border-subtle); }
+        .qa-step-head { display:flex; gap:var(--space-6); align-items:baseline; }
+        .qa-o { flex:none; width:1.2em; }
+        .qa-step.pass .qa-o { color:var(--ok); }
+        .qa-step.fail .qa-o { color:var(--failed); }
+        .qa-step.blocked .qa-o { color:var(--waiting); }
+        .qa-n { flex:none; color:var(--text-faint); }
+        .qa-note { color:var(--text-muted); font-size:var(--fs-sm); margin:var(--space-4) 0; }
+        .qa-shots { display:flex; flex-wrap:wrap; gap:var(--space-6); margin-top:var(--space-4); }
+        .qa-thumb { display:block; max-width:160px; max-height:120px; border-radius:var(--radius-4); border:1px solid var(--border); }
         .arc-sub { padding:var(--space-2) 0 var(--space-8); background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); }
         .hist-head { display:inline-flex; gap:var(--space-7); align-items:baseline; cursor:pointer;
                      font-size:var(--fs-sm); color:var(--text-muted); padding:var(--space-3) 0; }

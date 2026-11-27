@@ -2242,3 +2242,52 @@
     (let [html (pane stopped)]
       (is (str/includes? html "Its conductor stopped"))
       (is (str/includes? html "/workstreams/nido/ws-1/gate/wake?ask=s7") "its Wake names the stop it answers"))))
+
+;; ── QA entries and the Land row's QA line ──────────────────────────────────
+
+(def ^:private a-digest (apply str (repeat 64 "b")))
+
+(deftest a-qa-plan-entry-draws-its-sections-and-numbered-steps
+  (let [html (str (h/html (#'views/report-body
+                           {:format :qa-plan :design {:seq 4} :surface :product
+                            :what-changed "A teacher sees the total."
+                            :steps [{:id "open" :action "Open the order." :expected "It opens."}
+                                    {:id "check" :action "Read the total." :expected "It is 12."}]
+                            :also-check ["The class list still loads."]})))]
+    (is (str/includes? html "What changed"))
+    (is (re-find #"<ol class=\"qa-steps\"><li>Open the order\.<div class=\"meta\">Expected: It opens\.</div></li>" html))
+    (is (str/includes? html "The class list still loads.")))
+  (is (str/includes? (str (h/html (#'views/report-body {:format :qa-plan :design {:seq 4} :surface :none
+                                                        :reason "a background job only"})))
+                     "Nothing a user sees changes: a background job only")))
+
+(deftest a-qa-walk-entry-draws-one-row-per-step-with-its-screenshots
+  (let [html (str (h/html (#'views/report-body
+                           {:format :qa-walk :plan {:seq 5} :app "http://localhost:3100"
+                            :note "played as a teacher\nafter the fix"
+                            :plan-steps [{:id "open" :action "Open the order." :expected "x"}
+                                         {:id "check" :action "Read the total." :expected "y"}]
+                            :counted? false
+                            :results [{:step "check" :outcome :fail :note "the total read 0" :screenshots [a-digest]}
+                                      {:step "open" :outcome :pass :screenshots [a-digest]}]})))]
+    (is (str/includes? html "before the newest build"))
+    (is (str/includes? html "1 of 2 steps passed"))
+    (is (str/includes? html "<p class=\"qa-note\">played as a teacher</p><p class=\"qa-note\">after the fix</p>")
+        "the caveats, verbatim, line by line")
+    (is (< (str/index-of html "Open the order.") (str/index-of html "Read the total.")) "in plan order")
+    (is (re-find #"qa-step fail.*✗.*2\..*Read the total\..*the total read 0" html))
+    (is (str/includes? html (str "<a href=\"/qa/screenshot/" a-digest "\" target=\"_blank\"")) "a thumbnail opens the full image")
+    (is (str/includes? html (str "<img alt=\"Screenshot of step 2\" class=\"qa-thumb\" loading=\"lazy\" src=\"/qa/screenshot/" a-digest "\"")))))
+
+(deftest the-land-row-says-what-the-brief-will-report-and-opens-each-walk
+  (let [render #(pr-str (#'views/arc-block {:ws-id "w" :project "nido"} % [] nil false nil))
+        land   (fn [qa] {:stages [] :excursions [] :past {}
+                         :land {:stage :land :state :ahead :visits 0 :entries 0
+                                :trail {:granted? false :steps []} :qa qa}})
+        html   (render (land {:state :passed :walks [9 7] :earlier [7] :tally {:passed 2 :of 2}}))]
+    (is (str/includes? html "2 of 2 steps passed"))
+    (is (str/includes? html "walk 9"))
+    (is (str/includes? html "earlier walk 7"))
+    (is (re-find #"entry=9" html) "each walk opens as its entry")
+    (is (str/includes? (render (land {:state :owed})) "owed"))
+    (is (not (str/includes? (render (land {:state :off})) "arc-qa")) "no QA line where QA is off")))

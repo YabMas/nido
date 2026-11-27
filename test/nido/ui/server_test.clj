@@ -887,3 +887,14 @@
     (is (= {:ask "a1" :text "yes"} (payload "ask=a1" :reply {:text "yes"})))
     (is (= 7 (payload "entry=7" :option-a {})) "a ledger card names the record it answers")
     (is (= {:seq 7 :text "left"} (payload "entry=7" :reply {:text "left"})))))
+
+(deftest a-qa-screenshot-is-served-through-the-work-plane-in-its-kept-media-type
+  (with-redefs [nido.coordinator.work/qa-screenshot
+                (fn [d] (when (= d (apply str (repeat 64 "c")))
+                          {:digest d :mime "image/webp"
+                           :data (.encodeToString (java.util.Base64/getEncoder) (.getBytes "bytes"))}))]
+    (let [resp (server/handle-request {:request-method :get :uri (str "/qa/screenshot/" (apply str (repeat 64 "c")))})]
+      (is (= 200 (:status resp)))
+      (is (= "image/webp" (get-in resp [:headers "Content-Type"])))
+      (is (= "bytes" (slurp (:body resp)))))
+    (is (= 404 (:status (server/handle-request {:request-method :get :uri "/qa/screenshot/nope"}))))))

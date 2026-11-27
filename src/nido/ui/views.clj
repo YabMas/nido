@@ -1474,6 +1474,71 @@
             [:code (str kind)] " — the two disagree about a kind they both know."))]
    [:pre markdown]])
 
+(defn- qa-plan-card
+  "A :qa-plan entry: its sections in `docs/reference/qa-brief.md`'s order and its numbered steps,
+   each one action then what should happen — or, for a :none plan, the one line saying why
+   nothing a user sees changes."
+  [{:keys [surface reason design what-changed before-you-start steps also-check not-in-change]}]
+  [:div.md
+   [:h2 "QA plan"]
+   [:div.report-meta
+    [:span.chip (if (= :product surface) "a change a user sees" "nothing a user sees changes")]
+    [:span.meta "plans design " (:seq design)]]
+   (if (= :none surface)
+     [:p "Nothing a user sees changes: " reason]
+     (list
+      (when what-changed [:div [:h3 "What changed"] [:p what-changed]])
+      (when before-you-start [:div [:h3 "Before you start"] [:p before-you-start]])
+      (when (seq steps)
+        [:div [:h3 "Steps"]
+         (into [:ol.qa-steps]
+               (for [{:keys [action expected]} steps]
+                 [:li action [:div.meta "Expected: " expected]]))])
+      (when (seq also-check) [:div [:h3 "Also check"] (into [:ul] (for [a also-check] [:li a]))])
+      (when (seq not-in-change)
+        [:div [:h3 "Not in this change"] (into [:ul] (for [a not-in-change] [:li a]))])))])
+
+(defn- qa-note
+  "A walk's note as written — each of its lines a paragraph, so the walker's line breaks stand."
+  [note]
+  (into [:div] (for [l (str/split-lines (str note)) :when (not (str/blank? l))] [:p.qa-note l])))
+
+(def ^:private qa-outcome-marks {:pass "✓" :fail "✗" :blocked "⊘"})
+
+(defn- qa-screenshot-href [digest] (str "/qa/screenshot/" digest))
+
+(defn- qa-walk-card
+  "A :qa-walk entry, hydrated with its plan's steps (`:plan-steps`) and whether the QA reading
+   counts it (`:counted?`): its caveats — the walker's note, verbatim, and the app it was walked
+   against — and one row per step in plan order: outcome mark, step number and action, the note,
+   and its screenshots as thumbnails, each opening the full image."
+  [{:keys [plan app results note plan-steps counted?]}]
+  (let [by-step (into {} (map (juxt :step identity)) results)
+        passed  (count (filter #(= :pass (:outcome %)) results))]
+    [:div.md
+     [:h2 "QA walk of plan " (:seq plan)]
+     [:div.report-meta
+      [:span.chip (if counted? "walks the build that lands" "before the newest build")]
+      [:span.meta passed " of " (count results) " steps passed"]]
+     (when app [:p.meta "Walked against " app])
+     (when note [:div [:h3 "How it was walked"] (qa-note note)])
+     (into [:ol.qa-walk]
+           (for [[i {:keys [id action]}] (map-indexed vector (or (seq plan-steps)
+                                                                  (map (fn [r] {:id (:step r) :action (:step r)}) results)))
+                 :let [{:keys [outcome note screenshots]} (get by-step id)]]
+             [:li {:class (str "qa-step " (some-> outcome name))}
+              [:div.qa-step-head
+               [:span.qa-o {:title (some-> outcome name)} (qa-outcome-marks outcome "?")]
+               [:span.qa-n (str (inc i) ".")]
+               [:span action]]
+              (when note (qa-note note))
+              (when (seq screenshots)
+                (into [:div.qa-shots]
+                      (for [d screenshots]
+                        [:a {:href (qa-screenshot-href d) :target "_blank" :title "open the full screenshot"}
+                         [:img.qa-thumb {:src (qa-screenshot-href d) :alt (str "Screenshot of step " (inc i))
+                                         :loading "lazy"}]])))]))]))
+
 (defn- report-body
   "Dispatch a gate/ledger report on :format — each typed event gets its curated card,
    markdown reports render through md/render. `pos` is the workstream pane's reading
@@ -1505,6 +1570,8 @@
      :phase-gate               (md/render (report/report->markdown report))
      :proposed-ticket          (md/render (report/report->markdown report))
      :proposed-tickets         (md/render (report/report->markdown report))
+     :qa-plan                  (qa-plan-card report)
+     :qa-walk                  (qa-walk-card report)
      (md/render (:markdown report))))))
 
 ;; Defined below with the Workstreams page, which hosts the same pane.
@@ -1773,6 +1840,25 @@
              [:span.lt title]
              (when superseded-by [:span.lx (str "superseded by " superseded-by)])]))))
 
+(defn- land-qa-line
+  "The Land row's QA line: what the brief a landing writes will report — the tally of the report's
+   newest walk, and every walk the report is built from, each opening as its entry under the QA
+   stage — or the QA reading's state where there is no report. Nothing where QA is :off."
+  [pos {:keys [state walks earlier tally]}]
+  (when (and state (not= :off state))
+    [:div.arc-qa
+     [:span.arc-qa-l "QA"]
+     (if tally
+       [:span (str (:passed tally) " of " (:of tally) " steps passed")]
+       [:span (case state
+                :not-applicable "nothing a user sees changes"
+                :failed         "a walk of the build failed"
+                :owed           "owed"
+                (name state))])
+     (for [s walks]
+       [:a.arc-qa-w {"data-on:click" (pane-fragment (assoc pos :stage :qa :entry s :rounds nil))}
+        (str (if (some #{s} earlier) "earlier walk " "walk ") s)])]))
+
 (defn- arc-block
   "The arc: every stage in order, the expanded one showing its records, and the
    open record shown under the stage it belongs to.
@@ -1801,6 +1887,8 @@
                                            :open? (= stage (:stage pos))}
                                           {} (fn [_ {:keys [stage]}]
                                                (pane-fragment-url (at-stage pos stage))))]
+                     (= :land stage)
+                     (conj (land-qa-line pos (:qa facet)))
                      (= stage (:stage pos))
                      (conj [:div.arc-sub
                             (arc-entry-rows pos entries seqs)

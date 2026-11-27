@@ -65,6 +65,16 @@
      :body (io/input-stream res)}
     {:status 404 :body ""}))
 
+(defn- qa-screenshot-response
+  "A QA walk's screenshot by `digest`, read through the work plane and answered in the media type
+   it was kept with — or 404 when nothing is kept by it. Cached for good: a digest names its bytes."
+  [digest]
+  (if-let [{:keys [mime data]} (work/qa-screenshot digest)]
+    {:status 200
+     :headers {"Content-Type" mime "Cache-Control" "public, max-age=31536000, immutable"}
+     :body (java.io.ByteArrayInputStream. (.decode (java.util.Base64/getDecoder) ^String data))}
+    {:status 404 :body ""}))
+
 ;; ---------------------------------------------------------------------------
 ;; Routing
 
@@ -1094,6 +1104,11 @@
               vs      (assoc parsed :scope project)
               screen  (derive-screen vs)]
           (page-response project (views/workstream-page (rail-ctx req :workstreams project screen) screen)))
+
+        ;; GET /qa/screenshot/:digest — a QA walk's screenshot, through the work plane, as the
+        ;; media type it was kept with. A digest names its bytes, so it never changes.
+        (and (= 3 (count segments)) (= ["qa" "screenshot"] (subvec segments 0 2)))
+        (qa-screenshot-response (nth segments 2))
 
         ;; GET /gate/:project/:ws-id — legacy deep link → the workstream it names
         (and (= 3 (count segments)) (= "gate" (first segments)))
