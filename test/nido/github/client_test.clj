@@ -1,7 +1,8 @@
 (ns nido.github.client-test
   (:require
    [cheshire.core :as json]
-   [clojure.test :refer [deftest is]]
+   [clojure.string :as str]
+   [clojure.test :refer [deftest is testing]]
    [nido.github.client :as gh]))
 
 (deftest list-merged-parses-json
@@ -77,6 +78,69 @@
                            (case (nth args 2) "view" {:exit 0 :out "false"} {:exit 1 :err "not mergeable"}))]
       (is (= {:error :gh :detail "not mergeable"} (gh/squash-pr! "o/r" 5)) "gh's refusal in its own words")
       (is (= ["view" "merge"] @calls) "a ready PR is not readied"))))
+
+(defn- land-pr-with
+  "Run land-pr! against a gh whose `--auto` answers `auto`, whose route read answers `route` (the
+   repository map) and whose every other call succeeds; answer [result calls], each call named by
+   what it does."
+  [auto route]
+  (let [calls (atom [])
+        named (fn [args]
+                (cond (some #{"--auto"} args)                                  :auto
+                      (some #(str/includes? (str %) "enqueuePullRequest") args) :enqueue
+                      (some #(str/includes? (str %) "isMergeQueueEnabled") args) :route
+                      (some #{"--squash"} args)                                :squash
+                      :else                                                   (keyword (nth args 2))))]
+    (with-redefs [gh/sh! (fn [args]
+                           (let [c (named args)]
+                             (swap! calls conj c)
+                             (case c
+                               :auto  auto
+                               :route {:exit 0 :out (json/generate-string {:data {:repository route}})}
+                               :view  {:exit 0 :out "false"}
+                               {:exit 0 :out ""})))]
+      [(gh/land-pr! "o/r" 7) @calls])))
+
+(def ^:private method-required
+  {:exit 1 :out "" :err "--merge, --rebase, or --squash required when not running interactively"})
+
+(deftest land-pr-puts-a-pr-on-auto-merge-where-the-repository-allows-it
+  (is (= [{:status :ok :via :auto} [:auto]] (land-pr-with {:exit 0 :out ""} nil))))
+
+(deftest land-pr-enqueues-on-a-merge-queue-where-auto-merge-is-refused
+  (is (= [{:status :ok :via :queue} [:auto :route :enqueue]]
+         (land-pr-with {:exit 1 :err "Pull request Auto merge is not allowed for this repository"}
+                       {:autoMergeAllowed false :squashMergeAllowed true
+                        :pullRequest {:id "PR_1" :isMergeQueueEnabled true}}))))
+
+(deftest land-pr-squash-merges-where-the-repository-has-neither-queue-nor-auto-merge
+  ;; brian-study/babel: auto-merge off, no merge queue — gh demands a method, and nothing would
+  ;; ever merge a PR left waiting, so the landing is the squash-merge its PRs were merged by.
+  (is (= [{:status :ok :via :squash} [:auto :route :view :squash]]
+         (land-pr-with method-required
+                       {:autoMergeAllowed false :squashMergeAllowed true
+                        :pullRequest {:id "PR_1" :isMergeQueueEnabled false}}))))
+
+(deftest land-pr-runs-no-merge-the-repository-has-not-allowed
+  (testing "auto-merge allowed but no queue: gh's own refusal, and no direct merge"
+    (is (= [{:error :gh :detail (:err method-required)} [:auto :route]]
+           (land-pr-with method-required
+                         {:autoMergeAllowed true :squashMergeAllowed true
+                          :pullRequest {:id "PR_1" :isMergeQueueEnabled false}}))))
+  (testing "squash merges disallowed: refused, saying so"
+    (let [[r calls] (land-pr-with method-required
+                                  {:autoMergeAllowed false :squashMergeAllowed false
+                                   :pullRequest {:id "PR_1" :isMergeQueueEnabled false}})]
+      (is (= :gh (:error r)))
+      (is (re-find #"disallows squash" (:detail r)))
+      (is (= [:auto :route] calls))))
+  (testing "a refusal that is not about the route is answered as it is"
+    (is (= [{:error :gh :detail "required checks are failing"} [:auto]]
+           (land-pr-with {:exit 1 :err "required checks are failing"} nil))))
+  (testing "a route read that answers no pull request is refused, never merged"
+    (let [[r calls] (land-pr-with method-required {:autoMergeAllowed false :squashMergeAllowed true})]
+      (is (= :gh (:error r)))
+      (is (= [:auto :route] calls)))))
 
 (deftest merge-queue-timeline-reads-the-merged-flag-and-queue-events-in-one-read
   (let [calls (atom [])]

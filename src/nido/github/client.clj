@@ -97,19 +97,27 @@
       (let [m (sh! ["gh" "pr" "merge" (str number) "--repo" repo "--squash"])]
         (if (zero? (:exit m)) {:status :ok :via :squash} (fail m))))))
 
-(def ^:private auto-merge-off
-  "What GitHub answers `gh pr merge --auto` with on a repository that disables auto-merge: the call
-   never reaches the merge queue, and an enqueue is the queue's own entry point."
-  #"(?i)auto.?merge is not allowed|enablePullRequestAutoMerge")
+(def ^:private auto-merge-refused
+  "What `gh pr merge --auto` answers where it cannot put a PR on auto-merge: GitHub's refusal on a
+   repository that disables auto-merge, or gh's own demand for a merge method, which it makes only
+   when the PR's base has no merge queue. Either way the repository's setup decides what follows."
+  #"(?i)auto.?merge is not allowed|enablePullRequestAutoMerge|--merge, --rebase, or --squash required")
+
+(def ^:private merge-route-query
+  "Whether a repository allows auto-merge and squash merges, and the pull request's node id and
+   whether its base branch has a merge queue — everything land-pr! picks its route by, in one read."
+  (str "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){"
+       "autoMergeAllowed squashMergeAllowed pullRequest(number:$number){id isMergeQueueEnabled}}}"))
 
 (defn ^{:malli/schema [:=> [:cat :string :int] :map]}
   land-pr!
   "Put pull request `number` of `repo` on its way to its base branch: `gh pr merge --auto`, which
-   on a merge-queue branch enqueues it once its checks allow; where the repository refuses
-   auto-merge, an `enqueuePullRequest` by the node id read here. No merge strategy is passed: a
-   queue's own decides and refuses one. {:status :ok :via :auto|:queue} or
-   {:error :auth|:gh :detail}, :detail carrying gh's refusal in its own words, since a queue's
-   refusal names the protection to satisfy."
+   on a merge-queue branch enqueues it once its checks allow. Where gh refuses that, the
+   repository's setup picks the route: a base with a merge queue gets an `enqueuePullRequest`, and
+   a repository with neither a queue nor auto-merge is squash-merged now (squash-pr!) — nothing
+   else would ever merge it. No merge strategy is passed to the queue: its own decides and refuses
+   one. {:status :ok :via :auto|:queue|:squash} or {:error :auth|:gh :detail}, :detail carrying
+   gh's refusal in its own words, since a queue's refusal names the protection to satisfy."
   [repo number]
   (let [fail (fn [{:keys [err out]}]
                (let [msg (str/trim (str err (when (str/blank? err) out)))]
@@ -119,18 +127,40 @@
       (zero? (:exit auto))
       {:status :ok :via :auto}
 
-      (not (re-find auto-merge-off (str (:err auto) (:out auto))))
+      (not (re-find auto-merge-refused (str (:err auto) (:out auto))))
       (fail auto)
 
       :else
-      (let [view (sh! ["gh" "pr" "view" (str number) "--repo" repo "--json" "id" "--jq" ".id"])
-            id   (str/trim (str (:out view)))]
-        (if (or (not (zero? (:exit view))) (str/blank? id))
-          (fail view)
+      (let [[owner nm] (str/split repo #"/" 2)
+            view  (sh! ["gh" "api" "graphql" "-f" (str "query=" merge-route-query)
+                        "-f" (str "owner=" owner) "-f" (str "name=" nm) "-F" (str "number=" number)])
+            route (when (zero? (:exit view))
+                    (some-> (try (json/parse-string (:out view) true) (catch Exception _ nil))
+                            :data :repository))
+            {:keys [id isMergeQueueEnabled]} (:pullRequest route)]
+        (cond
+          (or (nil? route) (str/blank? (str id)))
+          (if (zero? (:exit view))
+            {:error :gh :detail (str "could not read how " repo " merges pull request " number ": "
+                                     (str/trim (str (:out view))))}
+            (fail view))
+
+          isMergeQueueEnabled
           (let [q (sh! ["gh" "api" "graphql"
                         "-f" "query=mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position state}}}"
                         "-f" (str "id=" id)])]
-            (if (zero? (:exit q)) {:status :ok :via :queue} (fail q))))))))
+            (if (zero? (:exit q)) {:status :ok :via :queue} (fail q)))
+
+          (:autoMergeAllowed route)
+          (fail auto)
+
+          (:squashMergeAllowed route)
+          (squash-pr! repo number)
+
+          :else
+          {:error :gh
+           :detail (str repo " has no merge queue, disables auto-merge and disallows squash merges, "
+                        "so nido has no merge it can run for pull request " number)})))))
 
 (def ^:private queue-timeline-query
   "A pull request's merged flag and one page of its merge-queue adds and removals, oldest first,

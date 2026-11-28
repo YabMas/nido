@@ -226,7 +226,7 @@ Each project declares how its workstreams land, as `:landing` on its entry in
 
 | `:landing` | what landing runs |
 |---|---|
-| `:pr-auto` (the default, when undeclared) | `gh pr merge --auto`, or the merge queue where the repository refuses auto-merge |
+| `:pr-auto` (the default, when undeclared) | `gh pr merge --auto`, or the merge queue where the repository refuses auto-merge, or a squash-merge now where the PR's repository has neither (brian's babel PRs) |
 | `:pr-squash` | marks a draft ready, then `gh pr merge --squash` now (fukan) |
 | `:push-main` | `bb nido:land` in the worktree — rebase, test, check, push main (nido) |
 

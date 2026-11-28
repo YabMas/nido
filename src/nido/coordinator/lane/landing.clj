@@ -38,7 +38,8 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   land!
   "Land workstream `ws-id` of `project` by the procedure the project declares (`project/landing`):
-   :pr-auto puts the PR :pr names — `owner/repo#n` — on auto-merge or its merge queue, :pr-squash
+   :pr-auto puts the PR :pr names — `owner/repo#n` — on auto-merge or its merge queue, or
+   squash-merges it where its repository has neither (github/land-pr!), :pr-squash
    squash-merges it now after marking a draft ready, :push-main runs `bb nido:land` in :dir.
    A PR procedure without a well-formed :pr is refused before anything runs, and so is a
    declaration `project/landing` refuses. The caller has already checked :pr is the workstream's
