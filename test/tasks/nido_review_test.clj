@@ -2996,3 +2996,33 @@
           (with-redefs [record/canvas-reading (fn [& _] (throw (ex-info "read" {})))]
             (is (= 0 (t/amend-check* {:project "nido" :ws-id "ws-1" :kind "baseline" :file f :worktree "/w"}))))))
       (finally (fs/delete-if-exists f)))))
+
+(deftest the-amend-dry-run-holds-the-answer-to-the-gates-that-decide
+  ;; Watched (ws-20261016-3b762c, ws-20261017-c46036, ws-20261018-16ba3c): the dry-run said ok and
+  ;; the round's append then held the record for the person — a second amender paid for a refusal
+  ;; the first could have read.
+  (let [f (str (fs/create-temp-file {:suffix ".edn"}))
+        g (str (fs/create-temp-file {:suffix ".edn"}))
+        check #(with-out-str (is (= %1 (t/amend-check* {:project "nido" :ws-id "ws-1" :kind "design"
+                                                        :file f :worktree "/w" :guard g}))))]
+    (spit f (pr-str {:record {:format :design}}))
+    (spit g (pr-str {:scope {:held ["keyed"]} :findings [] :declared-before {"keyed" "as it was"}}))
+    (try
+      (with-redefs [record/amendment-refusal (constantly nil)
+                    record/canvas-reading (fn [& _] {:status :listed :elements []})
+                    nido.design.check/design-of (fn [_ _] {:spec-dirs ["canvas"]})
+                    record/declared-claim-statements (fn [_ _] {"keyed" "as it was"})]
+        (with-redefs [record/design-guard-refusal (fn [_ _ _ guard]
+                                                    (when (= {:held ["keyed"]} (:scope guard)) "it changes [keyed]"))
+                      record/design-drift-refusal (constantly nil)]
+          (is (str/includes? (check 1) "it changes [keyed]")
+              "the round's question scope reaches the guard, which refuses as the append would"))
+        (with-redefs [record/design-guard-refusal (constantly nil)
+                      record/design-drift-refusal (fn [_ _ _ _ before now]
+                                                    (when (= before now) "a claim here and its Claim disagree"))]
+          (is (str/includes? (check 1) "disagree")
+              "a claim apart from its declaration is refused before the round pays for it"))
+        (with-redefs [record/design-guard-refusal (constantly nil)
+                      record/design-drift-refusal (constantly nil)]
+          (is (str/includes? (check 0) "ok"))))
+      (finally (fs/delete-if-exists f) (fs/delete-if-exists g)))))

@@ -3416,7 +3416,9 @@
                 (map :id))
           (get-in record [:model :elements]))))
 
-(defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :map]]}
+(defn ^{:malli/schema [:function
+                       [:=> [:cat :map :DeclaredElements] [:vector :map]]
+                       [:=> [:cat :map :DeclaredElements [:set :string]] [:vector :map]]]}
   drifted-statements
   "A finding for each claim of `record` that `listing` declares under the same id with another
    statement, in the order the model lists them — compared as `bb nido:land:check` compares them
@@ -3428,18 +3430,27 @@
    until some reading happens to open the declaration. Each finding is the
    amender's to repair in whichever of the two is wrong — the record's own claim, so it names no
    check. A claim the listing does not declare is no drift: an amendment may add one before its
-   declaration, and the landing holds that apart."
-  [record listing]
-  (let [declared (design-check/declared-claims listing)]
-    (vec (for [{:keys [id statement]} (get-in record [:model :claims])
-               :let [canvas (get-in declared [id :statement])]
-               :when (and canvas (not= canvas (design-check/claim-text statement)))]
-           {:claim-id id
-            :claim    (str "[" id "] is declared in canvas/ with a docstring that is not its statement"
-                           " here, and a landing refuses the two disagreeing. canvas/ declares: \""
-                           canvas "\"; the record states: \"" (design-check/claim-text statement)
-                           "\". Make them one statement, in whichever of the two is wrong.")
-            :cites    []}))))
+   declaration, and the landing holds that apart.
+
+   A claim of `held` (`grant-held`) is one a person's grant holds at the record's text, so the only
+   repair is canvas/'s, and its finding says so: a judge or amender reading the declaration as the
+   design's own word would otherwise move the record to it, which is the person's to decide."
+  ([record listing] (drifted-statements record listing #{}))
+  ([record listing held]
+   (let [declared (design-check/declared-claims listing)]
+     (vec (for [{:keys [id statement]} (get-in record [:model :claims])
+                :let [canvas (get-in declared [id :statement])]
+                :when (and canvas (not= canvas (design-check/claim-text statement)))]
+            {:claim-id id
+             :claim    (str "[" id "] is declared in canvas/ with a docstring that is not its statement"
+                            " here, and a landing refuses the two disagreeing. canvas/ declares: \""
+                            canvas "\"; the record states: \"" (design-check/claim-text statement)
+                            (if (contains? held id)
+                              (str "\", the statement a person's grant holds. Bring canvas/ to the granted"
+                                   " statement: that is the repair the grant allows, and the record's"
+                                   " claim is not the amendment's to change.")
+                              "\". Make them one statement, in whichever of the two is wrong."))
+             :cites    []})))))
 
 (defn- generation-fixed
   "The current generation's defining elements as the design that fixed them states them —
@@ -5809,11 +5820,15 @@
 (defn- amend-check-cmd
   "The shell command that dry-runs the answer at `out-path` as a `kind` record on this ledger —
    through nido's own bb.edn, because an amender runs in the reviewed project's tree. Every value
-   is one quoted shell word, so the dry-run refuses only for what it reads, never for a path."
-  [project ws-id kind out-path]
-  (str "bb --config " (sh-quote (fs/path (core/nido-source-dir) "bb.edn"))
-       " nido:review:amend:check :project " (sh-quote (name project)) " :ws-id " (sh-quote ws-id)
-       " :kind " (sh-quote (name kind)) " :file " (sh-quote out-path)))
+   is one quoted shell word, so the dry-run refuses only for what it reads, never for a path.
+   `guard`, when given, is the file of what the round's guards read beside the record
+   (`design-guard-refusal`)."
+  ([project ws-id kind out-path] (amend-check-cmd project ws-id kind out-path nil))
+  ([project ws-id kind out-path guard]
+   (str "bb --config " (sh-quote (fs/path (core/nido-source-dir) "bb.edn"))
+        " nido:review:amend:check :project " (sh-quote (name project)) " :ws-id " (sh-quote ws-id)
+        " :kind " (sh-quote (name kind)) " :file " (sh-quote out-path)
+        (when guard (str " :guard " (sh-quote guard))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   refusal-prompt
@@ -8740,8 +8755,10 @@
    (when declared?
      (str "So where the corrected design moves or adds an element, change its declaration\n"
           "under canvas/ to match: that edit is part of this amendment, and the next round\n"
-          "judges it with the record. Any other file in the tree you only read — a write\n"
-          "there is denied.\n"))
+          "judges it with the record. Where it changes a claim's statement, change that\n"
+          "Claim's docstring under canvas/ to the same words: the two are compared, and an\n"
+          "amendment whose claim and declaration disagree is handed back. Any other file in\n"
+          "the tree you only read — a write there is denied.\n"))
    "\n" amender-reading
    (check-block check-cmd)
    "nido reads this file, validates it, and appends it as the superseding design.\n"
@@ -8756,6 +8773,16 @@
    "answered: what this amendment answers is the round's to say, and a :why the\n"
    "next judge reads as provenance must not credit a person with what a judge asked.\n"
    (level-reminder :commitment))))
+
+(declare grant-held)
+
+(defn- design-grant-held
+  "`grant-held` of the grant `design` stands on, or empty when the ledger names none."
+  [project ws-id design]
+  (try (let [answers (answered project ws-id design)]
+         (grant-held (some->> (get-in answers [:grant :seq]) (ws/entry-at-seq project ws-id))
+                     (get-in answers [:grant :note])))
+       (catch Exception _ #{})))
 
 (defn- run-design-judge-stage
   [ctx]
@@ -8822,7 +8849,8 @@
                                                        (conj (in-span project ws-id (ws/entries-of project ws-id :design-decision))
                                                              record))
                                                       (report/accepted-unchecked-ids design))
-                                  (when listing (drifted-statements design listing))))
+                                  (when listing
+                                    (drifted-statements design listing (design-grant-held project ws-id design)))))
                     [])
         ;; Every append below writes `record`; a reused one is on the ledger already.
         put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))
@@ -9273,6 +9301,18 @@
   [s]
   (into #{} (map #(str/replace % #"[.:]+$" "")) (re-seq name-re (str s))))
 
+(defn- names-id?
+  "Whether `text` names `id` as a whole word — a hyphen continues an id, so `a-b` is not `a`."
+  [text id]
+  (boolean (re-find (re-pattern (str "(?<![\\w-])" (java.util.regex.Pattern/quote (str id)) "(?![\\w-])"))
+                    (str text))))
+
+(defn- grant-held
+  "The claim ids the design `granted` holds at its own text against an amender: each it states
+   that the grant's `note` does not order changed. Empty without a grant."
+  [granted note]
+  (into #{} (comp (map :id) (remove #(names-id? note %))) (when granted (model/claims granted))))
+
 (defn- grant-covered
   "The claims of `granted` whose text `record` changes or drops against `prev`, each a move: one
    whose statement in `record` is neither `prev`'s nor the granted one, or that `record` drops. A
@@ -9283,10 +9323,7 @@
         [g p r] (map text [granted prev record])]
     (for [[id gc] (sort-by key g)
           :let [pc (get p id) rc (get r id)]
-          :when (and pc (not= pc rc) (not= gc rc)
-                     (not (re-find (re-pattern (str "(?<![\\w-])" (java.util.regex.Pattern/quote (str id))
-                                                    "(?![\\w-])"))
-                                   (str note))))]
+          :when (and pc (not= pc rc) (not= gc rc) (not (names-id? note id)))]
       {:id id :held :granted
        :why (if rc "a claim the grant covers, changed where its note does not order it"
                    "a claim the grant covers, dropped where its note does not order it")})))
@@ -9391,9 +9428,234 @@
   [moves]
   (str "it changes what a person granted or wrote, which no repair decides for them: "
        (str/join "; " (map (fn [{:keys [id why]}] (str "[" id "] — " why)) moves))
-       ". Put each back exactly as it stands in the design you were given, and name the line"
-       " that asked for it under :out-of-reach, saying what the person must decide; keep the"
-       " rest of your repair"))
+       ". Put each back exactly as it stands in the design you were given, with every edit your"
+       " :swept attributes to the finding that moved it and its Claim's declaration under canvas/ —"
+       " nido puts back all of these itself before it appends — and name the line that asked for"
+       " it under :out-of-reach, saying what the person must decide"))
+
+;; ── What a guard holds, and how the round puts it back ─────────────────────
+;;
+;; A guard below holds a move for the person (or keeps a claim the person's question is about).
+;; The unit of a hold is the finding whose repair made the move: put back the held claim and
+;; keep the rest of that repair, and the appended record states both sides — the claim as the
+;; person had it and the shape, elements and routes rewritten for the repair that was refused.
+;; So the round puts back the whole footprint itself, record and declaration, rather than asking
+;; the amender to.
+
+(defn- guard-moves
+  "What the append-time guards hold of amendment `record` against `prev`, as
+   `{:asked :person :accepted}` — `asked-moves`, `person-moves` and `accepted-moves` — only the
+   non-empty keys. `guard` carries what they read beside the two records: `:scope`
+   (`asked-scope`), `:standing` (the ids the amender named under :standing-ask), `:answers`
+   (`answered` of `prev`), `:granted` (the design its grant names), `:intent` and the round's
+   `:findings`."
+  [prev record {:keys [scope standing answers granted intent findings]}]
+  (into {} (filter (comp seq val))
+        {:asked    (asked-moves prev record scope standing)
+         :person   (person-moves answers granted intent prev record)
+         :accepted (accepted-moves prev record findings)}))
+
+(defn- guard-refusal
+  "What the guards' refusal of `moves` (`guard-moves`) says, the first guard's that holds any — or
+   nil when none does."
+  [{:keys [asked person accepted]} scope]
+  (or (some-> asked (asked-refusal scope))
+      (some-> person person-refusal)
+      (some-> accepted person-refusal)))
+
+(defn- held-footprint
+  "Everything a hold on the claims `ids` puts back of an amendment, read off the amender's
+   `swept` (`[{:finding n :amended [id] :stale [id]}]`) and `stale-because` (`{id reason}`):
+
+     :ids       the held ids, every id the sweep reports amended or stale for a finding whose sweep
+                names a held id, and every stale id whose reason names one
+     :findings  those findings' numbers
+     :whole?    true when every finding the sweep reports amending anything is one of them, so
+                the amendment is wholly their repair and none of it stands
+
+   A sweep naming no held id ties nothing to them, and the hold is the held ids alone."
+  [ids swept stale-because]
+  (let [ids   (into #{} (map slug) ids)
+        named (fn [e] (some ids (map slug (concat (:amended e) (:stale e)))))
+        held  (filter named swept)]
+    {:ids      (-> ids
+                   (into (comp (mapcat #(concat (:amended %) (:stale %))) (map slug)) held)
+                   (into (keep (fn [[id why]] (when (some #(names-id? why %) ids) (slug id))))
+                         stale-because))
+     :findings (vec (sort (distinct (map :finding held))))
+     :whole?   (boolean (and (seq held) (every? named (filter (comp seq :amended) swept))))}))
+
+(defn- entry-key
+  "The id a record's list entry carries — a subject's :id, a route's :health-id, a rejected
+   alternative's :area — or nil for one that carries none, such as a seam."
+  [e]
+  (when (map? e) (some #(some-> (get e %) str) [:id :health-id :area])))
+
+(defn- put-back-entries
+  "`now`, a list of a record, with each entry `ids` names as `was` holds it: replaced in place,
+   dropped when `was` lacks it, and appended when `now` dropped it. Entries naming no id stay."
+  [ids was now]
+  (let [by-id   (into {} (keep #(when-let [k (entry-key %)] [k %])) was)
+        kept    (into [] (keep #(let [k (entry-key %)] (if (and k (ids k)) (get by-id k) %))) now)
+        present (into #{} (keep entry-key) kept)]
+    (into kept (filter #(let [k (entry-key %)] (and k (ids k) (not (present k))))) was)))
+
+(defn- put-back-fields
+  "`m` with every list of id-carrying entries, and every map keyed by id, put back for `ids` as
+   `p` holds them."
+  [ids p m]
+  (let [listy? #(and (sequential? %) (some entry-key %))
+        keyed? #(and (map? %) (seq %) (every? string? (keys %)))]
+    (reduce (fn [m k]
+              (let [a (get p k) b (get m k)]
+                (cond
+                  (or (listy? a) (listy? b))
+                  (let [r (put-back-entries ids a b)] (if (and (empty? r) (nil? b)) m (assoc m k r)))
+
+                  (or (keyed? a) (keyed? b))
+                  (assoc m k (reduce (fn [x id] (if (contains? a id) (assoc x id (get a id)) (dissoc x id)))
+                                     (or b {}) (filter ids (concat (keys a) (keys b)))))
+
+                  :else m)))
+            m (distinct (concat (keys p) (keys m))))))
+
+(defn- put-back-subjects
+  "`record` with every subject and entry `ids` names put back as `prev` states it — claims and
+   elements, every other list whose entries carry an id (`entry-key`), and :shape, :composition
+   and the :baseline citation, which an id names by their field name."
+  [prev record ids]
+  (let [ids (set ids)
+        r   (cond-> (put-back-fields ids prev record)
+              (or (map? (:model record)) (map? (:model prev)))
+              (assoc :model (put-back-fields ids (:model prev) (:model record))))]
+    (reduce (fn [r f]
+              (if (ids (name f))
+                (if (contains? prev f) (assoc r f (get prev f)) (dissoc r f))
+                r))
+            r [:shape :composition :baseline])))
+
+;; ── A claim's declaration, as text ──────────────────────────────────────────
+;;
+;; A held claim's declaration is put back by its form, read off the file's text: the declaration
+;; is the design's other half and must say what the record does, while every other declaration
+;; the amender's writes changed in the same file is the repair that stands. A Claim is read only
+;; as `(Claim <id> "<docstring>" …)`, the shape canvas.vocab.claim declares; one declared in any
+;; other shape is not put back, and an element's declaration is never put back — a listing
+;; compares only a claim's statement with the record.
+
+(defn- form-end
+  "The index just past the form that opens at `start` of `text`, or nil when it does not close."
+  [^String text start]
+  (let [n (count text)]
+    (loop [i start depth 0 in-str? false]
+      (when (< i n)
+        (let [c (.charAt text i)]
+          (cond
+            in-str?             (case c \\ (recur (+ i 2) depth true) \" (recur (inc i) depth false) (recur (inc i) depth true))
+            (= c \")            (recur (inc i) depth true)
+            (= c \;)            (recur (or (some-> (str/index-of text "\n" i) inc) n) depth false)
+            (= c \\)            (recur (+ i 2) depth false)
+            (#{\( \[ \{} c)     (recur (inc i) (inc depth) false)
+            (#{\) \] \}} c)     (if (= 1 depth) (inc i) (recur (inc i) (dec depth) false))
+            :else               (recur (inc i) depth false)))))))
+
+(defn- claim-form
+  "Where `text` declares the Claim `id`, as `[start end]`, or nil."
+  [text id]
+  (let [m (re-matcher (re-pattern (str "\\(Claim\\s+" (java.util.regex.Pattern/quote (str id)) "(?=[\\s\"])"))
+                      (str text))]
+    (when (.find m)
+      (when-let [e (form-end text (.start m))] [(.start m) e]))))
+
+(defn- put-back-claim-forms
+  "`now`, a declaration file's text, with the Claim form of each of `ids` as `before` held it:
+   replaced where both declare it, removed where only `now` does, appended where only `before`
+   does."
+  [before now ids]
+  (reduce (fn [now id]
+            (let [[bs be] (when before (claim-form before id))
+                  [ns ne] (claim-form now id)]
+              (cond
+                (and bs ns) (str (subs now 0 ns) (subs before bs be) (subs now ne))
+                ns          (str (str/trimr (subs now 0 ns)) (subs now ne))
+                bs          (str (str/trimr now) "\n\n" (subs before bs be) "\n")
+                :else       now)))
+          now (sort ids)))
+
+(defn- declared-statements
+  "Each Claim `files` (path → text) declare, by id, as its docstring's `design-check/claim-text` —
+   read off the text, as `claim-form` reads a declaration, without a listing."
+  [files]
+  (into {}
+        (for [[_ text] files
+              :when (string? text)
+              [_ id doc] (re-seq #"\(Claim\s+([^\s\"()\[\]{}]+)\s+(\"(?:[^\"\\]|\\.)*\")" text)]
+          [id (design-check/claim-text (try (edn/read-string doc) (catch Exception _ doc)))])))
+
+(defn- touched-claims
+  "The claim ids whose declared statement (`declared-statements`) differs between `before` and
+   `now`, each path → text."
+  [before now]
+  (let [[b n] (map declared-statements [before now])]
+    (into #{} (filter #(not= (get b %) (get n %))) (into (set (keys b)) (keys n)))))
+
+(defn ^{:malli/schema [:=> [:cat :map :map :DeclaredElements [:set :string] [:set :string]] [:maybe :string]]}
+  drift-refusal
+  "Why amendment `record` cannot be appended beside the declaration `listing` reads — a claim it
+   changes against `prev`, or one `touched` names as declared anew, stated otherwise under canvas/
+   than here (`drifted-statements`) — or nil when none is. `held` is the claims a grant holds at
+   their text (`grant-held`). Drift on a claim neither side touched is not the amendment's: the
+   round's next listing files it."
+  [prev record listing touched held]
+  (let [was (into {} (map (juxt :id :statement)) (model/claims prev))
+        ids (into #{} (comp (filter #(or (contains? touched (:id %)) (not= (get was (:id %)) (:statement %))))
+                            (map :id))
+                  (model/claims record))
+        drift (filterv #(ids (:claim-id %)) (drifted-statements record listing held))]
+    (when (seq drift)
+      (str "a claim here and its Claim under canvas/ disagree, which a landing refuses: "
+           (str/join " " (map :claim drift))
+           " A claim statement you change is mirrored word for word in its Claim's docstring, and"
+           " a docstring you change states the record's claim"))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :map] [:maybe :string]]}
+  design-guard-refusal
+  "What the round's append-time guards (`guard-moves`) would hold of the design amendment
+   `record`, read against the newest design and its grant, as the refusal the amender is told —
+   or nil when they hold nothing. `guard` is what the round wrote beside the amender's dry-run:
+   `{:scope :findings}`; `standing` the ids the answer names under :standing-ask. For an amender
+   to learn before it answers what the round would put back."
+  [project ws-id record {:keys [scope findings standing]}]
+  (let [prev    (newest-design project ws-id)
+        answers (try (answered project ws-id prev) (catch Exception _ nil))
+        granted (some->> (get-in answers [:grant :seq]) (ws/entry-at-seq project ws-id))]
+    (when prev
+      (guard-refusal (guard-moves prev record {:scope scope :standing (set standing) :answers answers
+                                               :granted granted :findings findings
+                                               :intent (discover-intent [project ws-id] prev)})
+                     scope))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :DeclaredElements
+                             [:map-of :string :string] [:map-of :string :string]]
+                        [:maybe :string]]}
+  design-drift-refusal
+  "`drift-refusal` of the design amendment `record` against the newest design, the declaration
+   `listing` reads and `declared-before`, each Claim's statement as the amender launched over it
+   (`declared-statements`), with `now` that of the working copy. For the amender's dry-run."
+  [project ws-id record listing declared-before now]
+  (let [prev    (newest-design project ws-id)
+        answers (try (answered project ws-id prev) (catch Exception _ nil))
+        granted (some->> (get-in answers [:grant :seq]) (ws/entry-at-seq project ws-id))
+        touched (into #{} (filter #(not= (get declared-before %) (get now %)))
+                      (into (set (keys declared-before)) (keys now)))]
+    (when prev
+      (drift-refusal prev record listing touched (grant-held granted (get-in answers [:grant :note]))))))
+
+(defn ^{:malli/schema [:=> [:cat :string [:vector :string]] [:map-of :string :string]]}
+  declared-claim-statements
+  "`declared-statements` of every file under `dirs` of `cwd`."
+  [cwd dirs]
+  (declared-statements (canvas-files cwd dirs)))
 
 (defn- restated-areas
   "The hot areas of `prev` (`hot-areas` over its lineage) that `decision`'s :step-back restates, as
@@ -9404,8 +9666,9 @@
 
 (defn- design-amend-message
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
-   beside it and answering into `out-path`."
-  [ctx prev recommend baseline out-path declared?]
+   beside it and answering into `out-path`, offered `check` as its dry-run — by default the one
+   that reads no guard file."
+  [ctx prev recommend baseline out-path declared? & [check]]
   (let [[project ws-id :as ledger] (ledger-of (:config ctx))]
     (design-amend-prompt
      {:design prev
@@ -9428,7 +9691,7 @@
       :rulings (get-in ctx [:record :relation-rulings])
       :secrets-moved (get-in ctx [:record :secrets-moved])
       :out-path out-path
-      :check-cmd (when (and project ws-id) (amend-check-cmd project ws-id :design out-path))
+      :check-cmd (or check (when (and project ws-id) (amend-check-cmd project ws-id :design out-path)))
       :settled (:settled ctx)
       :refuted-running (:refuted-running ctx)
       :refuted-with (:refuted-with ctx)
@@ -9592,8 +9855,12 @@
         ;; element-id rule requires is part of the answer, and the next round
         ;; judges it with the rest.
         permitted (:spec-dirs declared)
-        check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :design %))
         stem      (str "design-amend-round-" (:iter ctx))
+        ;; What the dry-run reads beside the answer to hold it to the round's own guards: the
+        ;; question's scope and the round's findings, and each Claim's statement as the amender
+        ;; launched over it, which its edits are told from.
+        guard-path (str (fs/path dir (str stem "-guard.edn")))
+        check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :design % guard-path))
         ;; The declaration as it stood before the amender, and whether it listed then: the first
         ;; is what an edit the round does not keep is put back to, the second whether a canvas
         ;; that no longer loads is the amender's doing.
@@ -9621,8 +9888,8 @@
                                                                    (= expected (get (:launched-over trespass) p)))})))
                                      l (:wrote trespass)))))
         ;; Whether the declaration the amender's writes leave stands beside the amendment: nil when
-        ;; it does (or nothing under it moved), {:err refusal} for the amender to repair, or
-        ;; {:halt stop} when no repair of its can lift what stopped it.
+        ;; nothing under it moved, {:listing reading} when it lists, {:err refusal} for the amender
+        ;; to repair, or {:halt stop} when no repair of its can lift what stopped it.
         canvas-gate (fn []
                       (when declared
                         (let [now     (canvas-files code-cwd permitted)
@@ -9633,7 +9900,7 @@
                             (let [reading (canvas-reading project code-cwd
                                                           (filterv #(spec-path? permitted %) changed))]
                               (cond
-                                (= :listed (:status reading)) nil
+                                (= :listed (:status reading)) {:listing reading}
                                 (canvas-unverified-causes (:cause reading))
                                 {:halt (canvas-unverified-stop reading (when (seq (amender-canvas @left)) kept-dir))}
                                 listed-before? {:err (canvas-refusal reading)}
@@ -9650,6 +9917,8 @@
         settling? (atom false)]
     (fs/create-dirs dir)
     (fs/delete-if-exists out-path)
+    (spit guard-path (pr-str {:scope (asked-scope ctx) :findings (vec (:findings ctx))
+                              :declared-before (declared-statements canvas-before)}))
     (try
     (let [{:keys [trespass launch]}
                    (launch-amender!
@@ -9658,7 +9927,8 @@
                          :out-path out-path
                          :check-cmd (when check-cmd (check-cmd out-path))
                          :first-message (design-amend-message ctx prev recommend baseline out-path
-                                                              (some? declared))})
+                                                              (some? declared)
+                                                              (when check-cmd (check-cmd out-path)))})
           _        (launched trespass)
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
@@ -9692,6 +9962,35 @@
               ;; is a decision the person was not asked for, and the round stops to ask it.
               held    (atom (sorted-map))
               hold!   (fn [moves] (swap! held into (map (juxt :id identity)) moves) moves)
+              guard   {:scope scope :standing standing :answers answers :granted granted
+                       :intent intent :findings (:findings ctx)}
+              grant-ids (grant-held granted (get-in answers [:grant :note]))
+              ;; What the round put back itself, for the report: `held-footprint` plus the
+              ;; declaration paths whose held Claim forms it restored.
+              put-back (atom nil)
+              ;; `record` with the footprint of the claims `ids` put back as `prev` states it, and
+              ;; each held claim's Claim form in a declaration path the amender wrote put back as
+              ;; it stood before the amender launched. A path someone else wrote since is left.
+              put-back! (fn [record ids]
+                          (let [fp     (held-footprint ids (:swept answer) (:stale-because answer))
+                                claims (into #{} (map :id) (concat (model/claims prev) (model/claims record)))
+                                ids    (:ids fp)
+                                r      (if (:whole? fp) prev (put-back-subjects prev record ids))
+                                paths  (when (and declared (not (:whole? fp)))
+                                         (vec (for [[path {:keys [content mine?]}] (sort-by key @left)
+                                                    :when (and mine? (string? content) (= content (holds code-cwd path)))
+                                                    :let [now (put-back-claim-forms (get canvas-before path) content
+                                                                                    (filter claims ids))]
+                                                    :when (not= now content)]
+                                                (do (spit (str (fs/path code-cwd path)) now)
+                                                    (swap! left assoc-in [path :content] now)
+                                                    path))))]
+                            (swap! put-back (fn [pb] (-> (merge-with (comp vec distinct concat) pb
+                                                                     (select-keys fp [:findings]))
+                                                         (update :ids #(vec (sort (into (set %) (:ids fp)))))
+                                                         (cond-> (:whole? fp) (assoc :whole? true)
+                                                                 (seq paths) (update :canvas #(vec (distinct (concat % paths))))))))
+                            r))
               entry  (fn [retreats amended?]
                        (cond-> {:iter (:iter ctx) :findings (:findings ctx)
                                 :retreats retreats :disputes disputes :amended? amended?}
@@ -9736,20 +10035,46 @@
                                     :launched launched
                                     ;; Refused like a ledger refusal, so the amender is asked to
                                     ;; put the asked claims back rather than the run stopping.
+                                    ;; A move a guard holds is put back by the round itself, with
+                                    ;; its finding's whole footprint (`put-back!`), and only a clause
+                                    ;; the question names inside a claim the amender may repair goes
+                                    ;; back to it. A person-move is held for the person; an asked
+                                    ;; claim's question already stands, and a claim the person
+                                    ;; accepted put back as it stood is their decision kept.
                                     :append (fn [record]
-                                              (if-let [err (or (some-> (asked-moves prev record scope standing)
-                                                                       (asked-refusal scope))
-                                                               (some->> (person-moves answers granted intent prev record)
-                                                                        hold!
-                                                                        person-refusal)
-                                                               ;; Refused, never held for the person: a
-                                                               ;; claim they accepted put back as it stood
-                                                               ;; is their decision kept, not a question.
-                                                               (some->> (accepted-moves prev record (:findings ctx))
-                                                                        person-refusal))]
-                                                {:record record :err err}
-                                                (if-let [gate (canvas-gate)]
-                                                  (assoc gate :record record)
+                                              (let [moves  (guard-moves prev record guard)
+                                                    mine   (concat (remove :clause? (:asked moves))
+                                                                   (:person moves) (:accepted moves))
+                                                    _      (hold! (:person moves))
+                                                    record (if (seq mine) (put-back! record (map :id mine)) record)
+                                                    moves  (if (seq mine) (guard-moves prev record guard) moves)
+                                                    gate   (delay (canvas-gate))
+                                                    drift  (delay
+                                                            (when declared
+                                                              (let [now (canvas-files code-cwd permitted)
+                                                                    touched (touched-claims canvas-before now)
+                                                                    was (into {} (map (juxt :id :statement)) (model/claims prev))]
+                                                                (when (or (seq touched)
+                                                                          (some #(not= (get was (:id %)) (:statement %))
+                                                                                (model/claims record)))
+                                                                  (let [listing (or (:listing @gate)
+                                                                                    (canvas-reading project code-cwd nil))]
+                                                                    (when (= :listed (:status listing))
+                                                                      (drift-refusal prev record listing touched grant-ids)))))))]
+                                                (cond
+                                                  (guard-refusal moves scope)
+                                                  {:record record :err (guard-refusal moves scope)}
+
+                                                  (and @put-back (nil? (subject-delta prev record)))
+                                                  {:record record :unchanged? true}
+
+                                                  (or (:err @gate) (:halt @gate))
+                                                  (assoc (dissoc @gate :listing) :record record)
+
+                                                  @drift
+                                                  {:record record :err @drift}
+
+                                                  :else
                                                   (let [record (cite record)]
                                                     (try (let [n (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
                                                                                    (pr-str (ws/unstamp record)))]
@@ -9758,8 +10083,17 @@
                                                          (catch Exception e
                                                            {:record record :err (ledger-refusal e)}))))))})
                       record  (:record written)]
-                  (if (:status written)
+                  (cond
+                    (:status written)
                     (refused-stop ctx written disputes)
+
+                    ;; Nothing of the amendment outlived the put-back: no record to append, and
+                    ;; what was held is asked below as though the amender had put it back itself.
+                    (:unchanged? written)
+                    (assoc ctx :disputes disputes :retreats [] :amend-refusals (:refusals written)
+                           :history (conj (vec (:history ctx)) (entry [] false)))
+
+                    :else
                     (let [retreats (as-> (retreat/design-retreats prev record (:findings ctx)) rs
                                      (retreat/attributed rs (:findings ctx) (:swept answer) (:stale-because answer))
                                      (into rs (retreat/declared (:stale-because answer) rs)))
@@ -9800,13 +10134,30 @@
             (seq @held)
             (assoc :held-for-person (vec (vals @held)))
 
+            @put-back
+            (assoc :held-put-back @put-back)
+
+            ;; A held claim canvas/ already stated otherwise before the amender ran is a
+            ;; disagreement no repair closes — the grant holds the record, the declaration says what
+            ;; the person is asked — so the declaration's text goes beside the question as the
+            ;; answer it proposes.
             (and (seq @held) (not (:status out)))
             (assoc :control :escalate :status :asked
-                   :out-of-reach (into (vec out-of-reach)
-                                       (for [{:keys [id why]} (vals @held)]
-                                         {:claim (str "[" id "]")
-                                          :because (str "the amendment changed " why
-                                                        "; refused, and left for the person")}))))))]
+                   :out-of-reach (let [declared (declared-statements canvas-before)
+                                       stated   (into {} (map (juxt :id #(design-check/claim-text (:statement %))))
+                                                      (model/claims prev))]
+                                   (into (vec out-of-reach)
+                                         (for [{:keys [id why]} (vals @held)
+                                               :let [canvas (get declared id)]]
+                                           {:claim (str "[" id "]")
+                                            :because (str "the amendment changed " why
+                                                          "; refused, put back with every edit made for it,"
+                                                          " and left for the person"
+                                                          (when (and canvas (stated id) (not= canvas (stated id)))
+                                                            (str ". canvas/ already declares it as \"" canvas
+                                                                 "\" — the answer it proposes; a landing refuses"
+                                                                 " the record and canvas/ disagreeing until the"
+                                                                 " person decides which stands")))})))))))]
          (reset! settling? true)
          out)))
       (catch Throwable t

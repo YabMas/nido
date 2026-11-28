@@ -3048,16 +3048,31 @@
    A :design answer in a modelled project is also refused when the declaration in `worktree` (the
    cwd, which is where an amender runs it) does not list — a namespace that does not load, or a
    listing that did not finish — with the refusal the round's own gate would give, so the amender
-   learns of a canvas it broke before it answers rather than after."
-  [{:keys [project ws-id kind file worktree]}]
+   learns of a canvas it broke before it answers rather than after. Given the round's `guard`
+   file, a :design answer is held as well to the guards the round's append applies
+   (`record/design-guard-refusal`) and, where the declaration lists, to its claims agreeing with
+   their declarations (`record/design-drift-refusal`) — the gates that decide, not a weaker one."
+  [{:keys [project ws-id kind file worktree guard]}]
   (let [answer   (try (edn/read-string (slurp (str file))) (catch Exception _ nil))
+        guard    (when guard (try (edn/read-string (slurp (str guard))) (catch Exception _ nil)))
         project  (keyword (name project))
         kind     (keyword (name kind))
-        worktree (str (or worktree (System/getProperty "user.dir")))]
+        worktree (str (or worktree (System/getProperty "user.dir")))
+        design   (when (= :design kind) (design-check/design-of project worktree))
+        listing  (delay (record/canvas-reading project worktree nil))]
     (if-let [r (:record answer)]
       (if-let [refusal (or (record/amendment-refusal project (str ws-id) kind r)
-                           (when (and (= :design kind) (design-check/design-of project worktree))
-                             (record/canvas-refusal (record/canvas-reading project worktree nil))))]
+                           (when (and (= :design kind) guard)
+                             (record/design-guard-refusal
+                              project (str ws-id) r
+                              (assoc (select-keys guard [:scope :findings])
+                                     :standing (keep #(some-> (:id %) str) (:standing-ask answer)))))
+                           (when design
+                             (record/canvas-refusal @listing))
+                           (when (and design guard (= :listed (:status @listing)))
+                             (record/design-drift-refusal
+                              project (str ws-id) r @listing (or (:declared-before guard) {})
+                              (record/declared-claim-statements worktree (vec (:spec-dirs design))))))]
         (do (println (str "refused — " refusal)) 1)
         (do (println "ok — the ledger would take this record") 0))
       (do (println (str "nothing to check — " file " holds no readable {:record ...}")) 2))))

@@ -47,9 +47,20 @@
     "A finding for each claim of a record that a listing of the declared design holds under the
      same id with another statement — compared as the landing compares them, so the round that can
      first repair a mismatch is handed it rather than a later reading that happens to open canvas/.
-     The amender's to repair in whichever of the two is wrong; a claim not declared yet is none."
-    {:signature [:=> [:catn [:record :map] [:listing DeclaredElements]] [:vector :map]]
+     The amender's to repair in whichever of the two is wrong; a claim not declared yet is none. On
+     a claim a person's grant holds at the record's text, the finding names canvas/ as the side to
+     bring to the granted statement."
+    {:signature [:function
+                 [:=> [:catn [:record :map] [:listing DeclaredElements]] [:vector :map]]
+                 [:=> [:catn [:record :map] [:listing DeclaredElements] [:held [:set :string]]] [:vector :map]]]
      :delegates [design/declared-claims design/claim-text]})
+  (Operation drift-refusal
+    "Why an amendment cannot be appended beside a listing of the declaration: a claim it changes,
+     or whose declaration was rewritten, stated otherwise under canvas/. Drift neither side was
+     touched for is the next round's finding, not the amendment's refusal."
+    {:signature [:=> [:catn [:prev :map] [:record :map] [:listing DeclaredElements]
+                      [:touched [:set :string]] [:held [:set :string]]]
+                 [:maybe :string]]})
   (Operation settled-block
     "The settled subjects, shown for the record-level derivations and outside the round's checks —
      text, readings and id, without the counterexample or evidence a check carries. Says nothing
@@ -352,6 +363,23 @@
     {:signature [:=> [:catn [:project :keyword] [:worktree :string] [:changed [:maybe [:vector :string]]]]
                  DeclaredElements]
      :delegates [design/elements]})
+  (Operation design-guard-refusal
+    "What the round's append-time guards — the person's question, their grant or authorship, what
+     they accepted unchecked — would hold of a design amendment against the newest design, as the
+     refusal the amender is told; nil when they hold nothing. For the amend dry-run."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:record :map] [:guard :map]]
+                 [:maybe :string]]})
+  (Operation design-drift-refusal
+    "drift-refusal of a design amendment against the newest design, the declaration's listing and
+     each Claim's statement as the amender launched over it. For the amend dry-run."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:record :map]
+                      [:listing DeclaredElements] [:declared-before [:map-of :string :string]]
+                      [:now [:map-of :string :string]]]
+                 [:maybe :string]]})
+  (Operation declared-claim-statements
+    "Each Claim the files under a worktree's declaration dirs declare, by id, as its docstring's
+     statement — read off the text, without a listing."
+    {:signature [:=> [:catn [:cwd :string] [:dirs [:vector :string]]] [:map-of :string :string]]})
   (Operation canvas-refusal
     "Why the declaration a canvas reading read cannot stand beside an amendment, said to the
      amender who wrote it, or nil when it lists — one text for the round's re-ask and the amend

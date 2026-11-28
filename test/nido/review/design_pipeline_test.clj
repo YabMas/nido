@@ -2721,22 +2721,23 @@
     (is (nil? (:status out)))
     (is (str/includes? (first @prompts) "It is about [keyed-on-medium]")
         "the amend stage hands the decision's asks_about to the amender")
-    (is (str/includes? (second @prompts) "it changes [keyed-on-medium]")
-        "an amendment that answers the person's question is refused, not appended")
+    (is (= 1 (count @prompts))
+        "the round puts the asked claim back itself rather than launching the amender again")
+    (is (= ["keyed-on-medium"] (get-in out [:held-put-back :ids])))
     (is (= fixed (read-string appended)) "the repair beside it is what lands"))
   (testing "a claim a numbered line hands the amender is held as well"
     (let [prompts (atom [])
-          n       (atom 0)
           fixed   (restating asked-design "keyed-on-medium" "narrowed")
           [out appended]
           (with-amend {:prev asked-design :prompts prompts
-                       :writes (fn [p] (spit p (pr-str {:record (if (= 1 (swap! n inc)) fixed asked-design)})))}
+                       :writes (fn [p] (spit p (pr-str {:record fixed})))}
                       (ctx :findings [(assoc (check :goal-served :broken) :claim-ids ["keyed-on-medium"])]
                            :record (assoc (decision :ask) :asks-about ["keyed-on-medium"])))]
-      (is (nil? (:status out)))
-      (is (str/includes? (second @prompts) "[keyed-on-medium], which a numbered line hands you")
+      (is (= 1 (count @prompts)))
+      (is (= ["keyed-on-medium"] (get-in out [:held-put-back :ids]))
           "a derivable line on an asked claim is no licence to change what the question is about")
-      (is (= asked-design (read-string appended))))))
+      (is (nil? appended) "with the claim put back nothing of the amendment is left to append")
+      (is (not (:amended? out))))))
 
 ;; Watched (ws-20261013-a392f7, e4a424): a derivable finding on the claim a person was being asked
 ;; about let the amender narrow that claim along the very axis of the question, or widen scope to
@@ -2796,11 +2797,8 @@
                        :writes (fn [p] (spit p (pr-str {:record (if (= 1 (swap! n inc)) widened granted)})))}
                       (ctx :findings [(assoc (check :goal-served :broken) :claim-ids ["sent-upright"])]
                            :record (decision :amend :checks [(check :goal-served :broken)]))))]
-    (is (str/includes? (second @prompts) "it changes what a person granted or wrote")
-        "the amendment is handed back rather than appended")
-    (is (str/includes? (second @prompts) "[sent-upright] — a claim the grant covers")
-        "the refusal names the claim the grant covers")
-    (is (= (:model granted) (:model (read-string appended))) "what lands is the claim put back")
+    (is (= 1 (count @prompts)) "the round puts the granted claim back itself, without a re-ask")
+    (is (nil? appended) "the claim put back, the amendment holds nothing to append")
     (is (= :asked (:status out)) "the round asks the person instead of going on to a proceed")
     (is (= :escalate (:control out)))
     (is (= [{:id "sent-upright" :held :granted}]
@@ -2808,6 +2806,87 @@
         "the held claim is stamped beside the amend delta, not only in the refusal's prose")
     (is (some #(= "[sent-upright]" (:claim %)) (:out-of-reach out))
         "the person is told which claim the run stopped over, though the amender named no line")))
+
+;; Watched (ws-20261018-1eb888, 0bbaaf, 878e54, fa81cc): the refusal put the held claim back and kept
+;; the shape, element and route edits made for the same finding, so the appended record stated both
+;; the claim the person had and the repair they were asked about.
+(def ^:private swept-design
+  (-> asked-design
+      (assoc :shape "one boundary [sent-upright]")
+      (assoc-in [:model :elements] [{:id "m-send" :sort :module :hides ["the send"]}
+                                    {:id "m-other" :sort :module :hides ["the rest"]}])))
+
+(deftest a-held-claim-is-put-back-with-its-finding-s-whole-repair
+  (let [granted (assoc swept-design :seq 4 :supersedes {:seq 2 :why "the person's rewrite" :granted "keyed-on-medium is yours to repair"})
+        answer  (-> granted
+                    (dissoc :seq :supersedes)
+                    (restating "sent-upright" "a sent image is upright, and so is a received one")
+                    (restating "keyed-on-medium" "resolution is keyed on medium, read once")
+                    (assoc :shape "one boundary, both directions [sent-upright]")
+                    (assoc-in [:model :elements 0 :hides] ["the send" "the receive"])
+                    (assoc-in [:model :elements 1 :hides] ["the rest, read once"]))
+        findings [(assoc (check :goal-served :broken) :claim-ids ["sent-upright"])
+                  (assoc (check :relation-honest :broken) :claim-ids ["keyed-on-medium"])]
+        go (fn [swept]
+             (with-redefs [ws/amended-seqs (constantly #{})
+                           ws/entry-at-seq (fn [_ _ k] (when (= 4 k) granted))
+                           ws/entries-of   (constantly [])]
+               (with-amend {:prev granted
+                            :writes (fn [p] (spit p (pr-str {:record answer :swept swept})))}
+                           (ctx :findings findings
+                                :record (decision :amend :checks [(check :goal-served :broken)])))))]
+    (testing "what the sweep attributes to the held claim's finding goes back with it"
+      (let [[out appended] (go [{:finding 1 :amended ["sent-upright" "shape" "m-send"]}
+                                {:finding 2 :amended ["keyed-on-medium" "m-other"]}])
+            r (read-string appended)]
+        (is (= (:shape granted) (:shape r)) "the shape rewritten for the held finding is put back")
+        (is (= ["the send"] (get-in r [:model :elements 0 :hides])) "so is its element's :hides")
+        (is (= "a sent image is upright" (:statement (second (get-in r [:model :claims])))))
+        (is (= "resolution is keyed on medium, read once" (:statement (first (get-in r [:model :claims]))))
+            "another finding's repair stands")
+        (is (= ["the rest, read once"] (get-in r [:model :elements 1 :hides])))
+        (is (= [1] (get-in out [:held-put-back :findings])))
+        (is (= :asked (:status out)) "the held claim is still the person's question")))
+    (testing "an amendment that is wholly the held finding's repair appends nothing"
+      (let [[out appended] (go [{:finding 1 :amended ["sent-upright" "keyed-on-medium" "shape" "m-send" "m-other"]}])]
+        (is (nil? appended))
+        (is (true? (get-in out [:held-put-back :whole?])))
+        (is (= :asked (:status out)))))))
+
+(deftest a-held-claim-s-declaration-is-put-back-by-its-form
+  (let [before (str "(ns canvas.claims.x)\n\n"
+                    "(Claim sent-upright\n  \"a sent image is upright\"\n  {:about [send] :evidence \"test\"})\n\n"
+                    "(Claim keyed-on-medium\n  \"resolution is keyed on medium\"\n  {:about [send]})\n")
+        now    (-> before
+                   (str/replace "a sent image is upright" "a sent image is upright (and \\\"received\\\")")
+                   (str/replace "keyed on medium\"" "keyed on medium, read once\""))
+        put    (#'record/put-back-claim-forms before now ["sent-upright"])]
+    (is (str/includes? put "\"a sent image is upright\"") "the held claim's docstring is as it stood")
+    (is (str/includes? put "keyed on medium, read once") "every other declaration the amender changed stays")
+    (is (= {"sent-upright" "a sent image is upright"
+            "keyed-on-medium" "resolution is keyed on medium, read once"}
+           (#'record/declared-statements {"x.clj" put})))
+    (is (= #{"keyed-on-medium"} (#'record/touched-claims {"x.clj" before} {"x.clj" put}))
+        "which declarations an amender's writes changed is read off the text")
+    (is (not (str/includes? (#'record/put-back-claim-forms nil now ["sent-upright"]) "(Claim sent-upright"))
+        "a held claim's declaration the amender added is removed")))
+
+;; Watched (ws-20261018-71eddb, 16ba3c): an amender rewrote a claim and left its canvas/ docstring
+;; alone; its dry-run said ok, and the drift was found only by the next round's listing.
+(deftest an-amendment-leaving-its-claim-and-declaration-apart-is-handed-back
+  (let [listed (fn [doc] {:status :listed :elements [(claim-row "sent-upright" doc)]})
+        moved  (restating asked-design "sent-upright" "a sent image is upright, always")]
+    (is (str/includes? (str (record/drift-refusal asked-design moved (listed "a sent image is upright") #{} #{}))
+                       "mirrored word for word in its Claim's docstring")
+        "a claim the amendment changed must say what its declaration says")
+    (is (nil? (record/drift-refusal asked-design asked-design (listed "something else") #{} #{}))
+        "drift neither the record nor the declaration was changed for is not the amendment's")
+    (is (some? (record/drift-refusal asked-design asked-design (listed "something else") #{"sent-upright"} #{}))
+        "a declaration the amender rewrote is held to the record")
+    (is (str/includes? (:claim (first (record/drifted-statements asked-design (listed "something else")
+                                                                 #{"sent-upright"})))
+                       "Bring canvas/ to the granted statement")
+        "on a claim a grant holds, the finding names the repair the grant allows")))
 
 ;; Watched (ws-20261013-9d71b9): a cold second reading recommended :amend over the first reading's
 ;; :ask, and the amender narrowed the asked claims — the repair decided the scope question R1 asked.
