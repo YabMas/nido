@@ -2,10 +2,13 @@
   "What an on-demand JVM changes outside its front: the ports a runtime start allocates, the app
    it does not start, and what the agent is told."
   (:require
+   [babashka.fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.session.engine :as engine]
    [nido.session.launcher :as launcher]
+   [nido.platform.io]
+   [nido.platform.process]
    [nido.session.links :as links]
    [nido.session.state :as state]))
 
@@ -43,19 +46,65 @@
         (is (= 5500 (get-in ctx [:repl :port])))
         (is (not= 5500 pg) "a later pick in the same start does not take the front's unbound port")))))
 
-(deftest a-port-another-runtime-owns-is-not-handed-out-while-it-is-cold
+(defn- ledger-of [home] (or (nido.platform.io/read-edn (str home "/state/ports.edn")) {}))
+
+(deftest overlapping-starts-never-pick-the-same-port
   (let [home (str (babashka.fs/create-temp-dir))]
-    (with-redefs [nido.platform.core/nido-home (constantly home)
-                  nido.platform.process/port-free? (constantly true)]
-      ;; Another runtime, cold: its front and the app's inner port are bound by nothing.
-      (state/write-session! "other--rt" {:instance-id "other--rt"
-                                         :context {:repl {:port 5100} :app {:port 4000 :bind-port 4001}}})
-      (let [owned (#'engine/owned-ports "me--rt")]
-        (is (every? owned [5100 4000 4001]) "its front ports and its inner port are owned")
-        (is (not (contains? (#'engine/owned-ports "other--rt") 4001)) "a runtime does not exclude its own")
-        (binding [nido.platform.process/*picked-ports* (atom owned)]
-          (is (= 4002 (nido.platform.process/find-available-port 4001 5))
-              "a start elsewhere picks around them"))))))
+    (with-redefs [nido.platform.core/nido-home       (constantly home)
+                  nido.platform.process/port-free?   (constantly true)]
+      ;; Eight runtimes starting at once, each its own start, all preferring one port; nothing binds
+      ;; any of them, so only what the starts publish keeps them apart.
+      (let [go     (promise)
+            starts (doall (for [i (range 8)]
+                            (future
+                              (binding [nido.platform.process/*picked-ports* (atom #{})
+                                        nido.platform.process/*port-ledger*  (#'engine/port-ledger (str "rt-" i))]
+                                @go
+                                (nido.platform.process/find-available-port 4000 50)))))
+            _      (deliver go true)
+            ports  (mapv deref starts)]
+        (is (= 8 (count (distinct ports))) (str "every start picked its own port: " ports))
+        (is (= (set ports) (set (keys (ledger-of home)))) "each pick is published as it is made")
+        (testing "a runtime's own ports are not held against it"
+          (binding [nido.platform.process/*picked-ports* (atom #{})
+                    nido.platform.process/*port-ledger*  (#'engine/port-ledger "rt-0")]
+            (is (= (nth ports 0) (nido.platform.process/find-available-port (nth ports 0) 1)))))))))
+
+(deftest a-failed-start-gives-its-ports-back
+  (let [home (str (babashka.fs/create-temp-dir)) during (atom nil)]
+    (with-redefs [nido.platform.core/nido-home       (constantly home)
+                  nido.platform.process/port-free?   (constantly true)]
+      (with-redefs-fn {#'engine/runtime-service-defs (fn [& _] [])
+                       #'engine/code-members         (fn [& _] {})
+                       #'engine/admission            (fn [& _] nil)
+                       #'engine/runtime-dir          (fn [& _] "/tmp/wt-fail")
+                       #'engine/start-each!          (fn [& _]
+                                                       (nido.platform.process/find-available-port 4500 5)
+                                                       (reset! during (ledger-of home))
+                                                       (throw (ex-info "service failed" {})))}
+        (fn []
+          (binding [nido.platform.process/*picked-ports* (atom #{})
+                    nido.platform.process/*port-ledger*  (#'engine/port-ledger "rt-other")]
+            (nido.platform.process/find-available-port 4500 5))
+          (is (thrown-with-msg? Exception #"service failed"
+                (engine/start-services! "/tmp/wt-fail" "p" "rt-fail" {} {} {} "/tmp/wt-fail")))
+          (is (= #{"rt-fail" "rt-other"} (set (vals @during))) "its pick was published while it ran")
+          (is (= {4500 "rt-other"} (ledger-of home))
+              "the port its service picked is free for the next start; another runtime's stays"))))))
+
+(deftest a-stopped-runtime-gives-its-ports-back
+  (let [home (str (babashka.fs/create-temp-dir))]
+    (with-redefs [nido.platform.core/nido-home              (constantly home)
+                  nido.platform.process/port-free?          (constantly true)
+                  nido.session.shared-pg/release-claims-of! (fn [_] nil)]
+      (with-redefs-fn {#'engine/read-session-edn (fn [_] {:services []})}
+        (fn []
+          (doseq [id ["rt-a" "rt-b"]]
+            (binding [nido.platform.process/*picked-ports* (atom #{})
+                      nido.platform.process/*port-ledger*  (#'engine/port-ledger id)]
+              (nido.platform.process/find-available-port 4600 5)))
+          (#'engine/stop-services! {:project-name "p"} "rt-a")
+          (is (= #{"rt-b"} (set (vals (ledger-of home)))) "only the stopped runtime's ports go"))))))
 
 (deftest an-eager-runtime-allocates-as-before
   (let [ctx (#'engine/pre-allocate-ports (update services 1 dissoc :on-demand) "/tmp/wt-eager")]

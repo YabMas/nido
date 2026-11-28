@@ -4,6 +4,7 @@
    rule: what starts the JVM, how often, what reaches it, and what stops it."
   (:require
    [babashka.fs :as fs]
+   [babashka.process]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.session.cold-starts :as cold-starts]
@@ -199,6 +200,49 @@
         "a failed start with no cause is no record")
     (is (not (fs/starts-with? (cold-starts/log-path "p") (state/state-dir)))
         "kept outside every instance's state, so a destroy keeps it"))))
+
+(defn- hold-file-lock!
+  "Another process holding `lock-path`'s file lock for `ms`; returns once it holds it."
+  [lock-path ms]
+  (let [p (babashka.process/process
+           ["bb" "-e" (str "(let [ch (java.nio.channels.FileChannel/open (java.nio.file.Paths/get "
+                           (pr-str (str lock-path)) " (make-array String 0)) "
+                           "(into-array java.nio.file.OpenOption [java.nio.file.StandardOpenOption/CREATE "
+                           "java.nio.file.StandardOpenOption/WRITE]))] "
+                           "(.lock ch) (println :locked) (flush) (Thread/sleep " ms "))")]
+           {:out :stream :err :inherit})]
+    (.readLine (java.io.BufferedReader. (java.io.InputStreamReader. (:out p))))
+    p))
+
+(deftest a-cold-start-append-waits-for-another-process-appending
+  (with-redefs [core/nido-home (constantly (str (fs/create-temp-dir)))]
+    (let [path   (cold-starts/log-path "p")
+          _      (fs/create-dirs (fs/parent path))
+          holder (hold-file-lock! (nido.platform.io/lock-path-for path) 1500)
+          t0     (System/currentTimeMillis)]
+      (cold-starts/record! {:project "p" :session "s" :instance-id "p--s" :port :repl
+                            :requested-at "2026-11-27T10:00:00Z" :ended-at "2026-11-27T10:00:01Z"
+                            :outcome :ready})
+      (is (>= (- (System/currentTimeMillis) t0) 1000)
+          "the append is made only once the other front's is whole")
+      @holder)))
+
+(deftest a-jvm-noted-from-the-front-does-not-overwrite-a-write-made-meanwhile
+  (with-redefs [core/nido-home (constantly (str (fs/create-temp-dir)))]
+    (state/write-session! "p--s" {:instance-id "p--s" :members {"/wt" "s"}})
+    (let [read-it (promise) go-on (promise)
+          real    state/read-session]
+      (with-redefs [state/read-session (fn [id] (let [s (real id)] (deliver read-it true) @go-on s))]
+        (let [noted (future (#'front/note-jvm! {:instance-id "p--s" :service :repl} 4242))
+              _     @read-it
+              ;; A join elsewhere records its member while the front holds what it read.
+              join  (future (state/write-session! "p--s" {:instance-id "p--s"
+                                                          :members {"/wt" "s" "/wt2" "t"}}))]
+          (Thread/sleep 300)
+          (deliver go-on true)
+          @noted @join)))
+    (is (= {"/wt" "s" "/wt2" "t"} (:members (state/read-session "p--s")))
+        "the join's member survives the front's update")))
 
 (deftest eval-on-demand-reserves-ports-and-starts-no-app
   (let [started (atom 0)]

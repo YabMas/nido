@@ -64,7 +64,9 @@
      is not sufficient: a browser refuses its restricted-port list, and the failure looks like a
      dead session rather than an unusable port. Nor is it within a runtime start, which binds
      `*picked-ports*`: no port it already handed out — chosen but not bound yet — is handed out
-     again, so every service's port in one start is drawn from one set."
+     again, so every service's port in one start is drawn from one set. Nor, within a start that
+     binds `*port-ledger*`, any port another owner holds there: the ledger is read and the pick
+     published to it under one cross-process lock, so overlapping starts never share a port."
     {:signature [:=> [:catn [:preferred-port :int] [:max-attempts :int]] :int]
      :delegates [port-free?]})
   (Operation quoted "Shell-quote a string."

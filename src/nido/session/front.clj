@@ -69,11 +69,16 @@
   "Record that the runtime's on-demand JVM runs as `pid`, or that none does (nil): in the runtime
    record, and on every registry entry of a session on it, which the fleet charges memory by."
   [{:keys [instance-id service]} pid]
-  (when-let [s (state/read-session instance-id)]
-    (state/write-session! instance-id
-                          (-> s
-                              (assoc-in [:service-states service :jvm-pid] pid)
-                              (assoc-in [:context (keyword service) :pid] pid))))
+  ;; A read-modify-write under the lock `state/write-session!` writes the record under: other
+  ;; nido processes write it (a join, a stop), and one's write landing between this read and this
+  ;; write would be lost. A record already saying so is not rewritten.
+  (let [path (state/session-state-file instance-id)]
+    (io/with-file-lock (io/lock-path-for path)
+      #(when-let [s (state/read-session instance-id)]
+         (let [s' (-> s
+                      (assoc-in [:service-states service :jvm-pid] pid)
+                      (assoc-in [:context (keyword service) :pid] pid))]
+           (when (not= s s') (io/write-edn! path s'))))))
   (state/update-runtime-entries! instance-id
                                  #(if pid (assoc % :repl-pid pid) (dissoc % :repl-pid))))
 

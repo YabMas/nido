@@ -24,7 +24,8 @@
    [babashka.fs :as fs]
    [clojure.edn :as edn]
    [clojure.string :as str]
-   [nido.platform.core :as core]))
+   [nido.platform.core :as core]
+   [nido.platform.io :as io]))
 
 (defn ^{:malli/schema [:=> [:cat :string] :string]}
   log-path
@@ -46,8 +47,10 @@
     (throw (ex-info "Not a cold start record" {:entry entry})))
   (let [path (log-path project)]
     (fs/create-dirs (fs/parent path))
-    (locking record!
-      (spit path (str (pr-str (into (sorted-map) entry)) "\n") :append true))
+    ;; Every front of the project appends here, each its own process: under the file's lock, so
+    ;; each record's append is whole across them as across this process's threads.
+    (io/with-file-lock (io/lock-path-for path)
+      #(spit path (str (pr-str (into (sorted-map) entry)) "\n") :append true))
     entry))
 
 (defn ^{:malli/schema [:=> [:cat :string [:maybe :string]] [:vector :map]]}

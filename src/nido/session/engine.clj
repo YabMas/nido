@@ -303,20 +303,20 @@
   [services]
   (into #{} (comp (filter #(and (= :process (:type %)) (:on-demand %))) (map :name)) services))
 
-(defn- owned-ports
-  "Every port a runtime other than `except` owns, as its record says: each service's context port
-   and bound port — an on-demand runtime's front ports and its app's inner port among them, which
-   no listener holds while its JVM is cold. What a start draws its ports outside of, so a port
-   one runtime owns is never handed to another for as long as that runtime exists."
-  [except]
-  (into #{}
-        (comp (keep #(let [id (str (fs/file-name %))]
-                       (when (not= except id) (state/read-session id))))
-              (mapcat #(vals (:context %)))
-              (filter map?)
-              (mapcat (juxt :port :bind-port))
-              (filter pos-int?))
-        (when (fs/exists? (state/state-dir)) (fs/list-dir (state/state-dir)))))
+(defn- port-ledger
+  "Where every runtime start publishes the ports it picks, each under the runtime it picked it for
+   (`proc/*port-ledger*`). A runtime's ports stay there for as long as it exists — its front ports
+   and its app's inner port among them, which no listener holds while its JVM is cold — so a port
+   one runtime holds is never handed to another, whether or not its start has finished."
+  [instance-id]
+  {:path (str (fs/path (state/state-dir) "ports.edn")) :owner instance-id})
+
+(defn- release-ports!
+  "Drop every port the ledger holds for `instance-id`: its start failed, or it was stopped."
+  [instance-id]
+  (let [{:keys [path]} (port-ledger instance-id)]
+    (when (fs/exists? path)
+      (io/update-edn! path (fn [ledger] (into {} (remove (fn [[_ o]] (= o instance-id))) ledger))))))
 
 (defn- allocate-port [seed [low high]]
   (proc/find-available-port (proc/deterministic-port seed low high) (- high low)))
@@ -556,7 +556,10 @@
       (try (shared-pg/release-claims-of! instance-id)
            (catch Exception e
              (println (str "warning: error releasing " instance-id "'s shared-cluster claim: "
-                           (ex-message e))))))))
+                           (ex-message e)))))
+      (try (release-ports! instance-id)
+           (catch Exception e
+             (println (str "warning: error releasing " instance-id "'s ports: " (ex-message e))))))))
 
 (defn- checkout?
   "Does a runtime carrying `dirs` (its members' worktrees) run out of a checkout of its own? Only
@@ -692,8 +695,13 @@
    (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
    ;; One set of picked ports for the whole start: the front's, pre-allocated, are not bound
    ;; until the JVM's :process service starts, after services that pick their own (Postgres).
-   ;; It starts from what every other runtime owns, bound or not.
-   (binding [proc/*picked-ports* (atom (owned-ports instance-id))]
+   ;; Each pick is also published to the ledger every start reads, around what every other
+   ;; runtime holds there, bound or not. A start that throws before its record is written gives
+   ;; its ports back; one that throws after is up, and keeps them until it is stopped.
+   (binding [proc/*picked-ports* (atom #{})
+             proc/*port-ledger*  (port-ledger instance-id)]
+    (let [written? (volatile! false)]
+    (try
     (let [session-name (:session-name opts)
           all      (assoc others (str project-dir) session-name)
           code     (code-members project-name all {(str project-dir) (:profile opts)})
@@ -748,13 +756,17 @@
                          session-name              (assoc :name session-name)
                          (checkout? (keys code))   (assoc :checkout run-dir))]
       (state/write-session! instance-id session-data)
+      (vreset! written? true)
       ;; The profile is recorded before the briefing, which reads it to choose the full or lite one.
       (rebrief! project-dir session-name (:runtime-key opts) session-data session-edn
                 (select-keys opts [:run-dir :profile]))
       (doseq [[dir member] others]
         (rebrief! dir member (:runtime-key opts) session-data session-edn))
       (print-session-summary session-data final-ctx)
-      session-data))))
+      session-data)
+    (catch Throwable e
+      (when-not @written? (release-ports! instance-id))
+      (throw e)))))))
 
 (defn- session-alive?
   "Is any of this session's PROCESSES still running? Deliberately narrow: it

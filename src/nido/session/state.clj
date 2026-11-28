@@ -350,7 +350,10 @@
   [instance-id data]
   (when-let [wt (:project-dir data)]
     (io/write-edn! (worktree-record-file instance-id) {:worktree (str wt)}))
-  (io/write-edn! (session-state-file instance-id) data))
+  ;; Under the record's file lock, which an update made from another process (an on-demand
+  ;; front's) reads and writes under, so neither lands inside the other.
+  (let [path (session-state-file instance-id)]
+    (io/with-file-lock (io/lock-path-for path) #(io/write-edn! path data))))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId] :any]}
   delete-session!
@@ -362,7 +365,9 @@
       (when-let [wt (try (:project-dir (io/read-edn (session-state-file instance-id)))
                          (catch Exception _ nil))]
         (io/write-edn! wt-file {:worktree (str wt)}))))
-  (fs/delete-if-exists (session-state-file instance-id)))
+  ;; Under the record's lock, so an update read before the delete cannot write it back after.
+  (let [path (session-state-file instance-id)]
+    (io/with-file-lock (io/lock-path-for path) #(fs/delete-if-exists path))))
 
 ;; ---------------------------------------------------------------------------
 ;; Registry — global session index at ~/.nido/state/sessions.edn

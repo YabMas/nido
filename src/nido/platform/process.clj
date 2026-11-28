@@ -2,7 +2,8 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [nido.platform.io :as io]))
 
 (def ^:private live-children
   "Agent processes this JVM started and is still waiting on.
@@ -261,16 +262,19 @@
    the pre-allocation, is drawn from one set."
   nil)
 
-(defn ^{:malli/schema [:=> [:cat :int :int] :int]}
-  find-available-port
-  "The first port at or above `preferred-port` that is free AND openable by a
-   browser, and not one this runtime start already handed out (`*picked-ports*`), which it is
-   then recorded as. See `browser-blocked-ports` for why free is not sufficient."
-  [preferred-port max-attempts]
+(def ^:dynamic *port-ledger*
+  "Within a runtime start, where every start publishes the ports it picks, and for whom:
+   `{:path p :owner id}`, the file a map of port to owner. Nil outside a start. A port another
+   owner holds there is never picked, bound or not — a runtime's unbound ports are invisible to a
+   free-socket probe, and its record names them only once its start has finished."
+  nil)
+
+(defn- search-port [preferred-port max-attempts taken]
   (loop [port preferred-port
          attempts 0]
     (cond
       (and (not (contains? browser-blocked-ports port))
+           (not (contains? taken port))
            (not (some-> *picked-ports* deref (contains? port)))
            (port-free? port))
       (do (some-> *picked-ports* (swap! conj port))
@@ -281,6 +285,25 @@
                       {:preferred-port preferred-port :attempts max-attempts}))
 
       :else (recur (inc port) (inc attempts)))))
+
+(defn ^{:malli/schema [:=> [:cat :int :int] :int]}
+  find-available-port
+  "The first port at or above `preferred-port` that is free AND openable by a
+   browser, and not one this runtime start already handed out (`*picked-ports*`), which it is
+   then recorded as. See `browser-blocked-ports` for why free is not sufficient. Within a start
+   that binds `*port-ledger*`, nor one another owner holds there: the ledger is read and the
+   port published to it under one lock every start takes, so two starts picking at once, in any
+   processes, never take the same port."
+  [preferred-port max-attempts]
+  (if-let [{:keys [path owner]} *port-ledger*]
+    (io/with-file-lock (io/lock-path-for path)
+      (fn []
+        (let [ledger (or (io/read-edn path) {})
+              port   (search-port preferred-port max-attempts
+                                  (into #{} (keep (fn [[p o]] (when (not= o owner) p))) ledger))]
+          (io/write-edn! path (assoc ledger port owner))
+          port)))
+    (search-port preferred-port max-attempts #{})))
 
 (defn ^{:malli/schema [:=> [:cat :string] :string]}
   quoted [s]
