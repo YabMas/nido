@@ -303,6 +303,21 @@
   [services]
   (into #{} (comp (filter #(and (= :process (:type %)) (:on-demand %))) (map :name)) services))
 
+(defn- owned-ports
+  "Every port a runtime other than `except` owns, as its record says: each service's context port
+   and bound port — an on-demand runtime's front ports and its app's inner port among them, which
+   no listener holds while its JVM is cold. What a start draws its ports outside of, so a port
+   one runtime owns is never handed to another for as long as that runtime exists."
+  [except]
+  (into #{}
+        (comp (keep #(let [id (str (fs/file-name %))]
+                       (when (not= except id) (state/read-session id))))
+              (mapcat #(vals (:context %)))
+              (filter map?)
+              (mapcat (juxt :port :bind-port))
+              (filter pos-int?))
+        (when (fs/exists? (state/state-dir)) (fs/list-dir (state/state-dir)))))
+
 (defn- allocate-port [seed [low high]]
   (proc/find-available-port (proc/deterministic-port seed low high) (- high low)))
 
@@ -677,7 +692,8 @@
    (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
    ;; One set of picked ports for the whole start: the front's, pre-allocated, are not bound
    ;; until the JVM's :process service starts, after services that pick their own (Postgres).
-   (binding [proc/*picked-ports* (atom #{})]
+   ;; It starts from what every other runtime owns, bound or not.
+   (binding [proc/*picked-ports* (atom (owned-ports instance-id))]
     (let [session-name (:session-name opts)
           all      (assoc others (str project-dir) session-name)
           code     (code-members project-name all {(str project-dir) (:profile opts)})

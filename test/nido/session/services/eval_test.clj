@@ -400,3 +400,18 @@
             r    (deref (future (#'eval/eval-over-socket path 300 form)) 6000 ::stuck)]
         (is (not= ::stuck r) "the cleanup does not wait on the writer the JVM stopped reading"))
       (finally (stop)))))
+
+(deftest a-fresh-jvm-does-not-adopt-a-listener-on-its-apps-port
+  (with-redefs-fn {#'eval/nrepl-answers?             (constantly true)
+                   #'nido.platform.process/tcp-open? (constantly true)
+                   #'nido.platform.core/log-step     (constantly nil)}
+    (fn []
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"held by a process this JVM did not start"
+                            (eval/start-app! {:name :a :start-form "(start)"}
+                                             {:app-port 3300 :bind-port 3301 :socket "/tmp/x.sock" :host "h"
+                                              :fresh-jvm? true}
+                                             {:session {:instance-id "i"}})))
+      (is (true? (eval/start-app! {:name :a :start-form "(start)"}
+                                  {:app-port 3300 :bind-port 3301 :socket "/tmp/x.sock" :host "h"}
+                                  {:session {:instance-id "i"}}))
+          "a JVM that ran already keeps its listening app, as before"))))

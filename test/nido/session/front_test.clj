@@ -570,3 +570,24 @@
             (.close c))
           (is (= 0 (deref got 5000 :stuck)) "the inner connection was closed before any held byte went to it")))
       (finally (cleanup fx)))))
+
+(deftest a-failed-start-whose-jvm-runs-without-answering-is-not-read-as-ready
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {})
+        starts (atom 0)]
+    (try
+      (with-redefs-fn (assoc redefs
+                             #'process/start-jvm! (fn [c] (swap! starts inc) ((:on-spawn c) 4242)
+                                                    (throw (ex-info "Timed out waiting for repl's nREPL" {:pid 4242})))
+                             #'process/stop-jvm! (fn [_] (throw (ex-info "it survives its stop" {})))
+                             #'nido.platform.process/process-alive? (constantly true))
+        (fn []
+          (is (nil? (call (:nrepl-port cfg) "x" 3000)) "the call fails rather than being relayed")
+          (await-phase front :absent)
+          (Thread/sleep 100)
+          (is (= :absent (:phase @front)) "a JVM whose nREPL does not answer is not read as running")
+          (is (= 4242 (:jvm-pid @front)) "but it runs, so its pid is kept")
+          (is (= [:registry {:repl-pid 4242}] (last (filter #(and (vector? %) (= :registry (first %))) @log)))
+              "as the fleet charges it")
+          (call (:nrepl-port cfg) "y" 3000)
+          (is (= 2 @starts) "the next call starts it again rather than taking the dead socket")))
+      (finally (cleanup fx)))))

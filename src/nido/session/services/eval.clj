@@ -420,7 +420,9 @@
 (defn ^{:malli/schema [:=> [:cat :map :any :map] :any]}
   start-app!
   "Eval the service's :start-form over nREPL and wait for the port the app binds to open.
-   Idempotent: if the app is already listening, returns immediately without re-evaling. The form
+   Idempotent: if the app is already listening, returns immediately without re-evaling — unless
+   `saved-state` says its JVM was just started (`:fresh-jvm?`), when a listener there is another
+   process's and the start throws. The form
    is substituted with `app.port` and `app.bind-port` — and the same two under the service's own
    name — all naming the port the app binds."
   [service-def saved-state session-ctx]
@@ -436,6 +438,12 @@
       (not (nrepl-answers? nrepl))
       (throw (ex-info "nREPL is not listening — session may not be up"
                       {:nrepl-port nrepl}))
+
+      ;; A JVM just started runs no app yet: a listener on the port it is to bind is another
+      ;; process's, and adopting it would relay the session's calls to that process.
+      (and (:fresh-jvm? saved-state) (proc/tcp-open? app-port))
+      (throw (ex-info (str "Port " app-port " the app is to bind is held by a process this JVM did not start")
+                      {:service (:name service-def) :bind-port app-port}))
 
       (proc/tcp-open? app-port)
       (do (core/log-step (str "App already listening on " host ":" app-port)) true)

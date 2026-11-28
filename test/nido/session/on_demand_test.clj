@@ -43,6 +43,20 @@
         (is (= 5500 (get-in ctx [:repl :port])))
         (is (not= 5500 pg) "a later pick in the same start does not take the front's unbound port")))))
 
+(deftest a-port-another-runtime-owns-is-not-handed-out-while-it-is-cold
+  (let [home (str (babashka.fs/create-temp-dir))]
+    (with-redefs [nido.platform.core/nido-home (constantly home)
+                  nido.platform.process/port-free? (constantly true)]
+      ;; Another runtime, cold: its front and the app's inner port are bound by nothing.
+      (state/write-session! "other--rt" {:instance-id "other--rt"
+                                         :context {:repl {:port 5100} :app {:port 4000 :bind-port 4001}}})
+      (let [owned (#'engine/owned-ports "me--rt")]
+        (is (every? owned [5100 4000 4001]) "its front ports and its inner port are owned")
+        (is (not (contains? (#'engine/owned-ports "other--rt") 4001)) "a runtime does not exclude its own")
+        (binding [nido.platform.process/*picked-ports* (atom owned)]
+          (is (= 4002 (nido.platform.process/find-available-port 4001 5))
+              "a start elsewhere picks around them"))))))
+
 (deftest an-eager-runtime-allocates-as-before
   (let [ctx (#'engine/pre-allocate-ports (update services 1 dissoc :on-demand) "/tmp/wt-eager")]
     (is (nil? (:repl ctx)) "the JVM's nREPL picks its own port, as it always did")

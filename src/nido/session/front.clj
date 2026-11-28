@@ -137,22 +137,26 @@
 (declare readiness)
 
 (defn- settle-jvm!
-  "Read the front's JVM state from the JVM itself, after any attempt to start or stop it: when
-   `pid` still runs, the group is running — its pid on the runtime record and registry, the idle
-   clock restarted — and otherwise absent, no pid recorded. The one place a stop or a failed
-   start sets what the front and the fleet read, so neither can say a JVM is gone that a stop
-   which threw left running, nor keep a pid that is gone.
+  "Read the front's JVM state from the JVM itself, after any attempt to start or stop it. The pid
+   is the process's: recorded on the runtime and registry while `pid` runs, whatever answers,
+   and cleared once it does not. What the front reads is the nREPL's: the group is running — the
+   idle clock restarted — only while the JVM's own socket answers, and otherwise absent, so the
+   next byte starts it again (which retires a JVM that runs and does not answer). The one place a
+   stop or a failed start sets what the front and the fleet read, so neither can say a JVM is gone
+   that a stop which threw left running, nor keep a pid that is gone, nor release a client to a
+   JVM that does not answer.
 
-   A running group's readiness is each listener's own target's: the nREPL's is the JVM's, ready
-   at once; an app's is its own bound port's, ready when that answers. An app whose port does not
+   A running group's readiness is each listener's own target's: the nREPL's is its socket's, ready
+   since it answers; an app's is its own bound port's, ready when that answers. An app whose port does not
    — stopped by the stop that failed, or never started by the start that did — is started again
    under the runtime's lock, and what its port holds is released only once it answers. Returns
    whether the JVM runs; never throws."
   [front pid]
   (let [{:keys [cfg]} @front
-        alive? (boolean (and pid (proc/process-alive? pid)))]
+        alive?   (boolean (and pid (proc/process-alive? pid)))
+        answers? (and alive? (eval-svc/jvm-answers? {:socket (:socket cfg)}))]
     (try (note-jvm! cfg (when alive? pid)) (catch Exception _ nil))
-    (if alive?
+    (if answers?
       (let [ready   (readiness cfg)
             session (try (state/read-session (:instance-id cfg)) (catch Exception _ nil))
             down    (into {} (for [[d s] (app-services cfg session)
@@ -172,7 +176,7 @@
                           (catch Throwable e
                             (core/log-step (str "warning: restarting the app " (name k) ": " (ex-message e)))
                             {:error e}))))))
-      (swap! front assoc :phase :absent :jvm-pid nil))
+      (swap! front assoc :phase :absent :jvm-pid (when alive? pid)))
     alive?))
 
 (defn- fail-start!
@@ -242,7 +246,7 @@
               (assert-port-file! cfg)
               (ready! front :repl)
               (doseq [[d s] (app-services cfg session)]
-                (when-not (eval-svc/start-app! d s (:context session))
+                (when-not (eval-svc/start-app! d (assoc s :fresh-jvm? true) (:context session))
                   (throw (ex-info (str "The app " (name (:name d)) " did not open port " (:bind-port s)
                                        " after its start form")
                                   {:service (:name d) :bind-port (:bind-port s)})))
