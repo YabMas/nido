@@ -474,3 +474,23 @@
                     "the start is timed from the byte that asked for it, not from the end of the stop")
                 (is (>= (cold-starts/duration-ms rec) 500) "so its duration includes the stop it waited out"))))))
       (finally (cleanup fx)))))
+
+(deftest an-idle-stop-that-leaves-the-jvm-running-keeps-reading-it-as-running
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {:idle-ms 100})]
+    (try
+      (with-redefs-fn (assoc redefs #'process/stop-jvm!
+                             (fn [_] (swap! log conj :stop-refused)
+                               (throw (ex-info "ownership of the recorded pid cannot be told" {}))))
+        (fn []
+          (is (= "a" (call (:nrepl-port cfg) "a" 3000)))
+          (await-phase front :running)
+          (Thread/sleep 200)
+          (#'front/stop-idle! front)
+          (is (some #{:stop-refused} @log))
+          (is (= :running (:phase @front)) "the JVM still runs, so the front reads it as running")
+          (is (= 4242 (:jvm-pid @front)) "and keeps its pid")
+          (is (= [:registry {:repl-pid 4242}] (last (filter #(and (vector? %) (= :registry (first %))) @log)))
+              "as does the registry, which the fleet charges by")
+          (is (= "b" (call (:nrepl-port cfg) "b" 3000)) "the next call is relayed to it")
+          (is (= 1 (count (filter #{:start} @log))) "rather than starting another")))
+      (finally (cleanup fx)))))

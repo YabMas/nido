@@ -134,10 +134,31 @@
                       :origin            {:kind :on-demand :port (:port start)}}
                      e)))
 
+(declare readiness)
+
+(defn- settle-jvm!
+  "Read the front's JVM state from the JVM itself, after any attempt to start or stop it: when
+   `pid` still runs, the group is running — its pid on the runtime record and registry, every
+   port ready again, the idle clock restarted — and otherwise absent, no pid recorded. The one
+   place a stop or a failed start sets what the front and the fleet read, so neither can say a
+   JVM is gone that a stop which threw left running, nor keep a pid that is gone. Returns whether
+   it runs; never throws."
+  [front pid]
+  (let [{:keys [cfg]} @front
+        alive? (boolean (and pid (proc/process-alive? pid)))]
+    (try (note-jvm! cfg (when alive? pid)) (catch Exception _ nil))
+    (if alive?
+      (let [ready (readiness cfg)]
+        (doseq [p (vals ready)] (deliver p {:ok true}))
+        (swap! front assoc :phase :running :jvm-pid pid :ready ready :last-traffic (now-ms)))
+      (swap! front assoc :phase :absent :jvm-pid nil))
+    alive?))
+
 (defn- fail-start!
   "Everything a failed start owes, as one outcome: undo what it made on the runtime — the JVM, if
    it came up, and its pid — keep the failure under ~/.nido/failures/, record the start failed
-   unless its triggering port was already ready (recorded then), and read the group absent. Run
+   unless its triggering port was already ready (recorded then), and settle what the front reads
+   from whether a JVM still runs (`settle-jvm!`). Run
    holding the runtime's lock, so no verb sees a half-made start or ends the front before the
    evidence is written; `rollback?` false only when that lock was never taken, so no JVM was
    started. Never throws."
@@ -145,15 +166,15 @@
   (let [{:keys [cfg]} @front]
     (core/log-step (str "On-demand start failed: " (ex-message e)))
     (when rollback?
-      (try (process/stop-jvm! cfg) (catch Exception e2 (core/log-step (str "warning: " (ex-message e2)))))
-      (try (note-jvm! cfg nil) (catch Exception _ nil)))
+      (try (process/stop-jvm! cfg) (catch Exception e2 (core/log-step (str "warning: " (ex-message e2))))))
     (try (keep-failure! front e)
          (catch Exception e2 (core/log-step (str "warning: could not keep the failed start: " (ex-message e2)))))
     ;; What failed after the triggering port was ready — an app, for an nREPL-triggered start —
     ;; is kept above all the same.
     (when-not (get-in @front [:start :recorded?])
       (record-start! front :failed (or (ex-message e) (str (class e))) (core/now-iso)))
-    (swap! front assoc :phase :absent :jvm-pid nil)))
+    ;; The JVM this start spawned: the front's, or the one a start that threw names.
+    (settle-jvm! front (or (:jvm-pid @front) (:pid (ex-data e))))))
 
 (defn- listener-key
   "What a listener's readiness is kept under: :repl for the nREPL, the app's service name for an
@@ -267,10 +288,9 @@
                         (swap! front assoc :phase :stopping :stopped (promise))
                         true)))
               (try (process/stop-jvm! cfg)
-                   (note-jvm! cfg nil)
                    (finally
                      (let [stopped (:stopped @front)]
-                       (swap! front assoc :phase :absent :jvm-pid nil)
+                       (settle-jvm! front jvm-pid)
                        (deliver stopped true)))))))
         (catch Throwable e (core/log-step (str "warning: " (ex-message e))))))))
 
@@ -283,25 +303,22 @@
                          (let [p (promise)]
                            (swap! front assoc :phase :stopping :stopped p)
                            p)))]
-    (let [{:keys [cfg]} @front
-          entered? (atom false)]
+    (let [{:keys [cfg jvm-pid]} @front]
       (core/log-step (str "No nREPL traffic for " (quot (:idle-ms cfg) 1000) "s and no connection open — stopping the JVM"))
       (try
         (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-idle-stop
           (fn []
-            (reset! entered? true)
             (when-let [session (state/read-session (:instance-id cfg))]
               (doseq [[d s] (app-services cfg session)]
                 (try (eval-svc/stop-app! d s) (catch Exception _ nil))))
-            (process/stop-jvm! cfg)
-            (note-jvm! cfg nil)))
+            (try (process/stop-jvm! cfg)
+                 ;; Under the lock, so no start reads the group between the stop and this.
+                 (finally (settle-jvm! front jvm-pid)))))
         (catch Throwable e
-          (core/log-step (str "warning: idle stop: " (ex-message e))))
+          (core/log-step (str "warning: idle stop: " (ex-message e)))
+          ;; A lock never taken stopped nothing; one that threw before the stop, likewise.
+          (when (= :stopping (:phase @front)) (settle-jvm! front jvm-pid)))
         (finally
-          ;; A lock never taken stopped nothing: the JVM still runs, and is read as running.
-          (if @entered?
-            (swap! front assoc :phase :absent :jvm-pid nil)
-            (swap! front assoc :phase :running))
           (deliver stopped true))))))
 
 ;; ---------------------------------------------------------------------------
