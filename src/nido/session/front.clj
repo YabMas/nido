@@ -145,6 +145,19 @@
 
 (declare readiness)
 
+(defn- jvm-runs?
+  "Whether the JVM the front spawned as `pid` still runs — the one reading every decision to keep,
+   clear, charge or trust a pid derives from. A pid names whatever process holds it now, so the
+   process under it must have started when the spawn's did (`:jvm-started`, read at the spawn); a
+   later start is another process given the recycled number. Where the OS will not say when either
+   started, it is read as running while something holds the pid, as nothing better can be told."
+  [front pid]
+  (boolean
+   (and pid (proc/process-alive? pid)
+        (let [spawned (when (= pid (:jvm-pid @front)) (:jvm-started @front))
+              now     (proc/process-started pid)]
+          (or (not (int? spawned)) (not (int? now)) (= spawned now))))))
+
 (defn- settle-jvm!
   "Read the front's JVM state from the JVM itself, after any attempt to start or stop it. The pid
    is the process's: recorded on the runtime and registry while `pid` runs, whatever answers,
@@ -162,7 +175,7 @@
    whether the JVM runs; never throws."
   [front pid]
   (let [{:keys [cfg]} @front
-        alive?   (boolean (and pid (proc/process-alive? pid)))
+        alive?   (jvm-runs? front pid)
         answers? (and alive? (eval-svc/jvm-answers? {:socket (:socket cfg)}))]
     (try (note-jvm! cfg (when alive? pid)) (catch Exception _ nil))
     (if answers?
@@ -250,7 +263,8 @@
                   ;; once it answers; a start that fails settles it from whether it still runs.
                   _       (process/start-jvm!
                            (assoc cfg :on-spawn (fn [pid]
-                                                  (swap! front assoc :jvm-pid pid)
+                                                  (swap! front assoc :jvm-pid pid
+                                                         :jvm-started (proc/process-started pid))
                                                   (note-jvm! cfg pid))))]
               (assert-port-file! cfg)
               (ready! front :repl)
@@ -315,7 +329,7 @@
    meanwhile is undone."
   [front]
   (let [{:keys [phase jvm-pid cfg]} @front]
-    (when (and (= :running phase) jvm-pid (not (proc/process-alive? jvm-pid)))
+    (when (and (= :running phase) jvm-pid (not (jvm-runs? front jvm-pid)))
       (core/log-step "The JVM exited on its own — the next call starts it again")
       (try
         (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-jvm-exited
@@ -335,7 +349,7 @@
   ;; — is cleared once its process is gone, so the fleet stops charging it and a reused pid is
   ;; never charged to this runtime.
   (let [{:keys [phase jvm-pid cfg]} @front]
-    (when (and (= :absent phase) jvm-pid (not (proc/process-alive? jvm-pid)))
+    (when (and (= :absent phase) jvm-pid (not (jvm-runs? front jvm-pid)))
       (try
         (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-jvm-exited
           (fn []

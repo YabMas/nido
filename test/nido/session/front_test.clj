@@ -694,3 +694,29 @@
             (is (= :ready-after-give-up (:outcome rec))
                 "its client went while the stop ran, before the start began"))))
       (finally (cleanup fx)))))
+
+(deftest a-recycled-pid-is-not-read-as-the-jvm
+  (doseq [fails? [true false]]
+    (let [{:keys [cfg log redefs front] :as fx} (fixture {})
+          started (atom 100)]
+      (try
+        (with-redefs-fn (cond-> (assoc redefs
+                                       #'nido.platform.process/process-alive? (constantly true)
+                                       #'nido.platform.process/process-started (fn [_] @started))
+                          fails? (assoc #'process/start-jvm! (fn [c] ((:on-spawn c) 4242)
+                                                               (throw (ex-info "Timed out waiting for repl's nREPL" {:pid 4242})))
+                                        #'process/stop-jvm! (fn [_] (throw (ex-info "it survives its stop" {})))))
+          (fn []
+            (call (:nrepl-port cfg) "x" 3000)
+            (await-phase front (if fails? :absent :running))
+            (Thread/sleep 100)
+            (is (= 4242 (:jvm-pid @front)) "the JVM it spawned runs, so its pid is kept")
+            ;; The JVM exits and another process is given its number.
+            (reset! started 200)
+            (#'front/forget-dead-jvm! front)
+            (is (nil? (:jvm-pid @front))
+                (str "a process started after the spawn is not the JVM, "
+                     (if fails? "after a failed start" "while it read as running")))
+            (is (= [:registry {}] (last (filter #(and (vector? %) (= :registry (first %))) @log)))
+                "and the fleet does not charge it")))
+        (finally (cleanup fx))))))
