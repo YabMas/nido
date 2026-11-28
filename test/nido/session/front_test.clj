@@ -652,3 +652,45 @@
           (call (:nrepl-port cfg) "y" 3000)
           (is (= 2 @starts) "the next call starts it again rather than taking the dead socket")))
       (finally (cleanup fx)))))
+
+(deftest a-pid-kept-after-a-failed-start-is-cleared-once-its-process-exits
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {})
+        alive? (atom true)]
+    (try
+      (with-redefs-fn (assoc redefs
+                             #'process/start-jvm! (fn [c] ((:on-spawn c) 4242)
+                                                    (throw (ex-info "Timed out waiting for repl's nREPL" {:pid 4242})))
+                             #'process/stop-jvm! (fn [_] (throw (ex-info "it survives its stop" {})))
+                             #'nido.platform.process/process-alive? (fn [_] @alive?))
+        (fn []
+          (call (:nrepl-port cfg) "x" 3000)
+          (await-phase front :absent)
+          (Thread/sleep 100)
+          (is (= 4242 (:jvm-pid @front)) "the JVM still runs, so its pid is kept")
+          (reset! alive? false)
+          (#'front/forget-dead-jvm! front)
+          (is (nil? (:jvm-pid @front)) "once it exits, the front no longer reads its pid")
+          (is (= [:registry {}] (last (filter #(and (vector? %) (= :registry (first %))) @log)))
+              "and the fleet no longer charges it")))
+      (finally (cleanup fx)))))
+
+(deftest a-start-deferred-behind-a-stop-is-recorded-as-given-up-on-when-its-client-went
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {})
+        stopped (promise)]
+    (try
+      (with-redefs-fn redefs
+        (fn []
+          (swap! front assoc :phase :stopping :stopped stopped :start {:first {:id :previous}})
+          (with-open [c (Socket. "127.0.0.1" (int (:nrepl-port cfg)))]
+            (.write (.getOutputStream c) (.getBytes "x"))
+            (.flush (.getOutputStream c))
+            (Thread/sleep 200))
+          (Thread/sleep 200)
+          (swap! front assoc :phase :absent)
+          (deliver stopped true)
+          (await-phase front :running)
+          (Thread/sleep 100)
+          (let [[_ rec] (some #(when (and (vector? %) (= :record (first %))) %) @log)]
+            (is (= :ready-after-give-up (:outcome rec))
+                "its client went while the stop ran, before the start began"))))
+      (finally (cleanup fx)))))

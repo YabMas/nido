@@ -117,7 +117,11 @@
                 :port         (:port start)
                 :requested-at (:requested-at start)
                 :ended-at     ended-at
-                :outcome      (if (and (= :ready outcome) (:gave-up? start)) :ready-after-give-up outcome)
+                ;; Read from the connection that triggered the start, however long the start
+                ;; waited to begin: its own record of having ended is the one source of it.
+                :outcome      (if (and (= :ready outcome) @(get-in start [:first :gave-up?]))
+                                :ready-after-give-up
+                                outcome)
                 ;; No start through the front is admitted against the fleet's memory budget.
                 :admission    :bypassed}
          cause (assoc :cause cause)))
@@ -275,7 +279,7 @@
    be forgotten) is part of the start's time."
   [conn]
   {:requested-at (:first-byte-at conn) :port (:kind conn) :key (:key conn)
-   :first conn :gave-up? false})
+   :first conn})
 
 (defn- demand!
   "The readiness connection `conn` waits on — its listener's (`listener-key`): a promise delivered
@@ -306,8 +310,9 @@
 (defn- forget-dead-jvm!
   "When the JVM the front reads as running has exited on its own, clear its record and read it as
    absent, so the next byte starts it again rather than being relayed to a socket nothing listens
-   on. Under the runtime's lock, and only while the front still reads that same JVM as running,
-   so no start made meanwhile is undone."
+   on; and when a pid the front kept while reading the JVM as absent has exited, clear it. Under
+   the runtime's lock, and only while the front still reads that same JVM so, so no start made
+   meanwhile is undone."
   [front]
   (let [{:keys [phase jvm-pid cfg]} @front]
     (when (and (= :running phase) jvm-pid (not (proc/process-alive? jvm-pid)))
@@ -325,6 +330,18 @@
                      (let [stopped (:stopped @front)]
                        (settle-jvm! front jvm-pid)
                        (deliver stopped true)))))))
+        (catch Throwable e (core/log-step (str "warning: " (ex-message e)))))))
+  ;; A pid kept while the front reads the JVM as absent — one a failed start or stop left running
+  ;; — is cleared once its process is gone, so the fleet stops charging it and a reused pid is
+  ;; never charged to this runtime.
+  (let [{:keys [phase jvm-pid cfg]} @front]
+    (when (and (= :absent phase) jvm-pid (not (proc/process-alive? jvm-pid)))
+      (try
+        (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-jvm-exited
+          (fn []
+            (when (locking front
+                    (let [f @front] (and (= :absent (:phase f)) (= jvm-pid (:jvm-pid f)))))
+              (settle-jvm! front jvm-pid))))
         (catch Throwable e (core/log-step (str "warning: " (ex-message e))))))))
 
 (defn- stop-idle!
@@ -387,13 +404,11 @@
   (* 1024 1024))
 
 (defn- gave-up!
-  "Mark the start `conn` triggered, if it did and it is not recorded yet, as one whose first client
-   gave up: its connection ended — an end of sending, a reset, any failure — before its target
-   was connected."
-  [front conn]
-  (swap! front (fn [f]
-                 (cond-> f
-                   (= (:id conn) (get-in f [:start :first :id])) (assoc-in [:start :gave-up?] true)))))
+  "Mark connection `conn` as one whose client gave up: it ended — an end of sending, a reset, any
+   failure — before its target was connected. Marked on the connection, not on a start, so a start
+   it triggers later (one deferred behind a stop) reads it as well as one already running."
+  [conn]
+  (reset! (:gave-up? conn) true))
 
 (defn- pump-client!
   "Client to JVM: what the client sends is held until `inner` is connected, written through
@@ -415,7 +430,7 @@
                   (if-let [i @inner]
                     ((:shutdown-output i))
                     (do (reset! client-eof? true)
-                        (gave-up! front conn))))
+                        (gave-up! conn))))
                 (end!))
             (do (traffic! front (:kind conn))
                 (locking held
@@ -446,7 +461,7 @@
   "Relay one accepted client connection on listener `l`. It stays open — and counted among the
    front's open connections — until both directions have ended, or either fails."
   [front l ^Socket client]
-  (let [conn        {:kind (:kind l) :key (listener-key l) :id (Object.)}
+  (let [conn        {:kind (:kind l) :key (listener-key l) :id (Object.) :gave-up? (atom false)}
         in          (.getInputStream client)
         held        (java.io.ByteArrayOutputStream.)
         inner       (atom nil)
@@ -460,7 +475,7 @@
                         (if-let [i @inner]
                           (try ((:close i)) (catch Exception _ nil))
                           ;; Ended before its target was connected: its client gave up.
-                          (gave-up! front conn))
+                          (gave-up! conn))
                         (swap! front update :conns dec)))
         ended       (atom 0)
         end!        #(when (= 2 (swap! ended inc)) (close!))]
