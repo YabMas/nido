@@ -138,18 +138,35 @@
 ;; port and only scan when a real listener actually occupies it.
 
 (deftest pick-shared-port-keeps-the-stable-port-when-nothing-is-listening
-  (with-redefs [shared/resolve-shared-port (constantly 6145)
-                proc/tcp-open? (fn [_] false)                 ; free or merely TIME_WAIT
-                proc/find-available-port (fn [& _] (throw (ex-info "must not scan past the stable port" {})))]
-    (is (= 6145 (#'shared/pick-shared-port "brian"))
-        "a TIME_WAIT-but-not-listening preferred port stays stable (PG rebinds it)")))
+  (try
+    (with-redefs [shared/resolve-shared-port (constantly 6145)
+                  proc/tcp-open? (fn [_] false)]              ; free or merely TIME_WAIT
+      (is (= 6145 (#'shared/pick-shared-port "brian"))
+          "a TIME_WAIT-but-not-listening preferred port stays stable (PG rebinds it)")
+      (is (= 6145 (#'shared/pick-shared-port "brian"))
+          "the cluster's own hold on its port never pushes it off it"))
+    (finally (proc/release-ports! "shared-pg:brian"))))
 
 (deftest pick-shared-port-scans-only-when-a-real-listener-occupies-it
-  (with-redefs [shared/resolve-shared-port (constantly 6145)
-                proc/tcp-open? (fn [p] (= p 6145))            ; a real server is listening on 6145
-                proc/find-available-port (fn [pref _] (+ pref 1))]
-    (is (= 6146 (#'shared/pick-shared-port "brian"))
-        "only an actively-listening preferred port forces a scan to an alternative")))
+  (try
+    (with-redefs [shared/resolve-shared-port (constantly 6145)
+                  proc/tcp-open? (fn [p] (= p 6145))]          ; a real server is listening on 6145
+      (is (= 6146 (#'shared/pick-shared-port "brian"))
+          "only an actively-listening preferred port forces a scan to an alternative"))
+    (finally (proc/release-ports! "shared-pg:brian"))))
+
+(deftest pick-shared-port-skips-a-port-a-runtime-holds-unbound
+  ;; An on-demand app's inner port is held in the ledger while its JVM is cold, so nothing
+  ;; listens there; the shared cluster must not take it.
+  (try
+    (with-redefs [proc/tcp-open? (fn [_] false)]
+      (binding [proc/*port-owner* "rt-cold"]
+        (is (= 6245 (proc/find-available-port 6245 1 {:probe :listen}))))
+      (with-redefs [shared/resolve-shared-port (constantly 6245)]
+        (is (= 6246 (#'shared/pick-shared-port "held-proj"))
+            "a port another owner holds is skipped even when nothing listens there")))
+    (finally (proc/release-ports! "rt-cold")
+             (proc/release-ports! "shared-pg:held-proj"))))
 
 (deftest migration-file-parsing
   (is (= 258 (shared/migration-file->version "V258__create_licence_expiry_notification.sql")))

@@ -62,13 +62,19 @@
   (Operation find-available-port
     "The first port at or above `preferred-port` that is free AND reachable by a browser. Free
      is not sufficient: a browser refuses its restricted-port list, and the failure looks like a
-     dead session rather than an unusable port. Nor is it within a runtime start, which binds
-     `*picked-ports*`: no port it already handed out — chosen but not bound yet — is handed out
-     again, so every service's port in one start is drawn from one set. Nor, within a start that
-     binds `*port-ledger*`, any port another owner holds there: the ledger is read and the pick
-     published to it under one cross-process lock, so overlapping starts never share a port."
-    {:signature [:=> [:catn [:preferred-port :int] [:max-attempts :int]] :int]
-     :delegates [port-free?]})
+     dead session rather than an unusable port. Free is bindable, or — `:probe :listen` — that
+     nothing listens there, for a server that rebinds a TIME_WAIT port and keeps its preferred
+     one so. Nor is it, within a runtime start (`*picked-ports*`), a port it already handed out,
+     nor, ever, one another owner holds in the port ledger: every pick reads the ledger, and one
+     made for an owner (`*port-owner*`) is published to it, under one cross-process lock. The one
+     way nido chooses a port to bind."
+    {:signature [:=> [:catn [:preferred-port :int] [:max-attempts :int]
+                  [:opts [:? [:map [:probe {:optional true} [:enum :bind :listen]]]]]] :int]
+     :delegates [port-free? tcp-open?]})
+  (Operation release-ports!
+    "Drop every port the port ledger holds for `owner` — a runtime whose start failed or which
+     was stopped."
+    {:signature [:=> [:catn [:owner :string]] :any]})
   (Operation quoted "Shell-quote a string."
     {:signature [:=> [:catn [:s :string]] :string]})
   (Operation inherited-env "This process's environment, as a map."

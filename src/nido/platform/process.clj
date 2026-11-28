@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
    [clojure.string :as str]
+   [nido.platform.core :as core]
    [nido.platform.io :as io]))
 
 (def ^:private live-children
@@ -262,21 +263,25 @@
    the pre-allocation, is drawn from one set."
   nil)
 
-(def ^:dynamic *port-ledger*
-  "Within a runtime start, where every start publishes the ports it picks, and for whom:
-   `{:path p :owner id}`, the file a map of port to owner. Nil outside a start. A port another
-   owner holds there is never picked, bound or not — a runtime's unbound ports are invisible to a
-   free-socket probe, and its record names them only once its start has finished."
+(def ^:dynamic *port-owner*
+  "Who a port `find-available-port` picks is held for — a runtime's instance id within its start,
+   a cluster's own name around its pick — or nil, when the pick is held for nobody. Every pick
+   reads the ledger (`port-ledger-path`), a map of port to owner: a port another owner holds is
+   never picked, bound or not, since a runtime's unbound ports are invisible to a socket probe. A
+   pick made for an owner is published there, under the lock every pick takes."
   nil)
 
-(defn- search-port [preferred-port max-attempts taken]
+(defn- port-ledger-path []
+  (str (fs/path (core/nido-home) "state" "ports.edn")))
+
+(defn- search-port [preferred-port max-attempts taken usable?]
   (loop [port preferred-port
          attempts 0]
     (cond
       (and (not (contains? browser-blocked-ports port))
            (not (contains? taken port))
            (not (some-> *picked-ports* deref (contains? port)))
-           (port-free? port))
+           (usable? port))
       (do (some-> *picked-ports* (swap! conj port))
           port)
 
@@ -286,24 +291,39 @@
 
       :else (recur (inc port) (inc attempts)))))
 
-(defn ^{:malli/schema [:=> [:cat :int :int] :int]}
+(defn ^{:malli/schema [:=> [:cat :int :int [:? [:map [:probe {:optional true} [:enum :bind :listen]]]]] :int]}
   find-available-port
-  "The first port at or above `preferred-port` that is free AND openable by a
-   browser, and not one this runtime start already handed out (`*picked-ports*`), which it is
-   then recorded as. See `browser-blocked-ports` for why free is not sufficient. Within a start
-   that binds `*port-ledger*`, nor one another owner holds there: the ledger is read and the
-   port published to it under one lock every start takes, so two starts picking at once, in any
-   processes, never take the same port."
-  [preferred-port max-attempts]
-  (if-let [{:keys [path owner]} *port-ledger*]
-    (io/with-file-lock (io/lock-path-for path)
-      (fn []
-        (let [ledger (or (io/read-edn path) {})
-              port   (search-port preferred-port max-attempts
-                                  (into #{} (keep (fn [[p o]] (when (not= o owner) p))) ledger))]
-          (io/write-edn! path (assoc ledger port owner))
-          port)))
-    (search-port preferred-port max-attempts #{})))
+  "The first port at or above `preferred-port` that is free AND openable by a browser, not one
+   this runtime start already handed out (`*picked-ports*`), which it is then recorded as, and not
+   one another owner holds in the ledger (`*port-owner*`). See `browser-blocked-ports` for why free
+   is not sufficient. Free means bindable (`:probe :bind`, the default) or, with `:probe :listen`,
+   that nothing listens there — for a server that rebinds a port still in TIME_WAIT, and keeps its
+   preferred port across restarts so. The ledger is read, and a pick for an owner published to it,
+   under one lock every pick takes, so two picks at once, in any processes, never take one port.
+   The one way nido chooses a port to bind."
+  ([preferred-port max-attempts]
+   (find-available-port preferred-port max-attempts {}))
+  ([preferred-port max-attempts {:keys [probe] :or {probe :bind}}]
+   (let [path    (port-ledger-path)
+         owner   *port-owner*
+         usable? (case probe :bind port-free? :listen (complement tcp-open?))]
+     (io/with-file-lock (io/lock-path-for path)
+       (fn []
+         (let [ledger (or (io/read-edn path) {})
+               port   (search-port preferred-port max-attempts
+                                   (into #{} (keep (fn [[p o]] (when (not= o owner) p))) ledger)
+                                   usable?)]
+           (when (and owner (not= owner (get ledger port)))
+             (io/write-edn! path (assoc ledger port owner)))
+           port))))))
+
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  release-ports!
+  "Drop every port the ledger holds for `owner`: its start failed, or it was stopped."
+  [owner]
+  (let [path (port-ledger-path)]
+    (when (fs/exists? path)
+      (io/update-edn! path (fn [ledger] (into {} (remove (fn [[_ o]] (= o owner))) ledger))))))
 
 (defn ^{:malli/schema [:=> [:cat :string] :string]}
   quoted [s]

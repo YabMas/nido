@@ -58,7 +58,7 @@
             starts (doall (for [i (range 8)]
                             (future
                               (binding [nido.platform.process/*picked-ports* (atom #{})
-                                        nido.platform.process/*port-ledger*  (#'engine/port-ledger (str "rt-" i))]
+                                        nido.platform.process/*port-owner*   (str "rt-" i)]
                                 @go
                                 (nido.platform.process/find-available-port 4000 50)))))
             _      (deliver go true)
@@ -67,7 +67,7 @@
         (is (= (set ports) (set (keys (ledger-of home)))) "each pick is published as it is made")
         (testing "a runtime's own ports are not held against it"
           (binding [nido.platform.process/*picked-ports* (atom #{})
-                    nido.platform.process/*port-ledger*  (#'engine/port-ledger "rt-0")]
+                    nido.platform.process/*port-owner*   "rt-0"]
             (is (= (nth ports 0) (nido.platform.process/find-available-port (nth ports 0) 1)))))))))
 
 (deftest a-failed-start-gives-its-ports-back
@@ -84,7 +84,7 @@
                                                        (throw (ex-info "service failed" {})))}
         (fn []
           (binding [nido.platform.process/*picked-ports* (atom #{})
-                    nido.platform.process/*port-ledger*  (#'engine/port-ledger "rt-other")]
+                    nido.platform.process/*port-owner*   "rt-other"]
             (nido.platform.process/find-available-port 4500 5))
           (is (thrown-with-msg? Exception #"service failed"
                 (engine/start-services! "/tmp/wt-fail" "p" "rt-fail" {} {} {} "/tmp/wt-fail")))
@@ -101,7 +101,7 @@
         (fn []
           (doseq [id ["rt-a" "rt-b"]]
             (binding [nido.platform.process/*picked-ports* (atom #{})
-                      nido.platform.process/*port-ledger*  (#'engine/port-ledger id)]
+                      nido.platform.process/*port-owner*   id]
               (nido.platform.process/find-available-port 4600 5)))
           (#'engine/stop-services! {:project-name "p"} "rt-a")
           (is (= #{"rt-b"} (set (vals (ledger-of home)))) "only the stopped runtime's ports go"))))))

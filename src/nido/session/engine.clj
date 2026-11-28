@@ -303,21 +303,6 @@
   [services]
   (into #{} (comp (filter #(and (= :process (:type %)) (:on-demand %))) (map :name)) services))
 
-(defn- port-ledger
-  "Where every runtime start publishes the ports it picks, each under the runtime it picked it for
-   (`proc/*port-ledger*`). A runtime's ports stay there for as long as it exists — its front ports
-   and its app's inner port among them, which no listener holds while its JVM is cold — so a port
-   one runtime holds is never handed to another, whether or not its start has finished."
-  [instance-id]
-  {:path (str (fs/path (state/state-dir) "ports.edn")) :owner instance-id})
-
-(defn- release-ports!
-  "Drop every port the ledger holds for `instance-id`: its start failed, or it was stopped."
-  [instance-id]
-  (let [{:keys [path]} (port-ledger instance-id)]
-    (when (fs/exists? path)
-      (io/update-edn! path (fn [ledger] (into {} (remove (fn [[_ o]] (= o instance-id))) ledger))))))
-
 (defn- allocate-port [seed [low high]]
   (proc/find-available-port (proc/deterministic-port seed low high) (- high low)))
 
@@ -557,7 +542,7 @@
            (catch Exception e
              (println (str "warning: error releasing " instance-id "'s shared-cluster claim: "
                            (ex-message e)))))
-      (try (release-ports! instance-id)
+      (try (proc/release-ports! instance-id)
            (catch Exception e
              (println (str "warning: error releasing " instance-id "'s ports: " (ex-message e))))))))
 
@@ -695,11 +680,12 @@
    (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
    ;; One set of picked ports for the whole start: the front's, pre-allocated, are not bound
    ;; until the JVM's :process service starts, after services that pick their own (Postgres).
-   ;; Each pick is also published to the ledger every start reads, around what every other
-   ;; runtime holds there, bound or not. A start that throws before its record is written gives
-   ;; its ports back; one that throws after is up, and keeps them until it is stopped.
+   ;; Each pick is also published to the ledger every pick reads, held for this runtime for as
+   ;; long as it exists — its front ports and its app's inner port among them, which no listener
+   ;; holds while its JVM is cold. A start that throws before its record is written gives its
+   ;; ports back; one that throws after is up, and keeps them until it is stopped.
    (binding [proc/*picked-ports* (atom #{})
-             proc/*port-ledger*  (port-ledger instance-id)]
+             proc/*port-owner*   instance-id]
     (let [written? (volatile! false)]
     (try
     (let [session-name (:session-name opts)
@@ -765,7 +751,7 @@
       (print-session-summary session-data final-ctx)
       session-data)
     (catch Throwable e
-      (when-not @written? (release-ports! instance-id))
+      (when-not @written? (proc/release-ports! instance-id))
       (throw e)))))))
 
 (defn- session-alive?

@@ -95,9 +95,9 @@
     (if (= :running (:status existing))
       (:port existing)
       (let [preferred (proc/deterministic-port (cluster-dir project-name) 5500 7500)
-            port      (if (proc/tcp-open? preferred)
-                        (proc/find-available-port preferred 200)
-                        preferred)]
+            ;; Held in the ledger for the cluster itself, as `shared-pg`'s is.
+            port      (binding [proc/*port-owner* (str "test-pg:" project-name)]
+                        (proc/find-available-port preferred 200 {:probe :listen}))]
         (when (= :stale (:status existing))
           (fs/delete-if-exists (:pid-file existing)))
         (write-settings! project-name max-connections settings)

@@ -86,9 +86,10 @@
    conflict), and otherwise keep it stable."
   [project-name]
   (let [pref (resolve-shared-port project-name)]
-    (if (proc/tcp-open? pref)
-      (proc/find-available-port pref 200)
-      pref)))
+    ;; Held in the ledger for the cluster itself, not the runtime whose start brought it up, so
+    ;; its port stays its own across that runtime's stop and its own restarts.
+    (binding [proc/*port-owner* (str "shared-pg:" project-name)]
+      (proc/find-available-port pref 200 {:probe :listen}))))
 
 ;; ---------------------------------------------------------------------------
 ;; The connection budget
