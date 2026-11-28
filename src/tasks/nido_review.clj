@@ -2444,6 +2444,9 @@
                   (when (= :amend-stage (:asked-by final))
                     (str " · asked by the amend stage, not the judge"
                          (some->> (:asked-seq final) (str ", at entry "))))
+                  (when (= :standing (:asked-by final))
+                    (str " · entry " (:asked-seq final) "'s question still stands, unanswered — no judge"
+                         " or amender launched"))
                   (some->> (flip-rate ledger run-id) (str " · "))
                   " · report " report-path))
     ;; Before anything below can throw: the run is over, and how it went is worth reading whatever
@@ -2456,6 +2459,8 @@
     ;; needs to act.
     (when-let [detail (or (:amend-error final) (get-in final [:record :detail]))]
       (println (str "  " detail)))
+    (when-let [asks (when (= :standing (:asked-by final)) (not-empty (str (get-in final [:record :asks]))))]
+      (println (str "  " (str/replace (str/trim asks) "\n" "\n  "))))
     (when-let [path (:amend-unappended final)]
       (println (str "  the refused amendment, not appended: " path)))
     (when (= :amend-touched-code status)
@@ -2479,6 +2484,8 @@
     ;; comes through prefixed and the set is open by construction.
     (println (str "  → " (or (and remedies (= :asked status) (= :amend-stage (:asked-by final))
                                   (remedies :asked-by-amend-stage))
+                             (and remedies (= :asked status) (= :standing (:asked-by final))
+                                  (remedies :asked-standing))
                              (and remedies (remedies status))
                              (shared-remedy status final)
                              (str "unrecognised terminal status: " status))))
@@ -2494,6 +2501,15 @@
   (when (and max-iters (< max-iters 2))
     (str "⚠ :max-iters " max-iters " leaves no round to read an amendment this run makes — if round 1"
          " finds anything, the run ends with its amendment unread; pass 2 or more, or none")))
+
+(defn- unanswered-ask-line
+  "A launch line for a design run started over a question a person has not answered, or nil: the
+   run stops at entry when nothing it would judge has moved (`record/unanswered-ask`), and
+   otherwise re-judges before they answer — either way a choice made over their question."
+  [ledger]
+  (when-let [{n :seq r :run-id} (record/unanswered-ask ledger)]
+    (str "⚠ entry " n " asks a person and nobody has answered (run " r "): unless the tree moved"
+         " since, this run stops at entry and repeats the question")))
 
 (defn- record-loop-cmd*
   "Drive a record pipeline through the engine inside the live frame.
@@ -2569,6 +2585,7 @@
                   (tree/reading (keyword kind) (first ledger) cwd))]
     (some-> (provenance/warning (:machinery @report-atom)) println)
     (some-> (cap-warning max-iters) println)
+    (when (= "design" kind) (some-> (unanswered-ask-line ledger) println))
     (some-> (off-position-line cwd (record-loop-kinds kind)) println)
     (some-> (tree/line reading) println)
     ;; Under the claim from here, exactly as the diff loop is: two record rounds
@@ -2675,6 +2692,7 @@
 (def ^:private design-remedies
   {:cleared "the round proceeded and wrote the clearance — the design may be built"
    :asked-by-amend-stage "the judge asked for a repair, and a guard of the amend stage stopped it at what only you decide — the question below is on the ledger as an ask; answer it as the blocker it is parked on (bb nido:workstream:blocker:answer), or amend the design or its intent; until a person's entry answers it, no amender may change the claims it names"
+   :asked-standing "an earlier run asked this question, nobody has answered it, and nothing it judged has moved since, so this run stopped at entry rather than derive it again; answer it as the blocker it is parked on (bb nido:workstream:blocker:answer), grant, or amend the design or its intent, then re-run"
    :asked "the judge found something only you can repair — answer the question below as the blocker it is parked on (bb nido:workstream:blocker:answer), or amend the design or its intent; the next round reads the answer, and only a round that proceeds lets the design be built"
    :clearance-contended "the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"

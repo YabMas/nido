@@ -3089,3 +3089,36 @@
         "an amendment that left the relation alone changed no standing")
     (is (nil? (read moved (update final :record dissoc :asks)))
         "with no question for a person there is nothing to set the move beside")))
+
+;; ── A question a run left, still waiting ────────────────────────────────────
+
+(deftest a-run-over-an-unanswered-ask-stops-at-entry
+  ;; Watched (ws-20261016-b53fd6, -ec91f2): thirteen runs in a row relaunched over an :asked run's
+  ;; record, unchanged tree and no person entry, each re-deriving the same question with a judge
+  ;; and an amender.
+  (let [launched (atom 0)
+        ask      {:format :design-decision :seq 26 :design-seq 24 :recommend :ask :run-id "r0"
+                  :code-identity "t1" :asks "may the gate narrow?"}
+        go       (fn [tree c]
+                   (reset! launched 0)
+                   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                 record/unanswered-ask (fn [_] {:seq 26 :of 24 :run-id "r0" :design-seq 25
+                                                                :code-identity "t1" :asks (:asks ask)})
+                                 settled/code-identity (constantly tree)
+                                 ws/entry-at-seq (fn [_ _ n] (when (= 26 n) ask))
+                                 record/design-decision! (fn [_] (swap! launched inc) (decision :amend))
+                                 record/append! (fn [_ _] nil)]
+                     (run record/design-judge-stage c)))]
+    (let [out (go "t1" (ctx))]
+      (is (zero? @launched) "the question is already waiting for the person; no judge is paid to ask it again")
+      (is (= :asked (:status out)))
+      (is (= :standing (:asked-by out)) "the status line says the question was standing, not derived")
+      (is (= 26 (:asked-seq out)))
+      (is (= ask (:record out)) "the run ends on the ask it repeats")
+      (is (= 25 (:judged-seq out)) "the record it would have judged"))
+    (testing "a moved tree is something the judge has not read"
+      (go "t2" (ctx))
+      (is (= 1 @launched)))
+    (testing "only round 1 stands on it: later rounds judge what the run amended"
+      (go "t1" (ctx :iter 2))
+      (is (= 1 @launched)))))

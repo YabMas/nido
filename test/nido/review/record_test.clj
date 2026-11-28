@@ -2121,6 +2121,49 @@
                                     27)))
       "an amender's record from before the stamp is still known by the :why the loop wrote"))
 
+;; ── A question a run left, still waiting ───────────────────────────────────
+
+(defn- unanswered-over
+  "`record/unanswered-ask` on a ledger holding `entries` by :seq, `amended` the seqs the loop's
+   amender wrote."
+  [entries & {:keys [amended] :or {amended #{}}}]
+  (let [of-kind (fn [k] (->> (vals entries) (filter #(= k (:format %))) (sort-by :seq) vec))]
+    (with-redefs [ws/amended-seqs (constantly amended)
+                  ws/entry-at-seq (fn [_ _ n] (get entries n))
+                  ws/entries-of   (fn [_ _ k] (of-kind k))
+                  ws/latest-entry (fn [_ _ k] (peek (of-kind k)))]
+      (record/unanswered-ask [:nido "ws-1"]))))
+
+(def ^:private left-asking
+  ;; Run r1 judged 24, appended its amendment 25, then stopped for a person at 26.
+  {24 (assoc design :seq 24)
+   25 (assoc design :seq 25 :run-id "r1" :supersedes {:seq 24 :why "corrected against the code after round 1 of run r1"})
+   26 {:format :design-decision :seq 26 :design-seq 24 :recommend :ask :run-id "r1" :code-identity "t1"
+       :asks "may the gate narrow?"}})
+
+(deftest a-question-a-run-left-stands-until-a-person-writes
+  ;; Watched across nine runs (ws-20261016-b53fd6, -c79fab, -77b523): each relaunch over an
+  ;; amend-stage :asked paid a judge and an amender to re-derive the question already waiting.
+  (is (= {:seq 26 :of 24 :run-id "r1" :design-seq 25 :code-identity "t1" :asks "may the gate narrow?"}
+         (unanswered-over left-asking :amended #{25}))
+      "the asking run's own amendment, appended before it asked, is the record the question is over")
+  (is (= 24 (:design-seq (unanswered-over (dissoc left-asking 25))))
+      "an ask about the newest design itself stands as well")
+  (is (nil? (unanswered-over (assoc left-asking 27 {:format :findings :seq 27 :items ["also check x"]})
+                             :amended #{25}))
+      "a person's filing after it is something the next run must read")
+  (is (nil? (unanswered-over (assoc left-asking 27 {:format :grant :seq 27 :grants [:intent]})
+                             :amended #{25}))
+      "so is a grant")
+  (is (nil? (unanswered-over (assoc left-asking 27 (assoc design :seq 27 :run-id "r2"
+                                                          :supersedes {:seq 25 :why "corrected against the code after round 1 of run r2"}))
+                             :amended #{25 27}))
+      "a design another run appended since is not the one the question was left over")
+  (is (nil? (unanswered-over (assoc-in left-asking [26 :read-once] ["c"]) :amended #{25}))
+      "a first reading's ask was put to no one")
+  (is (nil? (unanswered-over (update left-asking 26 dissoc :run-id) :amended #{25}))
+      "an ask no run wrote is not a run's to repeat"))
+
 (deftest a-reply-written-as-a-superseding-intent-answers-the-ask
   ;; The person's answer went into the goal: intent 96 superseded 77, and the design cites 96.
   (let [ledger {77 {:format :intent :seq 77 :goal "g" :done-when ["d"]}

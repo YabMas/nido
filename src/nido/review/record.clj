@@ -8799,7 +8799,75 @@
                      (get-in answers [:grant :note])))
        (catch Exception _ #{})))
 
+(defn- person-entry-since?
+  "Whether anything a person writes is on the ledger after entry `n`: a design they wrote, an
+   approval, a filing, an intent, a baseline or retraction no run appended, or a grant or answer
+   to a blocker that is their own act (`ws/unspent-grants` reads a person's grant the same way)."
+  [project ws-id n]
+  (let [after?  #(> (long (or (:seq %) 0)) (long n))
+        amended (ws/amended-seqs project ws-id)
+        of      #(filter after? (ws/entries-of project ws-id %))]
+    (boolean
+     (or (some #(written-by-person? amended %) (of :design))
+         (seq (mapcat of [:design-approved :findings :intent]))
+         (some #(nil? (:run-id %)) (mapcat of [:baseline :retraction]))
+         (some #(and (not= :nido (:by %)) (not (:act %)) (not (:carried %)))
+               (mapcat of [:blocker-answered :grant]))))))
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  unanswered-ask
+  "The question a run left for a person over the newest design of `ledger`, which nobody has
+   answered: `{:seq :of :run-id :design-seq :asks :code-identity}`, the :ask decision at :seq about
+   the design at :of, written by run :run-id at the tree :code-identity names, over the newest
+   design at :design-seq — or nil. Only while it is the newest decision, it asks about that design
+   or the design is the asking run's own amendment, appended before it asked, and no person has
+   written to the ledger since (`answered`'s :asked, `person-entry-since?`). A first reading's ask
+   is no question put to anyone. Nil when the ledger cannot be read."
+  [[project ws-id]]
+  (when (and project ws-id)
+    (try
+      (when-let [design (newest-design project ws-id)]
+        (when-let [{n :seq} (:asked (answered project ws-id design))]
+          (let [a (ws/entry-at-seq project ws-id n)]
+            (when (and (= :ask (:recommend a))
+                       (:run-id a)
+                       (empty? (:read-once a))
+                       (not (:amendment-read-once a))
+                       (or (= (:design-seq a) (:seq design))
+                           (and (= (:run-id a) (:run-id design)) (< (long (:seq design)) (long n))))
+                       (not (person-entry-since? project ws-id n)))
+              (cond-> {:seq n :of (:design-seq a) :run-id (:run-id a) :design-seq (:seq design)
+                       :asks (:asks a)}
+                (:code-identity a) (assoc :code-identity (:code-identity a)))))))
+      (catch Exception _ nil))))
+
+(defn- asked-standing
+  "`ctx` ended :asked on the question a run left on `ledger` (`unanswered-ask`), launching no judge
+   or amender: the round would judge the record that run left, at the tree it judged, with nothing
+   a person wrote since, so it could only derive again the question already waiting for them. The
+   ask is the round's :record and :reused-seq, as a standing judgement is. Nil when the
+   round must judge: past round 1, under repair, or `worktree` is not the tree the ask was read at."
+  [ctx ledger worktree]
+  (when (and (= 1 (:iter ctx)) (not (get-in ctx [:carry :under-repair])))
+    (when-let [ask (unanswered-ask ledger)]
+      (when (and (:code-identity ask) (= (settled/code-identity worktree) (:code-identity ask)))
+        (let [[project ws-id] ledger
+              record (ws/entry-at-seq project ws-id (:seq ask))]
+          (assoc ctx :record record :findings [] :status :asked :control :escalate
+                 :asked-by :standing :asked-seq (:seq ask) :standing-ask ask
+                 :judged-seq (:design-seq ask) :reused-seq (:seq ask)))))))
+
+(declare judge-design)
+
 (defn- run-design-judge-stage
+  [ctx]
+  (let [{:keys [cwd code-cwd]} (:config ctx)
+        ledger (ledger-of (:config ctx))]
+    (or (when-not (ledger-lost ctx ledger)
+          (asked-standing ctx ledger (or code-cwd cwd)))
+        (judge-design ctx))))
+
+(defn- judge-design
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
         ;; What the judge is not asked to check, read at the tree it is about to read, from

@@ -340,6 +340,11 @@
      from the one the asking decision judged — the standing change a person answering scope is
      owed. nil when it did not move, or nothing was asked."
     {:signature [:=> [:catn [:final :map]] [:maybe :map]]})
+  (Operation unanswered-ask
+    "The question a run left for a person over the newest design of a ledger, while nobody has
+     answered it and the design is still the one it was asked over. A design run stops at entry on
+     it when its tree has not moved, and names it at launch. nil when there is none."
+    {:signature [:=> [:catn [:ledger :any]] [:maybe :map]]})
   (Operation appended-amendment-delta
     "What the amendment a run's amender appended superseding a judged entry moved, read back off the
      ledger — for a run stopped in its amend phase, whose phase never finished to say so. nil when
