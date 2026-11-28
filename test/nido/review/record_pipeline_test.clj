@@ -2827,6 +2827,38 @@
     (is (nil? (refusal (update-in model-a-baseline [:model :elements 0] dissoc :interface)))
         "nor one removed, which is measured as what it is")))
 
+(def ^:private slot-baseline
+  {:format :baseline :seq 5
+   :model {:elements [{:id "executor" :sort :module :hides "turn slots"}]
+           :claims [{:id "slot" :about ["executor"]
+                     :statement "Every turn the core starts is counted in an executor slot."
+                     :read-at ["rg -n 'launch' src/nido/launcher"]}]}})
+
+(deftest a-refuted-claim-over-calls-is-rewritten-only-on-a-new-search
+  ;; Watched: "every turn is counted in an executor slot" was refuted five rounds running, each time
+  ;; by a different caller of the launching fn, while the claim's :read-at named only a grep of the
+  ;; launcher directory.
+  (let [rewrite  #(assoc-in slot-baseline [:model :claims 0 :statement] %)
+        appended (rewrite "Every turn the core or the UI starts is counted in an executor slot.")
+        refusal  #(#'record/search-refusal slot-baseline % ["slot"])]
+    (is (str/includes? (str (refusal appended)) "[slot]")
+        "a universal over turns patched at the launch path the judge named is refused")
+    (is (str/includes? (str (refusal appended)) "every caller")
+        "the refusal names the search the rewrite has to stand on")
+    (is (nil? (refusal (update-in appended [:model :claims 0 :read-at] conj
+                                  "rg -n 'agent/launch!' src test")))
+        "taken once the claim names a search over the callers")
+    (is (nil? (refusal (rewrite "The core counts the turns it starts from its tick in an executor slot.")))
+        "a statement bounded to one caller quantifies over none")
+    (is (nil? (#'record/search-refusal slot-baseline appended ["other"]))
+        "a claim no finding refuted is not this refusal's to judge")))
+
+(deftest a-summary-keeps-a-clause-no-claim-it-names-carries
+  ;; Watched: a shape clause promising a briefing paragraph was stripped to `[one-launch-baseline]
+  ;; states`, and that claim did not carry the paragraph; no claim did, so the commitment was lost.
+  (is (str/includes? (record/amend-prompt {:baseline a-baseline :findings [a-claim-finding] :out-path "/x"})
+                     "only a clause that claim states")))
+
 (deftest the-amend-check-holds-a-baseline-to-the-same-refusal
   (let [appended (assoc-in model-a-baseline [:model :elements 0 :interface] "total, line-sum, rounding")]
     (with-redefs [ws/latest-entry (fn [_ _ kind]

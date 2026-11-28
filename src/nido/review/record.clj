@@ -5606,7 +5606,9 @@
        "the summary, which is never offered withdrawal, carries every such refutation\n"
        "into the next run. So whenever you amend a claim or element the summary\n"
        "restates, replace the restatement with the id in this same amendment, whether\n"
-       "or not the summary was refuted, and report the summary under :swept as amended.\n"
+       "or not the summary was refuted, and report the summary under :swept as amended\n"
+       "— but only a clause that claim states: one it does not carry stays in the\n"
+       "summary, or becomes a claim of its own.\n"
        "A refuted summary is re-derived from what it summarises, by id. Never copy a\n"
        "finding's detail into the summary: it belongs on the claim the finding is about.\n\n"
        "NO UNIVERSAL YOU HAVE NOT CHECKED. `only`, `alone`, `none`, `no other`,\n"
@@ -5619,8 +5621,9 @@
        "search. Write one only after the search that establishes it, and\n"
        "name that search in :read-at beside the sites it found — on the claim, or on\n"
        "the element whose :interface or :hides it establishes — the grep over every\n"
-       "writer, every caller, every public fn of the namespaces surveyed, so the next\n"
-       "reader can run it again. Resolve each file's :require aliases before you\n"
+       "writer, every public fn of the namespaces surveyed and, for a clause over\n"
+       "calls, turns or launches, every caller of the function that makes them, so\n"
+       "the next reader can run it again. Resolve each file's :require aliases before you\n"
        "attribute a qualified call. Where operations differ, state them separately:\n"
        "every conjunct holds of each operation it quantifies over.\n"
        "When a missing member refuted a closed list, do not write a new list: state\n"
@@ -6600,6 +6603,43 @@
            " :interface from what it found — or restate it by category; never by appending the"
            " members the judge named."))))
 
+(def ^:private over-calls
+  "A clause quantifying over calls, turns or launches: `every turn`, `each call to`, `no other
+   caller`, `only one launch`. Its members are the call sites of the function that makes them."
+  #"(?i)\b(?:every|each|all|any|no|none of the|only)\s+(?:[\w!?*-]+\s+){0,3}?(?:calls?|callers?|turns?|launch(?:es)?|spawns?|invocations?)\b")
+
+(defn- quantified-refusal
+  "Why an amended baseline `record` may not replace `prev`, or nil: a claim whose id `refuted` holds
+   is rewritten into a statement quantifying over calls, turns or launches (`over-calls`) with no
+   :read-at entry naming a search (`search-entry`) that `prev`'s did not already carry. Each
+   counterexample to such a universal has been a different call site of the same function, so a
+   rewrite that read only the sites a judge named is refuted next round by the caller beside them."
+  [prev record refuted]
+  (let [by-id  #(into {} (map (juxt :id identity)) (filter :id (model/claims %)))
+        before (by-id prev)
+        after  (by-id record)
+        ids    (sort (for [id (set refuted)
+                           :let [b (get before id) a (get after id)]
+                           :when (and b a
+                                      (not= (:statement b) (:statement a))
+                                      (re-find over-calls (str (:statement a)))
+                                      (not-any? #(re-find search-entry (str %))
+                                                (remove (set (:read-at b)) (:read-at a))))]
+                       id))]
+    (when (seq ids)
+      (str "the claim " (str/join ", " (map #(str "[" % "]") ids))
+           " was refuted and rewritten into a statement over calls, turns or launches, but its"
+           " :read-at names no new search over their callers. Grep every caller of the function"
+           " that makes them across the tree, name that search in the claim's :read-at, and state"
+           " the claim of every caller it found — or bound it to the callers you read."))))
+
+(defn- search-refusal
+  "`interface-refusal`, else `quantified-refusal`: what a refuted baseline subject's rewrite has to
+   stand on a search for."
+  [prev record refuted]
+  (or (interface-refusal prev record refuted)
+      (quantified-refusal prev record refuted)))
+
 (defn- refuted-by-review
   "The subjects the newest :baseline-review on `ws-id` refutes, when it judged `baseline` — the
    findings `baseline`'s amender is answering. Empty when the newest review judged another record."
@@ -6615,14 +6655,14 @@
    loop would have it cite — or nil when it would be taken. Writes nothing. For an amender to check
    its answer before handing it over; see `nido.coordinator.record.workstream/check-entry` for how
    far \"now\" holds. A baseline is also held to what the loop's append holds it to beyond the
-   ledger (`interface-refusal`), against the newest review's findings."
+   ledger (`search-refusal`), against the newest review's findings."
   [project ws-id kind record]
   (let [prev   (ws/latest-entry project ws-id kind)
         record (cite-corrected kind prev record
                                {:iter "n" :run-id "(dry run)"
                                 :resolve #(ws/entry-at-seq project ws-id %)})]
     (or (when (= :baseline kind)
-          (interface-refusal prev record (refuted-by-review project ws-id prev)))
+          (search-refusal prev record (refuted-by-review project ws-id prev)))
         (try (ws/check-entry project ws-id {:kind kind} (pr-str (ws/unstamp record)))
              nil
              (catch Exception e (ledger-refusal e))))))
@@ -7593,7 +7633,7 @@
                                     :check-cmd check-cmd
                                     :append (fn [record]
                                               (let [record (cite record)]
-                                                (if-let [why (interface-refusal
+                                                (if-let [why (search-refusal
                                                               prev record (mapcat refuted-ids (:findings ctx)))]
                                                   {:record record :err why}
                                                   (try {:record record
