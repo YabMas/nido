@@ -240,9 +240,14 @@
     (let [dir  (fs/path (core/nido-home) "bin")
           link (fs/path dir front-command-name)]
       (fs/create-dirs dir)
+      ;; Shared by every runtime's start, which no one runtime's lock orders: made under a name
+      ;; of its own and renamed into place, so concurrent starts each land a whole link — the same
+      ;; one — and none sees another's half-made step.
       (when-not (and (fs/sym-link? link) (= (str (fs/read-link link)) bb))
-        (fs/delete-if-exists link)
-        (fs/create-sym-link link bb))
+        (let [tmp (fs/path dir (str front-command-name "." (random-uuid) ".tmp"))]
+          (fs/create-sym-link tmp bb)
+          (try (fs/move tmp link {:replace-existing true :atomic-move true})
+               (finally (fs/delete-if-exists tmp)))))
       (str link))
     "bb"))
 

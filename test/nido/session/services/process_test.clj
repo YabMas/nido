@@ -323,3 +323,18 @@
                      :service :repl :on-spawn #(swap! heard conj [:spawned %])})))
         (is (= [[:spawned 777] [:waiting 1]] @heard)
             "its pid is published before the wait for its socket begins")))))
+
+(deftest concurrent-starts-each-get-the-front-link
+  ;; Every runtime's front runs under the one link in the nido home; starts of different runtimes
+  ;; hold no lock in common, and none of them may fail on another's making it.
+  (let [home (str (fs/create-temp-dir))]
+    (try
+      (with-redefs [core/nido-home (constantly home)]
+        (dotimes [_ 20]
+          (fs/delete-if-exists (fs/path home "bin" "nido-front"))
+          (let [rs (mapv deref (mapv (fn [_] (future (try (#'nido.session.services.process/front-executable)
+                                                           (catch Exception e e))))
+                                     (range 8)))]
+            (is (every? string? rs) "no start fails on the link")
+            (is (fs/sym-link? (fs/path home "bin" "nido-front"))))))
+      (finally (fs/delete-tree home)))))
