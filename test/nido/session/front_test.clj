@@ -452,3 +452,25 @@
           (is (= "b" (call (:nrepl-port cfg) "b" 3000)) "the call starts a new JVM and is answered by it")
           (is (= 2 (count (filter #{:start} @log))))))
       (finally (cleanup fx)))))
+
+(deftest a-start-waiting-out-a-stop-is-timed-from-its-first-byte
+  (let [{:keys [cfg log redefs front server] :as fx} (fixture {:idle-ms 100})]
+    (try
+      (with-redefs-fn (assoc redefs #'process/stop-jvm!
+                             (fn [_] (Thread/sleep 800) (swap! log conj :stop)
+                               (when-let [f @server] (f) (reset! server nil))))
+        (fn []
+          (is (= "a" (call (:nrepl-port cfg) "a" 3000)))
+          (await-phase front :running)
+          (Thread/sleep 200)
+          (let [stopping (future (#'front/stop-idle! front))]
+            (await-phase front :stopping)
+            (let [sent (java.time.Instant/now)]
+              (is (= "b" (call (:nrepl-port cfg) "b" 5000)) "the call waits out the stop, then is answered")
+              @stopping
+              (let [rec (last (keep #(when (and (vector? %) (= :record (first %))) (second %)) @log))
+                    req (java.time.Instant/parse (:requested-at rec))]
+                (is (< (Math/abs (- (.toEpochMilli req) (.toEpochMilli sent))) 300)
+                    "the start is timed from the byte that asked for it, not from the end of the stop")
+                (is (>= (cold-starts/duration-ms rec) 500) "so its duration includes the stop it waited out"))))))
+      (finally (cleanup fx)))))

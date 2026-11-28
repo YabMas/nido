@@ -214,6 +214,15 @@
 
 (declare forget-dead-jvm!)
 
+(defn- start-of
+  "The start a connection triggers, as its record will read: every field from the connection —
+   its port, its listener, and the instant its first byte was read (`:first-byte-at`, stamped in
+   `serve!`) — so however long it waited before the start began (a stop to finish, a dead JVM to
+   be forgotten) is part of the start's time."
+  [conn]
+  {:requested-at (:first-byte-at conn) :port (:kind conn) :key (:key conn)
+   :first conn :gave-up? false})
+
 (defn- demand!
   "The readiness connection `conn` waits on — its listener's (`listener-key`): a promise delivered
    {:ok true} once that listener's target answers, or {:error e}. Starts the group when none runs
@@ -229,8 +238,7 @@
       (:running :starting) (get-in @front [:ready (:key conn)])
       :absent  (let [ready (readiness (:cfg @front))]
                  (swap! front assoc :phase :starting :ready ready
-                        :start {:requested-at (core/now-iso) :port (:kind conn) :key (:key conn)
-                                :first conn :gave-up? false})
+                        :start (start-of conn))
                  (future (run-start! front))
                  (get ready (:key conn)))
       :stopping (let [p (promise) stopped (:stopped @front)]
@@ -402,7 +410,7 @@
             n   (.read in buf)]
         (if (neg? n)
           (close!)
-          (do
+          (let [conn (assoc conn :first-byte-at (core/now-iso))]
             (traffic! front (:kind conn))
             (.write held buf 0 n)
             (let [ready (demand! front conn)]
