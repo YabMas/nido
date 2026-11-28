@@ -357,3 +357,46 @@
         (is (some #{["close" "s1"]} @ops)
             (str "the cloned session is closed when the eval " (if silent? "times out" "returns")))
         (finally (stop))))))
+
+(deftest a-start-form-names-the-bound-port-under-the-services-own-name
+  (let [seen (atom nil)]
+    (with-redefs-fn {#'eval/eval-on-repl!      (fn [_ _ _ _ form] (reset! seen form) {})
+                     #'eval/nrepl-answers?     (constantly true)
+                     #'eval/wait-for-app-port! (constantly true)
+                     #'nido.platform.process/tcp-open? (constantly false)
+                     #'nido.platform.core/log-step (constantly nil)}
+      (fn []
+        (eval/start-app! {:name :a :start-form "(start {{a.port}} {{app.port}})"}
+                         {:app-port 3300 :bind-port 3301 :socket "/tmp/x.sock" :host "h"}
+                         {:a {:port 3300 :bind-port 3301} :session {:instance-id "i" :project-name "p"}})
+        (is (= "(start 3301 3301)" @seen)
+            "behind a front, the app is told the port it binds, never the front's")))))
+
+(defn- deaf-after-clone-nrepl!
+  "A filesystem-socket nREPL that answers the session clone and then reads nothing more, so a
+   large request fills the socket and its writer blocks. Returns a fn that stops it."
+  [path]
+  (fs/delete-if-exists path)
+  (let [ss (java.nio.channels.ServerSocketChannel/open java.net.StandardProtocolFamily/UNIX)
+        conn (atom nil)]
+    (.bind ss (java.net.UnixDomainSocketAddress/of (str path)))
+    (future
+      (try
+        (let [c   (.accept ss)
+              in  (java.io.PushbackInputStream. (java.nio.channels.Channels/newInputStream c))
+              out (java.nio.channels.Channels/newOutputStream c)]
+          (reset! conn c)
+          (bencode.core/read-bencode in)
+          (bencode.core/write-bencode out {"id" "nido-clone" "new-session" "s1" "status" ["done"]})
+          (.flush out))
+        (catch Exception _ nil)))
+    (fn [] (some-> @conn .close) (.close ss) (fs/delete-if-exists path))))
+
+(deftest an-eval-whose-request-the-jvm-stops-reading-ends-at-its-timeout
+  (let [path (str (fs/path (str (fs/create-temp-dir)) "repl.sock"))
+        stop (deaf-after-clone-nrepl! path)]
+    (try
+      (let [form (apply str (repeat (* 16 1024 1024) "x"))
+            r    (deref (future (#'eval/eval-over-socket path 300 form)) 6000 ::stuck)]
+        (is (not= ::stuck r) "the cleanup does not wait on the writer the JVM stopped reading"))
+      (finally (stop)))))

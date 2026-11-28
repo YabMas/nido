@@ -214,7 +214,18 @@
       (let [out  (java.io.BufferedOutputStream. (java.nio.channels.Channels/newOutputStream ch))
             in   (java.io.PushbackInputStream. (java.nio.channels.Channels/newInputStream ch))
             ;; One message at a time: the cleanup's may be sent while the eval's still is.
-            send (fn [m] (locking out (bencode/write-bencode out m) (.flush out)))
+            wlock (java.util.concurrent.locks.ReentrantLock.)
+            write (fn [m] (bencode/write-bencode out m) (.flush out))
+            send (fn [m] (.lock wlock) (try (write m) (finally (.unlock wlock))))
+            ;; Every message of the cleanup goes this way, so the cleanup never waits on what it
+            ;; is cleaning up: skipped while a write is in flight (one blocked on a JVM that stopped
+            ;; reading holds the lock), bounded otherwise, and never thrown. The channel's close
+            ;; after it is what ends any operation still blocked on it.
+            send-cleanup (fn [m]
+                           (deref (future
+                                    (when (.tryLock wlock)
+                                      (try (write m) (catch Exception _ nil) (finally (.unlock wlock)))))
+                                  1000 nil))
             recv (fn [] (bencode/read-bencode in))
             sid  (atom nil)
             sent? (atom false)
@@ -245,14 +256,15 @@
               ;; Only once the eval was sent; a JVM that never answered the clone has no eval to
               ;; interrupt, and the close below ends the wait on it.
               (when (and @sent? @sid)
-                (try (send {"op" "interrupt" "session" @sid "interrupt-id" "nido-eval" "id" "nido-int"})
-                     (catch Exception _ nil)))
+                (send-cleanup {"op" "interrupt" "session" @sid "interrupt-id" "nido-eval" "id" "nido-int"}))
               (.append outs (str "\n" eval-timeout-signature "\n")))
             {:exit 0 :out (str outs) :err (str errs)})
           (finally
-            ;; Sent before the reader is cancelled: cancelling it closes the channel.
+            ;; Sent before the channel is closed, best effort: a JVM that stopped reading keeps the
+            ;; session, and the close of the channel is not held up by it.
             (when-let [s @sid]
-              (try (send {"op" "close" "session" s "id" "nido-close"}) (catch Exception _ nil)))
+              (send-cleanup {"op" "close" "session" s "id" "nido-close"}))
+            (try (.close ch) (catch Exception _ nil))
             (future-cancel done)))))
     (catch Exception e
       {:exit 1 :out "" :err (str "Could not reach nREPL on socket " path ": " (ex-message e))})))
@@ -409,7 +421,8 @@
   start-app!
   "Eval the service's :start-form over nREPL and wait for the port the app binds to open.
    Idempotent: if the app is already listening, returns immediately without re-evaling. The form
-   is substituted with `app.port` and `app.bind-port` both naming the port the app binds."
+   is substituted with `app.port` and `app.bind-port` — and the same two under the service's own
+   name — all naming the port the app binds."
   [service-def saved-state session-ctx]
   (let [{:keys [start-form eval-timeout-ms health-check-timeout-ms]
          :or {eval-timeout-ms 180000 health-check-timeout-ms 180000}} service-def
@@ -430,7 +443,12 @@
       :else
       (let [instance-id (or (:instance-id saved-state)
                             (get-in session-ctx [:session :instance-id]))
-            local-ctx (assoc session-ctx :app {:port app-port :bind-port app-port})
+            ;; Under `app.` and under the service's own name alike, a start form names the port
+            ;; the app binds — behind an on-demand JVM's front that is not the session's app
+            ;; port, which the front holds.
+            bound     {:port app-port :bind-port app-port}
+            local-ctx (cond-> (assoc session-ctx :app bound)
+                        (:name service-def) (update (keyword (name (:name service-def))) merge bound))
             resolved-start-form (ctx/substitute-value local-ctx start-form)]
         (core/log-step (str "Starting app on " host ":" app-port " (via nREPL eval)..."))
         (try
