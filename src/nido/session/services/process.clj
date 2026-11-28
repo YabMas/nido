@@ -346,15 +346,21 @@
 (defn ^{:malli/schema [:=> [:cat :map] :int]}
   start-jvm!
   "Start an on-demand JVM as front config `cfg` describes, its nREPL on the config's filesystem
-   socket, and return its pid once that socket answers. Throws, the JVM stopped, when it exits
+   socket, and return its pid once that socket answers; `(:on-spawn cfg)`, when given, is called
+   with each pid as soon as it is spawned. Throws, the JVM stopped, when it exits
    first or the declared :port-timeout-ms passes; a JVM that died building its classpath is started
    once more, as an eager start does."
-  [{:keys [command socket socket-args project-dir git-dir log-path pid-file port-timeout-ms service]}]
+  [{:keys [command socket socket-args project-dir git-dir log-path pid-file port-timeout-ms service
+           on-spawn]}]
   (retire-recorded! pid-file)
   (fs/delete-if-exists socket)
   (let [command (str command " " (str/join " " (map proc/quoted (conj (vec socket-args) socket))))
-        spawn   #(spawn! {:command command :project-dir project-dir :git-dir git-dir
-                          :log-path log-path :pid-path pid-file :svc-name service})
+        ;; `on-spawn` hears each pid the moment its process exists — before it answers, while it
+        ;; already holds memory — so what records it is never behind the process.
+        spawn   #(let [pid (spawn! {:command command :project-dir project-dir :git-dir git-dir
+                                    :log-path log-path :pid-path pid-file :svc-name service})]
+                   (when on-spawn (on-spawn pid))
+                   pid)
         {:keys [pid ready outcome]}
         (loop [attempt 1]
           (let [pid (spawn)

@@ -61,7 +61,8 @@
         ss     (#'front/listen! {:kind :repl :port (:nrepl-port cfg)})]
     (future (loop [] (let [c (.accept ss)] (future (#'front/serve! fr {:kind :repl :port (:nrepl-port cfg)} c)) (recur))))
     {:cfg cfg :front fr :log log :server server :ss ss :dir dir
-     :redefs {#'process/start-jvm!         (fn [_] (swap! log conj :start)
+     :redefs {#'process/start-jvm!         (fn [c] (swap! log conj :start)
+                                             (when-let [f (:on-spawn c)] (f 4242))
                                              (Thread/sleep start-ms)
                                              (when start-fails? (throw (ex-info "boom: classpath" {})))
                                              (reset! server (echo-server! sock))
@@ -363,7 +364,8 @@
         reply (* 8 1024 1024)]
     (try
       (with-redefs-fn (assoc redefs #'process/start-jvm!
-                             (fn [c] (Thread/sleep 300)
+                             (fn [c] (when-let [f (:on-spawn c)] (f 4242))
+                               (Thread/sleep 300)
                                (reset! server (answers-first-server! (:socket c) reply))
                                4242))
         (fn []
@@ -493,4 +495,78 @@
               "as does the registry, which the fleet charges by")
           (is (= "b" (call (:nrepl-port cfg) "b" 3000)) "the next call is relayed to it")
           (is (= 1 (count (filter #{:start} @log))) "rather than starting another")))
+      (finally (cleanup fx)))))
+
+(deftest the-pid-is-published-while-the-jvm-is-still-starting
+  (let [{:keys [cfg log redefs front server] :as fx} (fixture {})
+        seen  (atom nil)]
+    (try
+      (with-redefs-fn (assoc redefs #'process/start-jvm!
+                             (fn [c] (when-let [f (:on-spawn c)] (f 4242))
+                               (reset! seen (some #{[:registry {:repl-pid 4242}]} @log))
+                               (reset! server (echo-server! (:socket c)))
+                               4242))
+        (fn []
+          (is (= "a" (call (:nrepl-port cfg) "a" 3000)))
+          (is (some? @seen) "the registry names the JVM's pid before it answers")))
+      (finally (cleanup fx)))))
+
+(deftest an-app-stopped-by-a-failed-idle-stop-is-started-again-before-its-call-is-relayed
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {:idle-ms 100})
+        [pa ba] (repeatedly 2 free-port)
+        cfg   (assoc cfg :apps [{:service :a :port pa :bind-port ba}])
+        _     (swap! front assoc :cfg cfg)
+        app   (atom nil)
+        la    {:kind :app :service :a :port pa :bind-port ba}
+        ssa   (#'front/listen! la)]
+    (future (loop [] (let [c (.accept ssa)] (future (#'front/serve! front la c)) (recur))))
+    (try
+      (with-redefs-fn (assoc redefs
+                             #'state/read-session (fn [_] {:name "t"
+                                                           :service-defs [{:type :eval :name :a}]
+                                                           :service-states {:a {:bind-port ba}}})
+                             #'eval-svc/start-app! (fn [& _] (swap! log conj :app-start) (reset! app (tcp-echo! ba)) true)
+                             #'eval-svc/stop-app!  (fn [& _] (swap! log conj :app-stop) (when-let [f @app] (f) (reset! app nil)))
+                             #'process/stop-jvm!   (fn [_] (throw (ex-info "cannot tell the pid's owner" {}))))
+        (fn []
+          (is (= "x" (call pa "x" 3000)))
+          (await-phase front :running)
+          (Thread/sleep 200)
+          (#'front/stop-idle! front)
+          (is (= :running (:phase @front)) "the JVM survived its stop")
+          (is (= "y" (call pa "y" 3000)) "the stopped app is started again, then the call relayed to it")
+          (is (= 2 (count (filter #{:app-start} @log))))))
+      (finally (.close ssa) (some-> @app (apply [])) (cleanup fx)))))
+
+(deftest a-client-gone-while-its-target-is-connected-has-none-of-its-bytes-written
+  (let [{:keys [cfg redefs] :as fx} (fixture {:start-ms 200})
+        got   (promise)
+        orig  @#'front/connect-inner]
+    (try
+      (with-redefs-fn (assoc redefs
+                             #'process/start-jvm!
+                             (fn [c] (when-let [f (:on-spawn c)] (f 4242))
+                               (Thread/sleep 200)
+                               ;; A target that reads nothing for a while, then counts what reached it.
+                               (fs/delete-if-exists (:socket c))
+                               (let [ss (ServerSocketChannel/open StandardProtocolFamily/UNIX)]
+                                 (.bind ss (UnixDomainSocketAddress/of (str (:socket c))))
+                                 (future (try (let [ch (.accept ss)]
+                                                (Thread/sleep 1500)
+                                                (let [b (ByteBuffer/allocate 65536)]
+                                                  (deliver got (loop [n 0] (.clear b)
+                                                                 (let [r (try (.read ch b) (catch Exception _ -1))]
+                                                                   (if (pos? r) (recur (+ n r)) n))))))
+                                              (catch Exception _ (deliver got :error)))))
+                               4242)
+                             #'front/connect-inner (fn [c l] (Thread/sleep 800) (orig c l)))
+        (fn []
+          (let [c (Socket. "127.0.0.1" (int (:nrepl-port cfg)))]
+            ;; Under the held limit, so the front goes on reading the client and sees it go.
+            (try (.write (.getOutputStream c) (byte-array (* 512 1024))) (catch Exception _ nil))
+            ;; Reset while the front connects to its target.
+            (Thread/sleep 600)
+            (.setSoLinger c true 0)
+            (.close c))
+          (is (= 0 (deref got 5000 :stuck)) "the inner connection was closed before any held byte went to it")))
       (finally (cleanup fx)))))

@@ -138,19 +138,40 @@
 
 (defn- settle-jvm!
   "Read the front's JVM state from the JVM itself, after any attempt to start or stop it: when
-   `pid` still runs, the group is running — its pid on the runtime record and registry, every
-   port ready again, the idle clock restarted — and otherwise absent, no pid recorded. The one
-   place a stop or a failed start sets what the front and the fleet read, so neither can say a
-   JVM is gone that a stop which threw left running, nor keep a pid that is gone. Returns whether
-   it runs; never throws."
+   `pid` still runs, the group is running — its pid on the runtime record and registry, the idle
+   clock restarted — and otherwise absent, no pid recorded. The one place a stop or a failed
+   start sets what the front and the fleet read, so neither can say a JVM is gone that a stop
+   which threw left running, nor keep a pid that is gone.
+
+   A running group's readiness is each listener's own target's: the nREPL's is the JVM's, ready
+   at once; an app's is its own bound port's, ready when that answers. An app whose port does not
+   — stopped by the stop that failed, or never started by the start that did — is started again
+   under the runtime's lock, and what its port holds is released only once it answers. Returns
+   whether the JVM runs; never throws."
   [front pid]
   (let [{:keys [cfg]} @front
         alive? (boolean (and pid (proc/process-alive? pid)))]
     (try (note-jvm! cfg (when alive? pid)) (catch Exception _ nil))
     (if alive?
-      (let [ready (readiness cfg)]
-        (doseq [p (vals ready)] (deliver p {:ok true}))
-        (swap! front assoc :phase :running :jvm-pid pid :ready ready :last-traffic (now-ms)))
+      (let [ready   (readiness cfg)
+            session (try (state/read-session (:instance-id cfg)) (catch Exception _ nil))
+            down    (into {} (for [[d s] (app-services cfg session)
+                                   :when (not (proc/tcp-open? (:bind-port s)))]
+                               [(:name d) [d s]]))]
+        (doseq [[k p] ready :when (not (contains? down k))] (deliver p {:ok true}))
+        (swap! front assoc :phase :running :jvm-pid pid :ready ready :last-traffic (now-ms))
+        (doseq [[k [d s]] down]
+          (future
+            (deliver (get ready k)
+                     (try (lifecycle/with-runtime-lock (:instance-id cfg) :on-demand-app-restart
+                            (fn []
+                              (if (eval-svc/start-app! d s (:context session))
+                                {:ok true}
+                                {:error (ex-info (str "The app " (name k) " did not open port "
+                                                      (:bind-port s) " after its start form") {})})))
+                          (catch Throwable e
+                            (core/log-step (str "warning: restarting the app " (name k) ": " (ex-message e)))
+                            {:error e}))))))
       (swap! front assoc :phase :absent :jvm-pid nil))
     alive?))
 
@@ -212,9 +233,12 @@
           (try
             (let [session (or (state/read-session instance-id)
                               (throw (ex-info (str "Runtime " instance-id " is not up") {:instance-id instance-id})))
-                  pid     (process/start-jvm! cfg)]
-              (swap! front assoc :jvm-pid pid)
-              (note-jvm! cfg pid)
+                  ;; The pid is the front's and the registry's from the moment it is spawned, not
+                  ;; once it answers; a start that fails settles it from whether it still runs.
+                  _       (process/start-jvm!
+                           (assoc cfg :on-spawn (fn [pid]
+                                                  (swap! front assoc :jvm-pid pid)
+                                                  (note-jvm! cfg pid))))]
               (assert-port-file! cfg)
               (ready! front :repl)
               (doseq [[d s] (app-services cfg session)]
@@ -437,15 +461,20 @@
                   (close!)
                   (let [i (connect-inner (:cfg @front) l)]
                     (locking held
+                      ;; Published, then closure read — `close!` sets closure, then reads this — so
+                      ;; of a close and this attach, whichever comes second closes the inner
+                      ;; connection, before any byte is written to it.
                       (reset! inner i)
+                      (when @closed?
+                        (try ((:close i)) (catch Exception _ nil))
+                        (throw (ex-info "closed while its target was connected" {})))
                       ;; Replies are read from before the held bytes are written, as a direct
                       ;; connection would: a target that answers before it has read everything
                       ;; sent it would otherwise block on its reply while the flush blocks on it.
                       (future (pump-inner! front conn i client end! close!))
                       (let [bs (.toByteArray held)] ((:write i) bs (count bs)))
                       (when @client-eof? ((:shutdown-output i))))
-                    (deliver released true)
-                    (when @closed? (try ((:close i)) (catch Exception _ nil))))))))))
+                    (deliver released true))))))))
       (catch Exception _ (close!)))))
 
 (defn- listen!

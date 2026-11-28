@@ -305,3 +305,21 @@
           (is (thrown? clojure.lang.ExceptionInfo (service/start-service! svc ctx {})))
           (is (= 1 (count (str/split-lines (slurp count-file)))) "spawned exactly once")))
       (finally (fs/delete-tree tmp)))))
+
+(deftest an-on-demand-jvm-is-heard-of-when-it-is-spawned-not-when-it-answers
+  (let [heard (atom [])
+        tmp   (str (fs/create-temp-dir))]
+    (with-redefs-fn {#'nido.session.services.process/spawn!           (fn [_] 777)
+                     #'nido.session.services.process/wait-for-socket! (fn [_ _ _]
+                                                                        ;; Waiting on it to answer: already heard of.
+                                                                        (swap! heard conj [:waiting (count @heard)])
+                                                                        {:ready true})
+                     #'nido.session.services.process/retire-recorded! (fn [_] nil)
+                     #'core/log-step (constantly nil)}
+      (fn []
+        (is (= 777 (nido.session.services.process/start-jvm!
+                    {:command "java" :socket (str tmp "/s") :socket-args [] :project-dir tmp
+                     :log-path (str tmp "/log") :pid-file (str tmp "/pid") :port-timeout-ms 1000
+                     :service :repl :on-spawn #(swap! heard conj [:spawned %])})))
+        (is (= [[:spawned 777] [:waiting 1]] @heard)
+            "its pid is published before the wait for its socket begins")))))
