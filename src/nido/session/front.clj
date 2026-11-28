@@ -212,12 +212,18 @@
         ;; A listener already ready keeps its answer: a promise is delivered once.
         (doseq [p (vals ready)] (deliver p {:error e}))))))
 
+(declare forget-dead-jvm!)
+
 (defn- demand!
   "The readiness connection `conn` waits on — its listener's (`listener-key`): a promise delivered
    {:ok true} once that listener's target answers, or {:error e}. Starts the group when none runs
    — once, for however many connections ask — and waits out a stop in progress before starting it
-   again."
+   again. A JVM that exited since it was read as running is forgotten first (`forget-dead-jvm!`)."
   [front conn]
+  ;; A JVM read as running that has exited since the last tick is forgotten first, under the
+  ;; runtime's lock, so this connection waits for a new start rather than being handed the
+  ;; readiness of a JVM that is gone.
+  (forget-dead-jvm! front)
   (locking front
     (case (:phase @front)
       (:running :starting) (get-in @front [:ready (:key conn)])

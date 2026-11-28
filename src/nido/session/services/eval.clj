@@ -204,24 +204,29 @@
    a thrown exception's `Execution error …` among it — on :err. clj-nrepl-eval speaks TCP only,
    which is why this exists: an on-demand JVM's nREPL listens on no TCP port. When `timeout-ms`
    elapses — the session's clone included — the eval is interrupted, the connection closed and
-   :out carries `eval-timeout-signature`, as clj-nrepl-eval reports it."
+   :out carries `eval-timeout-signature`, as clj-nrepl-eval reports it. The nREPL session cloned
+   for the eval is closed however it ends: a cloned session outlives its connection, its thread
+   and bindings with it."
   [path timeout-ms form]
   (try
     (with-open [ch (java.nio.channels.SocketChannel/open
                     (java.net.UnixDomainSocketAddress/of (str path)))]
       (let [out  (java.io.BufferedOutputStream. (java.nio.channels.Channels/newOutputStream ch))
             in   (java.io.PushbackInputStream. (java.nio.channels.Channels/newInputStream ch))
-            send (fn [m] (bencode/write-bencode out m) (.flush out))
+            ;; One message at a time: the cleanup's may be sent while the eval's still is.
+            send (fn [m] (locking out (bencode/write-bencode out m) (.flush out)))
             recv (fn [] (bencode/read-bencode in))
             sid  (atom nil)
+            sent? (atom false)
             outs (StringBuilder.)
             errs (StringBuilder.)
             done (future
                    (send {"op" "clone" "id" "nido-clone"})
                    (let [s (loop [] (let [m (recv)]
                                       (or (some-> (get m "new-session") bytes->str) (recur))))]
+                     (reset! sid s)
                      (send {"op" "eval" "code" form "id" "nido-eval" "session" s})
-                     (reset! sid s))
+                     (reset! sent? true))
                    (loop []
                      (let [m (recv)]
                        (when-let [v (get m "out")]   (.append outs (bytes->str v)))
@@ -232,18 +237,23 @@
                            (.append errs (str "Execution error (" (bytes->str v) ")\n"))))
                        (if (some #(= "done" (bytes->str %)) (get m "status"))
                          :done
-                         (recur)))))
-            r    (try (deref done timeout-ms ::timeout)
-                      (catch java.util.concurrent.ExecutionException e (throw (or (.getCause e) e))))]
-        (when (= ::timeout r)
-          ;; Only once the eval was sent, so nothing else is writing; a JVM that never answered
-          ;; the clone has no eval to interrupt, and the close below ends the wait on it.
-          (when-let [s @sid]
-            (try (send {"op" "interrupt" "session" s "interrupt-id" "nido-eval" "id" "nido-int"})
-                 (catch Exception _ nil)))
-          (future-cancel done)
-          (.append outs (str "\n" eval-timeout-signature "\n")))
-        {:exit 0 :out (str outs) :err (str errs)}))
+                         (recur)))))]
+        (try
+          (let [r (try (deref done timeout-ms ::timeout)
+                       (catch java.util.concurrent.ExecutionException e (throw (or (.getCause e) e))))]
+            (when (= ::timeout r)
+              ;; Only once the eval was sent; a JVM that never answered the clone has no eval to
+              ;; interrupt, and the close below ends the wait on it.
+              (when (and @sent? @sid)
+                (try (send {"op" "interrupt" "session" @sid "interrupt-id" "nido-eval" "id" "nido-int"})
+                     (catch Exception _ nil)))
+              (.append outs (str "\n" eval-timeout-signature "\n")))
+            {:exit 0 :out (str outs) :err (str errs)})
+          (finally
+            ;; Sent before the reader is cancelled: cancelling it closes the channel.
+            (when-let [s @sid]
+              (try (send {"op" "close" "session" s "id" "nido-close"}) (catch Exception _ nil)))
+            (future-cancel done)))))
     (catch Exception e
       {:exit 1 :out "" :err (str "Could not reach nREPL on socket " path ": " (ex-message e))})))
 

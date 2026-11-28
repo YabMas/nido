@@ -74,7 +74,9 @@
               #'state/update-runtime-entries! (fn [_ f] (swap! log conj [:registry (f {})]))
               #'cold-starts/record!        (fn [e] (swap! log conj [:record e]) e)
               #'failure/record!            (fn [a e] (swap! log conj [:failure (:origin a) (ex-message e)]) {:id "f"})
-              #'core/log-step              (constantly nil)}}))
+              #'core/log-step              (constantly nil)
+              ;; The fake JVM lives as long as its server does.
+              #'nido.platform.process/process-alive? (fn [_] (some? @server))}}))
 
 (defn- call
   "Send `s` on a fresh connection to `port` and read the reply, `timeout-ms` at most; nil when
@@ -437,3 +439,16 @@
             (is (= [:ready] (map :outcome recs)) "b failing later does not fail the start a triggered")
             (is (= :app (:port (first recs)))))))
       (finally (.close ssa) (app-a) (cleanup fx)))))
+
+(deftest the-first-call-after-the-jvm-exits-waits-for-a-new-one
+  (let [{:keys [cfg log redefs front server] :as fx} (fixture {})]
+    (try
+      (with-redefs-fn (assoc redefs #'nido.platform.process/process-alive? (fn [_] (some? @server)))
+        (fn []
+          (is (= "a" (call (:nrepl-port cfg) "a" 3000)))
+          (await-phase front :running)
+          ;; The JVM dies between the front's ticks: nothing has noticed yet.
+          (@server) (reset! server nil)
+          (is (= "b" (call (:nrepl-port cfg) "b" 3000)) "the call starts a new JVM and is answered by it")
+          (is (= 2 (count (filter #{:start} @log))))))
+      (finally (cleanup fx)))))

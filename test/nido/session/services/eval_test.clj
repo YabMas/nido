@@ -318,3 +318,42 @@
                    (if clones? "an eval" "the session clone") " it never answers"))
           (is (str/includes? (str (:out r)) @#'eval/eval-timeout-signature)))
         (finally (stop))))))
+
+(defn- recording-nrepl!
+  "A filesystem-socket nREPL that answers the session clone, answers an eval `done` unless
+   `silent?`, and records every op it is sent in `ops`. Returns a fn that stops it."
+  [path silent? ops]
+  (fs/delete-if-exists path)
+  (let [ss (java.nio.channels.ServerSocketChannel/open java.net.StandardProtocolFamily/UNIX)]
+    (.bind ss (java.net.UnixDomainSocketAddress/of (str path)))
+    (future
+      (try
+        (let [c   (.accept ss)
+              in  (java.io.PushbackInputStream. (java.nio.channels.Channels/newInputStream c))
+              out (java.nio.channels.Channels/newOutputStream c)
+              s   #(if (bytes? %) (String. ^bytes %) (str %))]
+          (loop []
+            (let [m  (bencode.core/read-bencode in)
+                  op (s (get m "op"))]
+              (swap! ops conj [op (some-> (get m "session") s)])
+              (case op
+                "clone" (bencode.core/write-bencode out {"id" "nido-clone" "new-session" "s1" "status" ["done"]})
+                "eval"  (when-not silent?
+                          (bencode.core/write-bencode out {"id" "nido-eval" "value" "1" "status" ["done"]}))
+                nil)
+              (.flush out)
+              (recur))))
+        (catch Exception _ nil)))
+    (fn [] (.close ss) (fs/delete-if-exists path))))
+
+(deftest an-eval-over-a-socket-closes-the-session-it-cloned
+  (doseq [silent? [false true]]
+    (let [path (str (fs/path (str (fs/create-temp-dir)) "repl.sock"))
+          ops  (atom [])
+          stop (recording-nrepl! path silent? ops)]
+      (try
+        (#'eval/eval-over-socket path 300 "1")
+        (Thread/sleep 200)
+        (is (some #{["close" "s1"]} @ops)
+            (str "the cloned session is closed when the eval " (if silent? "times out" "returns")))
+        (finally (stop))))))
