@@ -1510,7 +1510,11 @@
    :interface is otherwise found by diffing two answer files. :also-changed is every other
    record-level field whose value moved (:phases, :rejected, :seams, :routes, :open, :summary, the
    rest of :model), sorted: an amendment whose substance is there moves no subject, and a delta
-   without it reports that repair as no change. Neither is a subject — no judge owes them a ruling."
+   without it reports that repair as no change. Neither is a subject — no judge owes them a ruling.
+
+   :open is each :open note the amendment added, rewrote or dropped, `{open-<n> {:was :now}}`
+   under the id its clauses are ruled by (`clauses-owed`), a side nil where it has no note: a note
+   can state a fact about the code, and its text is what says whether one was written."
   [prev record]
   (let [with-citation #(cond-> (settled/subjects %)
                          (some? (:baseline %)) (update "baseline" (fnil conj []) (:baseline %)))
@@ -1518,17 +1522,23 @@
         is      (with-citation record)
         changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
         rest-of (fn [r] (let [m (not-empty (dissoc (:model r) :claims :elements))]
-                          (cond-> (apply dissoc r :model (concat subject-fields unauthored-fields))
+                          (cond-> (apply dissoc r :model :open (concat subject-fields unauthored-fields))
                             m (assoc :model m))))
         [rp rr] [(rest-of prev) (rest-of record)]
         also    (vec (sort (filter #(not= (get rp %) (get rr %))
-                                   (distinct (concat (keys rp) (keys rr))))))]
+                                   (distinct (concat (keys rp) (keys rr))))))
+        [ow on] [(vec (:open prev)) (vec (:open record))]
+        open    (into (sorted-map)
+                      (keep (fn [i] (let [[a b] [(get ow i) (get on i)]]
+                                      (when (not= a b) [(str "open-" (inc i)) {:was a :now b}]))))
+                      (range (max (count ow) (count on))))]
     (not-empty
      (into {} (filter (comp seq val))
            {:added        (vec (sort (remove was (keys is))))
             :changed      changed
             :dropped      (vec (sort (remove is (keys was))))
             :fields       (into (sorted-map) (map (fn [id] [id (field-changes (was id) (is id))])) changed)
+            :open         open
             :also-changed also}))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:sequential :any]] :any [:maybe :int]] [:maybe :map]]}
@@ -2368,6 +2378,18 @@
    bracketed and sometimes not is no identity at all."
   [x]
   (-> (str x) str/trim (str/replace "[" "") (str/replace "]" "")))
+
+(defn- unswept
+  "The ids `delta` (`subject-delta`) moved — a subject added, changed or dropped, an :open note
+   rewritten — that the amender's `swept` and `stale` name nowhere, sorted; nil when it named each.
+   An amender reports what it touched, and an edit it left out of that report is one no sweep
+   accounted for: read from the delta, not from the report, so the omission shows."
+  [delta swept stale]
+  (let [named (into (set (map slug stale))
+                    (comp (mapcat #(concat (:amended %) (:stale %) (:unaffected %))) (map slug))
+                    swept)]
+    (not-empty (vec (sort (remove named (concat (:added delta) (:changed delta) (:dropped delta)
+                                                (keys (:open delta)))))))))
 
 (defn- clause-ref
   "An asks_about entry as `[claim-id n]`: a clause key `<id>#<n>` (`keyed`) names clause n of the
@@ -7610,6 +7632,7 @@
                                       :disputes disputes
                                       :amend-refusals (:refusals written)
                                       :amend-delta (subject-delta prev record)
+                                      :unswept (unswept (subject-delta prev record) (:swept answer) (:stale answer))
                                       :growth (retreat/growth (or (get-in ctx [:carry :as-authored]) prev) record)
                                       :record-size (count (pr-str (ws/unstamp record)))
                                       :history (conj (vec (:history ctx)) (entry retreats true)))]
@@ -8711,6 +8734,10 @@
          "\n"
          (sound-rewrite-rules :design (some? baseline))
          beside-repair-rule
+         (str "AN :open NOTE YOU ADD OR REWRITE IS HELD THE SAME. A note stating what the\n"
+              "code does is read before you write it; one you have not verified goes under\n"
+              ":stale as its id, open-<n> by its place in :open, with :because\n"
+              "\"unverified: <the clause>\". Name each note you change under :swept too.\n\n")
          (when (seq (:strata design))
            (str "STRATA ARE LISTED FLOOR FIRST. :strata names the lowest level first — the one\n"
                 "every other is written in — and each after it is written in those before it.\n"
@@ -10064,8 +10091,12 @@
    :for-person finding under each claim a line names, so a later amend of it is held
    (`ledger-asked`) and a re-ask of it is read as one (`reasked`). The checks and the reading's
    identity are `decision`'s, the judgement of `design` the amendment answered, which this ask
-   stands beside."
-  [ledger design decision out-of-reach asked run-id iter]
+   stands beside.
+
+   `open` is the :open notes the amendment appended beside the stop rewrote (`subject-delta`):
+   the run ends before any judge reads them, so the ask says each one's text is unjudged rather
+   than leave the person to take it as checked."
+  [ledger design decision out-of-reach asked run-id iter open]
   (let [qs   (for [l out-of-reach
                    :let [ids   (line-ids l)
                          label (if (seq ids) (str "[" (str/join "] [" ids) "]") (str (:claim l)))]]
@@ -10083,7 +10114,10 @@
                                        (:reason decision))
                       :asks       (str "The amend stage stopped for you: what the judge found was a repair, and the"
                                        " repair reaches what only you decide.\n"
-                                       (str/join "\n" (map #(str "- " (:text %)) qs)))
+                                       (str/join "\n" (map #(str "- " (:text %)) qs))
+                                       (str/join (for [[id {:keys [now]}] open :when now]
+                                                   (str "\nUnjudged: the amendment rewrote [" id "] and no judge has"
+                                                        " read it against the code — \"" now "\""))))
                       :checks     (:checks decision)
                       :questions  (mapv #(hash-map :id "" :text (:text %)) qs)}
                (seq ids) (assoc :asks-about ids
@@ -10125,7 +10159,8 @@
     (let [decision (:record out)
           ask      (when (and (int? (:design-seq decision)) (seq (:checks decision)))
                      (amend-ask ledger design decision (:out-of-reach out)
-                                (or (:asked answers) (open-ask project ws-id answers)) run-id (:iter out)))
+                                (or (:asked answers) (open-ask project ws-id answers)) run-id (:iter out)
+                                (:open (:amend-delta out))))
           answer   (when ask (append! ledger ask))
           out      (cond-> (assoc out :asked-by :amend-stage)
                      (:refused answer) (assoc :ask-refused (:refused answer)))]
@@ -10418,6 +10453,7 @@
                                  :disputes disputes
                                  :amend-refusals (:refusals written)
                                  :amend-delta (subject-delta prev record)
+                                 :unswept (unswept (subject-delta prev record) (:swept answer) (:stale answer))
                                  :growth growth
                                  :record-size (count (pr-str (ws/unstamp record)))
                                  ;; :appended-seq is the entry the amendment became: the newest

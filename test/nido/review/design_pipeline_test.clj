@@ -1159,6 +1159,47 @@
         "a repair to the record outside its subjects is named, or the report says the round moved nothing")
     (is (nil? (:changed (:amend-delta out))) "and no subject is claimed to have moved")))
 
+(deftest an-amendment-shows-each-open-note-it-rewrote
+  ;; ws-20261013-1d89a0: an amender wrote a code fact into an :open note, and the delta named
+  ;; only :also-changed [:open], so nothing said what the note now claimed.
+  (let [noted   (assoc a-design :open ["who files the ref" "v3 keeps serving its heading set"])
+        [out _] (with-amend {:prev    (assoc a-design :open ["who files the ref" "v2 keeps serving"])
+                             :writes (fn [p] (spit p (pr-str {:record noted})))}
+                            (ctx :findings [(check :relation-honest :broken)]
+                                 :record (decision :amend)))]
+    (is (= {"open-2" {:was "v2 keeps serving" :now "v3 keeps serving its heading set"}}
+           (:open (:amend-delta out)))
+        "the note is named by the id its clauses are ruled by, with its text either side")
+    (is (nil? (:also-changed (:amend-delta out))) "and is not also reported as a bare field")))
+
+(deftest an-edit-the-amenders-sweep-omits-is-reported
+  ;; ws-20261013-ffb221: the amender narrowed the Shape and listed it in its sweep nowhere.
+  (let [reworded (assoc a-design :shape "one rounding boundary, at the invoice"
+                        :open ["v3 keeps serving"])
+        go       (fn [answer]
+                   (first (with-amend {:writes (fn [p] (spit p (pr-str (assoc answer :record reworded))))}
+                                      (ctx :findings [(check :relation-honest :broken)]
+                                           :record (decision :amend)))))]
+    (is (= ["open-1" "shape"] (:unswept (go {:swept [{:finding 1 :amended []}]})))
+        "read from the delta, so an edit missing from the sweep shows")
+    (is (nil? (:unswept (go {:swept [{:finding 1 :amended ["shape"]}]
+                             :stale [{:id "open-1" :because "unverified: v3 keeps serving"}]})))
+        "an edit named under :swept or :stale is accounted for")))
+
+(deftest an-ask-over-an-amended-open-note-says-the-note-is-unjudged
+  ;; ws-20261013-1d89a0: the run ended :asked via :out-of-reach with a rewritten note no judge read.
+  (let [line     [(assoc (check :goal-served :broken) :claim-ids ["one-row-per-content"])]
+        noted    (assoc a-design :open ["v3 keeps serving"])
+        [_ _ decided] (with-amend {:writes (fn [p] (spit p (pr-str {:record noted
+                                                                    :out-of-reach [{:finding 1 :because "a ref to file"}]})))}
+                                  (ctx :findings line :record (decision :amend)))]
+    (is (str/includes? (:asks (first decided))
+                       "Unjudged: the amendment rewrote [open-1] and no judge has read it against the code — \"v3 keeps serving\""))))
+
+(deftest the-design-amender-holds-an-open-note-it-writes
+  (is (str/includes? (record/design-amend-prompt {:design a-design :recommend :amend :raised [] :out-path "/x"})
+                     "AN :open NOTE YOU ADD OR REWRITE IS HELD THE SAME")))
+
 (deftest recut-and-amend-are-given-different-jobs
   (let [prompts (atom [])]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])

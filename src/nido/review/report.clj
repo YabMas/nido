@@ -855,6 +855,8 @@
       ;; reported, by the finding's number: a sibling it passed over is visible only here.
       ;; :delta is the subjects the appended amendment added, changed and dropped, by id: what the
       ;; next judge is asked about again, which otherwise takes diffing two ledger entries.
+      ;; :unswept is each id of :delta that :swept and :stale name nowhere — an edit the
+      ;; amender's own report of what it touched left out.
       ;; :record-size is the characters of the record this round's amendment appended, and
       ;; :growth each prose field and subject grown past checking since the record as authored (`nido.review.retreat/growth`): read down the rounds, the arc of a record
       ;; growing, which no single amendment's retreats show.
@@ -884,6 +886,7 @@
                 (seq (:stale-because ctx)) (assoc :stale-because (into (sorted-map) (:stale-because ctx)))
                 (seq (:swept ctx)) (assoc :swept (vec (:swept ctx)))
                 (:amend-delta ctx) (assoc :delta (:amend-delta ctx))
+                (seq (:unswept ctx)) (assoc :unswept (vec (:unswept ctx)))
                 (seq (:held-for-person ctx)) (assoc :held-for-person (vec (:held-for-person ctx)))
                 (:record-size ctx) (assoc :record-size (:record-size ctx))
                 (seq (:growth ctx)) (assoc :growth (vec (:growth ctx)))
