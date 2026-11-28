@@ -386,6 +386,15 @@
    backpressure a direct connection gives it, not a front whose heap it can fill."
   (* 1024 1024))
 
+(defn- gave-up!
+  "Mark the start `conn` triggered, if it did and it is not recorded yet, as one whose first client
+   gave up: its connection ended — an end of sending, a reset, any failure — before its target
+   was connected."
+  [front conn]
+  (swap! front (fn [f]
+                 (cond-> f
+                   (= (:id conn) (get-in f [:start :first :id])) (assoc-in [:start :gave-up?] true)))))
+
 (defn- pump-client!
   "Client to JVM: what the client sends is held until `inner` is connected, written through
    after — held up to `held-limit`, past which the client is not read until `released` (the
@@ -406,9 +415,7 @@
                   (if-let [i @inner]
                     ((:shutdown-output i))
                     (do (reset! client-eof? true)
-                        (swap! front (fn [f]
-                                       (cond-> f
-                                         (= conn (get-in f [:start :first])) (assoc-in [:start :gave-up?] true)))))))
+                        (gave-up! front conn))))
                 (end!))
             (do (traffic! front (:kind conn))
                 (locking held
@@ -450,7 +457,10 @@
                       (deliver released true)
                       (when (compare-and-set! closed? false true)
                         (try (.close client) (catch Exception _ nil))
-                        (when-let [i @inner] (try ((:close i)) (catch Exception _ nil)))
+                        (if-let [i @inner]
+                          (try ((:close i)) (catch Exception _ nil))
+                          ;; Ended before its target was connected: its client gave up.
+                          (gave-up! front conn))
                         (swap! front update :conns dec)))
         ended       (atom 0)
         end!        #(when (= 2 (swap! ended inc)) (close!))]

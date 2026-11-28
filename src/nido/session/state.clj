@@ -355,6 +355,23 @@
   (let [path (session-state-file instance-id)]
     (io/with-file-lock (io/lock-path-for path) #(io/write-edn! path data))))
 
+(defn ^{:malli/schema [:=> [:cat :InstanceId [:=> [:cat [:maybe :map]] [:maybe :map]]] [:maybe :map]]}
+  update-session!
+  "Replace an instance's record with `f` applied to it as it is now — read and written under the
+   record's file lock, the one every other writer of it (an on-demand front's) takes, so nothing
+   another process wrote meanwhile is lost: a change built from a record read before the lock
+   would write that older record back over it. `f` is handed nil when there is no record; a nil
+   result writes nothing. Returns the record written."
+  [instance-id f]
+  (let [path (session-state-file instance-id)
+        data (io/with-file-lock (io/lock-path-for path)
+               #(when-let [data (f (io/read-edn path))]
+                  (io/write-edn! path data)
+                  data))]
+    (when-let [wt (:project-dir data)]
+      (io/write-edn! (worktree-record-file instance-id) {:worktree (str wt)}))
+    data))
+
 (defn ^{:malli/schema [:=> [:cat :InstanceId] :any]}
   delete-session!
   "Drop an instance's record; its worktree record stays, written from the record first when there
@@ -467,6 +484,13 @@
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
   upsert-registry! [project-dir entry]
   (update-registry! #(assoc % project-dir entry)))
+
+(defn ^{:malli/schema [:=> [:cat :Path [:=> [:cat [:maybe :map]] :map]] :any]}
+  update-registry-entry!
+  "Replace the registry entry for `project-dir` with `f` applied to it as it is now, inside the
+   registry's lock — for an entry some of whose fields another process writes meanwhile."
+  [project-dir f]
+  (update-registry! #(assoc % project-dir (f (get % project-dir)))))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId [:=> [:cat :map] :map]] :any]}
   update-runtime-entries!

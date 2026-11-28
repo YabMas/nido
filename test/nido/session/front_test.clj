@@ -186,6 +186,23 @@
           (is (= "z" (call (:nrepl-port cfg) "z" 2000)) "its retry is relayed like any call")))
       (finally (cleanup fx)))))
 
+(deftest a-start-whose-first-client-resets-is-recorded-as-given-up-on
+  (let [{:keys [cfg log redefs front] :as fx} (fixture {:start-ms 800})]
+    (try
+      (with-redefs-fn redefs
+        (fn []
+          ;; A linger of 0 makes the close a reset, not an end of sending.
+          (with-open [c (Socket. "127.0.0.1" (int (:nrepl-port cfg)))]
+            (.setSoLinger c true 0)
+            (.write (.getOutputStream c) (.getBytes "x"))
+            (.flush (.getOutputStream c))
+            (Thread/sleep 200))
+          (await-phase front :running)
+          (let [[_ rec] (some #(when (and (vector? %) (= :record (first %))) %) @log)]
+            (is (= :ready-after-give-up (:outcome rec))
+                "a reset before the JVM is ready is the first client giving up"))))
+      (finally (cleanup fx)))))
+
 (deftest the-cold-start-log-derives-duration-and-survives-by-project
   (let [entry {:project "p" :session "s" :instance-id "p--s" :port :repl
                :requested-at "2026-11-27T10:00:00Z" :ended-at "2026-11-27T10:01:05.500Z"

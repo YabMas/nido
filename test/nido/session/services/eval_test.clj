@@ -356,6 +356,9 @@
         (Thread/sleep 200)
         (is (some #{["close" "s1"]} @ops)
             (str "the cloned session is closed when the eval " (if silent? "times out" "returns")))
+        (when silent?
+          (is (some #{["interrupt" "s1"]} @ops)
+              "an eval that times out is interrupted, while its reply is still being read"))
         (finally (stop))))))
 
 (deftest a-start-form-names-the-bound-port-under-the-services-own-name

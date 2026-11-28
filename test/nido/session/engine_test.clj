@@ -114,7 +114,9 @@
                   engine/load-session-edn     (constantly {:services []})
                   state/read-session          (constantly existing)
                   state/write-session!        (fn [& _] nil)
+                  state/update-session!       (fn [_ f] (f existing))
                   state/upsert-registry!      (fn [& _] nil)
+                  state/update-registry-entry! (fn [& _] nil)
                   proc/process-alive?         (constantly true)
                   launcher/write-artifacts!   (fn [& _] nil)
                   eval-svc/start-app!         (fn [& args] (swap! calls conj (vec args)) true)]
@@ -335,6 +337,29 @@
         (is (= {wt-a "a" wt-b "b"} (:members (state/read-session "p--ws-1"))))
         (is (= "p--ws-1" (engine/resolve-instance-id wt-b)))
         (is (= ["a" "b"] (sort (engine/sessions-on "p--ws-1"))))))))
+
+(deftest a-join-keeps-a-jvm-pid-cleared-while-it-ran
+  ;; An on-demand front writes the record from outside the runtime's lock: a JVM it settled as
+  ;; stopped while the join ran stays stopped in the record and in the joiner's entry.
+  (with-runtime-home
+    (fn [_ wt-b]
+      (state/write-session! "p--ws-1" (-> (state/read-session "p--ws-1")
+                                          (assoc-in [:context :repl :pid] 4242)
+                                          (assoc-in [:service-states :repl :jvm-pid] 4242)))
+      (let [sync @#'engine/sync-checkout!]
+        (with-redefs [engine/sync-checkout! (fn [& args]
+                                              (state/update-session! "p--ws-1"
+                                                                     #(-> %
+                                                                          (assoc-in [:context :repl :pid] nil)
+                                                                          (assoc-in [:service-states :repl :jvm-pid] nil)))
+                                              (apply sync args))]
+          (with-out-str (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}))))
+      (let [rt (state/read-session "p--ws-1")]
+        (is (contains? (:members rt) wt-b) "the joiner is recorded")
+        (is (nil? (get-in rt [:context :repl :pid])) "the cleared pid is not written back")
+        (is (nil? (get-in rt [:service-states :repl :jvm-pid]))))
+      (is (nil? (:repl-pid (get (state/read-registry) wt-b)))
+          "the joiner's entry charges no JVM that has stopped"))))
 
 (deftest leaving-a-shared-runtime-stops-nothing
   (with-runtime-home

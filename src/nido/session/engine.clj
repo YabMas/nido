@@ -421,19 +421,26 @@
    the runtime's ports."
   [project-dir session-name runtime-key runtime]
   (let [ctx (:context runtime)]
-    (state/upsert-registry!
+    (state/update-registry-entry!
      (str project-dir)
-     (cond-> {:project-dir  (str project-dir)
-              :project-name (:project-name runtime)
-              :instance-id  (:instance-id runtime)
-              :runtime-key  runtime-key
-              :session-name session-name
-              :url          (get-in ctx [:app :url])
-              :app-port     (get-in ctx [:app :port])
-              :nrepl-port   (get-in ctx [:repl :port])
-              :repl-pid     (get-in ctx [:repl :pid])
-              :created-at   (core/now-iso)}
-       (get-in ctx [:pg :port]) (assoc :pg-port (get-in ctx [:pg :port]))))))
+     (fn [_]
+       (cond-> {:project-dir  (str project-dir)
+                :project-name (:project-name runtime)
+                :instance-id  (:instance-id runtime)
+                :runtime-key  runtime-key
+                :session-name session-name
+                :url          (get-in ctx [:app :url])
+                :app-port     (get-in ctx [:app :port])
+                :nrepl-port   (get-in ctx [:repl :port])
+                ;; Read inside the registry's lock from the record as it is now, not from
+                ;; `runtime`: an on-demand front writes the JVM's pid into the record, then the
+                ;; registry, from outside this runtime's lock, and an older pid written here after it
+                ;; would charge the fleet for a JVM that has stopped.
+                :repl-pid     (if-let [s (state/read-session (:instance-id runtime))]
+                                (get-in s [:context :repl :pid])
+                                (get-in ctx [:repl :pid]))
+                :created-at   (core/now-iso)}
+         (get-in ctx [:pg :port]) (assoc :pg-port (get-in ctx [:pg :port])))))))
 
 (declare rebrief!)
 
@@ -916,8 +923,8 @@
                         [(:name d) (:state (service/start-service! (ctx/substitute ctx d) ctx {}))]))]
       (when (seq files)
         (let [instance-id (:instance-id runtime)]
-          (state/write-session! instance-id (assoc-in (or (state/read-session instance-id) runtime)
-                                                      [:member-states (str project-dir)] files)))))))
+          (state/update-session! instance-id #(assoc-in (or % runtime)
+                                                        [:member-states (str project-dir)] files)))))))
 
 (defn- unrender-member!
   "Restore what `render-member!` replaced in the worktree `project-dir`. A file that cannot be
@@ -1039,15 +1046,18 @@
         (start-services! project-dir (:project-name existing) (:instance-id existing) session-edn
                          opts others (:project-dir existing) prepared)
         nil))
-      (let [runtime (assoc existing :members (assoc (state/members existing) (str project-dir) session-name))]
+      (let [join    #(assoc % :members (assoc (state/members %) (str project-dir) session-name))
+            runtime (join existing)]
         (println "Joining running session" (:instance-id runtime))
         ;; Brought up to date before the joiner is recorded: a merge refused for a migration
         ;; leaves the runtime without it.
         (sync-checkout! runtime code session-name (:candidate opts) (:main opts))
-        (state/write-session! (:instance-id runtime) runtime)
-        (rebrief! project-dir session-name (:runtime-key opts) runtime session-edn
-                  (select-keys opts [:run-dir :profile]))
-        (reconcile-app! runtime)
+        ;; The membership is added to the record as it is now, not to `existing`: an on-demand
+        ;; front writes the JVM's pid into it meanwhile, from outside this runtime's lock.
+        (let [runtime (state/update-session! (:instance-id runtime) #(join (or % existing)))]
+          (rebrief! project-dir session-name (:runtime-key opts) runtime session-edn
+                    (select-keys opts [:run-dir :profile]))
+          (reconcile-app! runtime))
         nil))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
@@ -1169,8 +1179,13 @@
   (let [instance-id (:instance-id session)
         session-name (get (state/members session) (str project-dir))
         others       (dissoc (state/members session) (str project-dir))]
-    (state/write-session! instance-id (-> (unrender-member! project-dir session)
-                                          (assoc :members others)))
+    (unrender-member! project-dir session)
+    ;; Taken off the record as it is now, not `session`: an on-demand front writes the JVM's pid
+    ;; into it meanwhile, from outside this runtime's lock.
+    (state/update-session! instance-id
+                           #(-> (or % session)
+                                (update :member-states dissoc (str project-dir))
+                                (as-> r (assoc r :members (dissoc (state/members r) (str project-dir))))))
     (state/remove-from-registry! (str project-dir))
     (sync-checkout! session (code-members (:project-name session) others) nil)
     (when session-name
