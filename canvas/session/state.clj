@@ -168,6 +168,13 @@
   (Operation write-session!
     "Persist an instance's record, and the worktree it names in a record of its own that outlives it."
     {:signature [:=> [:catn [:instance-id InstanceId] [:data :map]] :any] :delegates [session-state-file]})
+  (Operation update-session!
+    "Replace an instance's record with a function of it as it is now, read and written under the
+     record's file lock, so a write another process made meanwhile (an on-demand front's) is not
+     lost. A nil result writes nothing; answers the record written."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:f [:=> [:cat [:maybe :map]] [:maybe :map]]]]
+                 [:maybe :map]]
+     :delegates [session-state-file]})
   (Operation delete-session!
     "Drop an instance's record; its worktree record stays, written from the record first when
      there was none."
@@ -192,6 +199,11 @@
      Every session verb mutates this one file — up, down, destroy, reclaim, the daemon adopting
      an orphan — so it is the most contended state here, and the read happens inside the lock."
     {:signature [:=> [:catn [:project-dir Path] [:entry :map]] :any]
+     :delegates [io/update-edn!]})
+  (Operation update-registry-entry!
+    "Replace one worktree's entry with a function of it as it is now, inside the registry's lock —
+     for an entry some of whose fields another process writes meanwhile."
+    {:signature [:=> [:catn [:project-dir Path] [:f [:=> [:cat [:maybe :map]] :map]]] :any]
      :delegates [io/update-edn!]})
   (Operation update-runtime-entries!
     "Apply a function to every entry of a session on one runtime, in one locked write — the
