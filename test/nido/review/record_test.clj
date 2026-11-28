@@ -3852,3 +3852,16 @@
     (is (= :amend-invalid (:status out)))
     (is (= person canvas) "what a person wrote meanwhile is left as they wrote it")
     (is (= ["canvas/review/core.clj"] (get-in out [:canvas-put-back :changed-since])))))
+
+(deftest a-pick-about-the-run-answers-nothing-about-the-design
+  ;; Stop and Let it run are choices about the run that parked the question, not its answer.
+  (let [ledger (assoc (dissoc asked-ledger 27)
+                      28 {:format :blocker :seq 28 :standing-ask {:run-id "r1" :decision-seq 26}})]
+    (is (= 26 (get-in (answered-over (assoc ledger 29 {:format :blocker-answered :seq 29 :blocker-seq 28
+                                                       :summary "Let it run"}) 24)
+                      [:asked :seq]))
+        "the question stays open")
+    (is (= [{:seq 29 :kind :blocker :why "only the new slices"}]
+           (:by (:answered-since (answered-over (assoc ledger 29 {:format :blocker-answered :seq 29 :blocker-seq 28
+                                                                  :summary "only the new slices"}) 24))))
+        "words are the person's answer")))

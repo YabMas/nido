@@ -2439,8 +2439,11 @@
         final  (if-let [p (try (record/write-owed-amend-prompt! final) (catch Exception _ nil))]
                  (assoc final :amend-prompt p)
                  final)
-        status (:status final)]
+        status (:status final)
+        _      (record/settle-run-asks! ledger run-id final)]
     (println (str kind "-loop: " (name status)
+                  (when (= :person (:asked-by final))
+                    (str " · stopped by a person at entry " (:asked-seq final) "'s question"))
                   (when (= :amend-stage (:asked-by final))
                     (str " · asked by the amend stage, not the judge"
                          (some->> (:asked-seq final) (str ", at entry "))))
@@ -2486,6 +2489,8 @@
                                   (remedies :asked-by-amend-stage))
                              (and remedies (= :asked status) (= :standing (:asked-by final))
                                   (remedies :asked-standing))
+                             (and remedies (= :asked status) (= :person (:asked-by final))
+                                  (remedies :asked-by-person))
                              (and remedies (remedies status))
                              (shared-remedy status final)
                              (str "unrecognised terminal status: " status))))
@@ -2692,6 +2697,7 @@
 (def ^:private design-remedies
   {:cleared "the round proceeded and wrote the clearance — the design may be built"
    :asked-by-amend-stage "the judge asked for a repair, and a guard of the amend stage stopped it at what only you decide — the question below is on the ledger as an ask; answer it as the blocker it is parked on (bb nido:workstream:blocker:answer), or amend the design or its intent; until a person's entry answers it, no amender may change the claims it names"
+   :asked-by-person "you stopped this run at the question it parked while it amended, and nothing more was judged or amended; the question is still open — answer it in words, grant, or amend the design or its intent, then re-run"
    :asked-standing "an earlier run asked this question, nobody has answered it, and nothing it judged has moved since, so this run stopped at entry rather than derive it again; answer it as the blocker it is parked on (bb nido:workstream:blocker:answer), grant, or amend the design or its intent, then re-run"
    :asked "the judge found something only you can repair — answer the question below as the blocker it is parked on (bb nido:workstream:blocker:answer), or amend the design or its intent; the next round reads the answer, and only a round that proceeds lets the design be built"
    :clearance-contended "the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"

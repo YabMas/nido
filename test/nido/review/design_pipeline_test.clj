@@ -3122,3 +3122,88 @@
     (testing "only round 1 stands on it: later rounds judge what the run amended"
       (go "t1" (ctx :iter 2))
       (is (= 1 @launched)))))
+
+;; ── A judge's ask that stands while its run goes on ─────────────────────────
+
+(defn- on-ledger
+  "`f` called with the ledger reads and writes a round makes going to `entries`, an atom of entries
+   by :seq, every append given the next :seq."
+  [entries f]
+  (let [of-kind (fn [k] (->> (vals @entries) (filter #(= k (:format %))) (sort-by :seq) vec))
+        add!    (fn [content]
+                  (let [n (inc (reduce max 0 (keys @entries)))]
+                    (swap! entries assoc n (assoc content :seq n))
+                    n))]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/entries-of   (fn [_ _ k] (of-kind k))
+                  ws/entry-at-seq (fn [_ _ n] (get @entries n))
+                  ws/append-entry! (fn [_ _ _ content] (add! (read-string content)))
+                  record/append!  (fn [_ record] {:seq (add! record)})]
+      (f))))
+
+(def ^:private asking-with-a-repair
+  (decision :ask :checks [(check :goal-served :broken) (check :routing-coherent :broken)]
+            :findings [{:cites ["c"] :claim "worth building now?" :check :goal-served
+                        :claim-id "pool-in-scope" :for-person true}]))
+
+(defn- blockers [entries] (filterv #(= :blocker (:format %)) (vals @entries)))
+
+(deftest a-standing-ask-reaches-the-person-the-round-it-is-raised
+  ;; Watched (ws-20261016-8f2fa9): "is this worth building now?" stood from round 1, and the run
+  ;; amended for thirteen rounds and seventy-five minutes before the person was shown it.
+  (let [entries (atom {})]
+    (on-ledger entries
+               #(with-redefs [record/design-decision! (fn [_] asking-with-a-repair)]
+                  (let [out (run record/design-judge-stage (ctx))]
+                    (is (nil? (:status out)) "the derivable half still goes to the amender")
+                    (let [[b] (blockers entries)]
+                      (is (= {:run-id "r1" :decision-seq (:appended-seq out)} (:standing-ask b))
+                          "parked over the decision the round appended, naming the run that asks")
+                      (is (str/includes? (:summary b) "is this worth doing now?")
+                          "the judge's question is what the person reads")
+                      (is (some #{"Stop the run"} (map :label (:options b)))))
+                    (run record/design-judge-stage (ctx :iter 2))
+                    (is (= 1 (count (blockers entries)))
+                        "a question already in the person's hands is not parked twice"))))))
+
+(deftest the-parked-question-is-a-blocker-the-ledger-takes
+  (let [b (#'record/run-asked-blocker {:recommend :ask :asks "is this worth building now?"} 45 "r1" 1)]
+    (is (= b (report/validate-event :blocker b)))))
+
+(deftest a-person-s-stop-ends-the-run-at-its-next-round
+  (let [launched (atom 0)
+        entries  (atom {45 (assoc (decision :ask) :seq 45 :run-id "r1")
+                        46 (assoc (#'record/run-asked-blocker (decision :ask) 45 "r1" 1) :seq 46)})
+        go       #(on-ledger entries
+                             (fn []
+                               (with-redefs [record/design-decision! (fn [_] (swap! launched inc) (decision :amend))]
+                                 (run record/design-judge-stage (ctx :iter 2)))))]
+    (testing "answered in words, the round judges with the answer"
+      (swap! entries assoc 47 {:format :blocker-answered :seq 47 :blocker-seq 46 :summary "only if it is cheap"})
+      (go)
+      (is (= 1 @launched)))
+    (testing "Stop picked at the gate"
+      (reset! launched 0)
+      (swap! entries assoc 47 {:format :blocker-answered :seq 47 :blocker-seq 46 :summary "Stop the run"})
+      (let [out (go)]
+        (is (zero? @launched) "no judge is paid for amendments the person declined to wait for")
+        (is (= :asked (:status out)))
+        (is (= :person (:asked-by out)))
+        (is (= 45 (:asked-seq out)))))))
+
+(deftest a-run-withdraws-its-parked-question-once-it-no-longer-asks-it
+  (let [parked  #(atom {45 (assoc (decision :ask) :seq 45 :run-id "r1")
+                        46 (assoc (#'record/run-asked-blocker (decision :ask) 45 "r1" 1) :seq 46)})
+        answers (fn [entries] (filterv #(= :blocker-answered (:format %)) (vals @entries)))]
+    (let [entries (parked)]
+      (on-ledger entries #(record/settle-run-asks! [:nido "ws-1"] "r1" {:status :cleared}))
+      (is (= [{:by :nido :blocker-seq 46}] (mapv #(select-keys % [:by :blocker-seq]) (answers entries)))
+          "a run that cleared the design leaves no question standing for the person"))
+    (let [entries (parked)]
+      (on-ledger entries #(record/settle-run-asks! [:nido "ws-1"] "r1"
+                                                   {:status :asked :record {:asks "is this worth doing now?"}}))
+      (is (empty? (answers entries)) "the question the run ends asking is the one it hands over"))
+    (let [entries (parked)]
+      (on-ledger entries #(record/settle-run-asks! [:nido "ws-1"] "r1"
+                                                   {:status :asked :record {:asks "a different question?"}}))
+      (is (= 1 (count (answers entries))) "a superseded question is withdrawn for the one the run ends on"))))

@@ -1603,6 +1603,8 @@
             []
             decisions)))
 
+(declare run-gate-pick?)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map [:? [:maybe :string]]] :map]}
   answered
   "What a person has already answered about `design`, read off the ledger for its judge's `asks`:
@@ -1707,13 +1709,15 @@
          ;; A question a round stops on reaches the person as a blocker the driver parks over the
          ;; decision, and their answer to it is a reply like a record they rewrite. Only a blocker
          ;; parked after a decision on this chain was one of its questions; one nido answered
-         ;; itself (:by :nido), or recorded for an act of the person's (:act), is no reply.
+         ;; itself (:by :nido), recorded for an act of the person's (:act), or a pick about the run
+         ;; that asked (`run-gate-pick?`) is no reply.
          asked-at  (some #(when (on-chain (:design-seq %)) (:seq %)) every-decision)
          answered-blockers (when asked-at
                              (filterv #(and (> (long (or (:blocker-seq %) 0)) (long asked-at))
                                             (not= :nido (:by %))
                                             (not (:act %))
-                                            (not (str/blank? (:summary %))))
+                                            (not (str/blank? (:summary %)))
+                                            (not (run-gate-pick? project ws-id %)))
                                       (this-gen (ws/entries-of project ws-id :blocker-answered))))
          replies   (sort-by :seq (cond-> (into (mapv #(reply :design %) written)
                                                (map (fn [a] {:seq (:seq a) :kind :blocker
@@ -8802,7 +8806,8 @@
 (defn- person-entry-since?
   "Whether anything a person writes is on the ledger after entry `n`: a design they wrote, an
    approval, a filing, an intent, a baseline or retraction no run appended, or a grant or answer
-   to a blocker that is their own act (`ws/unspent-grants` reads a person's grant the same way)."
+   to a blocker that is their own act (`ws/unspent-grants` reads a person's grant the same way) —
+   not a pick about a run (`run-gate-pick?`), which answers nothing about the design."
   [project ws-id n]
   (let [after?  #(> (long (or (:seq %) 0)) (long n))
         amended (ws/amended-seqs project ws-id)
@@ -8811,7 +8816,8 @@
      (or (some #(written-by-person? amended %) (of :design))
          (seq (mapcat of [:design-approved :findings :intent]))
          (some #(nil? (:run-id %)) (mapcat of [:baseline :retraction]))
-         (some #(and (not= :nido (:by %)) (not (:act %)) (not (:carried %)))
+         (some #(and (not= :nido (:by %)) (not (:act %)) (not (:carried %))
+                     (not (run-gate-pick? project ws-id %)))
                (mapcat of [:blocker-answered :grant]))))))
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
@@ -8841,6 +8847,102 @@
                 (:code-identity a) (assoc :code-identity (:code-identity a)))))))
       (catch Exception _ nil))))
 
+;; ── A judge's ask that stands while its run goes on ─────────────────────────
+;;
+;; An :ask whose round also found a derivable defect goes to the amender, and the run can amend for
+;; many more rounds before it ends :asked. The question is the person's from the round it stands, so
+;; it is parked as a blocker then, offering to stop the run; the run reads the answer at its next
+;; round. One such blocker is open per run at a time.
+
+(def ^:private stop-label "Stop the run")
+
+(def ^:private run-asked-options
+  [{:label       stop-label
+    :summary     "No more amendment until you have answered: the run ends at its next round."
+    :consequence (str "No judge or amender is launched for it. The design stays unapproved, the question"
+                      " stays open, and answering it in words is what the next run's judge reads.")}
+   {:label       "Let it run"
+    :summary     "The run goes on amending what it can repair without you."
+    :consequence (str "This question is closed here; if the run ends still asking, it asks you again"
+                      " then.")}])
+
+(defn- run-asked-blocker
+  "The blocker parking `decision`, an :ask the ledger holds at `n`, while run `run-id` goes on
+   amending in round `iter`."
+  [decision n run-id iter]
+  {:format       :blocker
+   :summary      (str "A design review run asked this in round " iter " (entry " n "), and is still"
+                      " amending what it can repair without you:\n\n" (str/trim (str (:asks decision))))
+   :needs        "Should this design run stop, or go on amending while the question waits?"
+   :after        (str "The run reads your answer at its next round. Stop ends it there; words answer the"
+                      " question, and its next judge reads them.")
+   :options      run-asked-options
+   :standing-ask {:run-id (str run-id) :decision-seq n}})
+
+(defn- run-asked-blockers
+  "This ledger's blockers parked over run `run-id`'s asks, oldest first."
+  [project ws-id run-id]
+  (filterv #(= (str run-id) (get-in % [:standing-ask :run-id])) (ws/entries-of project ws-id :blocker)))
+
+(defn- answer-to
+  "The :blocker-answered naming `blocker`, or nil."
+  [project ws-id blocker]
+  (some #(when (= (:seq blocker) (:blocker-seq %)) %) (ws/entries-of project ws-id :blocker-answered)))
+
+(defn- picked
+  "The label of the branch `answer`, a :blocker-answered, picked among `run-asked-options`, or nil
+   for an answer in words. The gate records a pick as its label, in :label or as the :summary."
+  [answer]
+  (some (into #{} (map :label) run-asked-options) [(:label answer) (str/trim (str (:summary answer)))]))
+
+(defn- run-gate-pick?
+  "Whether `answer`, a :blocker-answered, is a branch picked on a blocker parked over a run's ask:
+   a choice about that run, which answers nothing the design was asked."
+  [project ws-id answer]
+  (boolean (and (picked answer)
+                (:standing-ask (ws/entry-at-seq project ws-id (:blocker-seq answer))))))
+
+(defn- park-run-ask!
+  "Park the :ask at `n` as a blocker, unless one this run parked is still open or was answered with
+   a pick. Never throws."
+  [[project ws-id] decision n run-id iter]
+  (when (and project n run-id (= :ask (:recommend decision)))
+    (try
+      ;; Open, or answered with a pick: either way the person has this run's question in hand.
+      (when-not (some #(let [a (answer-to project ws-id %)] (or (nil? a) (picked a)))
+                      (run-asked-blockers project ws-id run-id))
+        (ws/append-entry! project ws-id {:kind :blocker} (pr-str (run-asked-blocker decision n run-id iter))))
+      (catch Exception _ nil))))
+
+(defn- stopped-by-person
+  "`ctx` ended :asked because a person picked Stop on a blocker this run parked, or nil."
+  [ctx [project ws-id] run-id]
+  (when (and project run-id (< 1 (long (or (:iter ctx) 1))))
+    (when-let [b (some #(when (some-> (answer-to project ws-id %) picked (= stop-label)) %)
+                       (run-asked-blockers project ws-id run-id))]
+      (let [n (get-in b [:standing-ask :decision-seq])]
+        (assoc ctx :record (ws/entry-at-seq project ws-id n) :findings [] :status :asked
+               :control :escalate :asked-by :person :asked-seq n :reused-seq n)))))
+
+(defn ^{:malli/schema [:=> [:cat :any :any :map] :any]}
+  settle-run-asks!
+  "Withdraw the blocker run `run-id` left open over one of its asks, unless the run ended :asked on
+   that same question — then it is the question the run hands over. Never throws."
+  [[project ws-id] run-id final]
+  (when (and project run-id)
+    (try
+      (doseq [b (run-asked-blockers project ws-id run-id)
+              :when (nil? (answer-to project ws-id b))
+              :let [asked (ws/entry-at-seq project ws-id (get-in b [:standing-ask :decision-seq]))]
+              :when (not (and (= :asked (:status final))
+                              (= (str/trim (str (:asks asked)))
+                                 (str/trim (str (get-in final [:record :asks]))))))]
+        (ws/append-entry! project ws-id {:kind :blocker-answered}
+                          (pr-str {:format :blocker-answered :blocker-seq (:seq b) :by :nido
+                                   :summary (str "The run that asked it ended " (name (:status final))
+                                                 " no longer asking it.")})))
+      (catch Exception _ nil))))
+
 (defn- asked-standing
   "`ctx` ended :asked on the question a run left on `ledger` (`unanswered-ask`), launching no judge
    or amender: the round would judge the record that run left, at the tree it judged, with nothing
@@ -8861,10 +8963,11 @@
 
 (defn- run-design-judge-stage
   [ctx]
-  (let [{:keys [cwd code-cwd]} (:config ctx)
+  (let [{:keys [cwd code-cwd run-id]} (:config ctx)
         ledger (ledger-of (:config ctx))]
     (or (when-not (ledger-lost ctx ledger)
-          (asked-standing ctx ledger (or code-cwd cwd)))
+          (or (stopped-by-person ctx ledger run-id)
+              (asked-standing ctx ledger (or code-cwd cwd))))
         (judge-design ctx))))
 
 (defn- judge-design
@@ -9084,11 +9187,15 @@
           (= :ask (:recommend record))
           (let [derivable (filterv (complement :for-person) findings)]
             (if (and (seq derivable) (not-any? disputed? derivable))
-              (with-appended (cond-> (assoc ctx :record record :findings derivable
-                                            :underivable (underivable-checks record))
-                               (some :for-person findings)
-                               (assoc :asked-findings (filterv :for-person findings)))
-                             (put! ledger record))
+              (let [answer (put! ledger record)]
+                ;; The question stands from this round, whatever the amender does next: the person
+                ;; is asked now rather than when the run ends.
+                (park-run-ask! ledger record (:seq answer) run-id (:iter ctx))
+                (with-appended (cond-> (assoc ctx :record record :findings derivable
+                                              :underivable (underivable-checks record))
+                                 (some :for-person findings)
+                                 (assoc :asked-findings (filterv :for-person findings)))
+                               answer))
               (final! (assoc ctx :record record :findings findings
                              :underivable (underivable-checks record)
                              :control :escalate :status :asked))))
@@ -9139,7 +9246,9 @@
    decision, and an amender would make it for them. An ask that also found a
    derivable defect — a finding not marked :for-person — is a round first: that
    defect is the amender's, so the person is asked over a record already repaired
-   of everything they were not needed for. :proceed
+   of everything they were not needed for, and its question is parked as a blocker that
+   round, so the person has it while the run amends; picking Stop there ends the run :asked
+   at its next round. :proceed
    escalates because the ask is the point — unless nobody is owed one: a design
    the round cleared advances, and one whose clearance is still unwritten ends
    :clearance-contended, which the clearance stage finishes without re-running

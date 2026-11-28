@@ -345,6 +345,10 @@
      answered it and the design is still the one it was asked over. A design run stops at entry on
      it when its tree has not moved, and names it at launch. nil when there is none."
     {:signature [:=> [:catn [:ledger :any]] [:maybe :map]]})
+  (Operation settle-run-asks!
+    "Withdraw the blocker a design run parked over one of its asks while it went on amending, once
+     the run ends no longer asking that question."
+    {:signature [:=> [:catn [:ledger :any] [:run-id :any] [:final :map]] :any]})
   (Operation appended-amendment-delta
     "What the amendment a run's amender appended superseding a judged entry moved, read back off the
      ledger — for a run stopped in its amend phase, whose phase never finished to say so. nil when
