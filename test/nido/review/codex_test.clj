@@ -23,15 +23,39 @@
     (is (some #{"read-only"} args)
         "codex exec runs under a read-only sandbox during review")))
 
-(deftest codex-argv-captures-output-to-log-not-terminal
+(deftest codex-argv-captures-output-not-terminal
   ;; codex's raw streaming output must NOT inherit the terminal (it floods the
-  ;; review TUI). Capture stdout to the per-round log, merge stderr into it.
+  ;; review TUI). stdout is piped to `run-codex!`'s copier, stderr merged into it.
   (let [[opts & _] (codex/codex-argv {:cwd "/w" :schema-path "/s.json"
                                       :out-path "/o.json" :log-path "/l.log"
                                       :prompt "p"})]
-    (is (= :write (:out opts)) "stdout is redirected (not :inherit)")
-    (is (= "/l.log" (str (:out-file opts))) "stdout goes to the log path")
+    (is (not= :inherit (:out opts)) "stdout is captured")
     (is (= :out (:err opts)) "stderr merges into stdout")))
+
+(defn- copied
+  "`copy-log!` over `s`, every stamp \"T\": [what it answered, what it wrote]."
+  [s]
+  (let [w (java.io.StringWriter.)]
+    [(@#'codex/copy-log! (java.io.StringReader. s) w (constantly "T")) (str w)]))
+
+(deftest the-log-stamps-each-exec-header-with-its-time
+  ;; A judge that sat 132 minutes in one reading left a log with no clock in it, so which command
+  ;; it sat in could not be found.
+  (is (= [nil "exec T\n/bin/zsh -lc 'rg x' in /t\n succeeded in 0ms:\nexecutes\nexec rg y\n"]
+         (copied "exec\n/bin/zsh -lc 'rg x' in /t\n succeeded in 0ms:\nexecutes\nexec rg y\n"))
+      "only the bare header line is stamped, and the stream is otherwise copied verbatim")
+  (is (= [nil "codex\nexe"] (copied "codex\nexe")) "a held prefix is written out when the stream ends"))
+
+(deftest a-reply-that-runs-to-whitespace-is-stopped
+  ;; Watched: 14 KB of valid JSON, then 15.8 million spaces over thirty minutes, until codex's next
+  ;; request was refused for its size and the reading ended a final failure.
+  (let [[why out] (copied (str "codex\n{\"findings\": []}" (apply str (repeat 200000 \space)) "}"))]
+    (is (= :whitespace-run why))
+    (is (< (count out) 70000) "the run is cut where it tripped, not copied whole into the log"))
+  (is (= :line-cap (first (copied (apply str (repeat (+ 1 (* 4 1024 1024)) \x)))))
+      "a line no request could carry back is stopped, whatever it holds")
+  (is (nil? (first (copied (str "exec\n" (apply str (repeat 5000 "src/a.clj:1:  (x)\n"))))))
+      "an ordinary long stream is no degenerate reply"))
 
 ;; ── When the reviewer could not be run at all ───────────────────────────────
 
@@ -229,6 +253,41 @@
         "so the caller ends on reviewer-unavailable rather than a failure that sends a reader to the diff")
     (is (str/includes? (:message unavailable) "Selected model is at capacity"))))
 
+(def too-long-log
+  "The tail of a real review log whose final message was too large for codex to send back."
+  (str "codex\n{\"findings\": []}      \n"
+       "ERROR: unexpected status 400 Bad Request: {\"error\": {\"message\": \"Invalid"
+       " 'input[18].content[0].text': string too long. Expected a string with maximum length"
+       " 10485760, but got a string with length 15815586 instead.\"}}\n"))
+
+(deftest a-degenerate-reply-is-re-sampled-once-on-the-same-reviewer
+  (is (= :degenerate-output (:signal (codex/unavailability too-long-log)))
+      "the vendor's size refusal is no evidence about the branch, so no failed review")
+  (let [{:keys [exit calls slept]} (attempted [{:log too-long-log} {:answers? true}])]
+    (is (zero? exit) "one bad sample of a prompt the same judge answers")
+    (is (= [:codex :codex] calls))
+    (is (= [0] slept) "at once — nothing outside is waited out"))
+  (let [{:keys [exit unavailable calls]} (attempted (repeat 5 {:log too-long-log}))]
+    (is (= 1 exit))
+    (is (= [:codex :codex] calls) "once: a reply degenerate twice is not re-sampled forever")
+    (is (= :degenerate-output (:signal unavailable)))))
+
+(deftest a-reading-stopped-as-degenerate-is-re-sampled
+  (let [dir   (str (fs/create-temp-dir))
+        left  (atom [{:exit 143 :timed-out? false :degenerate :whitespace-run}])
+        calls (atom 0)]
+    (with-redefs [codex/run-codex! (fn [{:keys [out-path]}]
+                                     (swap! calls inc)
+                                     (if-let [r (first @left)]
+                                       (do (swap! left rest) r)
+                                       (do (spit out-path "{}") {:exit 0 :timed-out? false})))
+                  codex/sleep!     (fn [_])]
+      (let [out (codex/run-reviewer! {:cwd dir :prompt "p" :schema-path (str dir "/s.json")
+                                      :out-path (str dir "/o.json") :log-path (str dir "/l.log")})]
+        (is (zero? (:exit out)))
+        (is (nil? (:unavailable out)))
+        (is (= 2 @calls))))))
+
 (deftest only-a-transient-signal-is-retried
   ;; A quota lifts on a date and a credential on a login; re-running after seconds only spends them.
   (let [{:keys [calls slept]}
@@ -326,3 +385,17 @@
                                         :out-path (str dir "/o.json") :log-path (str dir "/l.log")})]
           (is (:timed-out out))
           (is (not @launched)))))))
+
+(deftest a-running-codex-that-runs-to-whitespace-is-stopped
+  ;; Through the real pipe: the copier, not the budget, ends a reply that never stops.
+  (let [dir (str (fs/create-temp-dir))
+        log (str dir "/l.log")]
+    (with-redefs [codex/codex-argv (fn [_] [{:err :out}
+                                             "sh" "-c" "printf 'exec\\nrg x\\n'; yes ' ' | tr -d '\\n'"])]
+      (let [t0  (System/currentTimeMillis)
+            out (codex/run-codex! {:budget-ms 60000 :log-path log})]
+        (is (= :whitespace-run (:degenerate out)))
+        (is (not (:timed-out? out)))
+        (is (< (- (System/currentTimeMillis) t0) 30000) "stopped by its stream, long before its budget")
+        (is (re-find #"^exec \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\nrg x\n" (slurp log))
+            "the exec header carries the time it was seen")))))

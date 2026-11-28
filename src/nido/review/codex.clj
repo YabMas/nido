@@ -17,48 +17,116 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   codex-argv
-  "The `codex exec` invocation as [opts & args] for p/shell. Pure, so it's
+  "The `codex exec` invocation as [opts & args] for p/process. Pure, so it's
    unit-testable. The prompt is fed via stdin with \"-\" as the positional
-   prompt. Review runs read-only. codex's streaming output is captured to
-   :log-path (stderr merged into stdout) so it never floods the review TUI;
-   the structured findings still come back via -o :out-path."
-  [{:keys [cwd schema-path out-path prompt log-path]}]
-  [{:dir cwd :continue true :in prompt
-    :out :write :out-file (io/file log-path) :err :out}
+   prompt. Review runs read-only. codex's streaming output (stderr merged into
+   stdout) is piped to `run-codex!`, which copies it to :log-path, so it never
+   floods the review TUI; the structured findings still come back via -o :out-path."
+  [{:keys [cwd schema-path out-path prompt]}]
+  [{:dir cwd :continue true :in prompt :err :out}
    "codex" "exec" "--skip-git-repo-check"
    "-s" "read-only"
    "--output-schema" schema-path
    "-o" out-path
    "-"])
 
+(def ^:private degenerate-whitespace-run
+  "How many whitespace characters in a row end a reading as degenerate. A judge's answer is a few
+   kilobytes of JSON and a command's output is source text; neither holds a blank run this long.
+   A runaway answer does: 15.8 million spaces after 14 KB of valid JSON, generated for thirty
+   minutes until codex's own next request was refused for its size."
+  65536)
+
+(def ^:private degenerate-line-chars
+  "How long one line of the stream may grow before the reading is degenerate, whatever it holds —
+   well under the 10 MiB a codex request may carry, which a final message past it can only fail."
+  (* 4 1024 1024))
+
+(defn- copy-log!
+  "Copy codex's stream from Reader `in` to Writer `out`, flushing as it goes, until `in` ends —
+   answering nil — or the stream turns degenerate, answering :whitespace-run or :line-cap
+   (`degenerate-whitespace-run`, `degenerate-line-chars`) with nothing after the point it tripped
+   copied.
+
+   Each `exec` header line is written `exec <(stamp)>`: codex's log carries no clock of its own,
+   and the command a judge sat in is otherwise found only by its place in the stream. The stream
+   is read in chunks rather than lines, because the line to stop is the one that never ends."
+  [^java.io.Reader in ^java.io.Writer out stamp]
+  (let [buf  (char-array 8192)
+        head (StringBuilder.)]
+    (loop [i 0 n 0 line 0 ws 0]
+      (if (= i n)
+        (do (.flush out)
+            (let [n' (.read in buf)]
+              (if (neg? n')
+                (do (.append out head) (.flush out) nil)
+                (recur 0 n' line ws))))
+        (let [c   (aget buf i)
+              ws' (if (Character/isWhitespace c) (inc ws) 0)]
+          (if (= c \newline)
+            (do (.append out (if (= "exec" (str head)) (str "exec " (stamp)) head))
+                (.setLength head 0)
+                (.write out (int c))
+                (if (> ws' degenerate-whitespace-run)
+                  (do (.flush out) :whitespace-run)
+                  (recur (inc i) n 0 ws')))
+            (do (if (and (= line (.length head)) (< line 4) (= c (.charAt "exec" (int line))))
+                  (.append head c)
+                  (do (.append out head) (.setLength head 0) (.write out (int c))))
+                (cond
+                  (> ws' degenerate-whitespace-run) (do (.flush out) :whitespace-run)
+                  (> (inc line) degenerate-line-chars) (do (.flush out) :line-cap)
+                  :else (recur (inc i) n (inc line) ws')))))))))
+
+(defn- stamp-now [] (str (.truncatedTo (java.time.Instant/now) java.time.temporal.ChronoUnit/SECONDS)))
+
+(defn- stop!
+  "SIGTERM `proc`, then a forcible kill ten seconds later if it is still alive."
+  [^Process proc]
+  (.destroy proc)
+  (when-not (.waitFor proc 10 java.util.concurrent.TimeUnit/SECONDS)
+    (.destroyForcibly proc)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-codex!
-  "Run `codex exec` with output-schema. Seam for tests. Returns {:exit <int> :timed-out? <bool>}.
-   Writes the final JSON response to :out-path. `:budget-ms` bounds the run: past it codex is
-   killed, :timed-out? is true and :out-path is left unwritten.
+  "Run `codex exec` with output-schema. Seam for tests. Returns {:exit <int> :timed-out? <bool>},
+   plus :degenerate (`copy-log!`'s reason) when its stream turned degenerate and it was stopped
+   for it. Writes the final JSON response to :out-path and the stream to :log-path. `:budget-ms`
+   bounds the run: past it codex is killed, :timed-out? is true and :out-path is left unwritten.
 
    Spawned rather than shelled so the judge can be stopped when this process is.
    A killed loop used to leave its judge running — still billing, still writing
    an answer nothing would ever read — because nido disables the destroy-tree
    hook globally to cure a macOS shutdown hang."
-  [{:keys [budget-ms] :as opts}]
+  [{:keys [budget-ms log-path] :as opts}]
   (let [[opts' & cmd] (codex-argv opts)
-        proc (apply p/process opts' cmd)]
+        proc   (apply p/process opts' cmd)
+        jproc  (:proc proc)
+        copied (future
+                 (with-open [in  (io/reader (:out proc))
+                             out (io/writer (io/file log-path))]
+                   (when-let [why (copy-log! in out stamp-now)]
+                     (stop! jproc)
+                     why)))]
     (nprocess/with-child-registered
-      (:proc proc)
-      #(nprocess/wait-within! (:proc proc) budget-ms))))
+      jproc
+      #(let [ran        (nprocess/wait-within! jproc budget-ms)
+             ;; Bounded: a command codex left running can hold the pipe open past codex itself.
+             degenerate (deref copied 10000 nil)]
+         (cond-> ran degenerate (assoc :degenerate degenerate))))))
 
 (def ^:private unavailability-signatures
   "What codex prints when the REVIEWER could not be run, as against when it ran
    and the review failed.
 
    Each row is a phrase codex emits for a condition outside this process — a
-   billing quota, a rate limit, a credential, the model being at capacity. What
-   they share is that the run is no evidence at all about the branch. That is
-   what makes the distinction worth drawing: it decides whether the next move is
-   to open the diff or to wait. How long to wait differs — capacity sheds in
-   seconds and is retried on the spot (`transient-retries-ms`); the rest need a
-   clock or a person.
+   billing quota, a rate limit, a credential, the model being at capacity — or
+   for an answer too large to send back, which is the model sampling a
+   degenerate reply. What they share is that the run is no evidence at all about
+   the branch. That is what makes the distinction worth drawing: it decides
+   whether the next move is to open the diff or to wait. How long to wait
+   differs — capacity sheds in seconds and a degenerate reply is re-sampled at
+   once (`transient-retries-ms`); the rest need a clock or a person.
 
    Literal vendor phrasing, and deliberately narrow. A looser pattern that also
    matched an ordinary failure would report a working reviewer as an absent one,
@@ -76,6 +144,7 @@
    {:signal :usage-limit  :re #"(?i)usage limit reached"}
    {:signal :rate-limited :re #"(?i)429 too many requests"}
    {:signal :capacity     :re #"(?i)selected model is at capacity"}
+   {:signal :degenerate-output :re #"(?i)string too long.*maximum length"}
    {:signal :unauthorized :re #"(?i)401 unauthorized"}
    {:signal :unauthorized :re #"(?i)\bnot logged in\b"}])
 
@@ -113,7 +182,7 @@
    `claude/run-claude!`), which are classified only where they happen to share
    one; otherwise its failure reads as a failed review.
 
-   {:signal :usage-limit|:rate-limited|:capacity|:unauthorized
+   {:signal :usage-limit|:rate-limited|:capacity|:degenerate-output|:unauthorized
     :message <the line codex printed>
     :retry-at <when it said to come back, when it said>}
 
@@ -266,20 +335,21 @@
    reviewer instead (`transient-retries-ms`)."
   {:codex {:reviewer :claude :on #{:usage-limit}}})
 
-(def ^:private transient-signals
-  "The `unavailability` signals worth running the SAME reviewer again for, a few seconds later.
-
-   Only capacity: the vendor shedding load, which a request moments later usually gets past. Each
-   unretried capacity refusal ended a whole record run, or aborted a diff round and the clean layer
-   reviews already paid for beside it. Not a 429, whose window is minutes — a short backoff only
-   spends the wait without outlasting it."
-  #{:capacity})
-
 (def ^:private transient-retries-ms
-  "How long to wait before each re-run of a reviewer that left a `transient-signals` signal — one
-   entry per retry, so its length is the retry bound. Short against a round's budget: two minutes
-   is the most a vendor blip costs before the run says the reviewer was unavailable."
-  [20000 60000])
+  "The `unavailability` signals worth running the SAME reviewer again for, each with how long to
+   wait before each re-run — one entry per retry, so its length is the retry bound.
+
+   Capacity: the vendor shedding load, which a request moments later usually gets past. Each
+   unretried capacity refusal ended a whole record run, or aborted a diff round and the clean layer
+   reviews already paid for beside it. Two minutes is the most a vendor blip costs before the run
+   says the reviewer was unavailable.
+
+   A degenerate reply, once and at once: it is one bad sample of a prompt the same judge answers
+   in minutes, and its prefix is no answer to keep — it lacks the schema's closing fields.
+
+   Not a 429, whose window is minutes — a short backoff only spends the wait without outlasting it."
+  {:capacity          [20000 60000]
+   :degenerate-output [0]})
 
 (defn- sleep!
   "Seam for tests."
@@ -305,17 +375,34 @@
   (when (or (not (zero? exit)) (not (fs/exists? out-path)))
     (unavailability (log-tail log-path unavailability-tail-chars))))
 
+(defn- degenerate-reading
+  "The `unavailability` map for a reading `run-codex!` stopped as degenerate. The sentence is
+   nido's: codex printed none, since it was stopped before the vendor refused the answer."
+  [why]
+  {:signal  :degenerate-output
+   :message (case why
+              :whitespace-run (str "codex was stopped: its stream ran " degenerate-whitespace-run
+                                   " whitespace characters without content")
+              :line-cap       (str "codex was stopped: one line of its stream passed "
+                                   degenerate-line-chars " characters"))})
+
 (defn- run-within!
   "`run-reviewer!` over a launch budget already settled: the primary, its transient retries, and
    its stand-in."
   [reviewer opts out-path log-path judged-by]
-  (let [[ran u]  (loop [waits transient-retries-ms]
-                   (let [{:keys [exit timed-out?]} (run-one! reviewer opts)
-                         ran (cond-> {:exit exit :log-path log-path :judged-by judged-by}
-                               timed-out? (assoc :timed-out true))
-                         u   (when-not timed-out? (why-unavailable ran out-path))]
-                     (if (and (transient-signals (:signal u)) (seq waits))
-                       (do (sleep! (first waits)) (recur (rest waits)))
+  (let [[ran u]  (loop [retried {}]
+                   (let [{:keys [exit timed-out? degenerate]} (run-one! reviewer opts)
+                         ran   (cond-> {:exit exit :log-path log-path :judged-by judged-by}
+                                 timed-out? (assoc :timed-out true))
+                         u     (cond
+                                 timed-out? nil
+                                 degenerate (degenerate-reading degenerate)
+                                 :else      (why-unavailable ran out-path))
+                         sig   (:signal u)
+                         waits (get transient-retries-ms sig)
+                         n     (get retried sig 0)]
+                     (if (< n (count waits))
+                       (do (sleep! (nth waits n)) (recur (assoc retried sig (inc n))))
                        [ran u])))
         stand-in (get fallbacks reviewer)]
     (if (contains? (:on stand-in) (:signal u))
@@ -359,9 +446,10 @@
    run in. A quota can lift mid-run, and nothing in the log says when codex's
    will except a date in the vendor's own wording.
 
-   A primary whose run left a `transient-signals` signal is run again after each
-   of `transient-retries-ms`, over the same log, and only the last attempt is
-   answered for. Still refused, it returns :unavailable like any other signal.
+   A primary whose run left a signal `transient-retries-ms` names is run again after each of its
+   waits, over the same log, and only the last attempt is answered for. A run `run-codex!` stopped
+   as :degenerate reads as :degenerate-output. Still refused, it returns :unavailable like any
+   other signal.
 
    Every launch runs under `:budget` (`judge-budget` when absent), cut to what the
    caller's `agent/*deadline-ms*` leaves. A launch killed on it answers :timed-out

@@ -1924,7 +1924,9 @@
   (let [ended  (frontend/with-live-display
                  {:report-atom report-atom :report-path report-path :clock clock}
                  (fn [emit] (rloop/run-loop (assoc config :emit emit))))
-        _      (when (and (= :reviewer-unavailable (:status ended)) (:unavailable ended))
+        ;; A degenerate reply is one bad sample, not the vendor away: no later run waits on it.
+        _      (when (and (= :reviewer-unavailable (:status ended)) (:unavailable ended)
+                          (not= :degenerate-output (get-in ended [:unavailable :signal])))
                  (remember-unavailable! (:reviewer config) (:unavailable ended) (clock)))
         ;; The verdict BEFORE the :review entry, because what it answers changes
         ;; what the run is owed and so the status that entry publishes — see
