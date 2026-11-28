@@ -807,10 +807,12 @@
   "Run the design amend stage with every seam stubbed. `writes` stands in for the
    answer the amender left at the out-path; `moves` for the paths it wrote in the
    tree, each named in its transcript by an Edit; `declared` for the project's
-   design configuration."
-  [{:keys [prev writes recommend append-throws? refusals prompts moves declared launch]
+   design configuration. Answers [ctx the design appended, each decision appended];
+   `ask-throws?` makes the ledger refuse a decision."
+  [{:keys [prev writes recommend append-throws? ask-throws? refusals prompts moves declared launch]
     :or {prev a-design recommend :amend refusals 0 launch {:num-turns 3}}} c]
   (let [appended (atom nil)
+        decided  (atom [])
         refused  (atom 0)
         state    (atom {:identity "t0" :entries {}})]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
@@ -826,6 +828,10 @@
                                        (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
                                      5)
+                  ws/append-decision! (fn [_ _ payload]
+                                        (when ask-throws? (throw (ex-info "the ledger said no" {})))
+                                        (swap! decided conj (read-string payload))
+                                        6)
                   agent/launch! (fn [{:keys [first-message out-file]}]
                                   (some-> prompts (swap! conj first-message))
                                   (when writes
@@ -842,7 +848,8 @@
                                   launch)]
       [(run record/design-amend-stage
             (assoc-in c [:record :recommend] recommend))
-       @appended])))
+       @appended
+       @decided])))
 
 (deftest the-canvas-edit-a-declared-design-requires-is-part-of-the-amendment
   ;; The element-id rule makes a moved element's id valid only once the canvas
@@ -2680,6 +2687,38 @@
                               (ctx :findings [(check :goal-served :broken)] :record (decision :ask)))]
       (is (= :asked (:status out)) "an answer naming only out-of-reach lines is not a no-op"))))
 
+;; Watched (ws-20261016-20969a, 916c4a, 8392ab, 19f219 and others): the amend stage stopped :asked
+;; while the ledger's newest decision said :amend with no :asks, so the gate never showed the
+;; question and the next run derived it again.
+(deftest an-amend-stage-that-asks-writes-its-question-to-the-ledger
+  (let [line [(assoc (check :goal-served :broken) :claim-ids ["one-row-per-content"])]
+        go   (fn [opts]
+               (with-amend (merge {:writes (fn [p] (spit p (pr-str {:out-of-reach [{:finding 1 :because "the done-when says zero duplicates"}]})))}
+                                  opts)
+                           (ctx :findings line :record (decision :amend))))]
+    (let [[out _ decided] (go {})
+          ask (first decided)]
+      (is (= :asked (:status out)))
+      (is (= 1 (count decided)) "the question is appended as a decision of its own")
+      (is (= :ask (:recommend ask)))
+      (is (= 4 (:design-seq ask)) "of the design the judgement it answers read")
+      (is (= ["one-row-per-content"] (:asks-about ask)) "an amender after it is held to the claim")
+      (is (= [{:id "q1" :text "[one-row-per-content] (goal-served): the done-when says zero duplicates"}]
+             (:questions ask))
+          "each line is its own question, by an id later readings keep")
+      (is (str/includes? (:asks ask) "the done-when says zero duplicates"))
+      (is (= [{:claim-id "one-row-per-content" :for-person true}]
+             (map #(select-keys % [:claim-id :for-person]) (:findings ask))))
+      (is (= [(check :relation-honest :broken)] (:checks ask)) "the judgement's checks, which it stands beside")
+      (is (str/starts-with? (:reason ask) "Asked by the amend stage"))
+      (is (= 6 (:asked-seq out)))
+      (is (= :amend-stage (:asked-by out)) "the status line says a guard asked, not the judge"))
+    (testing "an ask the ledger refuses ends the run unrecorded, as the judge stage's does"
+      (let [[out] (go {:ask-throws? true})]
+        (is (= :unrecorded (:status out)))
+        (is (= :asked (get-in out [:unrecorded :would-have-ended])))
+        (is (= "the ledger said no" (get-in out [:ask-refused :message])))))))
+
 ;; ── The question the amender is told to leave standing ──────────────────────
 
 (def ^:private asked-design
@@ -2690,6 +2729,24 @@
 (defn- restating [design id text]
   (update-in design [:model :claims]
              (fn [cs] (mapv #(if (= id (:id %)) (assoc % :statement text) %) cs))))
+
+(deftest a-claim-a-ledger-ask-still-holds-is-put-back
+  ;; Watched (ws-20261018-d14cab): the run after an :asked stop amended the held claim before any
+  ;; person had answered the question about it.
+  (let [prompts (atom [])
+        open    {:format :design-decision :seq 3 :design-seq 2 :recommend :ask :asks "which stands?"
+                 :findings [{:claim-id "keyed-on-medium" :claim "q" :cites ["c"] :for-person true}]}
+        [out appended]
+        (with-redefs [record/answered (fn [& _] {:asked-of {"keyed-on-medium" [{:seq 3 :asks "which stands?"}]}})
+                      ws/entry-at-seq (fn [_ _ n] (when (= 3 n) open))]
+          (with-amend {:prev asked-design :prompts prompts
+                       :writes (fn [p] (spit p (pr-str {:record (restating asked-design "keyed-on-medium" "narrowed")})))}
+                      (ctx :findings [(assoc (check :goal-served :broken) :claim-ids ["sent-upright"])]
+                           :record (decision :amend))))]
+    (is (str/includes? (first @prompts) "It is about [keyed-on-medium]")
+        "the amender is told the claim is a person's question before it writes")
+    (is (= ["keyed-on-medium"] (get-in out [:held-put-back :ids])))
+    (is (nil? appended) "with the claim put back nothing of the amendment is left to append")))
 
 (deftest the-amender-is-told-which-claims-the-question-is-about
   ;; Shown only the asks prose, an amender's stale sweep restated the claim the question was about

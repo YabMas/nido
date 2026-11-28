@@ -2096,6 +2096,21 @@
         "a record left inconsistent with the answer is the amender's to repair, not the person's to re-answer")
     (is (not (str/includes? p "ASKED BEFORE")))))
 
+(deftest a-grant-copied-past-a-question-grants-nothing-new
+  ;; Watched (ws-20261016-e76725): a design written after an :asked run carried the earlier grant
+  ;; word for word, and the next judge read it as the person settling the question asked since.
+  (let [ledger {16 (assoc design :seq 16)
+                19 (assoc design :seq 19 :supersedes {:seq 16 :why "the spike's scope" :granted "ok, on all"})
+                21 {:format :design-decision :seq 21 :design-seq 19 :recommend :ask :asks "which stands?"}
+                23 (assoc design :seq 23 :supersedes {:seq 19 :why "dropped open-1" :granted "ok, on all"})}]
+    (is (= 19 (get-in (answered-over ledger 23) [:grant :seq]))
+        "the copy is the older grant's, given before the question")
+    (is (= 23 (get-in (answered-over (assoc-in ledger [23 :supersedes :granted] "ok, canvas/ stands") 23)
+                      [:grant :seq]))
+        "a note written after the question is the person's answer to it")
+    (is (= 23 (get-in (answered-over (dissoc ledger 21) 23) [:grant :seq]))
+        "with no question between them, carrying the grant forward keeps it")))
+
 (deftest an-amenders-rewrite-answers-nothing
   ;; An amender handed an asked question settles it by guessing; its rewrite must not close it.
   (is (= "Does the source gate cover only slices this workstream adds?"

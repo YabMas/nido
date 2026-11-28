@@ -1610,7 +1610,9 @@
      :grant  the nearest design in its :supersedes chain a person granted, itself included —
              {:seq :self? :note :delta :carried? :answered :earlier} — or absent when nobody has
              granted any of them. A :design-approved grants the design it names; a design a person
-             wrote grants itself with its :supersedes :granted, and is then :carried?. :delta is
+             wrote grants itself with its :supersedes :granted, and is then :carried? — unless the
+             note is word for word an older grant's on the chain with an :ask on the chain written
+             between them, a grant copied past the question it would settle. :delta is
              `grant-delta` against the granted design. :answered is what the grant answered, as
              [{:seq :asks}] (`grant-answered`). :earlier is every grant further up the chain,
              nearest first, as {:seq :note :carried? :answered}: a newer grant is often narrower,
@@ -1665,17 +1667,31 @@
          every-approval (ws/entries-of project ws-id :design-approved)
          approvals (this-gen every-approval)
          approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) every-approval)
-         grants    (filterv #(or (approved (:seq %))
-                                 (and (person? %) (get-in % [:supersedes :granted])))
-                            (take-while #(= (premise design) (premise %)) chain))
-         granted   (first grants)
          note-of   #(if-let [a (approved (:seq %))]
                       (:note a)
                       (get-in % [:supersedes :granted]))
-         note      (note-of granted)
          own-read? #(and run-id (= run-id (:run-id %))
                          (or (seq (:read-once %)) (:amendment-read-once %)))
          every-decision (into [] (remove own-read?) (ws/entries-of project ws-id :design-decision))
+         on-chain  (into #{} (keep :seq) chain)
+         granting  (filterv #(or (approved (:seq %))
+                                 (and (person? %) (get-in % [:supersedes :granted])))
+                            (take-while #(= (premise design) (premise %)) chain))
+         ;; A carried note word for word an older grant's, with a question put on the chain between
+         ;; the two, is that grant copied forward: it was given before the question it would settle.
+         given-at  #(long (or (:seq (approved (:seq %))) (:seq %) 0))
+         copied?   (fn [g]
+                     (and (not (approved (:seq g)))
+                          (some (fn [older]
+                                  (and (< (given-at older) (given-at g))
+                                       (= (str/trim (str (note-of older))) (str/trim (str (note-of g))))
+                                       (some #(and (= :ask (:recommend %)) (on-chain (:design-seq %))
+                                                   (< (given-at older) (long (or (:seq %) 0)) (given-at g)))
+                                             every-decision)))
+                                granting)))
+         grants    (filterv (complement copied?) granting)
+         granted   (first grants)
+         note      (note-of granted)
          decisions (this-gen every-decision)
          asks?     #(not (str/blank? (:asks %)))
          answers   (fn [g] (grant-answered g (approved (:seq g)) every-decision))
@@ -1692,7 +1708,6 @@
          ;; decision, and their answer to it is a reply like a record they rewrite. Only a blocker
          ;; parked after a decision on this chain was one of its questions; one nido answered
          ;; itself (:by :nido), or recorded for an act of the person's (:act), is no reply.
-         on-chain  (into #{} (keep :seq) chain)
          asked-at  (some #(when (on-chain (:design-seq %)) (:seq %)) every-decision)
          answered-blockers (when asked-at
                              (filterv #(and (> (long (or (:blocker-seq %) 0)) (long asked-at))
@@ -9230,7 +9245,8 @@
         repaired (into #{} (comp (mapcat ids) (map slug)) (:findings ctx))
         refs     (into [] (comp (map slug) (remove str/blank?) (map clause-ref))
                        (concat (get-in ctx [:record :asks-about])
-                               (map str (mapcat ids (:asked-findings ctx)))))
+                               (map str (mapcat ids (:asked-findings ctx)))
+                               (:ledger-asked ctx)))
         asked    (into (sorted-set) (map first) refs)
         whole    (into #{} (keep (fn [[id n]] (when-not n id))) refs)]
     {:held     (vec (remove repaired asked))
@@ -9835,6 +9851,119 @@
         kept         (assoc :kept kept)
         (seq theirs) (assoc :changed-since (vec (sort (map first theirs))))))))
 
+;; ── What an amend stage asks, on the ledger ─────────────────────────────────
+;;
+;; A stop for a person is a claim that the ledger holds the question, as the judge stage's
+;; `final!` holds it: the decision the round judged recommended :amend, and a question that lives
+;; only in the run's report is one the gate never shows, no grant can be read as answering and the
+;; next run derives again.
+
+(defn- ledger-asked
+  "The claims of `design` an :ask on its ledger still holds for a person: each one an :ask in its
+   lineage filed a :for-person finding under, with no approval or person's reply written since
+   (`answered`'s :asked-of). An amender is held to them as to the round's own question
+   (`asked-scope`), whichever round or run posed it. Empty when the ledger cannot be read."
+  [project ws-id design]
+  (if-not (and project ws-id design)
+    []
+    (try
+      (let [person-ids (memoize (fn [n] (into #{} (comp (filter :for-person) (keep #(some-> (:claim-id %) str)))
+                                              (:findings (ws/entry-at-seq project ws-id n)))))]
+        (vec (sort (for [[id asks] (:asked-of (answered project ws-id design))
+                         :when (some #(and (not (:granted %)) (not (:answered %)) ((person-ids (:seq %)) id))
+                                     asks)]
+                     id))))
+      (catch Exception _ []))))
+
+(defn- line-ids
+  "The claim ids an :out-of-reach `line` is about: its own :claim-ids (a held claim's), else the
+   ids of the finding the amender named it against."
+  [{:keys [claim-ids finding]}]
+  (vec (distinct (remove str/blank? (map str (concat claim-ids (when finding (cons (:claim-id finding) (:claim-ids finding)))))))))
+
+(defn- amend-ask
+  "The :ask a round's amend stage appends when it stops for a person over `out-of-reach`: one
+   question per line, its own id (`questions-carried` against `asked`, the standing ask), and a
+   :for-person finding under each claim a line names, so a later amend of it is held
+   (`ledger-asked`) and a re-ask of it is read as one (`reasked`). The checks and the reading's
+   identity are `decision`'s, the judgement of `design` the amendment answered, which this ask
+   stands beside."
+  [ledger design decision out-of-reach asked run-id iter]
+  (let [qs   (for [l out-of-reach
+                   :let [ids   (line-ids l)
+                         label (if (seq ids) (str "[" (str/join "] [" ids) "]") (str (:claim l)))]]
+               {:ids ids
+                :text (str label (when (and (seq ids) (not= label (str (:claim l)))) (str " (" (:claim l) ")"))
+                           ": " (str/trim (str (:because l))))})
+        ids  (vec (distinct (mapcat :ids qs)))
+        n    (:design-seq decision)
+        ask  (cond-> {:format     :design-decision
+                      :design-seq n
+                      :recommend  :ask
+                      :reason     (str "Asked by the amend stage of round " iter ", not by its judge: the judgement of entry "
+                                       n " recommended " (some-> (:recommend decision) name)
+                                       ", and repairing it reached what only a person decides. The judgement's reason: "
+                                       (:reason decision))
+                      :asks       (str "The amend stage stopped for you: what the judge found was a repair, and the"
+                                       " repair reaches what only you decide.\n"
+                                       (str/join "\n" (map #(str "- " (:text %)) qs)))
+                      :checks     (:checks decision)
+                      :questions  (mapv #(hash-map :id "" :text (:text %)) qs)}
+               (seq ids) (assoc :asks-about ids
+                                :findings (vec (for [q qs, id (:ids q)]
+                                                 {:claim-id id :claim (:text q) :for-person true
+                                                  :cites [(str "the amend stage's :out-of-reach, round " iter)]})))
+               run-id    (assoc :run-id (str run-id)))
+        ask  (merge ask (select-keys decision [:confirmed :code-identity :subject-identities :unruled :relation-unruled]))
+        ask  (questions-carried ask asked n)]
+    (if-let [k (reasked ledger design ask asked run-id)]
+      (assoc ask :reasks k)
+      ask)))
+
+(defn- open-ask
+  "The newest :ask in the lineage `answers` (`answered`) was read for that no approval or person's
+   reply has answered since, as `answered`'s :asked reads one — or nil. Read off :asked-of, so only
+   an ask that filed a finding under a claim the design carries, and whatever decision came after
+   it: :asked is only ever the newest decision, which on an amend stage is the judgement it is
+   answering."
+  [project ws-id answers]
+  (when-let [ns (seq (for [[_ asks] (:asked-of answers), a asks
+                           :when (not (or (:granted a) (:answered a)))]
+                       (:seq a)))]
+    (when-let [e (try (ws/entry-at-seq project ws-id (reduce max ns)) (catch Exception _ nil))]
+      (cond-> {:seq (:seq e) :asks (:asks e)}
+        (:design-seq e)      (assoc :of (:design-seq e))
+        (seq (:questions e)) (assoc :questions (:questions e))))))
+
+(defn- asked-on-ledger
+  "`out`, an amend stage's outcome, with the question it stops :asked over written to `ledger` as an
+   :ask of `design` (`amend-ask`): :asked-seq names the entry, :amend-ask is it, and :asked-by
+   :amend-stage says a guard asked rather than the judge. An ask the ledger did not take ends the
+   run :unrecorded, as the judge stage's `final!` ends one — or :goal-superseded when the ledger
+   refused it because its goal moved — with what the ledger said as :ask-refused. `answers` is
+   `answered` of `design`. Any other outcome is untouched."
+  [out [project ws-id :as ledger] design answers run-id]
+  (if-not (and (= :asked (:status out)) (seq (:out-of-reach out)))
+    out
+    (let [decision (:record out)
+          ask      (when (and (int? (:design-seq decision)) (seq (:checks decision)))
+                     (amend-ask ledger design decision (:out-of-reach out)
+                                (or (:asked answers) (open-ask project ws-id answers)) run-id (:iter out)))
+          answer   (when ask (append! ledger ask))
+          out      (cond-> (assoc out :asked-by :amend-stage)
+                     (:refused answer) (assoc :ask-refused (:refused answer)))]
+      (cond
+        (:seq answer)
+        (assoc out :asked-seq (:seq answer) :amend-ask (assoc ask :seq (:seq answer)))
+
+        (= :goal-superseded (get-in answer [:refused :reason]))
+        (assoc out :status :goal-superseded)
+
+        :else
+        (assoc out :status :unrecorded :control :escalate
+               :unrecorded {:would-have-ended :asked
+                            :ledger (when project (str (name project) "/" ws-id))})))))
+
 (defn- amend-design!
   "Launch the amender against the design record and take in what it hands back.
 
@@ -9847,6 +9976,8 @@
         code-cwd (or (:code-cwd (:config ctx)) cwd)
         [project ws-id] (ledger-of (:config ctx))
         prev     (newest-design project ws-id)
+        ctx      (let [held (ledger-asked project ws-id prev)]
+                   (cond-> ctx (seq held) (assoc :ledger-asked held)))
         dir      (cstate/run-dir run-id)
         out-path (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".edn")))
         declared (design-check/design-of project code-cwd)
@@ -10120,11 +10251,11 @@
                           (update :carry #(-> (or % {})
                                               (assoc :growth growth)
                                               (update :as-authored (fn [x] (or x prev))))))))))]
-          (cond-> out
-            ;; A line the amender says only a record it may not write repairs is the person's, and
-            ;; the decision already on the ledger holds their question. Asked now, with the line
-            ;; attached, rather than after a judge round re-derives what the amender said — the
-            ;; amendment it made beside it, if any, is appended first and judged on the next run.
+          (-> (cond-> out
+            ;; A line the amender says only a record it may not write repairs is the person's.
+            ;; Asked now, with the line attached, rather than after a judge round re-derives what
+            ;; the amender said — the amendment it made beside it, if any, is appended first and
+            ;; judged on the next run. The question goes to the ledger below (`asked-on-ledger`).
             (and (seq out-of-reach) (not (:status out)))
             (assoc :out-of-reach out-of-reach :control :escalate :status :asked)
 
@@ -10147,17 +10278,22 @@
                                        stated   (into {} (map (juxt :id #(design-check/claim-text (:statement %))))
                                                       (model/claims prev))]
                                    (into (vec out-of-reach)
-                                         (for [{:keys [id why]} (vals @held)
+                                         (for [{:keys [id why held]} (vals @held)
                                                :let [canvas (get declared id)]]
                                            {:claim (str "[" id "]")
-                                            :because (str "the amendment changed " why
-                                                          "; refused, put back with every edit made for it,"
-                                                          " and left for the person"
-                                                          (when (and canvas (stated id) (not= canvas (stated id)))
-                                                            (str ". canvas/ already declares it as \"" canvas
-                                                                 "\" — the answer it proposes; a landing refuses"
-                                                                 " the record and canvas/ disagreeing until the"
-                                                                 " person decides which stands")))})))))))]
+                                            :claim-ids [id]
+                                            :because (if (and canvas (stated id) (not= canvas (stated id)))
+                                                       (str "canvas/ says \"" canvas "\"; the "
+                                                            (when (= :granted held) "granted ")
+                                                            "record says \"" (stated id) "\" — which stands?"
+                                                            " The amendment changed " why
+                                                            "; refused and put back with every edit made for it,"
+                                                            " and a landing refuses the record and canvas/"
+                                                            " disagreeing until you decide")
+                                                       (str "the amendment changed " why
+                                                            "; refused and put back with every edit made for it"
+                                                            " — may it change, and to what?"))})))))
+              (asked-on-ledger [project ws-id] prev answers run-id))))]
          (reset! settling? true)
          out)))
       (catch Throwable t

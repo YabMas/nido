@@ -2306,7 +2306,8 @@
                           (subject-names (:asked (record/outstanding rec))))
       :stood-in         (report/stood-in report)
       :machinery        (:machinery report)
-      :asks             (when (= :design-decision (:format rec)) (:asks rec))
+      :asks             (or (get-in final [:amend-ask :asks])
+                            (when (= :design-decision (:format rec)) (:asks rec)))
       ;; The repair that :asks waits on, and whether this run made it after the decision that asks.
       :repair           (when (= :design-decision (:format rec)) (creport/repair-before-asking rec))
       :repaired?        (boolean (some #(and (= (:iter final) (:iter %)) (:amended? %)) history))
@@ -2440,6 +2441,9 @@
                  final)
         status (:status final)]
     (println (str kind "-loop: " (name status)
+                  (when (= :amend-stage (:asked-by final))
+                    (str " · asked by the amend stage, not the judge"
+                         (some->> (:asked-seq final) (str ", at entry "))))
                   (some->> (flip-rate ledger run-id) (str " · "))
                   " · report " report-path))
     ;; Before anything below can throw: the run is over, and how it went is worth reading whatever
@@ -2473,7 +2477,9 @@
     ;; The pipeline's own remedies first, then the ones every record loop shares.
     ;; A lookup FN rather than a map, because a nested loop's terminal status
     ;; comes through prefixed and the set is open by construction.
-    (println (str "  → " (or (and remedies (remedies status))
+    (println (str "  → " (or (and remedies (= :asked status) (= :amend-stage (:asked-by final))
+                                  (remedies :asked-by-amend-stage))
+                             (and remedies (remedies status))
                              (shared-remedy status final)
                              (str "unrecognised terminal status: " status))))
     (when epilogue (epilogue final))
@@ -2668,6 +2674,7 @@
 
 (def ^:private design-remedies
   {:cleared "the round proceeded and wrote the clearance — the design may be built"
+   :asked-by-amend-stage "the judge asked for a repair, and a guard of the amend stage stopped it at what only you decide — the question below is on the ledger as an ask; answer it as the blocker it is parked on (bb nido:workstream:blocker:answer), or amend the design or its intent; until a person's entry answers it, no amender may change the claims it names"
    :asked "the judge found something only you can repair — answer the question below as the blocker it is parked on (bb nido:workstream:blocker:answer), or amend the design or its intent; the next round reads the answer, and only a round that proceeds lets the design be built"
    :clearance-contended "the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"

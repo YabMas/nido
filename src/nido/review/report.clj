@@ -859,7 +859,8 @@
       ;; :growth each prose field and subject grown past checking since the record as authored (`nido.review.retreat/growth`): read down the rounds, the arc of a record
       ;; growing, which no single amendment's retreats show.
       ;; :out-of-reach is each line the amender said only a record it may not write repairs, with
-      ;; the line itself — what the run then stopped to ask the person, and held nowhere else.
+      ;; the line itself — what the run then stopped to ask the person. :asked-seq is the :ask
+      ;; entry that question became on the ledger, :ask-refused what the ledger said instead.
       ;; :held-for-person is each claim an amendment was refused for changing what a person granted
       ;; or wrote (`nido.review.record/person-moves`), {:id :held :why}: the round asked over it
       ;; whatever the amender then wrote, and the refusal text alone does not say which claim.
@@ -887,6 +888,8 @@
                 (:record-size ctx) (assoc :record-size (:record-size ctx))
                 (seq (:growth ctx)) (assoc :growth (vec (:growth ctx)))
                 (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
+                (:asked-seq ctx) (assoc :asked-seq (:asked-seq ctx))
+                (:ask-refused ctx) (assoc :ask-refused (:ask-refused ctx))
                 (seq (:standing-ask ctx)) (assoc :standing-ask (vec (:standing-ask ctx)))
                 (seq (:widened-spent ctx)) (assoc :widened-spent (vec (:widened-spent ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
